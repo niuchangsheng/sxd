@@ -22,13 +22,17 @@ const (
 	// ActionIDStLogin 跨服登录握手协议号 (Module 94, Action 0 -> 0x005E0000)
 	ActionIDStLogin uint32 = 0x005E0000
 
-	// ActionIDPlayerLogin 角色主服登录协议号 (Module 0, Action 0 -> 0x00000000)
+	// ActionIDPlayerLogin 角色主服登录协议号 (Module 0, Action 0 -> 0x00000000, Mod_Player_Base.login)
 	ActionIDPlayerLogin uint32 = 0x00000000
-	// ActionIDPlayerGetInfo 获取角色主属性协议号 (Module 0, Action 2 -> 0x00000002)
+	// ActionIDPlayerGetInfo 获取角色主属性协议号 (Module 0, Action 2 -> 0x00000002, Mod_Player_Base.get_player_info)
 	ActionIDPlayerGetInfo uint32 = 0x00000002
-	// ActionIDPlayerUpdateData 服务器主动下发属性变更协议号 (Module 0, Action 3 -> 0x00000003)
+	// ActionIDPlayerUpdateData 服务器主动下发属性变更协议号 (Module 0, Action 3 -> 0x00000003, Mod_Player_Base.update_player_data)
 	ActionIDPlayerUpdateData uint32 = 0x00000003
-	// ActionIDPlayerInitStep1 角色初始化握手步 1 (Module 0, Action 72 -> 0x00000048)
+	// ActionIDPlayerHeartbeat 角色与网关长连接心跳保活协议号 (Module 0, Action 23 -> 0x00000017, Mod_Player_Base.heartbeat)
+	ActionIDPlayerHeartbeat uint32 = 0x00000017
+	// ActionIDPlayerServerTime 同步服务器系统时间协议号 (Module 0, Action 22 -> 0x00000016, Mod_Player_Base.get_server_time)
+	ActionIDPlayerServerTime uint32 = 0x00000016
+	// ActionIDPlayerInitStep1 角色初始化握手步 1 (Module 0, Action 72 -> 0x00000048, Mod_Player_Base.enter_town)
 	ActionIDPlayerInitStep1 uint32 = 0x00000048
 	// ActionIDPlayerInitStep2 角色初始化握手步 2 (Module 0, Action 99 -> 0x00000063)
 	ActionIDPlayerInitStep2 uint32 = 0x00000063
@@ -40,8 +44,16 @@ const (
 	// ActionIDTownLeave 离开城镇协议号 (Module 1, Action 1 -> 0x00010001)
 	ActionIDTownLeave uint32 = 0x00010001
 
-	// ActionIDFarmGetInfo 查询药园土地与种植状态 (Module 13, Action 0 -> 0x000D0000)
+	// ActionIDFarmGetInfo 查询药园土地基础开垦状态 (Module 13, Action 0 -> 0x000D0000)
 	ActionIDFarmGetInfo uint32 = 0x000D0000
+	// ActionIDFarmGetRoles 查询药园伙伴列表 (Module 13, Action 1 -> 0x000D0001)
+	ActionIDFarmGetRoles uint32 = 0x000D0001
+	// ActionIDFarmGetPlantState 查询药园作物种植状态与倒计时 (Module 13, Action 21 -> 0x000D0015)
+	ActionIDFarmGetPlantState uint32 = 0x000D0015
+	// ActionIDFarmGetSeeds 查询药园种子库存与商城列表 (Module 13, Action 22 -> 0x000D0016)
+	ActionIDFarmGetSeeds uint32 = 0x000D0016
+	// ActionIDFarmBuySeed 购买药园种子 (Module 13, Action 23 -> 0x000D0017)
+	ActionIDFarmBuySeed uint32 = 0x000D0017
 	// ActionIDFarmPlant 药园种植作物 (Module 13, Action 24 -> 0x000D0018)
 	ActionIDFarmPlant uint32 = 0x000D0018
 	// ActionIDFarmHarvest 药园收获作物 (Module 13, Action 25 -> 0x000D0019)

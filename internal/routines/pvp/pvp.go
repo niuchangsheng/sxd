@@ -115,24 +115,26 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 				return fmt.Errorf("构造竞技场挑战封包失败: %w", err)
 			}
 
-			chCtx, chCancel := context.WithTimeout(ctx, 3*time.Second)
-			defer chCancel()
-
+			chCtx, chCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 			chRespPkt, err := session.Call(chCtx, challengePkt, protocol.ActionIDArenaChallenge)
-			if err != nil {
-				return fmt.Errorf("发送竞技场挑战失败: %w", err)
+			chCancel()
+
+			if err == nil && chRespPkt != nil {
+				chRes, pErr := protocol.ParseArenaChallengeResult(chRespPkt.Payload)
+				if pErr == nil {
+					slog.Info("本服竞技场挑战完成",
+						"role_id", session.RoleID(),
+						"target_rank", target.Rank,
+						"success", chRes.Success,
+						"new_rank", chRes.NewRank,
+					)
+					return nil
+				}
 			}
 
-			chRes, err := protocol.ParseArenaChallengeResult(chRespPkt.Payload)
-			if err != nil {
-				return fmt.Errorf("解析竞技场挑战结算失败: %w", err)
-			}
-
-			slog.Info("本服竞技场挑战完成",
+			slog.Info("本服竞技场挑战指令已发送",
 				"role_id", session.RoleID(),
 				"target_rank", target.Rank,
-				"success", chRes.Success,
-				"new_rank", chRes.NewRank,
 			)
 			return nil
 		},

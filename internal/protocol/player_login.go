@@ -324,3 +324,25 @@ func BuildPlayerGetInfoPacket(prevActionID int32) *Packet {
 	return NewPacket(ActionIDPlayerGetInfo, w.Bytes())
 }
 
+// BuildPlayerHeartbeatPacket 构造长连接心跳保活封包 (Module 0, Action 23 -> 0x00000017)。
+// 对应微端抓包中周期性发送的大端序序列号/时间参数。
+//
+// @param seq 客户端心跳序列号或时间参数 (默认或初次可为 0x00000030)
+// @return 编码好的封包实例
+func BuildPlayerHeartbeatPacket(seq int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(seq)
+	return NewPacket(ActionIDPlayerHeartbeat, w.Bytes())
+}
+
+// BuildPlayerServerTimePacket 构造同步服务器系统时间封包 (Module 0, Action 22 -> 0x00000016)。
+//
+// @param param 参数
+// @return 编码好的封包实例
+func BuildPlayerServerTimePacket(param int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(param)
+	return NewPacket(ActionIDPlayerServerTime, w.Bytes())
+}
+
+

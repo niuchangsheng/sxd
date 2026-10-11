@@ -96,6 +96,34 @@ _避免使用_: Third-Party Bot, External Ingress
 在网络 EOF 闪断或服务端凭证过期时，由状态机自动触发原生换票、地址重解析与无缝重连的长连接韧性架构。
 _避免使用_: Auto Reconnect, Simple Retry
 
+**Recon Probe (协议逆向探针)**:
+在 `test/probes/` 目录下通过 `//go:build probe` 构建标签物理与逻辑隔离的独立协议验证脚本，用于以最小闭环复现特定协议交互与原版对齐验证，且对主干构建与标准单测零污染。
+_避免使用_: Test Script, Debug Code, Scratch Code, Hack Script
+
+**Official Micro-Client (官方微端)**:
+官方基于 Flash / ActiveX 封装的桌面独立运行客户端（如 `sxd_wd_*.exe`），由 Web 页面登录选区认证与底层 TCP 8381 游戏长连接双阶段网络通信组成。
+_避免使用_: Official Launcher, Web App, Desktop Client
+
+**Capture Diff Analysis (抓包差分对比)**:
+通过结构化比对官方微端与原版辅助在同一玩法或生命周期下的 TCP 二进制封包时序（Module/Action/Payload），逆向提取神仙道私有协议字段语义与原版对齐特征的工程化验证方法。
+_避免使用_: Packet Compare, Log Diff, Wireshark Comparison
+
+**Dual-Track Reverse Engineering (双轨交叉逆向)**:
+以官方微端 ActionScript/SWF 反编译确立权威协议结构字典，并结合原版辅助运行时反编译与抓包差分推导自动化玩法状态机时序的联合逆向方法。
+_避免使用_: Hybrid Reversing, Double Reversing
+
+**Golden Packet Replay (黄金报文回放测试)**:
+从真实微端与辅助抓包文件（`.pcapng`）中提取确定性业务载荷，并在脱机无网络状态下作为只读单测用例驱动协议编解码器与状态机断言的零风险测试机制。
+_避免使用_: Packet Mocking, Offline Test, Wireshark Replay
+
+**Protocol Drift (协议漂移/版本失效)**:
+由于页游服务端长期更新迭代，原版辅助内置的旧版发包逻辑、Action 编号或 Payload 字段与当前官方游戏实际运行逻辑不一致、导致报错或失效的现象。
+_避免使用_: Outdated Logic, Buggy Code, Broken Action
+
+**Official Baseline Arbiter (官方基准仲裁)**:
+当原版辅助行为与官方实际行为冲突或原版辅助失效时，强制以官方微端反编译（AS3 契约）及其实际网络抓包流量作为唯一基准事实（Ground Truth）进行校准和重构的仲裁原则。
+_避免使用_: Official Priority, Bug Override, Force Alignment
+
 ## 权威规范与研发技术文档索引 (Specifications)
 
 - **[协议规范白皮书 (Protocol Specification)](docs/protocol-spec.md)**:
@@ -107,7 +135,8 @@ _避免使用_: Auto Reconnect, Simple Retry
 - **[逆向侦察与分析报告合集 (Research & Reconnaissance)](docs/research/pie_reverse_engineering_master_index.md)**:
   包含原版 `pie.exe` 的 PE 架构侦察、双重嵌套加壳脱壳指南、数据模型推导与网络通信逆向成果。
 - **[架构决策记录 (ADR)](docs/adr/)**:
-  涵盖从 ADR 0001 至 ADR 0012 的完整架构演进决策。
+  涵盖从 ADR 0001 至 ADR 0014 的完整架构演进决策。
+  - [ADR 0014: 双轨交叉逆向与黄金报文回放策略](docs/adr/0014-dual-track-reverse-engineering-and-golden-packet-replay.md)
 
 
 

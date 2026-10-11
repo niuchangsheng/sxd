@@ -241,6 +241,11 @@ func run(ctx context.Context, args []string) error {
 	routineMgr := &routineManager{
 		enabledMap: make(map[string]bool),
 	}
+	if strings.ToLower(cfg.Scheduler.Preset) == "all" {
+		for _, d := range routines.GetAllDefinitions() {
+			routineMgr.enabledMap[d.ID] = true
+		}
+	}
 	for k, v := range cfg.Scheduler.Routines {
 		routineMgr.enabledMap[k] = v
 	}

@@ -138,3 +138,26 @@ func TestPlayerLogin_LivePcapWholeCompressedPacket(t *testing.T) {
 	}
 }
 
+func TestPlayerLogin_HeartbeatAndServerTime(t *testing.T) {
+	// 测试心跳包构造
+	seq := int32(0x00000030)
+	hbPkt := protocol.BuildPlayerHeartbeatPacket(seq)
+	if hbPkt.ActionID != protocol.ActionIDPlayerHeartbeat {
+		t.Fatalf("期望 ActionID 0x%04X, 实际 0x%04X", protocol.ActionIDPlayerHeartbeat, hbPkt.ActionID)
+	}
+	hbBytes, err := hbPkt.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal 心跳包失败: %v", err)
+	}
+	// 期望长度 4 (header) + 4 (module/action) + 4 (payload) = 12 字节
+	if len(hbBytes) != 12 {
+		t.Errorf("心跳包长度期望 12 字节, 实际 %d 字节", len(hbBytes))
+	}
+
+	// 测试同步系统时间包构造
+	stPkt := protocol.BuildPlayerServerTimePacket(0)
+	if stPkt.ActionID != protocol.ActionIDPlayerServerTime {
+		t.Fatalf("期望 ActionID 0x%04X, 实际 0x%04X", protocol.ActionIDPlayerServerTime, stPkt.ActionID)
+	}
+}
+

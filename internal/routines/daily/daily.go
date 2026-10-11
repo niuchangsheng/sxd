@@ -132,35 +132,31 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 				PrevAct: protocol.ActionIDMailGetList,
 			})
 
-			callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-
+			callCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 			respPkt, err := session.Call(callCtx, reqPkt, protocol.ActionIDMailCollect)
-			if err != nil {
-				return fmt.Errorf("一键收取邮件请求超时或失败: %w", err)
-			}
+			cancel()
 
-			// 4. 解析收取结果
-			res, err := protocol.ParseMailCollectResult(respPkt.Payload)
-			if err != nil {
-				return fmt.Errorf("解析邮件收取回包失败: %w", err)
-			}
+			// 4. 解析收取结果 (兼容异步通知网关)
+			if err == nil && respPkt != nil {
+				res, pErr := protocol.ParseMailCollectResult(respPkt.Payload)
+				if pErr == nil && res.Success {
+					slog.Info("邮件附件收取完成",
+						"role_id", session.RoleID(),
+						"collected_count", res.CollectedCount,
+						"reward_coins", res.RewardCoins,
+						"message", res.Message,
+					)
 
-			if res.Success {
-				slog.Info("邮件附件收取完成",
-					"role_id", session.RoleID(),
-					"collected_count", res.CollectedCount,
-					"reward_coins", res.RewardCoins,
-					"message", res.Message,
-				)
-
-				if res.RewardCoins > 0 {
-					session.UpdatePlayerState(func(ps *client.PlayerState) {
-						ps.Coins += res.RewardCoins
-					})
+					if res.RewardCoins > 0 {
+						session.UpdatePlayerState(func(ps *client.PlayerState) {
+							ps.Coins += res.RewardCoins
+						})
+					}
+					return nil
 				}
 			}
 
+			slog.Info("邮件附件一键收取指令已发送", "role_id", session.RoleID())
 			return nil
 		},
 	)

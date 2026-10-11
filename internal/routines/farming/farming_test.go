@@ -103,19 +103,52 @@ func TestHerbGardenRoutine_FullBusinessFlow(t *testing.T) {
 				res := protocol.FarmGetInfoResult{
 					Fields: []protocol.FarmField{
 						{LandID: 10, State: 1, Cooldown: 0, SeedOrRoleID: 0},
-						{LandID: 11, State: 3, Cooldown: 0, SeedOrRoleID: 169},
-						{LandID: 12, State: 2, Cooldown: 3600, SeedOrRoleID: 169},
+						{LandID: 11, State: 3, Cooldown: 0, SeedOrRoleID: 176},
+						{LandID: 12, State: 2, Cooldown: 3600, SeedOrRoleID: 176},
 					},
 				}
 				resp, _ := protocol.BuildFarmGetInfoResultPacket(res)
 				_ = protocol.WritePacket(c2, resp)
 
+			case protocol.ActionIDFarmGetPlantState:
+				w := protocol.NewWriter()
+				w.WriteUint16(3)
+				fields := []protocol.FarmField{
+					{LandID: 10, State: 1, Cooldown: 0, SeedOrRoleID: 0},
+					{LandID: 11, State: 3, Cooldown: 0, SeedOrRoleID: 176},
+					{LandID: 12, State: 2, Cooldown: 3600, SeedOrRoleID: 176},
+				}
+				for _, f := range fields {
+					w.WriteInt32(f.LandID)
+					w.WriteInt32(f.State)
+					w.WriteInt32(f.Cooldown)
+					w.WriteInt32(f.SeedOrRoleID)
+				}
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetPlantState, w.Bytes()))
+
+			case protocol.ActionIDFarmGetSeeds:
+				w := protocol.NewWriter()
+				w.WriteUint16(1)
+				w.WriteInt32(176) // SeedID
+				w.WriteInt32(1)   // OwnedCount
+				w.WriteInt32(3)   // PriceType
+				w.WriteInt32(1500000)
+				w.WriteInt32(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetSeeds, w.Bytes()))
+
+			case protocol.ActionIDFarmBuySeed:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmBuySeed, []byte{protocol.FarmStatusSuccess}))
+
 			case protocol.ActionIDFarmHarvest:
 				harvestCalls.Add(1)
 				req, _ := protocol.ParseFarmHarvestRequest(pkt.Payload)
-				// 模拟成熟采摘成功，产出 150000 经验与 600000 铜钱
+				// 模拟成熟采摘: 仅 Land 11 成熟采摘成功 (产出 150000 经验与 600000 铜钱)，播种后的例行采摘尝试返回未成熟
+				success := false
+				if req.LandID == 11 && harvestCalls.Load() == 2 {
+					success = true
+				}
 				res := protocol.FarmHarvestResult{
-					Success:   req.LandID == 11,
+					Success:   success,
 					GainExp:   150000,
 					GainCoins: 600000,
 				}
@@ -165,7 +198,9 @@ func TestHerbGardenRoutine_FullBusinessFlow(t *testing.T) {
 
 	// 执行药园例程
 	routine := farming.NewHerbGardenRoutine()
-	err := routine.Execute(context.Background(), session, nil)
+	execCtx, execCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer execCancel()
+	err := routine.Execute(execCtx, session, nil)
 	if err != nil {
 		t.Fatalf("药园 Routine 执行失败: %v", err)
 	}
@@ -175,9 +210,9 @@ func TestHerbGardenRoutine_FullBusinessFlow(t *testing.T) {
 		t.Errorf("期望发起 1 次土地查询, 实际发起 %d 次", queryCalls.Load())
 	}
 
-	// 2. 验证采摘了 Land 11
-	if harvestCalls.Load() != 1 {
-		t.Errorf("期望采摘 1 块成熟土地, 实际采摘 %d 次", harvestCalls.Load())
+	// 2. 验证采摘调用总计 3 次 (Land 10 播种后采摘尝试 + Land 11 成熟采摘 + Land 11 播种后采摘尝试)
+	if harvestCalls.Load() != 3 {
+		t.Errorf("期望采摘调用 3 次, 实际采摘 %d 次", harvestCalls.Load())
 	}
 
 	// 3. 验证对 Land 10 与刚采摘的 Land 11 发起了播种 (共 2 块空闲土地)

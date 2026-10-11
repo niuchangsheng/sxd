@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/hex"
+	"os"
 	"reflect"
 	"testing"
 
@@ -309,3 +310,135 @@ func TestGolden_Case4_PlayerGetInfoResponse(t *testing.T) {
 		t.Errorf("期望角色元宝 39479, 实际 %d", res.Ingots)
 	}
 }
+
+// TestGolden_Module0_LiveFilesReplay 遍历 test/testdata/golden/ 下提取的真实 .bin 封包切片，
+// 在离线状态下验证二进制协议解码与大端序解析 100% 字节级对齐。
+func TestGolden_Module0_LiveFilesReplay(t *testing.T) {
+	testCases := []struct {
+		name       string
+		relPath    string
+		expectMod  uint16
+		expectAct  uint16
+		verifyFunc func(t *testing.T, pkt *protocol.Packet)
+	}{
+		{
+			name:      "登录认证请求帧 (c2s_m0_a0.bin)",
+			relPath:   "../../test/testdata/golden/c2s_m0_a0.bin",
+			expectMod: 0,
+			expectAct: 0,
+			verifyFunc: func(t *testing.T, pkt *protocol.Packet) {
+				if len(pkt.Payload) != 100 {
+					t.Errorf("期望载荷长度 100, 实际 %d", len(pkt.Payload))
+				}
+			},
+		},
+		{
+			name:      "登录成功响应帧 (s2c_m0_a0.bin)",
+			relPath:   "../../test/testdata/golden/s2c_m0_a0.bin",
+			expectMod: 0,
+			expectAct: 0,
+			verifyFunc: func(t *testing.T, pkt *protocol.Packet) {
+				authResp, err := protocol.ParsePlayerLoginAuthResponse(pkt.Payload)
+				if err != nil {
+					t.Fatalf("解析登录响应载荷失败: %v", err)
+				}
+				if authResp.ResultCode != 4 {
+					t.Errorf("期望 ResultCode = 4 (SUCCESS), 实际 %d", authResp.ResultCode)
+				}
+			},
+		},
+		{
+			name:      "场景初始化步 1 请求帧 (c2s_m0_a72.bin)",
+			relPath:   "../../test/testdata/golden/c2s_m0_a72.bin",
+			expectMod: 0,
+			expectAct: 72,
+			verifyFunc: func(t *testing.T, pkt *protocol.Packet) {
+				if len(pkt.Payload) != 4 {
+					t.Errorf("期望载荷长度 4, 实际 %d", len(pkt.Payload))
+				}
+			},
+		},
+		{
+			name:      "场景初始化步 2 请求帧 (c2s_m0_a99.bin)",
+			relPath:   "../../test/testdata/golden/c2s_m0_a99.bin",
+			expectMod: 0,
+			expectAct: 99,
+			verifyFunc: func(t *testing.T, pkt *protocol.Packet) {
+				if len(pkt.Payload) != 4 {
+					t.Errorf("期望载荷长度 4, 实际 %d", len(pkt.Payload))
+				}
+			},
+		},
+		{
+			name:      "长连接心跳保活请求帧 (c2s_m0_a23.bin)",
+			relPath:   "../../test/testdata/golden/c2s_m0_a23.bin",
+			expectMod: 0,
+			expectAct: 23,
+			verifyFunc: func(t *testing.T, pkt *protocol.Packet) {
+				if len(pkt.Payload) != 4 {
+					t.Errorf("期望心跳载荷长度 4, 实际 %d", len(pkt.Payload))
+				}
+			},
+		},
+		{
+			name:      "长连接心跳保活响应帧 (s2c_m0_a23.bin)",
+			relPath:   "../../test/testdata/golden/s2c_m0_a23.bin",
+			expectMod: 0,
+			expectAct: 23,
+			verifyFunc: func(t *testing.T, pkt *protocol.Packet) {
+				if len(pkt.Payload) != 4 {
+					t.Errorf("期望心跳响应载荷长度 4, 实际 %d", len(pkt.Payload))
+				}
+			},
+		},
+		{
+			name:      "系统时间同步请求帧 (c2s_m0_a22.bin)",
+			relPath:   "../../test/testdata/golden/c2s_m0_a22.bin",
+			expectMod: 0,
+			expectAct: 22,
+		},
+		{
+			name:      "系统时间同步响应帧 (s2c_m0_a22.bin)",
+			relPath:   "../../test/testdata/golden/s2c_m0_a22.bin",
+			expectMod: 0,
+			expectAct: 22,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rawBytes, err := os.ReadFile(tc.relPath)
+			if err != nil {
+				t.Fatalf("读取脱机黄金测试切片失败: %v", err)
+			}
+
+			// 1. 测试 Unmarshal 解包
+			pkt, err := protocol.Unmarshal(rawBytes)
+			if err != nil {
+				t.Fatalf("Unmarshal 解包失败: %v", err)
+			}
+
+			mod, act := protocol.SplitActionID(pkt.ActionID)
+			if mod != tc.expectMod {
+				t.Errorf("期望 Module %d, 实际 %d", tc.expectMod, mod)
+			}
+			if act != tc.expectAct {
+				t.Errorf("期望 Action %d, 实际 %d", tc.expectAct, act)
+			}
+
+			// 2. 测试 ReadPacket 流式解析一致性
+			streamPkt, err := protocol.ReadPacket(bytes.NewReader(rawBytes))
+			if err != nil {
+				t.Fatalf("ReadPacket 流式读取失败: %v", err)
+			}
+			if streamPkt.ActionID != pkt.ActionID {
+				t.Errorf("流式读取 ActionID 不一致: %08X vs %08X", streamPkt.ActionID, pkt.ActionID)
+			}
+
+			if tc.verifyFunc != nil {
+				tc.verifyFunc(t, pkt)
+			}
+		})
+	}
+}
+

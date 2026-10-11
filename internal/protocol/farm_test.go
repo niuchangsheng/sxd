@@ -151,3 +151,71 @@ func TestFarmCodec_ResultsRoundtrip(t *testing.T) {
 	}
 }
 
+func TestFarmCodec_RealPcapGroundTruth(t *testing.T) {
+	// 1. 真实抓包 Act 25 收获成功 (23 字节)
+	// Hex: 0800010000000c000013e50000000100007080
+	realAct25Hex := "0800010000000c000013e50000000100007080"
+	payload25, err := hex.DecodeString(realAct25Hex)
+	if err != nil {
+		t.Fatalf("DecodeString 失败: %v", err)
+	}
+	res25, err := ParseFarmHarvestResult(payload25)
+	if err != nil {
+		t.Fatalf("ParseFarmHarvestResult 真实报文解析失败: %v", err)
+	}
+	if !res25.Success || res25.LandID != 12 || res25.GainExp != 5093 || res25.Cooldown != 28800 {
+		t.Errorf("Act 25 真实报文解析数据不符: %+v", res25)
+	}
+
+	// 2. 真实抓包 Act 25 未成熟 (7 字节)
+	// Hex: 21000000000000
+	failAct25Hex := "21000000000000"
+	failPayload25, _ := hex.DecodeString(failAct25Hex)
+	failRes25, err := ParseFarmHarvestResult(failPayload25)
+	if err != nil {
+		t.Fatalf("ParseFarmHarvestResult 失败报文解析错误: %v", err)
+	}
+	if failRes25.Success {
+		t.Errorf("期望 Success=false, 实际 true")
+	}
+
+	// 3. 真实抓包 Act 24 播种成功 (15 字节)
+	// Hex: 080000000c000000b0000000010000
+	realAct24Hex := "080000000c000000b0000000010000"
+	payload24, _ := hex.DecodeString(realAct24Hex)
+	res24, err := ParseFarmPlantResult(payload24)
+	if err != nil {
+		t.Fatalf("ParseFarmPlantResult 真实报文解析失败: %v", err)
+	}
+	if !res24.Success || res24.LandID != 12 || res24.SeedOrRoleID != 176 {
+		t.Errorf("Act 24 真实报文解析数据不符: %+v", res24)
+	}
+
+	// 4. 真实抓包 Act 23 购买种子成功 (1 字节: 0x08)
+	buyPayload := []byte{FarmStatusSuccess}
+	buyRes, err := ParseFarmBuySeedResult(buyPayload)
+	if err != nil {
+		t.Fatalf("ParseFarmBuySeedResult 失败: %v", err)
+	}
+	if !buyRes.Success {
+		t.Errorf("期望购买成功，实际失败")
+	}
+
+	// 5. 真实抓包 Act 21 药园土地状态 (82 字节: 4 块空闲土地)
+	// Hex: 00040000000a0000000000000000000000010100000000000b000000000000000000000001010000000000090000000000000000000000010100000000000c00000000000000000000000101000000000064
+	realAct21Hex := "00040000000a0000000000000000000000010100000000000b000000000000000000000001010000000000090000000000000000000000010100000000000c00000000000000000000000101000000000064"
+	payload21, _ := hex.DecodeString(realAct21Hex)
+	res21, err := ParseFarmPlantStateResult(payload21)
+	if err != nil {
+		t.Fatalf("ParseFarmPlantStateResult 真实报文解析失败: %v", err)
+	}
+	if len(res21.Fields) != 4 {
+		t.Fatalf("Act 21 土地数量不符: 期望 4, 实际 %d", len(res21.Fields))
+	}
+	for _, f := range res21.Fields {
+		if f.State != 1 || f.Cooldown != 0 {
+			t.Errorf("空闲土地状态解析错误，期望 State=1 Cooldown=0, 实际 State=%d Cooldown=%d (landID=%d)", f.State, f.Cooldown, f.LandID)
+		}
+	}
+}
+

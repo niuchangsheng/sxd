@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -549,8 +550,11 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 	}
 
 	err := protocol.WritePacket(s.conn, p)
-	if err == nil && p != nil && p.ActionID != s.cfg.HeartbeatActionID {
-		s.lastActionID.Store(p.ActionID)
+	if err == nil && p != nil {
+		if p.ActionID != s.cfg.HeartbeatActionID {
+			s.lastActionID.Store(p.ActionID)
+		}
+		slog.Info("发送网关请求", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", p.ActionID, p.ActionID>>16, p.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(p.Payload))
 	}
 	return err
 }
@@ -772,7 +776,11 @@ func (s *RoleSession) readLoop(conn net.Conn, errCh chan<- error) {
 			return
 		}
 
-		slog.Info("收到网关回包", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", pkt.ActionID, pkt.ActionID>>16, pkt.ActionID&0xFFFF), "payload_len", len(pkt.Payload))
+		hexDump := hex.EncodeToString(pkt.Payload)
+		if len(hexDump) > 64 {
+			hexDump = hexDump[:64] + "..."
+		}
+		slog.Info("收到网关回包", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", pkt.ActionID, pkt.ActionID>>16, pkt.ActionID&0xFFFF), "payload_len", len(pkt.Payload), "hex", hexDump)
 		s.dispatchPacket(pkt)
 	}
 }
