@@ -29,14 +29,17 @@ type SweepConfig struct {
 	TargetMissionID int
 	// MaxBatchTimes 单次执行最大扫荡次数 (默认 10)
 	MaxBatchTimes int
+	// PreferPracticeQuickly 是否优先使用 Module 25 秒扫荡 (默认为 false 以保障存量测试与原版辅助兼容)
+	PreferPracticeQuickly bool
 }
 
 // DefaultSweepConfig 返回默认扫荡策略配置。
 func DefaultSweepConfig() SweepConfig {
 	return SweepConfig{
-		Mode:          ModeAutoRecommend,
-		SweepElite:    false,
-		MaxBatchTimes: 10,
+		Mode:                  ModeAutoRecommend,
+		SweepElite:            false,
+		MaxBatchTimes:         10,
+		PreferPracticeQuickly: false,
 	}
 }
 
@@ -60,6 +63,7 @@ func (c SweepConfig) ToDungeonSweepConfig() DungeonSweepConfig {
 		SweepElite:            c.SweepElite,
 		MaxBatchTimes:         maxBatch,
 		RequiredPowerPerSweep: 5,
+		PreferPracticeQuickly: c.PreferPracticeQuickly,
 	}
 }
 
@@ -243,83 +247,133 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						break
 					}
 
-					// 7.1 前置关卡激活与上下文同步 (Module 35, Action 0)
-					enterPkt := protocol.BuildEnterMissionPacket(uint32(missionID))
-					_ = session.Send(enterPkt)
+					var cost = powerPerSweep
+					var exp = int64(2500)
+					var coins = int64(12000)
+					var sweepSucceeded = false
 
-					// 7.2 构造扫荡请求 (Module 35, Action 2, Times=1)
-					req := protocol.SweepRequest{
-						MissionID: uint32(missionID),
-						Times:     1,
-					}
-					pkt, err := protocol.BuildSweepPacket(req)
-					if err != nil {
-						return fmt.Errorf("dungeon: 构造扫荡封包失败: %w", err)
-					}
-
-					callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
-					respPkt, callErr := session.Call(callCtx, pkt, protocol.ActionMissionSweep)
-					callCancel()
-
-					if callErr != nil {
-						if successRounds > 0 {
-							break
+					// 7.1 优先模式：若配置启用 PreferPracticeQuickly，则尝试 Module 25 秒扫荡
+					if cfg.PreferPracticeQuickly {
+						m25Req := protocol.StartPracticeRequest{
+							MissionID: int32(missionID),
+							Count:     1,
+							AutoSale:  1,
+							PrevAct:   protocol.ActionIDPracticeGetStatus,
 						}
-						return fmt.Errorf("dungeon: 发送扫荡指令未收到服务端回包: %w", callErr)
-					}
-					if respPkt == nil {
-						if successRounds > 0 {
-							break
+						m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
+
+						callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
+						respPkt, callErr := session.Call(callCtx, m25Pkt, protocol.ActionIDPracticeStart)
+						callCancel()
+
+						if callErr == nil && respPkt != nil {
+							m25Res, pErr := protocol.ParseStartPracticeResult(respPkt.Payload)
+							if pErr == nil && m25Res != nil {
+								switch m25Res.Result {
+								case protocol.PracticeResultSuccess:
+									quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{
+										Count:   0,
+										PrevAct: protocol.ActionIDPracticeStart,
+									})
+									_ = session.Send(quickPkt)
+									sweepSucceeded = true
+								case protocol.PracticeResultNotEnoughPower:
+									slog.Warn("服务端返回体力不足，触发语义智能熔断", "role_id", session.RoleID(), "round", round)
+									if successRounds == 0 {
+										return scheduler.ErrStaminaDepleted
+									}
+									return nil
+								case protocol.PracticeResultBagFull:
+									slog.Warn("服务端返回背包已满，触发语义智能熔断", "role_id", session.RoleID(), "round", round)
+									if successRounds == 0 {
+										return scheduler.ErrBagFull
+									}
+									return nil
+								default:
+									slog.Warn("Module 25 秒扫荡受限，自愈降级至常规扫荡", "result", m25Res.Result)
+								}
+							}
 						}
-						return errors.New("dungeon: 服务端返回空扫荡响应")
 					}
 
-					// 7.3 解析服务端返回的真实扫荡结算回包
-					res, pErr := protocol.ParseSweepResult(respPkt.Payload)
-					if pErr != nil {
-						if successRounds > 0 {
-							break
+
+
+					// 7.3 若 Module 25 扫荡未成功且非熔断错误，无缝降级执行 Module 35 普通扫荡协议
+					if !sweepSucceeded {
+						enterPkt := protocol.BuildEnterMissionPacket(uint32(missionID))
+						_ = session.Send(enterPkt)
+
+						legacyReq := protocol.SweepRequest{
+							MissionID: uint32(missionID),
+							Times:     1,
 						}
-						return fmt.Errorf("dungeon: 解析扫荡回包失败: %w", pErr)
-					}
-					if !res.Success {
-						slog.Warn("服务端返回扫荡失败", "role_id", session.RoleID(), "round", round, "message", res.Message)
-						if strings.Contains(res.Message, "体力不足") {
+						legacyPkt, err := protocol.BuildSweepPacket(legacyReq)
+						if err != nil {
+							return fmt.Errorf("dungeon: 构造扫荡封包失败: %w", err)
+						}
+
+						legacyCtx, legacyCancel := context.WithTimeout(ctx, 3*time.Second)
+						legacyResp, legacyErr := session.Call(legacyCtx, legacyPkt, protocol.ActionMissionSweep)
+						legacyCancel()
+
+						if legacyErr != nil {
+							if successRounds > 0 {
+								break
+							}
+							return fmt.Errorf("dungeon: 发送扫荡指令未收到服务端回包: %w", legacyErr)
+						}
+						if legacyResp == nil {
+							if successRounds > 0 {
+								break
+							}
+							return errors.New("dungeon: 服务端返回空扫荡响应")
+						}
+
+						legacyRes, pErr := protocol.ParseSweepResult(legacyResp.Payload)
+						if pErr != nil {
+							if successRounds > 0 {
+								break
+							}
+							return fmt.Errorf("dungeon: 解析扫荡回包失败: %w", pErr)
+						}
+						if !legacyRes.Success {
+							slog.Warn("服务端返回扫荡失败", "role_id", session.RoleID(), "round", round, "message", legacyRes.Message)
+							if strings.Contains(legacyRes.Message, "体力不足") {
+								if successRounds == 0 {
+									return scheduler.ErrStaminaDepleted
+								}
+								break
+							}
+							if strings.Contains(legacyRes.Message, "背包已满") {
+								if successRounds == 0 {
+									return scheduler.ErrBagFull
+								}
+								break
+							}
 							if successRounds == 0 {
-								return scheduler.ErrStaminaDepleted
+								return fmt.Errorf("dungeon: sweep rejected by server: %s", legacyRes.Message)
 							}
 							break
 						}
-						if strings.Contains(res.Message, "背包已满") {
-							if successRounds == 0 {
-								return scheduler.ErrBagFull
-							}
-							break
+
+						_ = session.Send(protocol.BuildQuickFinishPacket())
+						if legacyRes.CostPower > 0 && legacyRes.CostPower <= 5 {
+							cost = legacyRes.CostPower
 						}
-						if successRounds == 0 {
-							return fmt.Errorf("dungeon: sweep rejected by server: %s", res.Message)
+						if legacyRes.GainExp > 0 {
+							exp = legacyRes.GainExp
 						}
+						if legacyRes.GainCoins > 0 {
+							coins = legacyRes.GainCoins
+						}
+						sweepSucceeded = true
+					}
+
+					if !sweepSucceeded {
 						break
 					}
 
-					// 7.4 发送快速完成协议 (Module 35, Action 7) 跳过倒计时
-					quickPkt := protocol.BuildQuickFinishPacket()
-					_ = session.Send(quickPkt)
-
-					// 7.5 真实资产扣除与收益累加
-					cost := powerPerSweep
-					if res.CostPower > 0 && res.CostPower <= 5 {
-						cost = res.CostPower
-					}
-					exp := int64(2500)
-					coins := int64(12000)
-					if res.GainExp > 0 {
-						exp = res.GainExp
-					}
-					if res.GainCoins > 0 {
-						coins = res.GainCoins
-					}
-
+					// 7.4 资产结算扣除与收益累加
 					remStamina, err := session.ConsumeStamina(cost)
 					if err != nil {
 						return err

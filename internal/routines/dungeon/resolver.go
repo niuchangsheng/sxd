@@ -42,6 +42,8 @@ type DungeonSweepConfig struct {
 	MaxBatchTimes int `json:"max_batch_times"`
 	// RequiredPowerPerSweep 单次扫荡体力消耗基线 (默认 5 点)
 	RequiredPowerPerSweep int `json:"required_power_per_sweep"`
+	// PreferPracticeQuickly 是否优先使用 Module 25 秒扫荡协议
+	PreferPracticeQuickly bool `json:"prefer_practice_quickly"`
 }
 
 // DefaultDungeonSweepConfig 返回开箱即用的默认推荐配置。
@@ -52,6 +54,7 @@ func DefaultDungeonSweepConfig() DungeonSweepConfig {
 		SweepElite:            false,
 		MaxBatchTimes:         10,
 		RequiredPowerPerSweep: 5,
+		PreferPracticeQuickly: false,
 	}
 }
 

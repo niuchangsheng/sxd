@@ -67,6 +67,30 @@ func startMockDungeonServer(srvConn net.Conn, handler func(pkt *protocol.Packet)
 				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
 				continue
 			}
+			if pkt.ActionID == protocol.ActionIDPracticeStart {
+				req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
+				mid := int32(43)
+				cnt := int16(1)
+				if req != nil {
+					mid = req.MissionID
+					cnt = req.Count
+				}
+				resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+					Result:    protocol.PracticeResultSuccess,
+					MissionID: mid,
+					Count:     cnt,
+				})
+				_ = protocol.WritePacket(srvConn, resPkt)
+				continue
+			}
+			if pkt.ActionID == protocol.ActionIDPracticeQuickly {
+				resPkt, _ := protocol.BuildQuicklyResultPacket(protocol.QuicklyResult{
+					Result: protocol.PracticeResultSuccess,
+					Count:  1,
+				})
+				_ = protocol.WritePacket(srvConn, resPkt)
+				continue
+			}
 			if pkt.ActionID == protocol.ActionMissionSweep {
 				req, _ := protocol.ParseSweepRequest(pkt.Payload)
 				resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
@@ -561,5 +585,190 @@ func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
 		t.Errorf("期望剩余体力 15, 实际 %d", rem)
 	}
 }
+
+// TestDungeonSweep_Module25_PracticeQuickly 验证当启用 PreferPracticeQuickly 时，
+// 发送 Module 25 (0x00190001) 开始扫荡并紧跟 Action 3 (0x00190003) 极速秒完成的完整闭环。
+func TestDungeonSweep_Module25_PracticeQuickly(t *testing.T) {
+	sess, srvConn := createTestSession(t, 20) // 20 点体力
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var m25StartCount atomic.Int32
+	var m25QuicklyCount atomic.Int32
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDPracticeStart:
+			m25StartCount.Add(1)
+			req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
+			mid := int32(854)
+			if req != nil {
+				mid = req.MissionID
+			}
+			resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+				Result:    protocol.PracticeResultSuccess,
+				MissionID: mid,
+				Count:     1,
+			})
+			_ = protocol.WritePacket(srvConn, resPkt)
+			return true
+
+		case protocol.ActionIDPracticeQuickly:
+			m25QuicklyCount.Add(1)
+			resPkt, _ := protocol.BuildQuicklyResultPacket(protocol.QuicklyResult{
+				Result: protocol.PracticeResultSuccess,
+				Count:  1,
+			})
+			_ = protocol.WritePacket(srvConn, resPkt)
+			return true
+		}
+		return false
+	})
+
+	cfg := dungeon.SweepConfig{
+		MaxBatchTimes:         2,
+		PreferPracticeQuickly: true,
+	}
+	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+	err := routine.Execute(context.Background(), sess, nil)
+	if err != nil {
+		t.Fatalf("执行 Module 25 秒扫荡失败: %v", err)
+	}
+
+	if m25StartCount.Load() != 2 {
+		t.Errorf("期望调用 Module 25 开始扫荡 2 次, 实际 %d 次", m25StartCount.Load())
+	}
+	if m25QuicklyCount.Load() != 2 {
+		t.Errorf("期望调用 Module 25 极速秒完成 2 次, 实际 %d 次", m25QuicklyCount.Load())
+	}
+	if rem := sess.GetStamina(); rem != 10 {
+		t.Errorf("期望剩余体力 10 (20 - 2*5), 实际 %d", rem)
+	}
+}
+
+// TestDungeonSweep_Module25_FallbackToLegacy 验证当 Module 25 秒扫荡返回受限状态码时，
+// 自动无缝降级为 Module 35 普通扫荡协议执行自愈。
+func TestDungeonSweep_Module25_FallbackToLegacy(t *testing.T) {
+	sess, srvConn := createTestSession(t, 10)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var m25Attempted atomic.Bool
+	var legacyExecuted atomic.Bool
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDPracticeStart:
+			m25Attempted.Store(true)
+			// 模拟元宝不足或其他非成功状态码
+			resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+				Result:    protocol.PracticeResultNotEnoughIngot,
+				MissionID: 854,
+				Count:     1,
+			})
+			_ = protocol.WritePacket(srvConn, resPkt)
+			return true
+
+		case protocol.ActionMissionSweep:
+			legacyExecuted.Store(true)
+			req, _ := protocol.ParseSweepRequest(pkt.Payload)
+			resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
+				Success:   true,
+				MissionID: req.MissionID,
+				Times:     req.Times,
+				CostPower: 5,
+				GainExp:   2500,
+				GainCoins: 12000,
+				Message:   "普通扫荡成功",
+			})
+			_ = protocol.WritePacket(srvConn, resPkt)
+			return true
+		}
+		return false
+	})
+
+	cfg := dungeon.SweepConfig{
+		MaxBatchTimes:         1,
+		PreferPracticeQuickly: true,
+	}
+	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+	err := routine.Execute(context.Background(), sess, nil)
+	if err != nil {
+		t.Fatalf("降级扫荡失败: %v", err)
+	}
+
+	if !m25Attempted.Load() {
+		t.Errorf("期望前置尝试 Module 25 秒扫荡")
+	}
+	if !legacyExecuted.Load() {
+		t.Errorf("期望自愈降级执行 Module 35 普通扫荡")
+	}
+	if rem := sess.GetStamina(); rem != 5 {
+		t.Errorf("期望扣减 5 点体力剩余 5, 实际 %d", rem)
+	}
+}
+
+// TestDungeonSweep_SemanticCoolingOff_Module25 验证 Module 25 明确返回体力不足或背包满时，
+// 立即触发 ErrStaminaDepleted 或 ErrBagFull 语义智能熔断，杜绝无意义降级重试。
+func TestDungeonSweep_SemanticCoolingOff_Module25(t *testing.T) {
+	t.Run("StaminaDepleted_CoolingOff", func(t *testing.T) {
+		sess, srvConn := createTestSession(t, 20)
+		defer sess.Close()
+		defer srvConn.Close()
+
+		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+			if pkt.ActionID == protocol.ActionIDPracticeStart {
+				resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+					Result:    protocol.PracticeResultNotEnoughPower,
+					MissionID: 854,
+					Count:     1,
+				})
+				_ = protocol.WritePacket(srvConn, resPkt)
+				return true
+			}
+			return false
+		})
+
+		cfg := dungeon.SweepConfig{
+			MaxBatchTimes:         1,
+			PreferPracticeQuickly: true,
+		}
+		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+		err := routine.Execute(context.Background(), sess, nil)
+		if !errors.Is(err, scheduler.ErrStaminaDepleted) {
+			t.Fatalf("期望触发 ErrStaminaDepleted 语义熔断, 实际返回: %v", err)
+		}
+	})
+
+	t.Run("BagFull_CoolingOff", func(t *testing.T) {
+		sess, srvConn := createTestSession(t, 20)
+		defer sess.Close()
+		defer srvConn.Close()
+
+		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+			if pkt.ActionID == protocol.ActionIDPracticeStart {
+				resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+					Result:    protocol.PracticeResultBagFull,
+					MissionID: 854,
+					Count:     1,
+				})
+				_ = protocol.WritePacket(srvConn, resPkt)
+				return true
+			}
+			return false
+		})
+
+		cfg := dungeon.SweepConfig{
+			MaxBatchTimes:         1,
+			PreferPracticeQuickly: true,
+		}
+		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+		err := routine.Execute(context.Background(), sess, nil)
+		if !errors.Is(err, scheduler.ErrBagFull) {
+			t.Fatalf("期望触发 ErrBagFull 语义熔断, 实际返回: %v", err)
+		}
+	})
+}
+
 
 
