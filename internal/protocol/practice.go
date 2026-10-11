@@ -257,3 +257,175 @@ func BuildHeroQuicklyPacket(req HeroQuicklyRequest) (*Packet, error) {
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDHeroPracticeQuickly, w.Bytes()), nil
 }
+
+// PracticeStatusMissionItem 代表扫荡状态中的单个关卡配置项。
+type PracticeStatusMissionItem struct {
+	MissionID int32
+	Level     int16
+	Type      int8
+}
+
+// PracticeStatusResult 代表查询副本扫荡状态响应结果 (ActionID=0x00190000)。
+type PracticeStatusResult struct {
+	HeaderTag    string
+	Missions     []PracticeStatusMissionItem
+	IsPracticing uint8
+	Remaining    uint32
+	TotalTime    uint32
+}
+
+// BuildPracticeGetStatusPacket 构造查询副本扫荡状态请求封包 (Mod_MissionPractice_Base.get_practice_info, ActionID=0x00190000)。
+func BuildPracticeGetStatusPacket(missionID int32, prevAct uint32) (*Packet, error) {
+	w := NewWriter()
+	w.WriteInt32(missionID)
+	if prevAct == 0 {
+		prevAct = ActionIDPracticeGetStatus
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDPracticeGetStatus, w.Bytes()), nil
+}
+
+// ParsePracticeStatusResult 解析副本扫荡状态响应载荷。
+func ParsePracticeStatusResult(payload []byte) (*PracticeStatusResult, error) {
+	if len(payload) < 4 {
+		return nil, fmt.Errorf("%w: payload too short for practice status", ErrInvalidPayload)
+	}
+	r := NewReader(payload)
+	tagBytes, err := r.ReadBytes(2)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read tag: %v", ErrInvalidPayload, err)
+	}
+	tag := string(tagBytes)
+
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read missions count: %v", ErrInvalidPayload, err)
+	}
+
+	missions := make([]PracticeStatusMissionItem, 0, count)
+	for i := uint16(0); i < count; i++ {
+		mid, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read mission_id at %d: %v", ErrInvalidPayload, i, err)
+		}
+		lvl, err := r.ReadInt16()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read level at %d: %v", ErrInvalidPayload, i, err)
+		}
+		typ, err := r.ReadInt8()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read type at %d: %v", ErrInvalidPayload, i, err)
+		}
+		missions = append(missions, PracticeStatusMissionItem{
+			MissionID: mid,
+			Level:     lvl,
+			Type:      typ,
+		})
+	}
+
+	var isPracticing uint8
+	var remaining uint32
+	var totalTime uint32
+
+	if r.Remaining() >= 1 {
+		isPracticing, _ = r.ReadUint8()
+	}
+	if r.Remaining() >= 4 {
+		remaining, _ = r.ReadUint32()
+	}
+	if r.Remaining() >= 4 {
+		totalTime, _ = r.ReadUint32()
+	}
+
+	return &PracticeStatusResult{
+		HeaderTag:    tag,
+		Missions:     missions,
+		IsPracticing: isPracticing,
+		Remaining:    remaining,
+		TotalTime:    totalTime,
+	}, nil
+}
+
+// PracticeRoleExpItem 代表扫荡结算中单个参战角色的经验结算明细。
+type PracticeRoleExpItem struct {
+	RoleID  uint32
+	ExpGain uint32
+}
+
+// PracticeNotifyResult 代表扫荡战斗轮次结算服务端主动通知结果 (ActionID=0x00190004)。
+type PracticeNotifyResult struct {
+	SubType       uint8
+	RoundIndex    uint16
+	RoundTotal    uint16
+	RemainingSec  uint16
+	CoinsGain     uint32
+	ItemsCount    uint16
+	RoleExpItems  []PracticeRoleExpItem
+	RawTailBuffer []byte
+}
+
+// ParsePracticeNotifyResult 从解压缩后的载荷中解析扫荡轮次结算通知。
+func ParsePracticeNotifyResult(payload []byte) (*PracticeNotifyResult, error) {
+	if len(payload) < 1 {
+		return nil, fmt.Errorf("%w: empty practice notify payload", ErrInvalidPayload)
+	}
+	r := NewReader(payload)
+	subType, err := r.ReadUint8()
+	if err != nil {
+		return nil, err
+	}
+
+	res := &PracticeNotifyResult{
+		SubType: subType,
+	}
+
+	// 针对微端典型 SubType (0x05, 0x06, 0x07) 进行结构化解析
+	if r.Remaining() >= 8 {
+		switch subType {
+		case 0x05:
+			// 0x05: 轮次信息与经验列表
+			res.RoundIndex, _ = r.ReadUint16()
+			res.RoundTotal, _ = r.ReadUint16()
+			_ , _ = r.ReadUint16() // 预留/状态
+			res.RemainingSec, _ = r.ReadUint16()
+			if r.Remaining() >= 2 {
+				roleCount, _ := r.ReadUint16()
+				res.RoleExpItems = make([]PracticeRoleExpItem, 0, roleCount)
+				for i := uint16(0); i < roleCount && r.Remaining() >= 8; i++ {
+					rid, _ := r.ReadUint32()
+					exp, _ := r.ReadUint32()
+					res.RoleExpItems = append(res.RoleExpItems, PracticeRoleExpItem{
+						RoleID:  rid,
+						ExpGain: exp,
+					})
+				}
+			}
+		case 0x06:
+			// 0x06: 完整掉落与伙伴结算快照
+			res.RoundIndex = 1
+			_ , _ = r.ReadUint32() // 预留/标志
+			res.CoinsGain, _ = r.ReadUint32()
+			_ , _ = r.ReadUint32() // 预留
+			_ , _ = r.ReadUint16() // 预留
+			if r.Remaining() >= 2 {
+				roleCount, _ := r.ReadUint16()
+				res.RoleExpItems = make([]PracticeRoleExpItem, 0, roleCount)
+				for i := uint16(0); i < roleCount && r.Remaining() >= 8; i++ {
+					rid, _ := r.ReadUint32()
+					exp, _ := r.ReadUint32()
+					res.RoleExpItems = append(res.RoleExpItems, PracticeRoleExpItem{
+						RoleID:  rid,
+						ExpGain: exp,
+					})
+				}
+			}
+		}
+	}
+
+	if r.Remaining() > 0 {
+		res.RawTailBuffer, _ = r.ReadBytes(r.Remaining())
+	}
+
+	return res, nil
+}
+

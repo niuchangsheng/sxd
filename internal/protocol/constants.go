@@ -77,6 +77,8 @@ const (
 	// ActionIDArenaNotify 竞技场排名变更服务端通知 (Module 28, Action 11 -> 0x001C000B)
 	ActionIDArenaNotify uint32 = 0x001C000B
 
+	// ActionIDPracticeGetStatus 查询副本扫荡挂机队列与状态 (Module 25, Action 0 -> 0x00190000)
+	ActionIDPracticeGetStatus uint32 = 0x00190000
 	// ActionIDPracticeGetInfo 查询副本扫荡信息 (Module 25, Action 7 -> 0x00190007)
 	ActionIDPracticeGetInfo uint32 = 0x00190007
 	// ActionIDPracticeStart 开始副本扫荡 (Module 25, Action 1 -> 0x00190001)
