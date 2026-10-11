@@ -96,5 +96,25 @@ func TestRepository_Queries(t *testing.T) {
 		if highest == nil || highest.ID <= 0 {
 			t.Fatalf("期望返回有效的最高等级关卡, 实际为 %+v", highest)
 		}
+
+		// 验证根据等级寻址最优关卡
+		lvl1Mission, err := repo.GetHighestMissionByLevel(1, false)
+		if err != nil {
+			t.Fatalf("获取 1 级推荐关卡失败: %v", err)
+		}
+		if lvl1Mission == nil || lvl1Mission.ID <= 0 {
+			t.Errorf("1 级推荐关卡应有效: %+v", lvl1Mission)
+		}
+
+		lvl50Mission, err := repo.GetHighestMissionByLevel(50, false)
+		if err != nil {
+			t.Fatalf("获取 50 级推荐关卡失败: %v", err)
+		}
+		if lvl50Mission.MissionLock > 50*1000 {
+			t.Errorf("50 级推荐关卡 Lock (%d) 不应超出 50000", lvl50Mission.MissionLock)
+		}
+		if lvl50Mission.MissionLock <= lvl1Mission.MissionLock {
+			t.Errorf("50 级推荐关卡 Lock 应高于 1 级关卡: %d vs %d", lvl50Mission.MissionLock, lvl1Mission.MissionLock)
+		}
 	})
 }

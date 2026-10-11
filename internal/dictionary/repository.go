@@ -28,6 +28,7 @@ type Repository interface {
 	GetRoleType(id int) (*RoleType, error)
 	GetMission(id int) (*Mission, error)
 	GetHighestMission(sweepElite bool) (*Mission, error)
+	GetHighestMissionByLevel(level int, sweepElite bool) (*Mission, error)
 	SearchItems(keyword string) ([]*Item, error)
 	Close() error
 }
@@ -50,6 +51,7 @@ func ResolveDatabasePath(customPath string) (string, error) {
 		filepath.Join("data", "Pieb.db"),
 		filepath.Join("..", "data", "Pieb.db"),
 		filepath.Join("..", "..", "data", "Pieb.db"),
+		filepath.Join("..", "..", "..", "data", "Pieb.db"),
 		`D:\Software\疯玩神仙道\Pieb.db`,
 	}
 
@@ -235,6 +237,56 @@ func (r *sqliteRepository) GetHighestMission(sweepElite bool) (*Mission, error) 
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("dictionary: 查询最高等级副本关卡失败: %w", err)
+	}
+	m.Name = strings.TrimSpace(name.String)
+	m.Monsters = monsters.String
+	m.IsBoss = isBoss == 1
+	return &m, nil
+}
+
+func (r *sqliteRepository) GetHighestMissionByLevel(level int, sweepElite bool) (*Mission, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if level <= 0 {
+		level = 1
+	}
+	// 神仙道关卡解锁锁定值 MissionLock 约为 level * 1000
+	maxLock := level * 1000
+	if level <= 1 {
+		maxLock = 1020 // 确保初级新手角色至少可以锁定小竹林新手关
+	}
+
+	query := `SELECT MissionsId, SectionId, MissionLock, MissionPower, map, mapkey, MissionName, MissionType, isBossMission, monsters 
+              FROM Missions 
+              WHERE MissionLock <= ? AND (? OR MissionType = 0) 
+              ORDER BY MissionLock DESC, MissionsId DESC 
+              LIMIT 1`
+	row := r.db.QueryRow(query, maxLock, sweepElite)
+
+	var m Mission
+	var name sql.NullString
+	var monsters sql.NullString
+	var isBoss int
+	err := row.Scan(&m.ID, &m.SectionID, &m.MissionLock, &m.Power, &m.MapID, &m.MapKey, &name, &m.Type, &isBoss, &monsters)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// 若未查到，降级返回全局最低第一关
+			fallbackQuery := `SELECT MissionsId, SectionId, MissionLock, MissionPower, map, mapkey, MissionName, MissionType, isBossMission, monsters 
+                              FROM Missions 
+                              WHERE (? OR MissionType = 0) 
+                              ORDER BY MissionLock ASC, MissionsId ASC 
+                              LIMIT 1`
+			fbRow := r.db.QueryRow(fallbackQuery, sweepElite)
+			if fbErr := fbRow.Scan(&m.ID, &m.SectionID, &m.MissionLock, &m.Power, &m.MapID, &m.MapKey, &name, &m.Type, &isBoss, &monsters); fbErr != nil {
+				return nil, ErrNotFound
+			}
+			m.Name = strings.TrimSpace(name.String)
+			m.Monsters = monsters.String
+			m.IsBoss = isBoss == 1
+			return &m, nil
+		}
+		return nil, fmt.Errorf("dictionary: 按等级查询最高副本关卡失败: %w", err)
 	}
 	m.Name = strings.TrimSpace(name.String)
 	m.Monsters = monsters.String

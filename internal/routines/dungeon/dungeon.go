@@ -19,8 +19,10 @@ import (
 )
 
 
-// SweepConfig 关卡扫荡自定义策略配置。
+// SweepConfig 关卡扫荡自定义策略配置。向后兼容既有字段并嵌入双模配置能力。
 type SweepConfig struct {
+	// Mode 扫荡模式 (默认 ModeAutoRecommend)
+	Mode SweepMode
 	// SweepElite 是否扫精英关卡 (默认 false，对齐 01.ini 扫精英=否)
 	SweepElite bool
 	// TargetMissionID 目标指定关卡 ID (0 表示自动选最高等级关卡)
@@ -32,8 +34,32 @@ type SweepConfig struct {
 // DefaultSweepConfig 返回默认扫荡策略配置。
 func DefaultSweepConfig() SweepConfig {
 	return SweepConfig{
+		Mode:          ModeAutoRecommend,
 		SweepElite:    false,
 		MaxBatchTimes: 10,
+	}
+}
+
+// ToDungeonSweepConfig 转换为标准的双模配置模型。
+func (c SweepConfig) ToDungeonSweepConfig() DungeonSweepConfig {
+	mode := c.Mode
+	if mode == "" {
+		if c.TargetMissionID > 0 {
+			mode = ModeExpertOverride
+		} else {
+			mode = ModeAutoRecommend
+		}
+	}
+	maxBatch := c.MaxBatchTimes
+	if maxBatch <= 0 {
+		maxBatch = 10
+	}
+	return DungeonSweepConfig{
+		Mode:                  mode,
+		TargetMissionID:       c.TargetMissionID,
+		SweepElite:            c.SweepElite,
+		MaxBatchTimes:         maxBatch,
+		RequiredPowerPerSweep: 5,
 	}
 }
 
@@ -194,22 +220,16 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				// 关闭英雄副本扫荡界面
 				_ = session.Send(protocol.BuildHeroMissionClosePacket())
 			} else {
-				// 7. 无英雄副本时，执行常规/指定关卡扫荡 (Module 35 兜底)
-				missionID := cfg.TargetMissionID
+				// 7. 无英雄副本时，执行常规/指定关卡扫荡 (基于 MissionResolver 智能寻址)
+				resolver := NewMissionResolver(dictRepo)
+				resolved, resErr := resolver.Resolve(cfg.ToDungeonSweepConfig(), state.Level, stamina)
+				missionID := 43
 				missionName := "扬州城-万妖皇"
-				if missionID > 0 && dictRepo != nil {
-					if m, err := dictRepo.GetMission(missionID); err == nil && m != nil {
-						missionName = m.Name
-					}
-				} else if dictRepo != nil {
-					if highest, err := dictRepo.GetHighestMission(cfg.SweepElite); err == nil && highest != nil {
-						missionID = highest.ID
-						missionName = highest.Name
-					}
-				}
-				if missionID <= 0 || missionID > 150 {
-					missionID = 43
-					missionName = "扬州城-万妖皇"
+				if resErr == nil && resolved != nil {
+					missionID = resolved.MissionID
+					missionName = resolved.MissionName
+				} else if cfg.TargetMissionID > 0 {
+					missionID = cfg.TargetMissionID
 				}
 
 				availableTimes := stamina / powerPerSweep
