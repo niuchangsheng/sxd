@@ -906,6 +906,77 @@ func runMockGameServer(conn net.Conn) {
 				resPkt, _ := protocol.BuildQuicklyResultPacket(res)
 				_ = protocol.WritePacket(conn, resPkt)
 			}
+
+		case protocol.ActionIDDailySignIn:
+			// 响应每日签到请求
+			resPkt := protocol.BuildDailySignInResultPacket(protocol.DailySignInResult{
+				Success:       true,
+				AlreadySigned: false,
+				SignedDays:    1,
+				RewardCoins:   50000,
+				RewardIngots:  20,
+				Message:       "签到成功，获得5万铜钱与20元宝！",
+			})
+			_ = protocol.WritePacket(conn, resPkt)
+
+		case protocol.ActionIDMailCollect:
+			// 响应一键收取邮件附件
+			resPkt := protocol.BuildMailCollectResultPacket(protocol.MailCollectResult{
+				Success:        true,
+				CollectedCount: 2,
+				RewardCoins:    20000,
+				Message:        "成功提取 2 封邮件附件！",
+			})
+			_ = protocol.WritePacket(conn, resPkt)
+
+		case protocol.ActionIDFateGetInfo:
+			// 响应仙履奇缘状态查询 (剩余 1 次)
+			resPkt := protocol.BuildFateGetInfoResultPacket(protocol.FateGetInfoResult{
+				RemainingTimes: 1,
+				MaxTimes:       3,
+			})
+			_ = protocol.WritePacket(conn, resPkt)
+
+		case protocol.ActionIDFateGetQuestion:
+			// 响应仙履奇缘故事题目 (对齐 answers.txt 真实故事)
+			resPkt := protocol.BuildFateQuestionResultPacket(protocol.FateQuestionResult{
+				QuestionID: 46,
+				Story:      "灵木玉神树，千年产一次凝神汁...",
+				Options: []protocol.FateOption{
+					{ChoiceID: 1, Key: "A", Text: "除掉守护灵兽，夺取凝神汁。"},
+					{ChoiceID: 2, Key: "B", Text: "灵兽过于强大，遗憾的放弃。"},
+				},
+			})
+			_ = protocol.WritePacket(conn, resPkt)
+
+		case protocol.ActionIDFateAnswer:
+			// 响应仙履奇缘答题结算
+			w := protocol.NewWriter()
+			w.WriteString("获得5体力,50声望！")
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFateAnswer, w.Bytes()))
+
+		case protocol.ActionIDArenaGetTimes:
+			// 响应竞技场剩余挑战次数 (10 次)
+			resPkt, _ := protocol.BuildArenaGetTimesResultPacket(10)
+			_ = protocol.WritePacket(conn, resPkt)
+
+		case protocol.ActionIDArenaGetOpponents:
+			// 响应竞技场可挑战对手列表
+			opponents := []protocol.ArenaOpponent{
+				{Rank: 5, RoleID: 1001, Name: "初级剑仙", FightValue: 35000},
+				{Rank: 4, RoleID: 1002, Name: "天罗神将", FightValue: 68000},
+				{Rank: 3, RoleID: 1003, Name: "万妖统帅", FightValue: 92000},
+			}
+			resPkt, _ := protocol.BuildArenaGetOpponentsResultPacket(opponents)
+			_ = protocol.WritePacket(conn, resPkt)
+
+		case protocol.ActionIDArenaChallenge:
+			// 响应竞技场挑战胜利 (提升至第 5 名)
+			resPkt, _ := protocol.BuildArenaChallengeResultPacket(protocol.ArenaChallengeResult{
+				Success: true,
+				NewRank: 5,
+			})
+			_ = protocol.WritePacket(conn, resPkt)
 		}
 	}
 }

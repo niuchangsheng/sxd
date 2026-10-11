@@ -175,3 +175,84 @@ func ParseFateAnswerResult(payload []byte) (*FateAnswerResult, error) {
 
 	return res, nil
 }
+
+// BuildFateGetInfoResultPacket 构造仙履奇缘状态回包。
+func BuildFateGetInfoResultPacket(res FateGetInfoResult) *Packet {
+	w := NewWriter()
+	w.WriteInt32(res.RemainingTimes)
+	w.WriteInt32(res.MaxTimes)
+	return NewPacket(ActionIDFateGetInfo, w.Bytes())
+}
+
+// ParseFateGetInfoResult 从载荷中反序列化奇缘状态。
+func ParseFateGetInfoResult(payload []byte) (*FateGetInfoResult, error) {
+	if len(payload) < 4 {
+		return &FateGetInfoResult{RemainingTimes: 1, MaxTimes: 3}, nil
+	}
+	r := NewReader(payload)
+	rem, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read remaining_times: %v", ErrInvalidPayload, err)
+	}
+	maxT, _ := r.ReadInt32()
+	return &FateGetInfoResult{
+		RemainingTimes: rem,
+		MaxTimes:       maxT,
+	}, nil
+}
+
+// BuildFateQuestionResultPacket 构造仙履奇缘故事题目回包。
+func BuildFateQuestionResultPacket(res FateQuestionResult) *Packet {
+	w := NewWriter()
+	w.WriteInt32(res.QuestionID)
+	w.WriteString(res.Story)
+	w.WriteUint16(uint16(len(res.Options)))
+	for _, opt := range res.Options {
+		w.WriteInt32(opt.ChoiceID)
+		w.WriteString(opt.Key)
+		w.WriteString(opt.Text)
+	}
+	return NewPacket(ActionIDFateGetQuestion, w.Bytes())
+}
+
+// ParseFateQuestionResult 从载荷中反序列化题目与选项。
+func ParseFateQuestionResult(payload []byte) (*FateQuestionResult, error) {
+	if len(payload) < 6 {
+		return nil, fmt.Errorf("%w: payload too short for fate question", ErrInvalidPayload)
+	}
+	r := NewReader(payload)
+	qid, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read question_id: %v", ErrInvalidPayload, err)
+	}
+	story, err := r.ReadString()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read story: %v", ErrInvalidPayload, err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return &FateQuestionResult{QuestionID: qid, Story: story}, nil
+	}
+	opts := make([]FateOption, 0, count)
+	for i := 0; i < int(count); i++ {
+		if r.Remaining() < 6 {
+			break
+		}
+		cid, err := r.ReadInt32()
+		if err != nil {
+			break
+		}
+		key, _ := r.ReadString()
+		txt, _ := r.ReadString()
+		opts = append(opts, FateOption{
+			ChoiceID: cid,
+			Key:      key,
+			Text:     txt,
+		})
+	}
+	return &FateQuestionResult{
+		QuestionID: qid,
+		Story:      story,
+		Options:    opts,
+	}, nil
+}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
@@ -57,45 +58,105 @@ func NewImmortalFantasyRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 			if err != nil {
 				return fmt.Errorf("构造仙履奇缘状态查询封包失败: %w", err)
 			}
-			if err := session.Send(infoPkt); err != nil {
-				return fmt.Errorf("发送仙履奇缘状态查询失败: %w", err)
-			}
 
-			// 3. 发送拉取当前奇缘事件题目请求
-			questionPkt, err := protocol.BuildFateQuestionPacket(protocol.FateQuestionRequest{
-				PrevAct: protocol.ActionIDFateGetInfo,
-			})
+			infoCtx, infoCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer infoCancel()
+
+			respInfoPkt, err := session.Call(infoCtx, infoPkt, protocol.ActionIDFateGetInfo)
 			if err != nil {
-				return fmt.Errorf("构造仙履奇缘题目查询封包失败: %w", err)
-			}
-			if err := session.Send(questionPkt); err != nil {
-				return fmt.Errorf("发送仙履奇缘题目查询失败: %w", err)
+				return fmt.Errorf("查询仙履奇缘状态失败: %w", err)
 			}
 
-			// 4. 若挂载题库引擎，支持自动检索与最优解匹配
-			chosenAnswerID := int32(0x5B) // 默认兜底选项
-			if qaEngine != nil {
-				sampleQ := "遭遇堕入魔道的原本门高手赤炼子。"
-				ans, conf, found := qaEngine.Match(sampleQ)
-				if found {
-					slog.Debug("仙履奇缘题库检索命中", "question", sampleQ, "answer", ans, "confidence", conf)
+			infoRes, err := protocol.ParseFateGetInfoResult(respInfoPkt.Payload)
+			if err != nil {
+				return fmt.Errorf("解析仙履奇缘状态回包失败: %w", err)
+			}
+
+			if infoRes.RemainingTimes <= 0 {
+				slog.Info("今日仙履奇缘答题次数已耗尽", "role_id", session.RoleID(), "remaining", infoRes.RemainingTimes)
+				return nil
+			}
+
+			rounds := int(infoRes.RemainingTimes)
+			for i := 0; i < rounds; i++ {
+				// 3. 发送拉取当前奇缘事件题目请求
+				questionPkt, err := protocol.BuildFateQuestionPacket(protocol.FateQuestionRequest{
+					PrevAct: protocol.ActionIDFateGetInfo,
+				})
+				if err != nil {
+					return fmt.Errorf("构造仙履奇缘题目查询封包失败: %w", err)
+				}
+
+				qCtx, qCancel := context.WithTimeout(ctx, 3*time.Second)
+				respQPkt, err := session.Call(qCtx, questionPkt, protocol.ActionIDFateGetQuestion)
+				qCancel()
+				if err != nil {
+					return fmt.Errorf("拉取仙履奇缘题目失败: %w", err)
+				}
+
+				qRes, err := protocol.ParseFateQuestionResult(respQPkt.Payload)
+				if err != nil {
+					return fmt.Errorf("解析仙履奇缘题目回包失败: %w", err)
+				}
+
+				// 4. 若挂载题库引擎，执行收益权重决策
+				chosenAnswerID := int32(1)
+				bestBranch := 1
+				reason := "默认首选选项"
+
+				if qaEngine != nil {
+					branch, entry, found := qaEngine.MatchFate(qRes.Story)
+					if found && entry != nil {
+						bestBranch = branch
+						_, reason = qa.DecideBestBranch(entry)
+						slog.Info("仙履奇缘题库检索与决策命中",
+							"story", qRes.Story,
+							"best_branch", bestBranch,
+							"decision_reason", reason,
+						)
+					}
+				}
+
+				if len(qRes.Options) >= 2 {
+					if bestBranch == 2 {
+						chosenAnswerID = qRes.Options[1].ChoiceID
+					} else {
+						chosenAnswerID = qRes.Options[0].ChoiceID
+					}
+				} else if len(qRes.Options) > 0 {
+					chosenAnswerID = qRes.Options[0].ChoiceID
+				}
+
+				// 5. 提交答案选项请求
+				answerPkt, err := protocol.BuildFateAnswerPacket(protocol.FateAnswerRequest{
+					QuestionID: qRes.QuestionID,
+					AnswerID:   chosenAnswerID,
+					PrevAct:    protocol.ActionIDFateGetQuestion,
+				})
+				if err != nil {
+					return fmt.Errorf("构造仙履奇缘提交答案封包失败: %w", err)
+				}
+
+				ansCtx, ansCancel := context.WithTimeout(ctx, 3*time.Second)
+				ansRespPkt, err := session.Call(ansCtx, answerPkt, protocol.ActionIDFateAnswer)
+				ansCancel()
+				if err != nil {
+					return fmt.Errorf("提交仙履奇缘答案失败: %w", err)
+				}
+
+				ansRes, _ := protocol.ParseFateAnswerResult(ansRespPkt.Payload)
+				slog.Info("仙履奇缘问答决策与提交完成",
+					"role_id", session.RoleID(),
+					"question_id", qRes.QuestionID,
+					"answer_id", chosenAnswerID,
+					"result_message", ansRes.Message,
+				)
+
+				if jitter != nil && i < rounds-1 {
+					_ = jitter.Wait(ctx)
 				}
 			}
 
-			// 5. 提交答案选项请求
-			answerPkt, err := protocol.BuildFateAnswerPacket(protocol.FateAnswerRequest{
-				QuestionID: 46,
-				AnswerID:   chosenAnswerID,
-				PrevAct:    protocol.ActionIDFateGetQuestion,
-			})
-			if err != nil {
-				return fmt.Errorf("构造仙履奇缘提交答案封包失败: %w", err)
-			}
-			if err := session.Send(answerPkt); err != nil {
-				return fmt.Errorf("发送仙履奇缘答案失败: %w", err)
-			}
-
-			slog.Info("仙履奇缘问答决策与提交完成", "role_id", session.RoleID())
 			return nil
 		},
 	)

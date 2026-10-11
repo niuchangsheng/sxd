@@ -72,4 +72,38 @@ func TestArenaCodec_BuildAndParse(t *testing.T) {
 	if parsedChallenge.TargetRank != 5 || parsedChallenge.PrevAct != 0x001C0001 {
 		t.Errorf("挑战解析结果不符: %+v", parsedChallenge)
 	}
+
+	// 4. 测试 ArenaGetOpponentsResult 编解码
+	opponents := []ArenaOpponent{
+		{Rank: 5, RoleID: 1001, Name: "初级剑仙", FightValue: 35000},
+		{Rank: 4, RoleID: 1002, Name: "天罗神将", FightValue: 68000},
+	}
+	oppPkt, err := BuildArenaGetOpponentsResultPacket(opponents)
+	if err != nil {
+		t.Fatalf("BuildArenaGetOpponentsResultPacket 失败: %v", err)
+	}
+	parsedOppRes, err := ParseArenaGetOpponentsResult(oppPkt.Payload)
+	if err != nil {
+		t.Fatalf("ParseArenaGetOpponentsResult 失败: %v", err)
+	}
+	if len(parsedOppRes.Opponents) != 2 || parsedOppRes.Opponents[0].Name != "初级剑仙" {
+		t.Errorf("对手列表解析不匹配: %+v", parsedOppRes)
+	}
+
+	// 5. 测试 ArenaChallengeResult 编解码
+	chRes := ArenaChallengeResult{
+		Success: true,
+		NewRank: 5,
+	}
+	chPkt, err := BuildArenaChallengeResultPacket(chRes)
+	if err != nil {
+		t.Fatalf("BuildArenaChallengeResultPacket 失败: %v", err)
+	}
+	parsedChRes, err := ParseArenaChallengeResult(chPkt.Payload)
+	if err != nil {
+		t.Fatalf("ParseArenaChallengeResult 失败: %v", err)
+	}
+	if !parsedChRes.Success || parsedChRes.NewRank != 5 {
+		t.Errorf("挑战结算结果不匹配: %+v", parsedChRes)
+	}
 }

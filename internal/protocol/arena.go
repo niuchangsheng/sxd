@@ -168,3 +168,86 @@ func ParseArenaChallengeRequest(payload []byte) (*ArenaChallengeRequest, error) 
 		PrevAct:    prevAct,
 	}, nil
 }
+
+// BuildArenaGetOpponentsResultPacket 构造竞技场对手列表回包封包。
+func BuildArenaGetOpponentsResultPacket(opponents []ArenaOpponent) (*Packet, error) {
+	w := NewWriter()
+	w.WriteUint16(uint16(len(opponents)))
+	for _, opp := range opponents {
+		w.WriteInt32(opp.Rank)
+		w.WriteInt32(opp.RoleID)
+		w.WriteString(opp.Name)
+		w.WriteInt32(opp.FightValue)
+	}
+	return NewPacket(ActionIDArenaGetOpponents, w.Bytes()), nil
+}
+
+// ParseArenaGetOpponentsResult 从载荷反序列化对手列表回包。
+func ParseArenaGetOpponentsResult(payload []byte) (*ArenaGetOpponentsResult, error) {
+	if len(payload) < 2 {
+		return &ArenaGetOpponentsResult{}, nil
+	}
+	r := NewReader(payload)
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read opponent count: %v", ErrInvalidPayload, err)
+	}
+	opps := make([]ArenaOpponent, 0, count)
+	for i := 0; i < int(count); i++ {
+		if r.Remaining() < 10 {
+			break
+		}
+		rank, err := r.ReadInt32()
+		if err != nil {
+			break
+		}
+		roleID, err := r.ReadInt32()
+		if err != nil {
+			break
+		}
+		name, err := r.ReadString()
+		if err != nil {
+			break
+		}
+		fightVal, err := r.ReadInt32()
+		if err != nil {
+			break
+		}
+		opps = append(opps, ArenaOpponent{
+			Rank:       rank,
+			RoleID:     roleID,
+			Name:       name,
+			FightValue: fightVal,
+		})
+	}
+	return &ArenaGetOpponentsResult{Opponents: opps}, nil
+}
+
+// BuildArenaChallengeResultPacket 构造竞技场挑战战报结算封包。
+func BuildArenaChallengeResultPacket(res ArenaChallengeResult) (*Packet, error) {
+	w := NewWriter()
+	var flag uint8
+	if res.Success {
+		flag = 1
+	}
+	w.WriteUint8(flag)
+	w.WriteInt32(res.NewRank)
+	return NewPacket(ActionIDArenaChallenge, w.Bytes()), nil
+}
+
+// ParseArenaChallengeResult 从载荷反序列化挑战结算回包。
+func ParseArenaChallengeResult(payload []byte) (*ArenaChallengeResult, error) {
+	if len(payload) == 0 {
+		return &ArenaChallengeResult{Success: true, NewRank: 0}, nil
+	}
+	r := NewReader(payload)
+	flag, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read challenge flag: %v", ErrInvalidPayload, err)
+	}
+	newRank, _ := r.ReadInt32()
+	return &ArenaChallengeResult{
+		Success: flag == 1,
+		NewRank: newRank,
+	}, nil
+}

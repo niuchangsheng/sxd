@@ -8,11 +8,27 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
 )
+
+// SelectSoftPersimmonOpponent 软柿子挑选算法：优先挑选战力最低且排位靠前的对手。
+func SelectSoftPersimmonOpponent(opponents []protocol.ArenaOpponent) protocol.ArenaOpponent {
+	if len(opponents) == 0 {
+		return protocol.ArenaOpponent{Rank: 5}
+	}
+	best := opponents[0]
+	for _, opp := range opponents[1:] {
+		// 战力更低，或者战力相当但排名更高 (Rank 更小)
+		if opp.FightValue < best.FightValue || (opp.FightValue == best.FightValue && opp.Rank < best.Rank) {
+			best = opp
+		}
+	}
+	return best
+}
 
 // NewArenaRoutine 构造本服竞技场挑战任务。
 func NewArenaRoutine() scheduler.ActivityRoutine {
@@ -41,8 +57,23 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 			if err != nil {
 				return fmt.Errorf("构造竞技场次数查询封包失败: %w", err)
 			}
-			if err := session.Send(timesPkt); err != nil {
-				return fmt.Errorf("发送竞技场次数查询失败: %w", err)
+
+			tCtx, tCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer tCancel()
+
+			timesRespPkt, err := session.Call(tCtx, timesPkt, protocol.ActionIDArenaGetTimes)
+			if err != nil {
+				return fmt.Errorf("查询竞技场次数失败: %w", err)
+			}
+
+			timesRes, err := protocol.ParseArenaGetTimesResult(timesRespPkt.Payload)
+			if err != nil {
+				return fmt.Errorf("解析竞技场剩余次数失败: %w", err)
+			}
+
+			if timesRes.RemainingTimes <= 0 {
+				slog.Info("今日竞技场免费挑战次数已用尽", "role_id", session.RoleID(), "remaining", timesRes.RemainingTimes)
+				return nil
 			}
 
 			// 3. 发送查询可挑战对手列表
@@ -52,23 +83,57 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 			if err != nil {
 				return fmt.Errorf("构造竞技场对手查询封包失败: %w", err)
 			}
-			if err := session.Send(opponentsPkt); err != nil {
-				return fmt.Errorf("发送竞技场对手查询失败: %w", err)
+
+			oppCtx, oppCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer oppCancel()
+
+			oppRespPkt, err := session.Call(oppCtx, opponentsPkt, protocol.ActionIDArenaGetOpponents)
+			if err != nil {
+				return fmt.Errorf("查询竞技场对手列表失败: %w", err)
 			}
 
-			// 4. 发起挑战 (默认挑战可挑战位 TargetRank=5，符合抓包行为)
+			oppRes, err := protocol.ParseArenaGetOpponentsResult(oppRespPkt.Payload)
+			if err != nil {
+				return fmt.Errorf("解析竞技场对手回包失败: %w", err)
+			}
+
+			// 4. 软柿子筛选算法：锁定战力最低、胜率最高的挑战目标
+			target := SelectSoftPersimmonOpponent(oppRes.Opponents)
+			slog.Info("竞技场软柿子筛选锁定目标",
+				"role_id", session.RoleID(),
+				"target_name", target.Name,
+				"target_rank", target.Rank,
+				"fight_value", target.FightValue,
+			)
+
+			// 5. 发起挑战
 			challengePkt, err := protocol.BuildArenaChallengePacket(protocol.ArenaChallengeRequest{
-				TargetRank: 5,
+				TargetRank: target.Rank,
 				PrevAct:    protocol.ActionIDArenaGetOpponents,
 			})
 			if err != nil {
 				return fmt.Errorf("构造竞技场挑战封包失败: %w", err)
 			}
-			if err := session.Send(challengePkt); err != nil {
+
+			chCtx, chCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer chCancel()
+
+			chRespPkt, err := session.Call(chCtx, challengePkt, protocol.ActionIDArenaChallenge)
+			if err != nil {
 				return fmt.Errorf("发送竞技场挑战失败: %w", err)
 			}
 
-			slog.Info("本服竞技场挑战完成", "role_id", session.RoleID(), "target_rank", 5)
+			chRes, err := protocol.ParseArenaChallengeResult(chRespPkt.Payload)
+			if err != nil {
+				return fmt.Errorf("解析竞技场挑战结算失败: %w", err)
+			}
+
+			slog.Info("本服竞技场挑战完成",
+				"role_id", session.RoleID(),
+				"target_rank", target.Rank,
+				"success", chRes.Success,
+				"new_rank", chRes.NewRank,
+			)
 			return nil
 		},
 	)

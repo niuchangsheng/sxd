@@ -24,6 +24,8 @@ import (
 type Engine interface {
 	// Match 执行三级漏斗智能问答检索，返回答案、置信度以及是否命中。
 	Match(question string) (answer string, confidence float64, found bool)
+	// MatchFate 根据仙履奇缘故事文本检索题库，并基于收益权重决策最优分支选项 (1 或 2)。
+	MatchFate(story string) (bestBranch int, entry *FateEntry, found bool)
 	// Size 返回当前引擎加载的题库去重条数。
 	Size() int
 }
@@ -40,7 +42,12 @@ type memoryEngine struct {
 	exactMap   map[string]string
 	entries    []entry
 	ngramIndex map[string][]int
-	mu         sync.RWMutex
+
+	fateEntries []FateEntry
+	fateMap     map[string]*FateEntry
+	fateNgrams  map[string][]int
+
+	mu sync.RWMutex
 }
 
 // Normalize 对题干文本执行清洗，去除所有标点、符号与空白字符，并转小写。
@@ -72,6 +79,7 @@ func ResolveDataDir(customDir string) (string, error) {
 		"data",
 		filepath.Join("..", "data"),
 		filepath.Join("..", "..", "data"),
+		filepath.Join("..", "..", "..", "data"),
 		`D:\Software\疯玩神仙道`,
 	}
 
@@ -94,6 +102,8 @@ func NewEngine(dataDir string) (Engine, error) {
 	eng := &memoryEngine{
 		exactMap:   make(map[string]string),
 		ngramIndex: make(map[string][]int),
+		fateMap:    make(map[string]*FateEntry),
+		fateNgrams: make(map[string][]int),
 	}
 
 	// 1. 扫描加载常见题库文件
@@ -103,13 +113,20 @@ func NewEngine(dataDir string) (Engine, error) {
 	for _, fname := range targetFiles {
 		fullPath := filepath.Join(actualDir, fname)
 		if _, err := os.Stat(fullPath); err == nil {
-			if err := eng.loadFile(fullPath); err == nil {
-				loadedCount++
+			if fname == "answers.txt" {
+				if entries, err := LoadAnswersFile(fullPath); err == nil && len(entries) > 0 {
+					eng.loadFateEntries(entries)
+					loadedCount++
+				}
+			} else {
+				if err := eng.loadFile(fullPath); err == nil {
+					loadedCount++
+				}
 			}
 		}
 	}
 
-	if len(eng.exactMap) == 0 {
+	if len(eng.exactMap) == 0 && len(eng.fateMap) == 0 {
 		return nil, fmt.Errorf("qa: 题库文件解析完成但未提取到有效题目 (dataDir: %s)", actualDir)
 	}
 
@@ -269,4 +286,77 @@ func levenshteinDistance(s1, s2 []rune) int {
 	}
 
 	return dp[len2]
+}
+
+func (e *memoryEngine) loadFateEntries(entries []FateEntry) {
+	e.fateEntries = append(e.fateEntries, entries...)
+	for idx, ent := range e.fateEntries {
+		normTitle := Normalize(ent.Title)
+		if normTitle != "" {
+			e.fateMap[normTitle] = &e.fateEntries[idx]
+		}
+		runes := []rune(normTitle)
+		for i := 0; i < len(runes)-1; i++ {
+			gram := string(runes[i : i+2])
+			e.fateNgrams[gram] = append(e.fateNgrams[gram], idx)
+		}
+	}
+}
+
+// MatchFate 根据仙履奇缘故事文本检索题库，并基于收益权重决策最优分支选项 (1 或 2)。
+func (e *memoryEngine) MatchFate(story string) (int, *FateEntry, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	normTarget := Normalize(story)
+	if normTarget == "" {
+		return 1, nil, false
+	}
+
+	// 1. 精确哈希匹配
+	if ent, ok := e.fateMap[normTarget]; ok {
+		branch, _ := DecideBestBranch(ent)
+		return branch, ent, true
+	}
+
+	// 2. 2-gram 倒排索引模糊匹配
+	targetRunes := []rune(normTarget)
+	if len(targetRunes) < 2 {
+		return 1, nil, false
+	}
+
+	candidateScores := make(map[int]int)
+	for i := 0; i < len(targetRunes)-1; i++ {
+		gram := string(targetRunes[i : i+2])
+		for _, idx := range e.fateNgrams[gram] {
+			candidateScores[idx]++
+		}
+	}
+
+	bestIdx := -1
+	bestSimilarity := 0.0
+
+	for idx, score := range candidateScores {
+		if score < 2 && len(targetRunes) > 4 {
+			continue
+		}
+		ent := e.fateEntries[idx]
+		candRunes := []rune(Normalize(ent.Title))
+		dist := levenshteinDistance(targetRunes, candRunes)
+		maxLen := max(len(targetRunes), len(candRunes))
+		sim := 1.0 - float64(dist)/float64(maxLen)
+
+		if sim > bestSimilarity {
+			bestSimilarity = sim
+			bestIdx = idx
+		}
+	}
+
+	if bestSimilarity >= 0.50 && bestIdx >= 0 {
+		ent := &e.fateEntries[bestIdx]
+		branch, _ := DecideBestBranch(ent)
+		return branch, ent, true
+	}
+
+	return 1, nil, false
 }
