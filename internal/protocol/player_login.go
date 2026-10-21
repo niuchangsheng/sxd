@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -29,10 +30,21 @@ type PlayerLoginRequest struct {
 	Time string
 	// Source 渠道来源标识 (默认 "sxd_baidu_pinpai_bt")
 	Source string
-	// Platform 平台显示名称 (如 "疯玩")
+	// Platform 平台显示名称 (如 "疯玩" / "心动")
 	Platform string
 	// ClientType 客户端接入类型 (默认 "web")
 	ClientType string
+
+	// 官方 10/12 字段入场参数 (Mod_Player_Base.login 0x00000000)
+	RegDate      int32
+	IDCard       string
+	OpenTime     int32
+	IsNewst      int8
+	Stage        string
+	Client       string
+	Flag         int8
+	TailUsername string
+	IsOfficial   bool
 }
 
 // PlayerLoginResult 代表角色主服登录成功后服务端返回的核心角色属性快照。
@@ -67,6 +79,36 @@ func BuildPlayerLoginPacket(req PlayerLoginRequest) (*Packet, error) {
 	if req.Username == "" {
 		return nil, errors.New("protocol: username cannot be empty for player login")
 	}
+
+	// 若显式指定为官方协议格式，或携带官方特有字段 (如 IDCard / RegDate / OpenTime)
+	if req.IsOfficial || req.IDCard != "" || req.RegDate != 0 || req.OpenTime != 0 {
+		w := NewWriter()
+		w.WriteString(req.Username)
+		w.WriteString(req.Hash)
+		w.WriteString(req.Time)
+		w.WriteString(req.Source)
+		w.WriteInt32(req.RegDate)
+		w.WriteString(req.IDCard)
+		w.WriteInt32(req.OpenTime)
+		w.WriteInt8(req.IsNewst)
+		w.WriteString(req.Stage)
+		w.WriteString(req.Client)
+		if req.Client == "pc_wd" || req.Flag != 0 || req.TailUsername != "" {
+			flag := req.Flag
+			if flag == 0 {
+				flag = 1
+			}
+			w.WriteInt8(flag)
+			tailUser := req.TailUsername
+			if tailUser == "" {
+				tailUser = strings.Split(req.Username, ".")[0]
+			}
+			w.WriteString(tailUser)
+		}
+		return NewPacket(ActionIDPlayerLogin, w.Bytes()), nil
+	}
+
+	// 默认向下兼容 Golden Case 1 封包规范
 	if req.Source == "" {
 		req.Source = "sxd_baidu_pinpai_bt"
 	}
@@ -208,34 +250,48 @@ func isLikelyName(b []byte, offset int) (int, bool) {
 // PlayerLoginAuthResponse 代表角色主服网关认证握手响应 (Module 0, Action 0)。
 type PlayerLoginAuthResponse struct {
 	Reserved   uint32
-	ResultCode uint8 // 4 代表登录成功
+	ResultCode uint8 // 0 或 4 代表登录成功
+	PlayerID   int32 // 官方协议返回的角色在当前区服 ID
 	RawPayload []byte
 }
 
 // ParsePlayerLoginAuthResponse 解析角色网关登录认证握手响应。
-// 对应 Golden Case 2: 00 00 00 1a 00 00 00 00 00 00 00 00 04 0a ...
+// 兼容官方协议 (首字节为 ResultCode=0，紧跟 4B PlayerID) 与 Golden Case 2 (前导 4 字节保留，第 5 字节为 ResultCode=4)。
 //
 // @param payload 原始封包载荷切片
 // @return 登录认证响应模型或错误
 func ParsePlayerLoginAuthResponse(payload []byte) (*PlayerLoginAuthResponse, error) {
-	if len(payload) < 5 {
+	if len(payload) < 1 {
 		return nil, ErrPlayerLoginPayloadTooShort
 	}
 
-	r := NewReader(payload)
-	reserved, err := r.ReadUint32()
-	if err != nil {
-		return nil, err
+	// 1. 优先校验 Golden Case 2 抓包规范: 前导 4 字节 Reserved=0，第 5 字节 ResultCode 为 1~4
+	if len(payload) >= 5 {
+		r := NewReader(payload)
+		reserved, _ := r.ReadUint32()
+		code, _ := r.ReadUint8()
+		if reserved == 0 && (code >= 1 && code <= 4) {
+			return &PlayerLoginAuthResponse{
+				Reserved:   reserved,
+				ResultCode: code,
+				RawPayload: payload,
+			}, nil
+		}
 	}
 
-	resultCode, err := r.ReadUint8()
-	if err != nil {
-		return nil, err
+	// 2. 官方协议格式: 首字节直接为 ResultCode (0 为成功)，随后紧跟 4 字节 PlayerID
+	if payload[0] == 0 && len(payload) >= 5 {
+		r := NewReader(payload[1:])
+		pid, _ := r.ReadInt32()
+		return &PlayerLoginAuthResponse{
+			ResultCode: 0,
+			PlayerID:   pid,
+			RawPayload: payload,
+		}, nil
 	}
 
 	return &PlayerLoginAuthResponse{
-		Reserved:   reserved,
-		ResultCode: resultCode,
+		ResultCode: payload[0],
 		RawPayload: payload,
 	}, nil
 }

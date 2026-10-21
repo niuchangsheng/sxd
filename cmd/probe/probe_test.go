@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,8 +18,26 @@ import (
 
 // TestResolveProbeConfig 验证命令行参数与配置文件的继承覆盖逻辑
 func TestResolveProbeConfig(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "test_probe_config_*.yaml")
+	if err != nil {
+		t.Fatalf("failed to create temp config: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	mockYAML := `accounts:
+  - platform: "fengwan"
+    username: "kongyu"
+    password: "pwd"
+    roles:
+      - server_id: "s813"
+        role_name: "梦一场"
+`
+	if err := os.WriteFile(tmpFile.Name(), []byte(mockYAML), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
 	opts := ProbeOptions{
-		ConfigPath: "configs/config.yaml",
+		ConfigPath: tmpFile.Name(),
 		ServerAddr: "custom-gateway:8381",
 		RoleName:   "自定义角色",
 	}
@@ -31,7 +50,7 @@ func TestResolveProbeConfig(t *testing.T) {
 	if res.RoleName != "自定义角色" {
 		t.Errorf("期望命令行 RoleName 覆盖配置, 实际为 %s", res.RoleName)
 	}
-	// 验证未覆盖字段继承自 configs/config.yaml
+	// 验证未覆盖字段继承自配置文件
 	if res.Platform != "fengwan" {
 		t.Errorf("期望 Platform 继承自配置文件 'fengwan', 实际为 %s", res.Platform)
 	}
@@ -45,7 +64,7 @@ func TestRunProbe_DryRun_FullLifecycle(t *testing.T) {
 	var out bytes.Buffer
 
 	opts := ProbeOptions{
-		ConfigPath: "configs/config.yaml",
+		ConfigPath: "configs/test_non_existent.yaml",
 		RoleName:   "梦一场",
 		DryRun:     true,
 		OneShot:    true,

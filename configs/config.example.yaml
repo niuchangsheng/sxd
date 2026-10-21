@@ -9,8 +9,11 @@ accounts:
   - platform: "xindong"
     username: "YOUR_PLATFORM_USERNAME"
     password: "${PLATFORM_PASSWORD}"
+    # 心动平台通行证 Cookie (可选，用于绕过图形验证码风控并实现全自动进服与掉线重连)
+    # 格式例如: "A1=xxxxxx; A2=yyyyyy"
+    cookie: ""
     roles:
-      - server_id: "s1"
+      - server_id: "s0"        # 区服ID，如测试1服为 "s0"，双线1区为 "s1"
         role_name: "YOUR_ROLE_NAME"
         auto_login: true
 

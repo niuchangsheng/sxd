@@ -49,6 +49,8 @@ type Ticket struct {
 	CreatedAt time.Time `json:"created_at"`
 	// ExpiresAt 票据预期过期时间
 	ExpiresAt time.Time `json:"expires_at"`
+	// Extra 存放平台特定的扩展入场参数 (例如官方 10 字段所需: regdate, id_card, open_time, is_newst, source 等)
+	Extra map[string]string `json:"extra,omitempty"`
 }
 
 // IsExpired 判断当前票据是否已过期或即将过期 (预留 5 分钟缓冲)。
@@ -69,6 +71,7 @@ type PlatformAuthenticator interface {
 
 // NormalizeServerID 执行区服标识归一化处理。
 // 若输入 "s813" 或 "813" 且平台为 "fengwanyx"，将自动补齐为 "fengwanyx_s813"；
+// 若输入 "S0" 或 "0" 且平台为 "xindong"，归一化为 "s0"；
 // 若输入已包含平台前缀，则原样保留。
 func NormalizeServerID(platformName, serverID string) string {
 	s := strings.TrimSpace(serverID)
@@ -87,6 +90,10 @@ func NormalizeServerID(platformName, serverID string) string {
 		serverNum := strings.TrimPrefix(s, "s")
 		serverNum = strings.TrimPrefix(serverNum, "S")
 		return fmt.Sprintf("fengwanyx_s%s", serverNum)
+	case "xindong", "xd":
+		serverNum := strings.TrimPrefix(s, "s")
+		serverNum = strings.TrimPrefix(serverNum, "S")
+		return fmt.Sprintf("s%s", serverNum)
 	default:
 		// 默认直接返回原始标识
 		return s

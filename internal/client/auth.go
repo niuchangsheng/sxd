@@ -20,11 +20,18 @@ func ApplyTicket(cfg *SessionConfig, ticket *platform.Ticket) {
 	if ticket.ServerID != "" {
 		cfg.ServerID = ticket.ServerID
 	}
+	if ticket.GatewayURL != "" {
+		cfg.ServerAddr = ticket.GatewayURL
+	}
+	if ticket.RoleName != "" {
+		cfg.Username = ticket.RoleName
+	}
 	cfg.Code = ticket.MainServer.Code
 	cfg.Time = ticket.MainServer.Time
 	cfg.Hash = ticket.MainServer.Hash
 	cfg.Time1 = ticket.CrossServer.Time1
 	cfg.Hash1 = ticket.CrossServer.Hash1
+	cfg.Extra = ticket.Extra
 }
 
 // DefaultAuthenticator 为角色会话提供标准登录认证握手、全局通知监听与四步场景同步调度。

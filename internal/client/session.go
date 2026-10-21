@@ -14,6 +14,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,6 +60,9 @@ type SessionConfig struct {
 	Time1 int32
 	// Hash1 跨服验签散列 (Mod_StLogin_Base 0x005E)
 	Hash1 string
+
+	// Extra 平台特定的扩展入场凭据 (例如官方 10 字段所需: regdate, id_card, open_time, is_newst 等)
+	Extra map[string]string
 
 	// HeartbeatInterval 心跳定时保活间隔 (默认 1.5s，抓包实测网关超时为 5s)
 	HeartbeatInterval time.Duration
@@ -149,7 +154,7 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 			}
 		} else {
 			cfg.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
-				var d net.Dialer
+				d := net.Dialer{Timeout: 5 * time.Second}
 				return d.DialContext(ctx, network, addr)
 			}
 		}
@@ -334,7 +339,7 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 // 3. Module 165, Action 0 (0x00A50000) 扩展业务模块初始化 (携带前序 0x63)
 // 4. Module 0, Action 2 (0x00000002) 全量角色资产拉取 (携带前序 0x00A50000) 并更新真实资产快照
 func DefaultGatewayAuthenticator(s *RoleSession) error {
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 
 	// 0. 构造并发送登录握手请求包 (优先主服 0x00000000，或跨服 0x005E0000)
@@ -378,9 +383,58 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 			Username:   username,
 			Hash:       hash,
 			Time:       timeStr,
-			Source:     "sxd_baidu_pinpai_bt",
+			Source:     "",
 			Platform:   platform,
 			ClientType: "web",
+		}
+
+		if s.cfg.Extra != nil {
+			if rd, ok := s.cfg.Extra["regdate"]; ok {
+				if v, err := strconv.ParseInt(rd, 10, 32); err == nil {
+					loginReq.RegDate = int32(v)
+				}
+			}
+			if ot, ok := s.cfg.Extra["open_time"]; ok {
+				if v, err := strconv.ParseInt(ot, 10, 32); err == nil {
+					loginReq.OpenTime = int32(v)
+				}
+			}
+			if in, ok := s.cfg.Extra["is_newst"]; ok {
+				if v, err := strconv.ParseInt(in, 10, 8); err == nil {
+					loginReq.IsNewst = int8(v)
+				}
+			}
+			if stage, ok := s.cfg.Extra["stage"]; ok && stage != "" {
+				loginReq.Stage = stage
+			}
+			if client, ok := s.cfg.Extra["client"]; ok && client != "" {
+				loginReq.Client = client
+			}
+			if src, ok := s.cfg.Extra["source"]; ok {
+				loginReq.Source = src
+			}
+			if idCard, ok := s.cfg.Extra["id_card"]; ok && idCard != "" {
+				loginReq.IDCard = idCard
+			}
+			if s.cfg.Extra["non_kid"] == "1" {
+				loginReq.IDCard = ""
+			}
+			if s.cfg.Extra["hash_code"] != "" {
+				loginReq.IsOfficial = true
+			}
+		}
+
+		if loginReq.Stage == "" && (s.cfg.Platform == "xindong" || s.cfg.Platform == "xd") {
+			loginReq.Stage = "心动"
+		}
+		if loginReq.Client == "" {
+			loginReq.Client = "web"
+		}
+		if loginReq.Client == "pc_wd" {
+			loginReq.Flag = 1
+			if loginReq.TailUsername == "" {
+				loginReq.TailUsername = strings.Split(username, ".")[0]
+			}
 		}
 
 		var err error
@@ -390,16 +444,49 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 		}
 	}
 
-	respPkt, err := s.Call(ctx, loginPkt, loginRespActionID)
-	if err != nil {
-		return fmt.Errorf("client: login handshake timeout or failed: %w", err)
+	// 注册握手回包通道并流水线发送首部封包
+	respCh := make(chan *protocol.Packet, 1)
+	s.handlerMu.Lock()
+	if s.pendingCalls == nil {
+		s.pendingCalls = make(map[uint32][]chan *protocol.Packet)
+	}
+	s.pendingCalls[loginRespActionID] = append(s.pendingCalls[loginRespActionID], respCh)
+	s.handlerMu.Unlock()
+
+	defer func() {
+		s.handlerMu.Lock()
+		calls := s.pendingCalls[loginRespActionID]
+		for i, c := range calls {
+			if c == respCh {
+				s.pendingCalls[loginRespActionID] = append(calls[:i], calls[i+1:]...)
+				break
+			}
+		}
+		s.handlerMu.Unlock()
+	}()
+
+	if err := s.Send(loginPkt); err != nil {
+		return fmt.Errorf("client: failed to send login packet: %w", err)
+	}
+
+	// 官方流水线对齐：官方微端在发送 M0:A0 登录请求后，立刻连发 Action 72 触发场景与分线初始化
+	if loginRespActionID == protocol.ActionIDPlayerLogin {
+		step1Pkt := protocol.BuildPlayerInitStep1Packet(0x00000000)
+		_ = s.Send(step1Pkt)
+	}
+
+	var respPkt *protocol.Packet
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("client: login handshake timeout or failed: %w", ctx.Err())
+	case respPkt = <-respCh:
 	}
 
 	// 校验登录回包状态码
 	if loginRespActionID == protocol.ActionIDPlayerLogin {
 		authResp, err := protocol.ParsePlayerLoginAuthResponse(respPkt.Payload)
 		if err == nil {
-			if authResp.ResultCode != 4 {
+			if authResp.ResultCode != 4 && authResp.ResultCode != 0 {
 				return fmt.Errorf("client: authentication rejected by server: resultCode=%d", authResp.ResultCode)
 			}
 		} else {

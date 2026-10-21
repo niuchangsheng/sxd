@@ -161,3 +161,42 @@ func TestPlayerLogin_HeartbeatAndServerTime(t *testing.T) {
 	}
 }
 
+func TestPlayerLogin_OfficialMicroClient104Bytes(t *testing.T) {
+	// 用户真实微端 Wireshark 抓包数据 (104 字节)
+	expectedHex := "0000006400000000000a363432373939322e733100206136373764346339616534303666336566623766663939336136653361306137000a3137393236303232323500004f74697100004eb137c8000006e5bf83e58aa8000570635f776401000736343237393932"
+	expectedBytes, err := hex.DecodeString(expectedHex)
+	if err != nil {
+		t.Fatalf("hex 解码失败: %v", err)
+	}
+
+	req := protocol.PlayerLoginRequest{
+		Username:     "6427992.s1",
+		Hash:         "a677d4c9ae406f3efb7ff993a6e3a0a7",
+		Time:         "1792602225",
+		Source:       "",
+		RegDate:      1333029233,
+		IDCard:       "",
+		OpenTime:     1320237000,
+		IsNewst:      0,
+		Stage:        "心动",
+		Client:       "pc_wd",
+		Flag:         1,
+		TailUsername: "6427992",
+		IsOfficial:   true,
+	}
+
+	pkt, err := protocol.BuildPlayerLoginPacket(req)
+	if err != nil {
+		t.Fatalf("BuildPlayerLoginPacket 失败: %v", err)
+	}
+
+	raw, err := pkt.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal 失败: %v", err)
+	}
+
+	if !bytes.Equal(raw, expectedBytes) {
+		t.Fatalf("微端 104 字节封包不匹配!\n期望: %s\n实际: %s", expectedHex, hex.EncodeToString(raw))
+	}
+}
+

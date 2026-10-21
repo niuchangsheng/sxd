@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sync"
 	"strings"
@@ -193,6 +194,7 @@ func run(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sxd-pie-ng", flag.ContinueOnError)
 	versionFlag := fs.Bool("v", false, "打印版本信息并退出")
 	configPath := fs.String("config", "configs/config.yaml", "配置文件路径")
+	browserLoginFlag := fs.Bool("browser-login", false, "启动前弹出浏览器交互登录以自动捕获/更新 Cookie")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -214,6 +216,12 @@ func run(ctx context.Context, args []string) error {
 	targetConfig := *configPath
 	if _, err := os.Stat(targetConfig); os.IsNotExist(err) && targetConfig == "configs/config.yaml" {
 		targetConfig = "configs/config.example.yaml"
+	}
+
+	if *browserLoginFlag {
+		if err := runBrowserLogin(ctx, targetConfig); err != nil {
+			slog.Error("浏览器辅助登录未完成", "error", err)
+		}
 	}
 
 	slog.Info("正在加载系统配置...", "file", targetConfig)
@@ -258,8 +266,16 @@ func run(ctx context.Context, args []string) error {
 	if fwAuth, err := platform.NewFengwanAuthenticator(); err == nil {
 		ticketCache.RegisterAuthenticator(fwAuth)
 	}
+	xdAuth, err := platform.NewXindongAuthenticator()
+	if err == nil {
+		ticketCache.RegisterAuthenticator(xdAuth)
+	}
 
 	for _, acc := range cfg.Accounts {
+		if acc.Cookie != "" && xdAuth != nil && (strings.EqualFold(acc.Platform, "xindong") || strings.EqualFold(acc.Platform, "xd")) {
+			xdAuth.SetCookie(acc.Cookie)
+		}
+
 		for _, role := range acc.Roles {
 			roleID := fmt.Sprintf("%s-%s", role.ServerID, role.RoleName)
 
@@ -268,6 +284,8 @@ func run(ctx context.Context, args []string) error {
 			if serverAddr == "" || serverAddr == "sandbox" {
 				if strings.Contains(role.ServerID, "813") {
 					serverAddr = "49.232.196.100:8381"
+				} else if strings.EqualFold(role.ServerID, "s0") || strings.EqualFold(role.ServerID, "0") {
+					serverAddr = "9x050.sxdweb.xd.com:8200"
 				}
 			}
 
@@ -288,8 +306,8 @@ func run(ctx context.Context, args []string) error {
 			}
 
 			// 全自治凭据流水线 (Autonomous Ingress):
-			// 优先通过账号密码全自动发起原生 Web 登录换取双轨凭据 (0外部依赖)
-			if acc.Platform != "" && acc.Username != "" && acc.Password != "" {
+			// 优先通过账号密码或会话 Cookie 全自动发起原生 Web 登录换取双轨凭据 (0外部依赖)
+			if acc.Platform != "" && (acc.Cookie != "" || (acc.Username != "" && acc.Password != "")) {
 				slog.Info("正在通过全自治 Web 驱动自动换取平台最新凭据...", "platform", acc.Platform, "username", acc.Username, "server", role.ServerID)
 				ticket, err := ticketCache.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)
 				if err != nil {
@@ -355,7 +373,11 @@ func run(ctx context.Context, args []string) error {
 			}
 
 			if role.AutoLogin {
-				_ = sess.Start(ctx)
+				if roleCfg.Hash == "" && roleCfg.Hash1 == "" && roleCfg.ServerAddr != "sandbox" {
+					slog.Error("角色缺失有效网关认证票据 (Hash 为空)，已跳过自动连接", "role_id", roleID)
+				} else {
+					_ = sess.Start(ctx)
+				}
 			}
 		}
 	}
@@ -409,4 +431,28 @@ func run(ctx context.Context, args []string) error {
 
 	slog.Info("神仙道助手已安全退出")
 	return nil
+}
+
+func runBrowserLogin(ctx context.Context, configPath string) error {
+	slog.Info("正在拉起浏览器交互式登录助手以获取/刷新 Cookie...", "config", configPath)
+	scriptPaths := []string{
+		"scripts/browser_login.py",
+		"../scripts/browser_login.py",
+	}
+	scriptPath := ""
+	for _, p := range scriptPaths {
+		if _, err := os.Stat(p); err == nil {
+			scriptPath = p
+			break
+		}
+	}
+	if scriptPath == "" {
+		return fmt.Errorf("未找到交互登录脚本 scripts/browser_login.py")
+	}
+
+	cmd := exec.CommandContext(ctx, "python3", scriptPath, "--config", configPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
 }

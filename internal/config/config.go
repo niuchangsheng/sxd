@@ -30,6 +30,7 @@ type AccountConfig struct {
 	Platform string       `yaml:"platform"`
 	Username string       `yaml:"username"`
 	Password string       `yaml:"password"`
+	Cookie   string       `yaml:"cookie,omitempty"`
 	Roles    []RoleConfig `yaml:"roles"`
 }
 
