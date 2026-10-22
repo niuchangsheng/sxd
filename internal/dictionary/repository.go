@@ -29,6 +29,8 @@ type Repository interface {
 	GetMission(id int) (*Mission, error)
 	GetHighestMission(sweepElite bool) (*Mission, error)
 	GetHighestMissionByLevel(level int, sweepElite bool) (*Mission, error)
+	GetHighestMissionByType(missionType int) (*Mission, error)
+	GetHighestMissionByTypeAndLevel(level int, missionType int) (*Mission, error)
 	SearchItems(keyword string) ([]*Item, error)
 	Close() error
 }
@@ -287,6 +289,83 @@ func (r *sqliteRepository) GetHighestMissionByLevel(level int, sweepElite bool) 
 			return &m, nil
 		}
 		return nil, fmt.Errorf("dictionary: 按等级查询最高副本关卡失败: %w", err)
+	}
+	m.Name = strings.TrimSpace(name.String)
+	m.Monsters = monsters.String
+	m.IsBoss = isBoss == 1
+	return &m, nil
+}
+
+func (r *sqliteRepository) GetHighestMissionByType(missionType int) (*Mission, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	query := `SELECT MissionsId, SectionId, MissionLock, MissionPower, map, mapkey, MissionName, MissionType, isBossMission, monsters 
+              FROM Missions 
+              WHERE MissionType = ? 
+              ORDER BY MissionsId DESC 
+              LIMIT 1`
+	row := r.db.QueryRow(query, missionType)
+
+	var m Mission
+	var name sql.NullString
+	var monsters sql.NullString
+	var isBoss int
+	err := row.Scan(&m.ID, &m.SectionID, &m.MissionLock, &m.Power, &m.MapID, &m.MapKey, &name, &m.Type, &isBoss, &monsters)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("dictionary: 查询指定类型最高副本关卡失败: %w", err)
+	}
+	m.Name = strings.TrimSpace(name.String)
+	m.Monsters = monsters.String
+	m.IsBoss = isBoss == 1
+	return &m, nil
+}
+
+func (r *sqliteRepository) GetHighestMissionByTypeAndLevel(level int, missionType int) (*Mission, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if level <= 0 {
+		level = 1
+	}
+	maxLock := level * 1000
+	if level <= 1 {
+		maxLock = 1020
+	}
+
+	query := `SELECT MissionsId, SectionId, MissionLock, MissionPower, map, mapkey, MissionName, MissionType, isBossMission, monsters 
+              FROM Missions 
+              WHERE MissionLock <= ? AND MissionType = ? 
+              ORDER BY MissionLock DESC, MissionsId DESC 
+              LIMIT 1`
+	row := r.db.QueryRow(query, maxLock, missionType)
+
+	var m Mission
+	var name sql.NullString
+	var monsters sql.NullString
+	var isBoss int
+	err := row.Scan(&m.ID, &m.SectionID, &m.MissionLock, &m.Power, &m.MapID, &m.MapKey, &name, &m.Type, &isBoss, &monsters)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// 若未查到，降级返回该类型全局最低第一关
+			fallbackQuery := `SELECT MissionsId, SectionId, MissionLock, MissionPower, map, mapkey, MissionName, MissionType, isBossMission, monsters 
+                              FROM Missions 
+                              WHERE MissionType = ? 
+                              ORDER BY MissionLock ASC, MissionsId ASC 
+                              LIMIT 1`
+			fbRow := r.db.QueryRow(fallbackQuery, missionType)
+			if fbErr := fbRow.Scan(&m.ID, &m.SectionID, &m.MissionLock, &m.Power, &m.MapID, &m.MapKey, &name, &m.Type, &isBoss, &monsters); fbErr != nil {
+				return nil, ErrNotFound
+			}
+			m.Name = strings.TrimSpace(name.String)
+			m.Monsters = monsters.String
+			m.IsBoss = isBoss == 1
+			return &m, nil
+		}
+		return nil, fmt.Errorf("dictionary: 按等级与类型查询最高副本关卡失败: %w", err)
 	}
 	m.Name = strings.TrimSpace(name.String)
 	m.Monsters = monsters.String

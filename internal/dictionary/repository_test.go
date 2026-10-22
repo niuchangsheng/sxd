@@ -116,5 +116,22 @@ func TestRepository_Queries(t *testing.T) {
 		if lvl50Mission.MissionLock <= lvl1Mission.MissionLock {
 			t.Errorf("50 级推荐关卡 Lock 应高于 1 级关卡: %d vs %d", lvl50Mission.MissionLock, lvl1Mission.MissionLock)
 		}
+
+		// 验证三类副本 (主线 0, 精英 1, 支线 2) 查询
+		mainMission, err := repo.GetHighestMissionByTypeAndLevel(50, 0)
+		if err != nil || mainMission == nil || mainMission.Type != 0 {
+			t.Errorf("主线关卡查询失败: %v, %+v", err, mainMission)
+		}
+
+		eliteMission, err := repo.GetHighestMissionByTypeAndLevel(50, 1)
+		if err != nil || eliteMission == nil || eliteMission.Type != 1 {
+			t.Errorf("精英关卡查询失败: %v, %+v", err, eliteMission)
+		}
+
+		sideMission, err := repo.GetHighestMissionByTypeAndLevel(50, 2)
+		// 支线若库中存在则必须 Type=2，若不存在返回 ErrNotFound 均可接受
+		if err == nil && sideMission != nil && sideMission.Type != 2 {
+			t.Errorf("支线关卡查询预期 Type=2，实际为 %d", sideMission.Type)
+		}
 	})
 }

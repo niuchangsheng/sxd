@@ -23,6 +23,8 @@ import (
 type SweepConfig struct {
 	// Mode 扫荡模式 (默认 ModeAutoRecommend)
 	Mode SweepMode
+	// Category 副本三大分类 (CategoryMainline, CategoryElite, CategorySide，默认 CategoryMainline)
+	Category DungeonCategory
 	// SweepElite 是否扫精英关卡 (默认 false，对齐 01.ini 扫精英=否)
 	SweepElite bool
 	// TargetMissionID 目标指定关卡 ID (0 表示自动选最高等级关卡)
@@ -31,15 +33,22 @@ type SweepConfig struct {
 	MaxBatchTimes int
 	// PreferPracticeQuickly 是否优先使用 Module 25 秒扫荡 (默认为 false 以保障存量测试与原版辅助兼容)
 	PreferPracticeQuickly bool
+	// AutoReplenishStamina 当主线或支线等副本无体力继续时，是否自动按 [包子 > 粽子 > 茶叶蛋] 优先级吃道具补充体力 (默认 true)
+	AutoReplenishStamina bool
+	// MaxReplenishTimes 单次执行自动补充体力的最大次数 (默认 10)
+	MaxReplenishTimes int
 }
 
 // DefaultSweepConfig 返回默认扫荡策略配置。
 func DefaultSweepConfig() SweepConfig {
 	return SweepConfig{
 		Mode:                  ModeAutoRecommend,
+		Category:              CategoryMainline,
 		SweepElite:            false,
 		MaxBatchTimes:         10,
 		PreferPracticeQuickly: false,
+		AutoReplenishStamina:  true,
+		MaxReplenishTimes:     10,
 	}
 }
 
@@ -53,14 +62,29 @@ func (c SweepConfig) ToDungeonSweepConfig() DungeonSweepConfig {
 			mode = ModeAutoRecommend
 		}
 	}
+	cat := c.Category
+	if cat == "" {
+		if c.SweepElite {
+			cat = CategoryElite
+		} else {
+			cat = CategoryMainline
+		}
+	}
 	maxBatch := c.MaxBatchTimes
 	if maxBatch <= 0 {
 		maxBatch = 10
 	}
+	maxReplenish := c.MaxReplenishTimes
+	if maxReplenish <= 0 {
+		maxReplenish = 10
+	}
 	return DungeonSweepConfig{
 		Mode:                  mode,
+		Category:              cat,
 		TargetMissionID:       c.TargetMissionID,
 		SweepElite:            c.SweepElite,
+		AutoReplenishStamina:  c.AutoReplenishStamina,
+		MaxReplenishTimes:     maxReplenish,
 		MaxBatchTimes:         maxBatch,
 		RequiredPowerPerSweep: 5,
 		PreferPracticeQuickly: c.PreferPracticeQuickly,
@@ -100,13 +124,38 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				return scheduler.ErrBagFull
 			}
 
-			// 3. 检查角色当前体力
-			stamina := session.GetStamina()
+			// 3. 检查角色当前体力并支持前置与中途自动补充 (包子 > 粽子 > 茶叶蛋)
 			const powerPerSweep = 5
-			if stamina < powerPerSweep {
-				slog.Warn("角色当前体力不足，无法继续扫荡",
+			replenishCount := 0
+			ensureStamina := func() bool {
+				if session.GetStamina() >= powerPerSweep {
+					return true
+				}
+				if !cfg.AutoReplenishStamina {
+					return false
+				}
+				maxTimes := cfg.MaxReplenishTimes
+				if maxTimes <= 0 {
+					maxTimes = 10
+				}
+				for session.GetStamina() < powerPerSweep && replenishCount < maxTimes {
+					ok, _, _, err := TryReplenishStamina(ctx, session)
+					if err != nil {
+						slog.Warn("尝试自动补充体力异常", "role_id", session.RoleID(), "err", err)
+						break
+					}
+					if !ok {
+						break // 背包中无体力道具
+					}
+					replenishCount++
+				}
+				return session.GetStamina() >= powerPerSweep
+			}
+
+			if !ensureStamina() {
+				slog.Warn("角色当前体力不足且无可用体力道具，无法继续扫荡",
 					"role_id", session.RoleID(),
-					"current_stamina", stamina,
+					"current_stamina", session.GetStamina(),
 					"required", powerPerSweep,
 				)
 				return scheduler.ErrStaminaDepleted
@@ -136,8 +185,9 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			totalGainExp := int64(0)
 			totalGainCoins := int64(0)
 
-			// 6. 若存在可扫荡的英雄副本，优先执行 Module 111 快速扫荡
-			if heroList != nil && len(heroList.Items) > 0 && heroList.TotalTimes > 0 {
+			// 6. 若存在可扫荡的英雄副本且配置允许 (非纯支线副本模式)，优先执行 Module 111 快速扫荡
+			canSweepHero := (cfg.Category != CategorySide)
+			if canSweepHero && heroList != nil && len(heroList.Items) > 0 && heroList.TotalTimes > 0 {
 				slog.Info("发现可扫荡英雄副本，启动英雄副本扫荡状态机",
 					"role_id", session.RoleID(),
 					"available_items", len(heroList.Items),
@@ -146,7 +196,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				)
 
 				for _, item := range heroList.Items {
-					if session.GetStamina() < powerPerSweep {
+					if session.GetStamina() < powerPerSweep && !ensureStamina() {
 						break
 					}
 					if successRounds >= cfg.MaxBatchTimes {
@@ -154,7 +204,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 					}
 
 					for t := uint8(0); t < item.Times; t++ {
-						if session.GetStamina() < powerPerSweep {
+						if session.GetStamina() < powerPerSweep && !ensureStamina() {
 							break
 						}
 						if successRounds >= cfg.MaxBatchTimes {
@@ -224,9 +274,9 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				// 关闭英雄副本扫荡界面
 				_ = session.Send(protocol.BuildHeroMissionClosePacket())
 			} else {
-				// 7. 无英雄副本时，执行常规/指定关卡扫荡 (基于 MissionResolver 智能寻址)
+				// 7. 执行常规/指定关卡扫荡 (基于 MissionResolver 智能寻址: 主线 0 / 精英 1 / 支线 2)
 				resolver := NewMissionResolver(dictRepo)
-				resolved, resErr := resolver.Resolve(cfg.ToDungeonSweepConfig(), state.Level, stamina)
+				resolved, resErr := resolver.Resolve(cfg.ToDungeonSweepConfig(), state.Level, session.GetStamina())
 				missionID := 43
 				missionName := "扬州城-万妖皇"
 				if resErr == nil && resolved != nil {
@@ -236,14 +286,11 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 					missionID = cfg.TargetMissionID
 				}
 
-				availableTimes := stamina / powerPerSweep
-				targetRounds := availableTimes
-				if targetRounds > cfg.MaxBatchTimes {
-					targetRounds = cfg.MaxBatchTimes
-				}
-
-				for round := 1; round <= targetRounds; round++ {
-					if session.GetStamina() < powerPerSweep {
+				for round := 1; round <= cfg.MaxBatchTimes; round++ {
+					if successRounds >= cfg.MaxBatchTimes {
+						break
+					}
+					if session.GetStamina() < powerPerSweep && !ensureStamina() {
 						break
 					}
 
@@ -278,7 +325,12 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 									_ = session.Send(quickPkt)
 									sweepSucceeded = true
 								case protocol.PracticeResultNotEnoughPower:
-									slog.Warn("服务端返回体力不足，触发语义智能熔断", "role_id", session.RoleID(), "round", round)
+									slog.Warn("服务端返回体力不足，尝试自动补充体力", "role_id", session.RoleID(), "round", round)
+									session.SetStamina(0)
+									session.SetExtraStamina(0)
+									if ensureStamina() {
+										continue
+									}
 									if successRounds == 0 {
 										return scheduler.ErrStaminaDepleted
 									}
@@ -339,6 +391,11 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						if !legacyRes.Success {
 							slog.Warn("服务端返回扫荡失败", "role_id", session.RoleID(), "round", round, "message", legacyRes.Message)
 							if strings.Contains(legacyRes.Message, "体力不足") {
+								session.SetStamina(0)
+								session.SetExtraStamina(0)
+								if ensureStamina() {
+									continue
+								}
 								if successRounds == 0 {
 									return scheduler.ErrStaminaDepleted
 								}

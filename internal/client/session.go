@@ -248,6 +248,14 @@ func (s *RoleSession) ConsumeStamina(amount int) (int, error) {
 	return s.playerState.Stamina + s.playerState.ExtraStamina, nil
 }
 
+// AddStamina 增加角色基础体力并返回增加后的总剩余体力。
+func (s *RoleSession) AddStamina(amount int) int {
+	s.playerMu.Lock()
+	defer s.playerMu.Unlock()
+	s.playerState.Stamina += amount
+	return s.playerState.Stamina + s.playerState.ExtraStamina
+}
+
 // AddRewards 增加角色经验与铜钱收益。
 func (s *RoleSession) AddRewards(exp, coins int64) {
 	s.playerMu.Lock()

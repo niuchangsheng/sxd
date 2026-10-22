@@ -8,14 +8,30 @@ const (
 	// 核心业务模块编号 (Module)
 	ModulePlayer          uint16 = 0  // 角色主模块 (Mod_Player_Base)
 	ModuleTown            uint16 = 1  // 城镇场景模块 (Mod_Town_Base)
+	ModuleItem            uint16 = 2  // 物品背包模块 (Mod_Item_Base)
 	ModuleMission         uint16 = 4  // 关卡任务模块 (Mod_Mission_Base)
-	ModuleItem            uint16 = 5  // 物品背包模块 (Mod_Item_Base)
 	ModuleFarm            uint16 = 13 // 药园农场模块 (Mod_Farm_Base)
 	ModuleFate            uint16 = 21 // 仙履奇缘模块 (Mod_Fate_Base)
 	ModuleMissionPractice uint16 = 25 // 副本挂机扫荡模块 (Mod_MissionPractice_Base)
 	ModuleArena           uint16 = 28 // 竞技场模块 (Mod_Arena_Base)
 	ModuleHeroMission     uint16 = 35 // 英雄副本模块 (Mod_HeroMission_Base)
 	ModuleStLogin         uint16 = 94 // 跨服/网页登录模块 (Mod_StLogin_Base)
+)
+
+const (
+	// ActionIDItemGetPackList 获取玩家主背包与仓库物品列表 (Module 2, Action 41 -> 0x00020029)
+	ActionIDItemGetPackList uint32 = 0x00020029
+	// ActionIDItemUseGrid 使用背包指定格位物品 (Module 2, Action 53 -> 0x00020035)
+	ActionIDItemUseGrid uint32 = 0x00020035
+
+	// 体力道具 ID (来源于数据字典 Pieb.db item 表)
+	ItemIDSteamedBun    int32 = 1488 // 包子 (可补充 5 点体力)
+	ItemIDRiceDumpling  int32 = 1444 // 粽子 (可补充 10 点体力)
+	ItemIDTeaEgg        int32 = 2016 // 茶叶蛋 (可补充 50 点体力)
+
+	// 物品使用业务结果码
+	ItemActionSuccess uint8 = 20
+	ItemSuccess       uint8 = 0
 )
 
 const (

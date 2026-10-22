@@ -5,7 +5,9 @@
 package dungeon_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"net"
 	"sync"
@@ -55,6 +57,22 @@ func startMockDungeonServer(srvConn net.Conn, handler func(pkt *protocol.Packet)
 			}
 			if pkt.ActionID == protocol.ActionTownMissionActive {
 				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionTownMissionActive, nil))
+				continue
+			}
+			if pkt.ActionID == protocol.ActionIDItemGetPackList {
+				// 默认返回空背包 (容量 30, 空格 30, 物品 0)
+				buf := new(bytes.Buffer)
+				_ = binary.Write(buf, binary.BigEndian, int16(30))
+				_ = binary.Write(buf, binary.BigEndian, int32(30))
+				_ = binary.Write(buf, binary.BigEndian, uint16(0))
+				_ = binary.Write(buf, binary.BigEndian, int16(10))
+				_ = binary.Write(buf, binary.BigEndian, uint16(0))
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
+				continue
+			}
+			if pkt.ActionID == protocol.ActionIDItemUseGrid {
+				// 默认使用成功
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemUseGrid, []byte{protocol.ItemActionSuccess}))
 				continue
 			}
 			if pkt.ActionID == protocol.ActionHeroMissionList {
@@ -172,6 +190,8 @@ func TestDungeonSweep_StaminaDepleted_SmartCooling(t *testing.T) {
 	sess, srvConn := createTestSession(t, 2) // 体力仅有 2 点，不足 5 点
 	defer sess.Close()
 	defer srvConn.Close()
+
+	startMockDungeonServer(srvConn, nil)
 
 	routine := dungeon.NewDungeonSweepRoutine(nil)
 	ctx := context.Background()
@@ -769,6 +789,209 @@ func TestDungeonSweep_SemanticCoolingOff_Module25(t *testing.T) {
 		}
 	})
 }
+
+// TestDungeonSweep_AutoReplenishStamina_Priority 验证主线/支线副本无体力时自动检查背包，
+// 且严格按照 [包子 > 粽子 > 茶叶蛋] 优先级使用道具补充体力并完成扫荡。
+func TestDungeonSweep_AutoReplenishStamina_Priority(t *testing.T) {
+	t.Run("Priority1_SteamedBun", func(t *testing.T) {
+		// 初始体力为 0，背包里同时有包子(Grid 1)、粽子(Grid 2)、茶叶蛋(Grid 3)
+		sess, srvConn := createTestSession(t, 0)
+		defer sess.Close()
+		defer srvConn.Close()
+
+		usedGridCh := make(chan int16, 5)
+
+		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+			if pkt.ActionID == protocol.ActionIDItemGetPackList {
+				buf := new(bytes.Buffer)
+				_ = binary.Write(buf, binary.BigEndian, int16(30))
+				_ = binary.Write(buf, binary.BigEndian, int32(27))
+				_ = binary.Write(buf, binary.BigEndian, uint16(3))
+
+				// 格位 1: 包子 (ID 1488)
+				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+					PlayerItemID: 101,
+					ItemID:       protocol.ItemIDSteamedBun,
+					GridID:       1,
+				})
+				// 格位 2: 粽子 (ID 1444)
+				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+					PlayerItemID: 102,
+					ItemID:       protocol.ItemIDRiceDumpling,
+					GridID:       2,
+				})
+				// 格位 3: 茶叶蛋 (ID 2016)
+				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+					PlayerItemID: 103,
+					ItemID:       protocol.ItemIDTeaEgg,
+					GridID:       3,
+				})
+
+				_ = binary.Write(buf, binary.BigEndian, int16(10))
+				_ = binary.Write(buf, binary.BigEndian, uint16(0))
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
+				return true
+			}
+
+			if pkt.ActionID == protocol.ActionIDItemUseGrid {
+				var gridID int16
+				_ = binary.Read(bytes.NewReader(pkt.Payload), binary.BigEndian, &gridID)
+				usedGridCh <- gridID
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemUseGrid, []byte{protocol.ItemActionSuccess}))
+				return true
+			}
+
+			return false
+		})
+
+		cfg := dungeon.SweepConfig{
+			Category:             dungeon.CategoryMainline,
+			MaxBatchTimes:        1,
+			AutoReplenishStamina: true,
+		}
+		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+		err := routine.Execute(context.Background(), sess, nil)
+		if err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
+			t.Fatalf("扫荡执行失败: %v", err)
+		}
+
+		select {
+		case gridID := <-usedGridCh:
+			if gridID != 1 {
+				t.Errorf("期望最高优先级优先使用包子 (Grid 1), 实际使用了格位 %d", gridID)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("未收到使用道具协议调用")
+		}
+	})
+
+	t.Run("Priority2_RiceDumpling_WhenNoBun", func(t *testing.T) {
+		// 背包中无包子，仅有粽子(Grid 2)和茶叶蛋(Grid 3)
+		sess, srvConn := createTestSession(t, 0)
+		defer sess.Close()
+		defer srvConn.Close()
+
+		usedGridCh := make(chan int16, 5)
+
+		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+			if pkt.ActionID == protocol.ActionIDItemGetPackList {
+				buf := new(bytes.Buffer)
+				_ = binary.Write(buf, binary.BigEndian, int16(30))
+				_ = binary.Write(buf, binary.BigEndian, int32(28))
+				_ = binary.Write(buf, binary.BigEndian, uint16(2))
+
+				// 格位 2: 粽子 (ID 1444)
+				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+					PlayerItemID: 102,
+					ItemID:       protocol.ItemIDRiceDumpling,
+					GridID:       2,
+				})
+				// 格位 3: 茶叶蛋 (ID 2016)
+				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+					PlayerItemID: 103,
+					ItemID:       protocol.ItemIDTeaEgg,
+					GridID:       3,
+				})
+
+				_ = binary.Write(buf, binary.BigEndian, int16(10))
+				_ = binary.Write(buf, binary.BigEndian, uint16(0))
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
+				return true
+			}
+
+			if pkt.ActionID == protocol.ActionIDItemUseGrid {
+				var gridID int16
+				_ = binary.Read(bytes.NewReader(pkt.Payload), binary.BigEndian, &gridID)
+				usedGridCh <- gridID
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemUseGrid, []byte{protocol.ItemActionSuccess}))
+				return true
+			}
+
+			return false
+		})
+
+		cfg := dungeon.SweepConfig{
+			Category:             dungeon.CategorySide,
+			MaxBatchTimes:        1,
+			AutoReplenishStamina: true,
+		}
+		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+		err := routine.Execute(context.Background(), sess, nil)
+		if err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
+			t.Fatalf("扫荡执行失败: %v", err)
+		}
+
+		select {
+		case gridID := <-usedGridCh:
+			if gridID != 2 {
+				t.Errorf("无包子时期望优先使用粽子 (Grid 2), 实际使用了格位 %d", gridID)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("未收到使用道具协议调用")
+		}
+	})
+
+	t.Run("Priority3_TeaEgg_WhenNoBunOrDumpling", func(t *testing.T) {
+		// 背包中仅有茶叶蛋(Grid 3)
+		sess, srvConn := createTestSession(t, 0)
+		defer sess.Close()
+		defer srvConn.Close()
+
+		usedGridCh := make(chan int16, 5)
+
+		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+			if pkt.ActionID == protocol.ActionIDItemGetPackList {
+				buf := new(bytes.Buffer)
+				_ = binary.Write(buf, binary.BigEndian, int16(30))
+				_ = binary.Write(buf, binary.BigEndian, int32(29))
+				_ = binary.Write(buf, binary.BigEndian, uint16(1))
+
+				// 格位 3: 茶叶蛋 (ID 2016)
+				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+					PlayerItemID: 103,
+					ItemID:       protocol.ItemIDTeaEgg,
+					GridID:       3,
+				})
+
+				_ = binary.Write(buf, binary.BigEndian, int16(10))
+				_ = binary.Write(buf, binary.BigEndian, uint16(0))
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
+				return true
+			}
+
+			if pkt.ActionID == protocol.ActionIDItemUseGrid {
+				var gridID int16
+				_ = binary.Read(bytes.NewReader(pkt.Payload), binary.BigEndian, &gridID)
+				usedGridCh <- gridID
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemUseGrid, []byte{protocol.ItemActionSuccess}))
+				return true
+			}
+
+			return false
+		})
+
+		cfg := dungeon.SweepConfig{
+			Category:             dungeon.CategoryMainline,
+			MaxBatchTimes:        1,
+			AutoReplenishStamina: true,
+		}
+		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+		err := routine.Execute(context.Background(), sess, nil)
+		if err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
+			t.Fatalf("扫荡执行失败: %v", err)
+		}
+
+		select {
+		case gridID := <-usedGridCh:
+			if gridID != 3 {
+				t.Errorf("无包子粽子时期望使用茶叶蛋 (Grid 3), 实际使用了格位 %d", gridID)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("未收到使用道具协议调用")
+		}
+	})
+}
+
 
 
 

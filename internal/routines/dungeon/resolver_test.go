@@ -82,6 +82,44 @@ func (m *mockDictionaryRepo) GetHighestMissionByLevel(level int, sweepElite bool
 	return best, nil
 }
 
+func (m *mockDictionaryRepo) GetHighestMissionByType(missionType int) (*dictionary.Mission, error) {
+	var highest *dictionary.Mission
+	for _, ms := range m.missions {
+		if ms.Type != missionType {
+			continue
+		}
+		if highest == nil || ms.ID > highest.ID {
+			highest = ms
+		}
+	}
+	if highest == nil {
+		return nil, dictionary.ErrNotFound
+	}
+	return highest, nil
+}
+
+func (m *mockDictionaryRepo) GetHighestMissionByTypeAndLevel(level int, missionType int) (*dictionary.Mission, error) {
+	maxLock := level * 1000
+	if level <= 1 {
+		maxLock = 1020
+	}
+	var best *dictionary.Mission
+	for _, ms := range m.missions {
+		if ms.Type != missionType {
+			continue
+		}
+		if ms.MissionLock <= maxLock {
+			if best == nil || ms.MissionLock > best.MissionLock || (ms.MissionLock == best.MissionLock && ms.ID > best.ID) {
+				best = ms
+			}
+		}
+	}
+	if best == nil {
+		return nil, dictionary.ErrNotFound
+	}
+	return best, nil
+}
+
 func TestMissionResolver_AutoRecommend(t *testing.T) {
 	mockRepo := &mockDictionaryRepo{
 		missions: map[int]*dictionary.Mission{
@@ -281,4 +319,40 @@ func TestMissionResolver_RealDatabaseIntegration(t *testing.T) {
 	if res854.MissionID != 854 {
 		t.Errorf("期望关卡 854, 实际 %d", res854.MissionID)
 	}
+
+	// 3. 验证三大副本分类解析 (主线、支线、精英)
+	t.Run("Categories_Resolution", func(t *testing.T) {
+		// 主线普通副本 (MissionType = 0)
+		mainCfg := dungeon.DungeonSweepConfig{
+			Mode:                  dungeon.ModeAutoRecommend,
+			Category:              dungeon.CategoryMainline,
+			RequiredPowerPerSweep: 5,
+		}
+		mainRes, err := resolver.Resolve(mainCfg, 50, 100)
+		if err != nil || mainRes == nil || mainRes.IsElite {
+			t.Errorf("主线副本解析失败: %v, %+v", err, mainRes)
+		}
+
+		// 精英副本 (MissionType = 1)
+		eliteCfg := dungeon.DungeonSweepConfig{
+			Mode:                  dungeon.ModeAutoRecommend,
+			Category:              dungeon.CategoryElite,
+			RequiredPowerPerSweep: 5,
+		}
+		eliteRes, err := resolver.Resolve(eliteCfg, 50, 100)
+		if err != nil || eliteRes == nil || !eliteRes.IsElite {
+			t.Errorf("精英副本解析失败: %v, %+v", err, eliteRes)
+		}
+
+		// 支线副本 (MissionType = 2)
+		sideCfg := dungeon.DungeonSweepConfig{
+			Mode:                  dungeon.ModeAutoRecommend,
+			Category:              dungeon.CategorySide,
+			RequiredPowerPerSweep: 5,
+		}
+		sideRes, err := resolver.Resolve(sideCfg, 50, 100)
+		if err != nil || sideRes == nil {
+			t.Errorf("支线副本解析失败: %v, %+v", err, sideRes)
+		}
+	})
 }

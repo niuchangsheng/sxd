@@ -30,14 +30,32 @@ const (
 	ModeExpertOverride SweepMode = "expert_override"
 )
 
+// DungeonCategory 副本三大类别枚举。
+type DungeonCategory string
+
+const (
+	// CategoryMainline 主线普通副本 (MissionType = 0)
+	CategoryMainline DungeonCategory = "mainline"
+	// CategoryElite 精英/英雄副本 (MissionType = 1)
+	CategoryElite DungeonCategory = "elite"
+	// CategorySide 支线/隐藏副本 (MissionType = 2)
+	CategorySide DungeonCategory = "side"
+)
+
 // DungeonSweepConfig 代表双模关卡扫荡策略配置。
 type DungeonSweepConfig struct {
 	// Mode 扫荡模式 (ModeAutoRecommend 或 ModeExpertOverride)
 	Mode SweepMode `json:"mode"`
+	// Category 副本三大分类 (CategoryMainline, CategoryElite, CategorySide)
+	Category DungeonCategory `json:"category"`
 	// TargetMissionID 专家模式下指定的关卡 ID (当 Mode=ModeExpertOverride 时生效)
 	TargetMissionID int `json:"target_mission_id"`
 	// SweepElite 是否扫荡精英副本关卡
 	SweepElite bool `json:"sweep_elite"`
+	// AutoReplenishStamina 当体力不足时是否自动吃背包体力道具 (包子/粽子/茶叶蛋)
+	AutoReplenishStamina bool `json:"auto_replenish_stamina"`
+	// MaxReplenishTimes 单次扫荡任务中自动补充体力的最大次数上限 (默认 10)
+	MaxReplenishTimes int `json:"max_replenish_times"`
 	// MaxBatchTimes 单次执行批处理最大扫荡次数 (默认 10，上限 30)
 	MaxBatchTimes int `json:"max_batch_times"`
 	// RequiredPowerPerSweep 单次扫荡体力消耗基线 (默认 5 点)
@@ -50,8 +68,11 @@ type DungeonSweepConfig struct {
 func DefaultDungeonSweepConfig() DungeonSweepConfig {
 	return DungeonSweepConfig{
 		Mode:                  ModeAutoRecommend,
+		Category:              CategoryMainline,
 		TargetMissionID:       0,
 		SweepElite:            false,
+		AutoReplenishStamina:  true,
+		MaxReplenishTimes:     10,
 		MaxBatchTimes:         10,
 		RequiredPowerPerSweep: 5,
 		PreferPracticeQuickly: false,
@@ -65,8 +86,11 @@ func ExpertDungeonSweepConfig(missionID int, maxBatchTimes int) DungeonSweepConf
 	}
 	return DungeonSweepConfig{
 		Mode:                  ModeExpertOverride,
+		Category:              CategoryMainline,
 		TargetMissionID:       missionID,
 		SweepElite:            false,
+		AutoReplenishStamina:  true,
+		MaxReplenishTimes:     10,
 		MaxBatchTimes:         maxBatchTimes,
 		RequiredPowerPerSweep: 5,
 	}
@@ -156,7 +180,27 @@ func (r *MissionResolver) Resolve(cfg DungeonSweepConfig, playerLevel int, curre
 			lvl = 1
 		}
 
-		m, err := r.dictRepo.GetHighestMissionByLevel(lvl, cfg.SweepElite)
+		targetType := 0 // 默认主线 0
+		if cfg.Category == CategorySide {
+			targetType = 2
+		} else if cfg.Category == CategoryElite || cfg.SweepElite {
+			targetType = 1
+		}
+
+		m, err := r.dictRepo.GetHighestMissionByTypeAndLevel(lvl, targetType)
+		if err == nil && m != nil {
+			return &MissionResolutionResult{
+				MissionID:   m.ID,
+				MissionName: m.Name,
+				SectionID:   m.SectionID,
+				PowerCost:   powerCost,
+				Mode:        ModeAutoRecommend,
+				IsElite:     m.Type == 1,
+			}, nil
+		}
+
+		// 降级兜底：既有 GetHighestMissionByLevel
+		m, err = r.dictRepo.GetHighestMissionByLevel(lvl, cfg.SweepElite)
 		if err == nil && m != nil {
 			return &MissionResolutionResult{
 				MissionID:   m.ID,
