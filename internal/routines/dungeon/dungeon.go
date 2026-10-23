@@ -171,13 +171,15 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			actCancel()
 
 			// 5. 尝试拉取 Module 111 英雄副本扫荡列表 (对齐 pie.exe "搜索可扫荡英雄副本")
-			listCtx, listCancel := context.WithTimeout(ctx, 3*time.Second)
-			listPkt, listErr := session.Call(listCtx, protocol.BuildHeroMissionListPacket(), protocol.ActionHeroMissionList)
-			listCancel()
-
 			var heroList *protocol.HeroMissionList
-			if listErr == nil && listPkt != nil {
-				heroList, _ = protocol.ParseHeroMissionListResponse(listPkt.Payload)
+			if !cfg.PreferPracticeQuickly && cfg.Category != CategorySide {
+				listCtx, listCancel := context.WithTimeout(ctx, 3*time.Second)
+				listPkt, listErr := session.Call(listCtx, protocol.BuildHeroMissionListPacket(), protocol.ActionHeroMissionList)
+				listCancel()
+
+				if listErr == nil && listPkt != nil {
+					heroList, _ = protocol.ParseHeroMissionListResponse(listPkt.Payload)
+				}
 			}
 
 			successRounds := 0
@@ -298,19 +300,52 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 					var exp = int64(2500)
 					var coins = int64(12000)
 					var sweepSucceeded = false
+					var callErr error
 
 					// 7.1 优先模式：若配置启用 PreferPracticeQuickly，则尝试 Module 25 秒扫荡
 					if cfg.PreferPracticeQuickly {
+						// 7.1.0 遵循官方微端原生协议：先同步当前关卡扫荡状态 (Mod 25, Act 0: get_practice_info，纯 4 字节入参)
+						statusPkt, _ := protocol.BuildPracticeGetStatusPacket(int32(missionID), 0)
+						statusCtx, statusCancel := context.WithTimeout(ctx, 3*time.Second)
+						statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
+						statusCancel()
+
+						var currentMissionID = int32(missionID)
+						if statusErr == nil && statusResp != nil {
+							if status, pErr := protocol.ParsePracticeStatusResult(statusResp.Payload); pErr == nil && status != nil {
+								if status.IsPracticing == 1 {
+									quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{
+										Count: 0,
+									})
+									_ = session.Send(quickPkt)
+									time.Sleep(100 * time.Millisecond)
+								}
+								// 若服务端回包给出了当前章节可扫荡关卡列表，智能对齐可用关卡
+								if len(status.Missions) > 0 {
+									found := false
+									for _, sm := range status.Missions {
+										if sm.MissionID == currentMissionID {
+											found = true
+											break
+										}
+									}
+									if !found {
+										currentMissionID = status.Missions[0].MissionID
+									}
+								}
+							}
+						}
+
 						m25Req := protocol.StartPracticeRequest{
-							MissionID: int32(missionID),
+							MissionID: currentMissionID,
 							Count:     1,
 							AutoSale:  1,
-							PrevAct:   protocol.ActionIDPracticeGetStatus,
 						}
 						m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
 
 						callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
-						respPkt, callErr := session.Call(callCtx, m25Pkt, protocol.ActionIDPracticeStart)
+						var respPkt *protocol.Packet
+						respPkt, callErr = session.Call(callCtx, m25Pkt, protocol.ActionIDPracticeStart)
 						callCancel()
 
 						if callErr == nil && respPkt != nil {
@@ -319,11 +354,11 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 								switch m25Res.Result {
 								case protocol.PracticeResultSuccess:
 									quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{
-										Count:   0,
-										PrevAct: protocol.ActionIDPracticeStart,
+										Count: 0,
 									})
 									_ = session.Send(quickPkt)
 									sweepSucceeded = true
+									missionID = int(currentMissionID)
 								case protocol.PracticeResultNotEnoughPower:
 									slog.Warn("服务端返回体力不足，尝试自动补充体力", "role_id", session.RoleID(), "round", round)
 									session.SetStamina(0)
@@ -342,16 +377,36 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 									}
 									return nil
 								default:
-									slog.Warn("Module 25 秒扫荡受限，自愈降级至常规扫荡", "result", m25Res.Result)
+									slog.Warn("Module 25 秒扫荡受限", "result", m25Res.Result)
 								}
+							}
+						} else {
+							slog.Warn("Module 25 秒扫荡未收到服务端响应", "mission_id", currentMissionID, "err", callErr)
+						}
+
+						// 7.1.3 若当前关卡因主线进度未通关而超时，安全兜底已通关新手关卡 1 保证日常稳健闭环
+						if !sweepSucceeded && currentMissionID != 1 && callErr != nil {
+							fbReq := protocol.StartPracticeRequest{
+								MissionID: 1,
+								Count:     1,
+								AutoSale:  1,
+							}
+							fbPkt, _ := protocol.BuildStartPracticePacket(fbReq)
+							fbCtx, fbCancel := context.WithTimeout(ctx, 2*time.Second)
+							fbResp, fbErr := session.Call(fbCtx, fbPkt, protocol.ActionIDPracticeStart)
+							fbCancel()
+							if fbErr == nil && fbResp != nil {
+								quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
+								_ = session.Send(quickPkt)
+								sweepSucceeded = true
+								missionID = 1
+								missionName = "浮月林道(1)"
 							}
 						}
 					}
 
-
-
-					// 7.3 若 Module 25 扫荡未成功且非熔断错误，无缝降级执行 Module 35 普通扫荡协议
-					if !sweepSucceeded {
+					// 7.2 若 Module 25 返回受限响应或未启用 PreferPracticeQuickly，降级执行普通扫荡协议
+					if !sweepSucceeded && (callErr == nil || !cfg.PreferPracticeQuickly) {
 						enterPkt := protocol.BuildEnterMissionPacket(uint32(missionID))
 						_ = session.Send(enterPkt)
 

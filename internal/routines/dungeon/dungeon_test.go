@@ -85,6 +85,16 @@ func startMockDungeonServer(srvConn net.Conn, handler func(pkt *protocol.Packet)
 				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
 				continue
 			}
+			if pkt.ActionID == protocol.ActionIDPracticeGetStatus {
+				w := protocol.NewWriter()
+				w.WriteBytes([]byte{'F', 'P'})
+				w.WriteUint16(0)
+				w.WriteUint8(0)
+				w.WriteUint32(0)
+				w.WriteUint32(0)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDPracticeGetStatus, w.Bytes()))
+				continue
+			}
 			if pkt.ActionID == protocol.ActionIDPracticeStart {
 				req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
 				mid := int32(43)

@@ -533,13 +533,13 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 		}
 	}
 
-	// 2. Step 2: 场景进阶同步 (ActionID 0x00000063，携带前序动作 0x0048)
+	// 2. Step 2: 场景进阶同步 (ActionID 0x00000063，携带前序动作 0x0048，单向通知包)
 	step2Pkt := protocol.BuildPlayerInitStep2Packet(0x0048)
-	_, _ = s.Call(ctx, step2Pkt, protocol.ActionIDPlayerInitStep2)
+	_ = s.Send(step2Pkt)
 
-	// 3. Step 3: 扩展模块初始化 (ActionID 0x00A50000，携带前序动作 0x0063)
+	// 3. Step 3: 扩展模块初始化 (ActionID 0x00A50000，携带前序动作 0x0063，单向通知包)
 	step3Pkt := protocol.BuildPlayerInitStep3Packet(0x0063)
-	_, _ = s.Call(ctx, step3Pkt, protocol.ActionIDPlayerInitStep3)
+	_ = s.Send(step3Pkt)
 
 	// 4. Step 4: 全量角色资产快照获取 (ActionID 0x00000002，携带前序动作 0x00A50000)
 	step4Pkt := protocol.BuildPlayerGetInfoPacket(0x00A50000)
@@ -973,6 +973,16 @@ func runMockGameServer(conn net.Conn) {
 			// 响应心跳包
 			hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28})
 			_ = protocol.WritePacket(conn, hbPkt)
+
+		case protocol.ActionIDPracticeGetStatus:
+			// 响应扫荡状态查询 (HeaderTag: "FP", 0 missions, isPracticing: 0)
+			w := protocol.NewWriter()
+			w.WriteBytes([]byte{'F', 'P'})
+			w.WriteUint16(0)
+			w.WriteUint8(0)
+			w.WriteUint32(0)
+			w.WriteUint32(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPracticeGetStatus, w.Bytes()))
 
 		case protocol.ActionIDPracticeStart:
 			// 响应关卡扫荡请求 (兼容 StartPracticeRequest 与 SweepRequest)

@@ -93,6 +93,7 @@ func ExpertDungeonSweepConfig(missionID int, maxBatchTimes int) DungeonSweepConf
 		MaxReplenishTimes:     10,
 		MaxBatchTimes:         maxBatchTimes,
 		RequiredPowerPerSweep: 5,
+		PreferPracticeQuickly: false,
 	}
 }
 

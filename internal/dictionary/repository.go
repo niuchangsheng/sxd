@@ -253,8 +253,12 @@ func (r *sqliteRepository) GetHighestMissionByLevel(level int, sweepElite bool) 
 	if level <= 0 {
 		level = 1
 	}
-	// 神仙道关卡解锁锁定值 MissionLock 约为 level * 1000
-	maxLock := level * 1000
+	maxLock := level*100 + 1000
+	var questLock sql.NullInt64
+	qRow := r.db.QueryRow("SELECT max(Lock) FROM Quests WHERE Level <= ? AND Lock < 90000 AND Type = 1 AND Level >= 10", level)
+	if qErr := qRow.Scan(&questLock); qErr == nil && questLock.Valid && questLock.Int64 > 0 {
+		maxLock = int(questLock.Int64)
+	}
 	if level <= 1 {
 		maxLock = 1020 // 确保初级新手角色至少可以锁定小竹林新手关
 	}
@@ -331,7 +335,12 @@ func (r *sqliteRepository) GetHighestMissionByTypeAndLevel(level int, missionTyp
 	if level <= 0 {
 		level = 1
 	}
-	maxLock := level * 1000
+	maxLock := level*100 + 1000
+	var questLock sql.NullInt64
+	qRow := r.db.QueryRow("SELECT max(Lock) FROM Quests WHERE Level <= ? AND Lock < 90000 AND Type = 1 AND Level >= 10", level)
+	if qErr := qRow.Scan(&questLock); qErr == nil && questLock.Valid && questLock.Int64 > 0 {
+		maxLock = int(questLock.Int64)
+	}
 	if level <= 1 {
 		maxLock = 1020
 	}

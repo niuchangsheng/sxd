@@ -81,12 +81,10 @@ func BuildStartPracticePacket(req StartPracticeRequest) (*Packet, error) {
 	w.WriteInt16(req.Count)
 	// 3. 写入 AutoSale (1 字节有符号整型)
 	w.WriteInt8(req.AutoSale)
-	// 4. 写入 PrevAct (4 字节大端序整型)
-	prevAct := req.PrevAct
-	if prevAct == 0 {
-		prevAct = ActionIDPracticeGetInfo
+	// 4. 若指定了 PrevAct，追加 4 字节前序动作号 (兼容测试抓包)
+	if req.PrevAct != 0 {
+		w.WriteUint32(req.PrevAct)
 	}
-	w.WriteUint32(prevAct)
 
 	return NewPacket(ActionIDPracticeStart, w.Bytes()), nil
 }
@@ -146,9 +144,12 @@ func ParseStartPracticeResult(payload []byte) (*StartPracticeResult, error) {
 		return nil, fmt.Errorf("%w: failed to read mission_id: %v", ErrInvalidPayload, err)
 	}
 
-	count, err := r.ReadInt16()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read count: %v", ErrInvalidPayload, err)
+	var count int16
+	if r.Remaining() >= 4 {
+		c32, _ := r.ReadInt32()
+		count = int16(c32)
+	} else if r.Remaining() >= 2 {
+		count, _ = r.ReadInt16()
 	}
 
 	return &StartPracticeResult{
@@ -162,11 +163,9 @@ func ParseStartPracticeResult(payload []byte) (*StartPracticeResult, error) {
 func BuildQuicklyPacket(req QuicklyRequest) (*Packet, error) {
 	w := NewWriter()
 	w.WriteInt16(req.Count)
-	prevAct := req.PrevAct
-	if prevAct == 0 {
-		prevAct = ActionIDPracticeStart
+	if req.PrevAct != 0 {
+		w.WriteUint32(req.PrevAct)
 	}
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDPracticeQuickly, w.Bytes()), nil
 }
 
@@ -278,10 +277,9 @@ type PracticeStatusResult struct {
 func BuildPracticeGetStatusPacket(missionID int32, prevAct uint32) (*Packet, error) {
 	w := NewWriter()
 	w.WriteInt32(missionID)
-	if prevAct == 0 {
-		prevAct = ActionIDPracticeGetStatus
+	if prevAct != 0 {
+		w.WriteUint32(prevAct)
 	}
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDPracticeGetStatus, w.Bytes()), nil
 }
 
