@@ -80,16 +80,25 @@ func GetAllDefinitions() []RoutineDefinition {
 
 // RegistryFactory 构建并注册所有玩法的统一工厂。
 type RegistryFactory struct {
-	qaEngine qa.Engine
-	dictRepo dictionary.Repository
+	qaEngine   qa.Engine
+	dictRepo   dictionary.Repository
+	dungeonCfg dungeon.SweepConfig
 }
 
 // NewRegistryFactory 创建注册工厂实例。
 func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *RegistryFactory {
+	cfg := dungeon.DefaultSweepConfig()
+	cfg.PreferPracticeQuickly = true
 	return &RegistryFactory{
-		qaEngine: qaEngine,
-		dictRepo: dictRepo,
+		qaEngine:   qaEngine,
+		dictRepo:   dictRepo,
+		dungeonCfg: cfg,
 	}
+}
+
+// SetDungeonConfig 设置副本自动化策略配置。
+func (f *RegistryFactory) SetDungeonConfig(cfg dungeon.SweepConfig) {
+	f.dungeonCfg = cfg
 }
 
 // RegisterAll 根据配置开关，向角色调度器装配全量活动玩法。
@@ -161,9 +170,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 
 	// 4. Dungeon
 	case "dungeon_sweep":
-		cfg := dungeon.DefaultSweepConfig()
-		cfg.PreferPracticeQuickly = true
-		return dungeon.NewDungeonSweepRoutine(f.dictRepo, cfg)
+		return dungeon.NewDungeonSweepRoutine(f.dictRepo, f.dungeonCfg)
 	case "six_realms":
 		return dungeon.NewSixRealmsRoutine()
 	case "demon_tower":

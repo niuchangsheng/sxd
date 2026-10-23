@@ -120,6 +120,10 @@ func (m *mockDictionaryRepo) GetHighestMissionByTypeAndLevel(level int, missionT
 	return best, nil
 }
 
+func (m *mockDictionaryRepo) GetQuestMissions(questType int, playerLevel int) ([]int, error) {
+	return nil, nil
+}
+
 func TestMissionResolver_AutoRecommend(t *testing.T) {
 	mockRepo := &mockDictionaryRepo{
 		missions: map[int]*dictionary.Mission{

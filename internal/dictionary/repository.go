@@ -31,6 +31,7 @@ type Repository interface {
 	GetHighestMissionByLevel(level int, sweepElite bool) (*Mission, error)
 	GetHighestMissionByType(missionType int) (*Mission, error)
 	GetHighestMissionByTypeAndLevel(level int, missionType int) (*Mission, error)
+	GetQuestMissions(questType int, playerLevel int) ([]int, error)
 	SearchItems(keyword string) ([]*Item, error)
 	Close() error
 }
@@ -381,3 +382,36 @@ func (r *sqliteRepository) GetHighestMissionByTypeAndLevel(level int, missionTyp
 	m.IsBoss = isBoss == 1
 	return &m, nil
 }
+
+// GetQuestMissions 根据任务类型 (1=主线, 2=支线) 及角色等级获取可挑战的任务关联关卡列表。
+func (r *sqliteRepository) GetQuestMissions(questType int, playerLevel int) ([]int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.db == nil {
+		return nil, errors.New("dictionary: database not connected")
+	}
+
+	if playerLevel <= 0 {
+		playerLevel = 1
+	}
+
+	query := `SELECT DISTINCT MissionId FROM Quests 
+              WHERE Type = ? AND Level <= ? AND MissionId > 0 
+              ORDER BY Lock ASC, QuestsId ASC`
+	rows, err := r.db.Query(query, questType, playerLevel)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: 查询任务关联关卡失败: %w", err)
+	}
+	defer rows.Close()
+
+	var missions []int
+	for rows.Next() {
+		var mid int
+		if err := rows.Scan(&mid); err == nil && mid > 0 {
+			missions = append(missions, mid)
+		}
+	}
+	return missions, nil
+}
+

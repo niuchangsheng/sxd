@@ -62,6 +62,9 @@ type DungeonSweepConfig struct {
 	RequiredPowerPerSweep int `json:"required_power_per_sweep"`
 	// PreferPracticeQuickly 是否优先使用 Module 25 秒扫荡协议
 	PreferPracticeQuickly bool `json:"prefer_practice_quickly"`
+	// Pipeline 策略优先级流水线，按先后顺序流转
+	// 可选值: "push_mainline", "push_side", "sweep_elite", "sweep_highest_main"
+	Pipeline []string `json:"pipeline"`
 }
 
 // DefaultDungeonSweepConfig 返回开箱即用的默认推荐配置。
@@ -76,6 +79,7 @@ func DefaultDungeonSweepConfig() DungeonSweepConfig {
 		MaxBatchTimes:         10,
 		RequiredPowerPerSweep: 5,
 		PreferPracticeQuickly: false,
+		Pipeline:              nil,
 	}
 }
 
@@ -94,6 +98,9 @@ func ExpertDungeonSweepConfig(missionID int, maxBatchTimes int) DungeonSweepConf
 		MaxBatchTimes:         maxBatchTimes,
 		RequiredPowerPerSweep: 5,
 		PreferPracticeQuickly: false,
+		Pipeline: []string{
+			"sweep_highest_main",
+		},
 	}
 }
 

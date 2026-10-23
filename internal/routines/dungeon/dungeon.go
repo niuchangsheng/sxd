@@ -37,6 +37,9 @@ type SweepConfig struct {
 	AutoReplenishStamina bool
 	// MaxReplenishTimes 单次执行自动补充体力的最大次数 (默认 10)
 	MaxReplenishTimes int
+	// Pipeline 策略优先级流水线，按先后顺序流转
+	// 可选值: "push_mainline", "push_side", "sweep_elite", "sweep_highest_main"
+	Pipeline []string
 }
 
 // DefaultSweepConfig 返回默认扫荡策略配置。
@@ -49,6 +52,7 @@ func DefaultSweepConfig() SweepConfig {
 		PreferPracticeQuickly: false,
 		AutoReplenishStamina:  true,
 		MaxReplenishTimes:     10,
+		Pipeline:              nil,
 	}
 }
 
@@ -88,6 +92,7 @@ func (c SweepConfig) ToDungeonSweepConfig() DungeonSweepConfig {
 		MaxBatchTimes:         maxBatch,
 		RequiredPowerPerSweep: 5,
 		PreferPracticeQuickly: c.PreferPracticeQuickly,
+		Pipeline:              c.Pipeline,
 	}
 }
 
@@ -170,197 +175,410 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			_, _ = session.Call(actCtx, protocol.NewPacket(protocol.ActionTownMissionActive, nil), protocol.ActionTownMissionActive)
 			actCancel()
 
-			// 5. 尝试拉取 Module 111 英雄副本扫荡列表 (对齐 pie.exe "搜索可扫荡英雄副本")
-			var heroList *protocol.HeroMissionList
-			if !cfg.PreferPracticeQuickly && cfg.Category != CategorySide {
-				listCtx, listCancel := context.WithTimeout(ctx, 3*time.Second)
-				listPkt, listErr := session.Call(listCtx, protocol.BuildHeroMissionListPacket(), protocol.ActionHeroMissionList)
-				listCancel()
-
-				if listErr == nil && listPkt != nil {
-					heroList, _ = protocol.ParseHeroMissionListResponse(listPkt.Payload)
-				}
-			}
-
 			successRounds := 0
 			totalCostStamina := 0
 			totalGainExp := int64(0)
 			totalGainCoins := int64(0)
 
-			// 6. 若存在可扫荡的英雄副本且配置允许 (非纯支线副本模式)，优先执行 Module 111 快速扫荡
-			canSweepHero := (cfg.Category != CategorySide)
-			if canSweepHero && heroList != nil && len(heroList.Items) > 0 && heroList.TotalTimes > 0 {
-				slog.Info("发现可扫荡英雄副本，启动英雄副本扫荡状态机",
-					"role_id", session.RoleID(),
-					"available_items", len(heroList.Items),
-					"total_times", heroList.TotalTimes,
-					"current_stamina", session.GetStamina(),
-				)
+			// 5. 确定执行流水线步骤 (优先推主线 -> 再推支线 -> 再扫荡精英 -> 最后兜底扫荡最高级主线)
+			isExplicitPipeline := len(cfg.Pipeline) > 0
+			pipeline := cfg.Pipeline
+			if !isExplicitPipeline {
+				if cfg.SweepElite || cfg.Category == CategoryElite {
+					pipeline = []string{"sweep_elite"}
+				} else if cfg.Category == CategorySide {
+					pipeline = []string{"push_side"}
+				} else {
+					pipeline = []string{"sweep_elite", "sweep_highest_main"}
+				}
+			}
 
-				for _, item := range heroList.Items {
-					if session.GetStamina() < powerPerSweep && !ensureStamina() {
-						break
-					}
-					if successRounds >= cfg.MaxBatchTimes {
-						break
-					}
-
-					for t := uint8(0); t < item.Times; t++ {
-						if session.GetStamina() < powerPerSweep && !ensureStamina() {
-							break
+			// 预先查询当前章节已解锁/已通关关卡列表 (通过 Module 25: ActionIDPracticeGetStatus)
+			clearedMissions := make(map[int]bool)
+			if cfg.PreferPracticeQuickly {
+				statusPkt, _ := protocol.BuildPracticeGetStatusPacket(1, 0)
+				statusCtx, statusCancel := context.WithTimeout(ctx, 3*time.Second)
+				statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
+				statusCancel()
+				if statusErr == nil && statusResp != nil {
+					if status, pErr := protocol.ParsePracticeStatusResult(statusResp.Payload); pErr == nil && status != nil {
+						if status.IsPracticing == 1 {
+							quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
+							_ = session.Send(quickPkt)
+							time.Sleep(100 * time.Millisecond)
 						}
+						for _, sm := range status.Missions {
+							clearedMissions[int(sm.MissionID)] = true
+						}
+					}
+				}
+			}
+
+			// 6. 依据配置流水线顺序依次调度执行
+		pipelineLoop:
+			for _, step := range pipeline {
+				if successRounds >= cfg.MaxBatchTimes {
+					break
+				}
+				if session.GetStamina() < powerPerSweep && !ensureStamina() {
+					break
+				}
+
+				switch step {
+				case "push_mainline":
+					// 6.1 阶段一: 优先推主线 (Quests 表 Type=1)
+					if dictRepo == nil {
+						continue
+					}
+					questMissions, err := dictRepo.GetQuestMissions(1, state.Level)
+					if err != nil || len(questMissions) == 0 {
+						continue
+					}
+
+					for _, mid := range questMissions {
 						if successRounds >= cfg.MaxBatchTimes {
 							break
 						}
-
-						// 6.1 选定副本实例 (Module 111, Action 1)
-						selCtx, selCancel := context.WithTimeout(ctx, 3*time.Second)
-						_, selErr := session.Call(selCtx, protocol.BuildHeroMissionSelectPacket(item.InstanceID), protocol.ActionHeroMissionSelect)
-						selCancel()
-						if selErr != nil {
-							slog.Warn("选定英雄副本实例失败", "instance_id", item.InstanceID, "err", selErr)
+						if clearedMissions[mid] {
+							continue // 已通关关卡无需再推
+						}
+						if session.GetStamina() < powerPerSweep && !ensureStamina() {
 							break
 						}
 
-						// 6.2 发送单次扫荡指令 (Module 111, Action 2)
-						sweepCtx, sweepCancel := context.WithTimeout(ctx, 3*time.Second)
-						sweepResp, sweepErr := session.Call(sweepCtx, protocol.BuildHeroMissionSweepPacket(), protocol.ActionHeroMissionSweep)
-						sweepCancel()
-						if sweepErr != nil {
-							slog.Warn("英雄副本单次扫荡未收到回包", "instance_id", item.InstanceID, "err", sweepErr)
+						slog.Info("正在推进主线关卡挑战", "role_id", session.RoleID(), "mission_id", mid)
+						enterPkt := protocol.BuildEnterMissionPacket(uint32(mid))
+						enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
+						enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionMissionSweep)
+						enterCancel()
+
+						pushedSuccess := false
+						if enterErr == nil && enterResp != nil {
+							if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
+								pushedSuccess = true
+								_ = session.Send(protocol.BuildQuickFinishPacket())
+							}
+						}
+						if pushedSuccess {
+							cost := powerPerSweep
+							remStamina, _ := session.ConsumeStamina(cost)
+							session.AddRewards(2500, 12000)
+							totalCostStamina += cost
+							totalGainExp += 2500
+							totalGainCoins += 12000
+							successRounds++
+							clearedMissions[mid] = true
+							slog.Info("主线关卡推进通关成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
+							time.Sleep(50 * time.Millisecond)
+						} else {
+							slog.Info("主线关卡暂未通关或卡等级，主线推图流转至下一阶段", "role_id", session.RoleID(), "mission_id", mid)
+							break
+						}
+					}
+
+				case "push_side":
+					// 6.2 阶段二: 再推支线 (Quests 表 Type=2)
+					if dictRepo == nil {
+						continue
+					}
+					sideMissions, err := dictRepo.GetQuestMissions(2, state.Level)
+					if err != nil || len(sideMissions) == 0 {
+						continue
+					}
+
+					for _, mid := range sideMissions {
+						if successRounds >= cfg.MaxBatchTimes {
+							break
+						}
+						if clearedMissions[mid] {
+							continue
+						}
+						if session.GetStamina() < powerPerSweep && !ensureStamina() {
 							break
 						}
 
-						// 6.3 发送快速完成指令跳过倒计时 (Module 111, Action 7)
-						_ = session.Send(protocol.BuildHeroMissionQuickFinishPacket(item.InstanceID))
+						slog.Info("正在推进支线关卡挑战", "role_id", session.RoleID(), "mission_id", mid)
+						enterPkt := protocol.BuildEnterMissionPacket(uint32(mid))
+						enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
+						enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionMissionSweep)
+						enterCancel()
 
-						// 6.4 解析回包并结算资产
-						res, _ := protocol.ParseHeroMissionSweepResponse(sweepResp.Payload)
-						cost := powerPerSweep
-						if res != nil && res.CostPower > 0 && res.CostPower <= 5 {
-							cost = res.CostPower
+						pushedSuccess := false
+						if enterErr == nil && enterResp != nil {
+							if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
+								pushedSuccess = true
+								_ = session.Send(protocol.BuildQuickFinishPacket())
+							}
 						}
-						exp := int64(3500)
-						coins := int64(15000)
-						if res != nil && res.GainExp > 0 {
-							exp = res.GainExp
+						if pushedSuccess {
+							cost := powerPerSweep
+							remStamina, _ := session.ConsumeStamina(cost)
+							session.AddRewards(2000, 10000)
+							totalCostStamina += cost
+							totalGainExp += 2000
+							totalGainCoins += 10000
+							successRounds++
+							clearedMissions[mid] = true
+							slog.Info("支线关卡推进通关成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
+							time.Sleep(50 * time.Millisecond)
+						} else {
+							slog.Info("支线关卡暂未通关或未解锁，支线推图流转至下一阶段", "role_id", session.RoleID(), "mission_id", mid)
+							break
 						}
-						if res != nil && res.GainCoins > 0 {
-							coins = res.GainCoins
-						}
+					}
 
-						remStamina, cErr := session.ConsumeStamina(cost)
-						if cErr != nil {
-							return cErr
-						}
-						session.AddRewards(exp, coins)
+				case "sweep_elite":
+					// 6.3 阶段三: 再扫荡精英 (Module 111 英雄/精英副本)
+					listCtx, listCancel := context.WithTimeout(ctx, 3*time.Second)
+					listPkt, listErr := session.Call(listCtx, protocol.BuildHeroMissionListPacket(), protocol.ActionHeroMissionList)
+					listCancel()
 
-						totalCostStamina += cost
-						totalGainExp += exp
-						totalGainCoins += coins
-						successRounds++
-
-						slog.Info("英雄副本单次扫荡完成",
+					var heroList *protocol.HeroMissionList
+					if listErr == nil && listPkt != nil {
+						heroList, _ = protocol.ParseHeroMissionListResponse(listPkt.Payload)
+					}
+					if heroList != nil && len(heroList.Items) > 0 && heroList.TotalTimes > 0 {
+						slog.Info("发现可扫荡英雄副本，启动英雄副本扫荡",
 							"role_id", session.RoleID(),
-							"instance_id", item.InstanceID,
-							"mission_id", item.MissionID,
-							"cost_stamina", cost,
-							"remaining_stamina", remStamina,
+							"available_items", len(heroList.Items),
+							"total_times", heroList.TotalTimes,
+							"current_stamina", session.GetStamina(),
 						)
-
-						// 拟人短抖动
-						time.Sleep(50 * time.Millisecond)
-					}
-				}
-
-				// 关闭英雄副本扫荡界面
-				_ = session.Send(protocol.BuildHeroMissionClosePacket())
-			} else {
-				// 7. 执行常规/指定关卡扫荡 (基于 MissionResolver 智能寻址: 主线 0 / 精英 1 / 支线 2)
-				resolver := NewMissionResolver(dictRepo)
-				resolved, resErr := resolver.Resolve(cfg.ToDungeonSweepConfig(), state.Level, session.GetStamina())
-				missionID := 43
-				missionName := "扬州城-万妖皇"
-				if resErr == nil && resolved != nil {
-					missionID = resolved.MissionID
-					missionName = resolved.MissionName
-				} else if cfg.TargetMissionID > 0 {
-					missionID = cfg.TargetMissionID
-				}
-
-				for round := 1; round <= cfg.MaxBatchTimes; round++ {
-					if successRounds >= cfg.MaxBatchTimes {
-						break
-					}
-					if session.GetStamina() < powerPerSweep && !ensureStamina() {
-						break
-					}
-
-					var cost = powerPerSweep
-					var exp = int64(2500)
-					var coins = int64(12000)
-					var sweepSucceeded = false
-					var callErr error
-
-					// 7.1 优先模式：若配置启用 PreferPracticeQuickly，则尝试 Module 25 秒扫荡
-					if cfg.PreferPracticeQuickly {
-						// 7.1.0 遵循官方微端原生协议：先同步当前关卡扫荡状态 (Mod 25, Act 0: get_practice_info，纯 4 字节入参)
-						statusPkt, _ := protocol.BuildPracticeGetStatusPacket(int32(missionID), 0)
-						statusCtx, statusCancel := context.WithTimeout(ctx, 3*time.Second)
-						statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
-						statusCancel()
-
-						var currentMissionID = int32(missionID)
-						if statusErr == nil && statusResp != nil {
-							if status, pErr := protocol.ParsePracticeStatusResult(statusResp.Payload); pErr == nil && status != nil {
-								if status.IsPracticing == 1 {
-									quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{
-										Count: 0,
-									})
-									_ = session.Send(quickPkt)
-									time.Sleep(100 * time.Millisecond)
+						for _, item := range heroList.Items {
+							if session.GetStamina() < powerPerSweep && !ensureStamina() {
+								break
+							}
+							if successRounds >= cfg.MaxBatchTimes {
+								break
+							}
+							for t := uint8(0); t < item.Times; t++ {
+								if session.GetStamina() < powerPerSweep && !ensureStamina() {
+									break
 								}
-								// 若服务端回包给出了当前章节可扫荡关卡列表，智能对齐可用关卡
-								if len(status.Missions) > 0 {
-									found := false
-									for _, sm := range status.Missions {
-										if sm.MissionID == currentMissionID {
-											found = true
-											break
+								if successRounds >= cfg.MaxBatchTimes {
+									break
+								}
+
+								selCtx, selCancel := context.WithTimeout(ctx, 3*time.Second)
+								_, selErr := session.Call(selCtx, protocol.BuildHeroMissionSelectPacket(item.InstanceID), protocol.ActionHeroMissionSelect)
+								selCancel()
+								if selErr != nil {
+									break
+								}
+
+								sweepCtx, sweepCancel := context.WithTimeout(ctx, 3*time.Second)
+								sweepResp, sweepErr := session.Call(sweepCtx, protocol.BuildHeroMissionSweepPacket(), protocol.ActionHeroMissionSweep)
+								sweepCancel()
+								if sweepErr != nil {
+									break
+								}
+
+								_ = session.Send(protocol.BuildHeroMissionQuickFinishPacket(item.InstanceID))
+								res, _ := protocol.ParseHeroMissionSweepResponse(sweepResp.Payload)
+								cost := powerPerSweep
+								if res != nil && res.CostPower > 0 && res.CostPower <= 5 {
+									cost = res.CostPower
+								}
+								exp := int64(3500)
+								coins := int64(15000)
+								if res != nil && res.GainExp > 0 {
+									exp = res.GainExp
+								}
+								if res != nil && res.GainCoins > 0 {
+									coins = res.GainCoins
+								}
+
+								remStamina, _ := session.ConsumeStamina(cost)
+								session.AddRewards(exp, coins)
+								totalCostStamina += cost
+								totalGainExp += exp
+								totalGainCoins += coins
+								successRounds++
+								slog.Info("英雄副本单次扫荡完成",
+									"role_id", session.RoleID(),
+									"instance_id", item.InstanceID,
+									"mission_id", item.MissionID,
+									"cost_stamina", cost,
+									"remaining_stamina", remStamina,
+								)
+								time.Sleep(50 * time.Millisecond)
+							}
+						}
+						_ = session.Send(protocol.BuildHeroMissionClosePacket())
+						if !isExplicitPipeline {
+							break pipelineLoop
+						}
+					}
+
+				case "sweep_highest_main":
+					// 6.4 阶段四: 最后兜底扫荡最高级主线副本 (消耗剩余体力冲级)
+					resolver := NewMissionResolver(dictRepo)
+					resolved, resErr := resolver.Resolve(cfg.ToDungeonSweepConfig(), state.Level, session.GetStamina())
+					missionID := 43
+					missionName := "扬州城-万妖皇"
+					if resErr == nil && resolved != nil {
+						missionID = resolved.MissionID
+						missionName = resolved.MissionName
+					} else if cfg.TargetMissionID > 0 {
+						missionID = cfg.TargetMissionID
+					}
+
+					for round := 1; round <= cfg.MaxBatchTimes; round++ {
+						if successRounds >= cfg.MaxBatchTimes {
+							break
+						}
+						if session.GetStamina() < powerPerSweep && !ensureStamina() {
+							break
+						}
+
+						var cost = powerPerSweep
+						var exp = int64(2500)
+						var coins = int64(12000)
+						var sweepSucceeded = false
+						var callErr error
+
+						// 7.1 优先模式：若配置启用 PreferPracticeQuickly，则尝试 Module 25 秒扫荡
+						if cfg.PreferPracticeQuickly {
+							statusPkt, _ := protocol.BuildPracticeGetStatusPacket(int32(missionID), 0)
+							statusCtx, statusCancel := context.WithTimeout(ctx, 3*time.Second)
+							statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
+							statusCancel()
+
+							var currentMissionID = int32(missionID)
+							if statusErr == nil && statusResp != nil {
+								if status, pErr := protocol.ParsePracticeStatusResult(statusResp.Payload); pErr == nil && status != nil {
+									if status.IsPracticing == 1 {
+										quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{
+											Count: 0,
+										})
+										_ = session.Send(quickPkt)
+										time.Sleep(100 * time.Millisecond)
+									}
+									if len(status.Missions) > 0 {
+										found := false
+										for _, sm := range status.Missions {
+											if sm.MissionID == currentMissionID {
+												found = true
+												break
+											}
+										}
+										if !found {
+											currentMissionID = status.Missions[0].MissionID
 										}
 									}
-									if !found {
-										currentMissionID = status.Missions[0].MissionID
+								}
+							}
+
+							m25Req := protocol.StartPracticeRequest{
+								MissionID: currentMissionID,
+								Count:     1,
+								AutoSale:  1,
+							}
+							m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
+
+							callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
+							var respPkt *protocol.Packet
+							respPkt, callErr = session.Call(callCtx, m25Pkt, protocol.ActionIDPracticeStart)
+							callCancel()
+
+							if callErr == nil && respPkt != nil {
+								m25Res, pErr := protocol.ParseStartPracticeResult(respPkt.Payload)
+								if pErr == nil && m25Res != nil {
+									switch m25Res.Result {
+									case protocol.PracticeResultSuccess:
+										quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{
+											Count: 0,
+										})
+										_ = session.Send(quickPkt)
+										sweepSucceeded = true
+										missionID = int(currentMissionID)
+									case protocol.PracticeResultNotEnoughPower:
+										slog.Warn("服务端返回体力不足，尝试自动补充体力", "role_id", session.RoleID(), "round", round)
+										session.SetStamina(0)
+										session.SetExtraStamina(0)
+										if ensureStamina() {
+											continue
+										}
+										if successRounds == 0 {
+											return scheduler.ErrStaminaDepleted
+										}
+										return nil
+									case protocol.PracticeResultBagFull:
+										slog.Warn("服务端返回背包已满，触发语义智能熔断", "role_id", session.RoleID(), "round", round)
+										if successRounds == 0 {
+											return scheduler.ErrBagFull
+										}
+										return nil
+									default:
+										slog.Warn("Module 25 秒扫荡受限", "result", m25Res.Result)
 									}
+								}
+							} else {
+								slog.Warn("Module 25 秒扫荡未收到服务端响应", "mission_id", currentMissionID, "err", callErr)
+							}
+
+							// 7.1.3 若当前关卡因主线进度未通关而超时，安全兜底已通关新手关卡 1 保证日常稳健闭环
+							if !sweepSucceeded && currentMissionID != 1 && callErr != nil {
+								fbReq := protocol.StartPracticeRequest{
+									MissionID: 1,
+									Count:     1,
+									AutoSale:  1,
+								}
+								fbPkt, _ := protocol.BuildStartPracticePacket(fbReq)
+								fbCtx, fbCancel := context.WithTimeout(ctx, 2*time.Second)
+								fbResp, fbErr := session.Call(fbCtx, fbPkt, protocol.ActionIDPracticeStart)
+								fbCancel()
+								if fbErr == nil && fbResp != nil {
+									quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
+									_ = session.Send(quickPkt)
+									sweepSucceeded = true
+									missionID = 1
+									missionName = "浮月林道(1)"
 								}
 							}
 						}
 
-						m25Req := protocol.StartPracticeRequest{
-							MissionID: currentMissionID,
-							Count:     1,
-							AutoSale:  1,
-						}
-						m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
+						// 7.2 若 Module 25 返回受限响应或未启用 PreferPracticeQuickly，降级执行普通扫荡协议
+						if !sweepSucceeded && (callErr == nil || !cfg.PreferPracticeQuickly) {
+							enterPkt := protocol.BuildEnterMissionPacket(uint32(missionID))
+							_ = session.Send(enterPkt)
 
-						callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
-						var respPkt *protocol.Packet
-						respPkt, callErr = session.Call(callCtx, m25Pkt, protocol.ActionIDPracticeStart)
-						callCancel()
+							legacyReq := protocol.SweepRequest{
+								MissionID: uint32(missionID),
+								Times:     1,
+							}
+							legacyPkt, err := protocol.BuildSweepPacket(legacyReq)
+							if err != nil {
+								return fmt.Errorf("dungeon: 构造扫荡封包失败: %w", err)
+							}
 
-						if callErr == nil && respPkt != nil {
-							m25Res, pErr := protocol.ParseStartPracticeResult(respPkt.Payload)
-							if pErr == nil && m25Res != nil {
-								switch m25Res.Result {
-								case protocol.PracticeResultSuccess:
-									quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{
-										Count: 0,
-									})
-									_ = session.Send(quickPkt)
-									sweepSucceeded = true
-									missionID = int(currentMissionID)
-								case protocol.PracticeResultNotEnoughPower:
-									slog.Warn("服务端返回体力不足，尝试自动补充体力", "role_id", session.RoleID(), "round", round)
+							legacyCtx, legacyCancel := context.WithTimeout(ctx, 3*time.Second)
+							legacyResp, legacyErr := session.Call(legacyCtx, legacyPkt, protocol.ActionMissionSweep)
+							legacyCancel()
+
+							if legacyErr != nil {
+								if successRounds > 0 {
+									break
+								}
+								return fmt.Errorf("dungeon: 发送扫荡指令未收到服务端回包: %w", legacyErr)
+							}
+							if legacyResp == nil {
+								if successRounds > 0 {
+									break
+								}
+								return errors.New("dungeon: 服务端返回空扫荡响应")
+							}
+
+							legacyRes, pErr := protocol.ParseSweepResult(legacyResp.Payload)
+							if pErr != nil {
+								if successRounds > 0 {
+									break
+								}
+								return fmt.Errorf("dungeon: 解析扫荡回包失败: %w", pErr)
+							}
+							if !legacyRes.Success {
+								slog.Warn("服务端返回扫荡失败", "role_id", session.RoleID(), "round", round, "message", legacyRes.Message)
+								if strings.Contains(legacyRes.Message, "体力不足") {
 									session.SetStamina(0)
 									session.SetExtraStamina(0)
 									if ensureStamina() {
@@ -369,141 +587,57 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 									if successRounds == 0 {
 										return scheduler.ErrStaminaDepleted
 									}
-									return nil
-								case protocol.PracticeResultBagFull:
-									slog.Warn("服务端返回背包已满，触发语义智能熔断", "role_id", session.RoleID(), "round", round)
+									break
+								}
+								if strings.Contains(legacyRes.Message, "背包已满") {
 									if successRounds == 0 {
 										return scheduler.ErrBagFull
 									}
-									return nil
-								default:
-									slog.Warn("Module 25 秒扫荡受限", "result", m25Res.Result)
-								}
-							}
-						} else {
-							slog.Warn("Module 25 秒扫荡未收到服务端响应", "mission_id", currentMissionID, "err", callErr)
-						}
-
-						// 7.1.3 若当前关卡因主线进度未通关而超时，安全兜底已通关新手关卡 1 保证日常稳健闭环
-						if !sweepSucceeded && currentMissionID != 1 && callErr != nil {
-							fbReq := protocol.StartPracticeRequest{
-								MissionID: 1,
-								Count:     1,
-								AutoSale:  1,
-							}
-							fbPkt, _ := protocol.BuildStartPracticePacket(fbReq)
-							fbCtx, fbCancel := context.WithTimeout(ctx, 2*time.Second)
-							fbResp, fbErr := session.Call(fbCtx, fbPkt, protocol.ActionIDPracticeStart)
-							fbCancel()
-							if fbErr == nil && fbResp != nil {
-								quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
-								_ = session.Send(quickPkt)
-								sweepSucceeded = true
-								missionID = 1
-								missionName = "浮月林道(1)"
-							}
-						}
-					}
-
-					// 7.2 若 Module 25 返回受限响应或未启用 PreferPracticeQuickly，降级执行普通扫荡协议
-					if !sweepSucceeded && (callErr == nil || !cfg.PreferPracticeQuickly) {
-						enterPkt := protocol.BuildEnterMissionPacket(uint32(missionID))
-						_ = session.Send(enterPkt)
-
-						legacyReq := protocol.SweepRequest{
-							MissionID: uint32(missionID),
-							Times:     1,
-						}
-						legacyPkt, err := protocol.BuildSweepPacket(legacyReq)
-						if err != nil {
-							return fmt.Errorf("dungeon: 构造扫荡封包失败: %w", err)
-						}
-
-						legacyCtx, legacyCancel := context.WithTimeout(ctx, 3*time.Second)
-						legacyResp, legacyErr := session.Call(legacyCtx, legacyPkt, protocol.ActionMissionSweep)
-						legacyCancel()
-
-						if legacyErr != nil {
-							if successRounds > 0 {
-								break
-							}
-							return fmt.Errorf("dungeon: 发送扫荡指令未收到服务端回包: %w", legacyErr)
-						}
-						if legacyResp == nil {
-							if successRounds > 0 {
-								break
-							}
-							return errors.New("dungeon: 服务端返回空扫荡响应")
-						}
-
-						legacyRes, pErr := protocol.ParseSweepResult(legacyResp.Payload)
-						if pErr != nil {
-							if successRounds > 0 {
-								break
-							}
-							return fmt.Errorf("dungeon: 解析扫荡回包失败: %w", pErr)
-						}
-						if !legacyRes.Success {
-							slog.Warn("服务端返回扫荡失败", "role_id", session.RoleID(), "round", round, "message", legacyRes.Message)
-							if strings.Contains(legacyRes.Message, "体力不足") {
-								session.SetStamina(0)
-								session.SetExtraStamina(0)
-								if ensureStamina() {
-									continue
+									break
 								}
 								if successRounds == 0 {
-									return scheduler.ErrStaminaDepleted
+									return fmt.Errorf("dungeon: sweep rejected by server: %s", legacyRes.Message)
 								}
 								break
 							}
-							if strings.Contains(legacyRes.Message, "背包已满") {
-								if successRounds == 0 {
-									return scheduler.ErrBagFull
-								}
-								break
+
+							_ = session.Send(protocol.BuildQuickFinishPacket())
+							if legacyRes.CostPower > 0 && legacyRes.CostPower <= 5 {
+								cost = legacyRes.CostPower
 							}
-							if successRounds == 0 {
-								return fmt.Errorf("dungeon: sweep rejected by server: %s", legacyRes.Message)
+							if legacyRes.GainExp > 0 {
+								exp = legacyRes.GainExp
 							}
+							if legacyRes.GainCoins > 0 {
+								coins = legacyRes.GainCoins
+							}
+							sweepSucceeded = true
+						}
+
+						if !sweepSucceeded {
 							break
 						}
 
-						_ = session.Send(protocol.BuildQuickFinishPacket())
-						if legacyRes.CostPower > 0 && legacyRes.CostPower <= 5 {
-							cost = legacyRes.CostPower
+						// 7.4 资产结算扣除与收益累加
+						remStamina, err := session.ConsumeStamina(cost)
+						if err != nil {
+							return err
 						}
-						if legacyRes.GainExp > 0 {
-							exp = legacyRes.GainExp
-						}
-						if legacyRes.GainCoins > 0 {
-							coins = legacyRes.GainCoins
-						}
-						sweepSucceeded = true
+						session.AddRewards(exp, coins)
+
+						totalCostStamina += cost
+						totalGainExp += exp
+						totalGainCoins += coins
+						successRounds++
+
+						slog.Info("关卡单次扫荡完成",
+							"role_id", session.RoleID(),
+							"mission_id", missionID,
+							"mission_name", missionName,
+							"round", round,
+							"remaining_stamina", remStamina,
+						)
 					}
-
-					if !sweepSucceeded {
-						break
-					}
-
-					// 7.4 资产结算扣除与收益累加
-					remStamina, err := session.ConsumeStamina(cost)
-					if err != nil {
-						return err
-					}
-					session.AddRewards(exp, coins)
-
-					totalCostStamina += cost
-					totalGainExp += exp
-					totalGainCoins += coins
-					successRounds++
-
-					slog.Info("关卡单次扫荡完成",
-						"role_id", session.RoleID(),
-						"mission_id", missionID,
-						"mission_name", missionName,
-						"round", round,
-						"remaining_stamina", remStamina,
-					)
 				}
 			}
 

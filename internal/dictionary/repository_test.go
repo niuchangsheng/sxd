@@ -133,5 +133,15 @@ func TestRepository_Queries(t *testing.T) {
 		if err == nil && sideMission != nil && sideMission.Type != 2 {
 			t.Errorf("支线关卡查询预期 Type=2，实际为 %d", sideMission.Type)
 		}
+
+		// 验证任务关联关卡列表
+		mainMissions, err := repo.GetQuestMissions(1, 32)
+		if err != nil || len(mainMissions) == 0 {
+			t.Errorf("期望查出 32 级以下主线任务关卡列表: err=%v, count=%d", err, len(mainMissions))
+		}
+		sideMissions, err := repo.GetQuestMissions(2, 32)
+		if err != nil || len(sideMissions) == 0 {
+			t.Errorf("期望查出 32 级以下支线任务关卡列表: err=%v, count=%d", err, len(sideMissions))
+		}
 	})
 }

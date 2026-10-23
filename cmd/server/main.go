@@ -23,6 +23,7 @@ import (
 	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/routines"
+	"sxd-pie-ng/internal/routines/dungeon"
 	"sxd-pie-ng/internal/scheduler"
 	"sxd-pie-ng/internal/web"
 )
@@ -246,6 +247,15 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	factory := routines.NewRegistryFactory(qaEngine, dictRepo)
+	dCfg := dungeon.DefaultSweepConfig()
+	if len(cfg.Scheduler.Dungeon.Pipeline) > 0 {
+		dCfg.Pipeline = cfg.Scheduler.Dungeon.Pipeline
+	}
+	dCfg.PreferPracticeQuickly = cfg.Scheduler.Dungeon.PreferPracticeQuickly
+	dCfg.MaxBatchTimes = cfg.Scheduler.Dungeon.MaxBatchTimes
+	dCfg.AutoReplenishStamina = cfg.Scheduler.Dungeon.AutoReplenishStamina
+	dCfg.MaxReplenishTimes = cfg.Scheduler.Dungeon.MaxReplenishTimes
+	factory.SetDungeonConfig(dCfg)
 	routineMgr := &routineManager{
 		enabledMap: make(map[string]bool),
 	}

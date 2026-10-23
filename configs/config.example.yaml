@@ -27,3 +27,17 @@ scheduler:
     lucky_star: true
     pilgrimage: true
     arena: true
+
+  # 副本与推图自动化策略配置
+  dungeon:
+    # 策略优先级流水线：优先推主线 -> 再推支线 -> 再扫荡精英 -> 最后兜底扫荡最高级主线副本
+    pipeline:
+      - "push_mainline"        # 1. 优先推主线 (推进未通关的主线剧情关卡)
+      - "push_side"            # 2. 再推支线 (推进未通关的支线任务关卡)
+      - "sweep_elite"          # 3. 再扫荡精英 (清空每日可用英雄/精英副本)
+      - "sweep_highest_main"   # 4. 最后兜底：扫荡当前角色已通关的最高级主线副本
+
+    prefer_practice_quickly: true # 优先使用 Module 25 秒完成协议
+    max_batch_times: 10           # 单次批处理最大扫荡次数
+    auto_replenish_stamina: true  # 体力不足时自动按 [包子 > 粽子 > 茶叶蛋] 自愈
+    max_replenish_times: 10       # 单次最大自愈补充次数

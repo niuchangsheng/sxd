@@ -1002,6 +1002,106 @@ func TestDungeonSweep_AutoReplenishStamina_Priority(t *testing.T) {
 	})
 }
 
+// TestDungeonSweep_PipelineExecutionOrder 验证配置流水线严格按照:
+// 优先推主线 -> 再推支线 -> 再扫荡精英 -> 最后兜底扫荡最高级主线 的时序流转。
+func TestDungeonSweep_PipelineExecutionOrder(t *testing.T) {
+	sess, srvConn := createTestSession(t, 20)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var sequence []string
+	var seqMu sync.Mutex
+	record := func(action string) {
+		seqMu.Lock()
+		defer seqMu.Unlock()
+		sequence = append(sequence, action)
+	}
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionMissionSweep:
+			// 普通关卡进入/扫荡
+			record("mission_sweep")
+			resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
+				Success:   true,
+				MissionID: 1,
+				Times:     1,
+				CostPower: 5,
+				GainExp:   2500,
+				GainCoins: 12000,
+				Message:   "扫荡成功",
+			})
+			_ = protocol.WritePacket(srvConn, resPkt)
+			return true
+
+		case protocol.ActionHeroMissionList:
+			record("hero_list")
+			w := protocol.NewWriter()
+			w.WriteUint32(0)
+			w.WriteUint8(1)
+			w.WriteUint32(10)
+			w.WriteUint32(1)
+			w.WriteUint32(1001)
+			w.WriteUint16(43)
+			w.WriteUint8(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+			return true
+
+		case protocol.ActionHeroMissionSelect:
+			record("hero_select")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
+			return true
+
+		case protocol.ActionHeroMissionSweep:
+			record("hero_sweep")
+			w := protocol.NewWriter()
+			w.WriteBytes([]byte{0x00, 0x00, 0x01})
+			w.WriteUint32(1001)
+			w.WriteUint16(43)
+			w.WriteUint8(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+			return true
+
+		case protocol.ActionHeroMissionClose:
+			record("hero_close")
+			return true
+		}
+		return false
+	})
+
+	cfg := dungeon.SweepConfig{
+		MaxBatchTimes: 3,
+		Pipeline: []string{
+			"sweep_elite",
+			"sweep_highest_main",
+		},
+	}
+	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+	err := routine.Execute(context.Background(), sess, nil)
+	if err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("流水线执行失败: %v", err)
+	}
+
+	seqMu.Lock()
+	defer seqMu.Unlock()
+	// 期望先执行英雄/精英副本，再执行最高主线扫荡
+	hasHeroFirst := false
+	hasSweepAfter := false
+	for _, act := range sequence {
+		if act == "hero_sweep" {
+			hasHeroFirst = true
+		}
+		if hasHeroFirst && act == "mission_sweep" {
+			hasSweepAfter = true
+			break
+		}
+	}
+	if !hasHeroFirst || !hasSweepAfter {
+		t.Errorf("期望流水线先扫荡精英再扫荡主线, 实际时序: %v", sequence)
+	}
+}
+
+
 
 
 

@@ -55,7 +55,23 @@ type SchedulerConfig struct {
 	Preset    string                 `yaml:"preset"`
 	CronTimes []string               `yaml:"cron_times"`
 	Routines  map[string]bool        `yaml:"routines"`
+	Dungeon   DungeonConfig          `yaml:"dungeon"`
 	Expert    map[string]interface{} `yaml:"expert"`
+}
+
+// DungeonConfig 副本与推图自动化策略配置
+type DungeonConfig struct {
+	// Pipeline 策略优先级流水线，按先后顺序流转
+	// 可选值: "push_mainline" (推主线), "push_side" (推支线), "sweep_elite" (扫荡精英), "sweep_highest_main" (扫荡最高级主线)
+	Pipeline []string `yaml:"pipeline"`
+	// PreferPracticeQuickly 是否优先使用 Module 25 秒完成协议 (默认 true)
+	PreferPracticeQuickly bool `yaml:"prefer_practice_quickly"`
+	// MaxBatchTimes 扫荡批次单次最大执行次数 (默认 10)
+	MaxBatchTimes int `yaml:"max_batch_times"`
+	// AutoReplenishStamina 当体力不足时是否自动按 [包子 > 粽子 > 茶叶蛋] 优先级吃道具自愈 (默认 true)
+	AutoReplenishStamina bool `yaml:"auto_replenish_stamina"`
+	// MaxReplenishTimes 单次执行自动补充体力的最大次数 (默认 10)
+	MaxReplenishTimes int `yaml:"max_replenish_times"`
 }
 
 // JitterConfig 抖动上下限配置 (秒)
@@ -132,6 +148,29 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Scheduler.Expert == nil {
 		cfg.Scheduler.Expert = make(map[string]interface{})
+	}
+
+	if len(cfg.Scheduler.Dungeon.Pipeline) == 0 {
+		cfg.Scheduler.Dungeon.Pipeline = []string{
+			"push_mainline",
+			"push_side",
+			"sweep_elite",
+			"sweep_highest_main",
+		}
+	}
+	// 默认启用秒完成
+	if !cfg.Scheduler.Dungeon.PreferPracticeQuickly {
+		cfg.Scheduler.Dungeon.PreferPracticeQuickly = true
+	}
+	if cfg.Scheduler.Dungeon.MaxBatchTimes <= 0 {
+		cfg.Scheduler.Dungeon.MaxBatchTimes = 10
+	}
+	if cfg.Scheduler.Dungeon.MaxReplenishTimes <= 0 {
+		cfg.Scheduler.Dungeon.MaxReplenishTimes = 10
+	}
+	// AutoReplenishStamina 默认为 true
+	if !cfg.Scheduler.Dungeon.AutoReplenishStamina {
+		cfg.Scheduler.Dungeon.AutoReplenishStamina = true
 	}
 
 	if cfg.Accounts == nil {
