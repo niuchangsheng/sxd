@@ -215,117 +215,33 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			}
 
 			// 6. 依据配置流水线顺序依次调度执行
+			questCycleDone := false
 		pipelineLoop:
 			for _, step := range pipeline {
 				if successRounds >= cfg.MaxBatchTimes {
 					break
+				}
+				if session.State() != client.StateActive {
+					for i := 0; i < 15 && session.State() != client.StateActive; i++ {
+						time.Sleep(200 * time.Millisecond)
+					}
 				}
 				if session.GetStamina() < powerPerSweep && !ensureStamina() {
 					break
 				}
 
 				switch step {
-				case "push_mainline":
-					// 6.1 阶段一: 优先推主线 (Quests 表 Type=1)
-					if dictRepo == nil {
+				case "push_mainline", "push_side", "quest", "quest_cycle":
+					// 6.1 阶段一/二: 循环接任务、做任务、交任务，直到无任务可做再流转至下一阶段
+					if questCycleDone {
 						continue
 					}
-					questMissions, err := dictRepo.GetQuestMissions(1, state.Level)
-					if err != nil || len(questMissions) == 0 {
-						continue
-					}
-
-					for _, mid := range questMissions {
-						if successRounds >= cfg.MaxBatchTimes {
-							break
-						}
-						if clearedMissions[mid] {
-							continue // 已通关关卡无需再推
-						}
-						if session.GetStamina() < powerPerSweep && !ensureStamina() {
-							break
-						}
-
-						slog.Info("正在推进主线关卡挑战", "role_id", session.RoleID(), "mission_id", mid)
-						enterPkt := protocol.BuildEnterMissionPacket(uint32(mid))
-						enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
-						enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionMissionSweep)
-						enterCancel()
-
-						pushedSuccess := false
-						if enterErr == nil && enterResp != nil {
-							if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
-								pushedSuccess = true
-								_ = session.Send(protocol.BuildQuickFinishPacket())
-							}
-						}
-						if pushedSuccess {
-							cost := powerPerSweep
-							remStamina, _ := session.ConsumeStamina(cost)
-							session.AddRewards(2500, 12000)
-							totalCostStamina += cost
-							totalGainExp += 2500
-							totalGainCoins += 12000
-							successRounds++
-							clearedMissions[mid] = true
-							slog.Info("主线关卡推进通关成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
-							time.Sleep(50 * time.Millisecond)
-						} else {
-							slog.Info("主线关卡暂未通关或卡等级，主线推图流转至下一阶段", "role_id", session.RoleID(), "mission_id", mid)
-							break
-						}
-					}
-
-				case "push_side":
-					// 6.2 阶段二: 再推支线 (Quests 表 Type=2)
-					if dictRepo == nil {
-						continue
-					}
-					sideMissions, err := dictRepo.GetQuestMissions(2, state.Level)
-					if err != nil || len(sideMissions) == 0 {
-						continue
-					}
-
-					for _, mid := range sideMissions {
-						if successRounds >= cfg.MaxBatchTimes {
-							break
-						}
-						if clearedMissions[mid] {
-							continue
-						}
-						if session.GetStamina() < powerPerSweep && !ensureStamina() {
-							break
-						}
-
-						slog.Info("正在推进支线关卡挑战", "role_id", session.RoleID(), "mission_id", mid)
-						enterPkt := protocol.BuildEnterMissionPacket(uint32(mid))
-						enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
-						enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionMissionSweep)
-						enterCancel()
-
-						pushedSuccess := false
-						if enterErr == nil && enterResp != nil {
-							if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
-								pushedSuccess = true
-								_ = session.Send(protocol.BuildQuickFinishPacket())
-							}
-						}
-						if pushedSuccess {
-							cost := powerPerSweep
-							remStamina, _ := session.ConsumeStamina(cost)
-							session.AddRewards(2000, 10000)
-							totalCostStamina += cost
-							totalGainExp += 2000
-							totalGainCoins += 10000
-							successRounds++
-							clearedMissions[mid] = true
-							slog.Info("支线关卡推进通关成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
-							time.Sleep(50 * time.Millisecond)
-						} else {
-							slog.Info("支线关卡暂未通关或未解锁，支线推图流转至下一阶段", "role_id", session.RoleID(), "mission_id", mid)
-							break
-						}
-					}
+					questCycleDone = true
+					executeQuestCycle(
+						ctx, session, dictRepo, cfg, ensureStamina,
+						&successRounds, &totalCostStamina, &totalGainExp, &totalGainCoins,
+						clearedMissions,
+					)
 
 				case "sweep_elite":
 					// 6.3 阶段三: 再扫荡精英 (Module 111 英雄/精英副本)
@@ -742,4 +658,295 @@ func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
 		},
 	)
 }
+
+// executeQuestCycle 任务闭环状态机:
+// 循环接任务、完成任务，一直到没有任务可做了再 break，随后流转执行后续流水线 (精英扫荡与最高主线扫荡)。
+func executeQuestCycle(
+	ctx context.Context,
+	session *client.RoleSession,
+	dictRepo dictionary.Repository,
+	cfg SweepConfig,
+	ensureStamina func() bool,
+	successRounds *int,
+	totalCostStamina *int,
+	totalGainExp *int64,
+	totalGainCoins *int64,
+	clearedMissions map[int]bool,
+) {
+	if dictRepo == nil || session == nil {
+		return
+	}
+
+	const powerPerSweep = 5
+	const maxCycles = 20
+	failedMissions := make(map[int]bool)
+
+	slog.Info("启动主线/支线任务闭环自动化驱动", "role_id", session.RoleID(), "town_id", session.GetPlayerState().TownID)
+
+	for cycle := 1; cycle <= maxCycles; cycle++ {
+		if *successRounds >= cfg.MaxBatchTimes {
+			slog.Info("已达到单次执行最大通关次数上限，退出任务循环", "success_rounds", *successRounds)
+			break
+		}
+		if session.GetStamina() < powerPerSweep && !ensureStamina() {
+			slog.Info("体力耗尽且无可用补充道具，退出任务循环", "stamina", session.GetStamina())
+			break
+		}
+
+		progressMade := false
+
+		// -------------------------------------------------------------
+		// 1. 优先交付当前身上已达成的任务 (State == 1)
+		// -------------------------------------------------------------
+		currentQuests := session.GetQuests()
+		for qid, state := range currentQuests {
+			if state == 1 {
+				q, _ := dictRepo.GetQuest(int(qid))
+				title := fmt.Sprintf("Quest#%d", qid)
+				if q != nil && q.Title != "" {
+					title = q.Title
+				}
+				slog.Info("正在交付已达成任务", "role_id", session.RoleID(), "quest_id", qid, "title", title)
+
+				compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: int32(qid)})
+				compCtx, compCancel := context.WithTimeout(ctx, 3*time.Second)
+				_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
+				compCancel()
+
+				session.RemoveQuest(qid)
+				if q != nil {
+					session.AddRewards(q.AwardExp, q.AwardCoins)
+					*totalGainExp += q.AwardExp
+					*totalGainCoins += q.AwardCoins
+				}
+				progressMade = true
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+
+		// -------------------------------------------------------------
+		// 2. 扫描城镇 NPC 列表并接取可接任务 (State == 1)
+		// -------------------------------------------------------------
+		curTown := session.GetPlayerState().TownID
+		var towns []int
+		if curTown > 0 {
+			towns = append(towns, curTown)
+		}
+		for _, fallbackTown := range []int{22, 4, 1} {
+			if fallbackTown != curTown {
+				towns = append(towns, fallbackTown)
+			}
+		}
+
+		validQuestNPCs, _ := dictRepo.GetQuestNPCs()
+		var candidateNPCs []int
+		seenNPC := make(map[int]bool)
+		for _, tid := range towns {
+			npcs, err := dictRepo.GetTownNPCs(tid)
+			if err == nil {
+				for _, nid := range npcs {
+					if !seenNPC[nid] {
+						seenNPC[nid] = true
+						if validQuestNPCs == nil || validQuestNPCs[nid] {
+							candidateNPCs = append(candidateNPCs, nid)
+						}
+					}
+				}
+			}
+		}
+
+		for _, npcID := range candidateNPCs {
+			npcPkt, _ := protocol.BuildGetNPCQuestsPacket(protocol.GetNPCQuestsRequest{NPCID: int32(npcID)})
+			npcCtx, npcCancel := context.WithTimeout(ctx, 300*time.Millisecond)
+			npcResp, npcErr := session.Call(npcCtx, npcPkt, protocol.ActionIDQuestGetNPCQuests)
+			npcCancel()
+
+			if npcErr != nil || npcResp == nil {
+				continue
+			}
+
+			items, pErr := protocol.ParseNPCQuestsResponse(npcResp.Payload)
+			if pErr != nil || len(items) == 0 {
+				continue
+			}
+
+			for _, it := range items {
+				if it.State != 1 {
+					continue // 仅接取状态为可接 (State == 1) 的任务
+				}
+				questID := uint32(it.QuestID)
+				questsNow := session.GetQuests()
+				if _, exists := questsNow[questID]; exists {
+					continue
+				}
+
+				q, _ := dictRepo.GetQuest(int(it.QuestID))
+				if q != nil && q.Level > 0 && q.Level > session.GetPlayerState().Level {
+					continue // 角色等级未达到要求
+				}
+
+				title := fmt.Sprintf("Quest#%d", it.QuestID)
+				if q != nil && q.Title != "" {
+					title = q.Title
+				}
+				slog.Info("发现可接取任务，正在接受", "role_id", session.RoleID(), "npc_id", npcID, "quest_id", it.QuestID, "title", title)
+
+				accPkt, _ := protocol.BuildAcceptQuestPacket(protocol.AcceptQuestRequest{QuestID: it.QuestID})
+				accCtx, accCancel := context.WithTimeout(ctx, 3*time.Second)
+				_, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
+				accCancel()
+
+				if accErr == nil {
+					session.SetQuestState(questID, 0) // 加入进行中状态
+					progressMade = true
+					slog.Info("成功接受任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
+					time.Sleep(50 * time.Millisecond)
+				}
+			}
+		}
+
+		// -------------------------------------------------------------
+		// 3. 推进已接任务关卡挑战与对话剧情
+		// -------------------------------------------------------------
+		questsInProgress := session.GetQuests()
+		for qid, qState := range questsInProgress {
+			if qState != 0 {
+				continue
+			}
+			q, err := dictRepo.GetQuest(int(qid))
+			if err != nil || q == nil {
+				continue
+			}
+
+			// 对话类任务 (MissionID == 0)
+			if q.MissionID == 0 {
+				slog.Info("正在交付对话剧情任务", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title)
+				compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: int32(qid)})
+				compCtx, compCancel := context.WithTimeout(ctx, 3*time.Second)
+				_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
+				compCancel()
+
+				session.RemoveQuest(qid)
+				session.AddRewards(q.AwardExp, q.AwardCoins)
+				*totalGainExp += q.AwardExp
+				*totalGainCoins += q.AwardCoins
+				progressMade = true
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+
+			// 关卡挑战类任务 (MissionID > 0)
+			mid := q.MissionID
+			if failedMissions[mid] {
+				continue
+			}
+			if *successRounds >= cfg.MaxBatchTimes {
+				break
+			}
+			if session.GetStamina() < powerPerSweep && !ensureStamina() {
+				break
+			}
+
+			slog.Info("正在推进任务关卡挑战", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title, "mission_id", mid)
+
+			enterPkt := protocol.BuildEnterMissionPacket(uint32(mid))
+			enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
+			enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionMissionSweep)
+			enterCancel()
+
+			challengeSuccess := false
+			if enterErr == nil && enterResp != nil {
+				if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
+					challengeSuccess = true
+					_ = session.Send(protocol.BuildQuickFinishPacket())
+				}
+			}
+
+			if challengeSuccess {
+				cost := powerPerSweep
+				remStamina, _ := session.ConsumeStamina(cost)
+				session.AddRewards(2500, 12000)
+				*totalCostStamina += cost
+				*totalGainExp += 2500
+				*totalGainCoins += 12000
+				*successRounds++
+				clearedMissions[mid] = true
+				progressMade = true
+				slog.Info("任务关卡推进挑战成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
+
+				// 任务达成，交付结算
+				compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: int32(qid)})
+				compCtx, compCancel := context.WithTimeout(ctx, 3*time.Second)
+				_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
+				compCancel()
+
+				session.RemoveQuest(qid)
+				session.AddRewards(q.AwardExp, q.AwardCoins)
+				*totalGainExp += q.AwardExp
+				*totalGainCoins += q.AwardCoins
+				slog.Info("任务达成并成功交付结算", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title)
+				time.Sleep(50 * time.Millisecond)
+			} else {
+				slog.Info("任务关卡暂未通关或卡战力/等级，记录跳过", "role_id", session.RoleID(), "mission_id", mid, "quest_id", qid)
+				failedMissions[mid] = true
+			}
+		}
+
+		// -------------------------------------------------------------
+		// 4. 兜底检查: 若无活跃任务，通过 GetQuestMissions 探测是否有未通关主线/支线
+		// -------------------------------------------------------------
+		if !progressMade && len(session.GetQuests()) == 0 {
+			playerLevel := session.GetPlayerState().Level
+			for _, qType := range []int{1, 2} {
+				qMissions, _ := dictRepo.GetQuestMissions(qType, playerLevel)
+				for _, mid := range qMissions {
+					if clearedMissions[mid] || failedMissions[mid] {
+						continue
+					}
+					if *successRounds >= cfg.MaxBatchTimes {
+						break
+					}
+					if session.GetStamina() < powerPerSweep && !ensureStamina() {
+						break
+					}
+
+					slog.Info("探测并推进未通关剧情关卡", "role_id", session.RoleID(), "type", qType, "mission_id", mid)
+					enterPkt := protocol.BuildEnterMissionPacket(uint32(mid))
+					enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
+					enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionMissionSweep)
+					enterCancel()
+
+					if enterErr == nil && enterResp != nil {
+						if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
+							_ = session.Send(protocol.BuildQuickFinishPacket())
+							cost := powerPerSweep
+							remStamina, _ := session.ConsumeStamina(cost)
+							session.AddRewards(2500, 12000)
+							*totalCostStamina += cost
+							*totalGainExp += 2500
+							*totalGainCoins += 12000
+							*successRounds++
+							clearedMissions[mid] = true
+							progressMade = true
+							slog.Info("剧情关卡推进挑战成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
+							time.Sleep(50 * time.Millisecond)
+							break
+						}
+					}
+					failedMissions[mid] = true
+					break
+				}
+			}
+		}
+
+		// -------------------------------------------------------------
+		// 5. 循环终止卫语句: 没有任务可做了，退出循环
+		// -------------------------------------------------------------
+		if !progressMade {
+			slog.Info("当前已无可推进或可接取的任务，退出任务循环流转至下一阶段", "cycle", cycle)
+			break
+		}
+	}
+}
+
 

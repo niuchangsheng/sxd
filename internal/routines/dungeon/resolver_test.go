@@ -124,6 +124,18 @@ func (m *mockDictionaryRepo) GetQuestMissions(questType int, playerLevel int) ([
 	return nil, nil
 }
 
+func (m *mockDictionaryRepo) GetQuest(id int) (*dictionary.Quest, error) {
+	return nil, dictionary.ErrNotFound
+}
+
+func (m *mockDictionaryRepo) GetTownNPCs(townID int) ([]int, error) {
+	return nil, nil
+}
+
+func (m *mockDictionaryRepo) GetQuestNPCs() (map[int]bool, error) {
+	return nil, nil
+}
+
 func TestMissionResolver_AutoRecommend(t *testing.T) {
 	mockRepo := &mockDictionaryRepo{
 		missions: map[int]*dictionary.Mission{

@@ -32,6 +32,9 @@ type Repository interface {
 	GetHighestMissionByType(missionType int) (*Mission, error)
 	GetHighestMissionByTypeAndLevel(level int, missionType int) (*Mission, error)
 	GetQuestMissions(questType int, playerLevel int) ([]int, error)
+	GetQuest(id int) (*Quest, error)
+	GetTownNPCs(townID int) ([]int, error)
+	GetQuestNPCs() (map[int]bool, error)
 	SearchItems(keyword string) ([]*Item, error)
 	Close() error
 }
@@ -414,4 +417,103 @@ func (r *sqliteRepository) GetQuestMissions(questType int, playerLevel int) ([]i
 	}
 	return missions, nil
 }
+
+// Quest 游戏剧情与日常任务元数据。
+type Quest struct {
+	ID             int
+	Type           int // 1=主线, 2=支线, 4=精英
+	Lock           int
+	Level          int
+	Title          string
+	BeginNPCID     int
+	EndNPCID       int
+	AwardExp       int64
+	AwardCoins     int64
+	AwardItemID    int
+	TalkQuest      int
+	MissionID      int
+	AwardItemCount int
+}
+
+// GetQuest 根据任务编号获取任务元数据详情。
+func (r *sqliteRepository) GetQuest(id int) (*Quest, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.db == nil {
+		return nil, errors.New("dictionary: database not connected")
+	}
+
+	query := `SELECT QuestsId, Type, Lock, Level, Title, BeginNPCId, EndNPCId, 
+                     AwardExperience, AwardCoins, AwardItemId, TalkQuest, MissionId, AwardItemCount 
+              FROM Quests WHERE QuestsId = ? LIMIT 1`
+	row := r.db.QueryRow(query, id)
+
+	var q Quest
+	var title sql.NullString
+	err := row.Scan(&q.ID, &q.Type, &q.Lock, &q.Level, &title, &q.BeginNPCID, &q.EndNPCID,
+		&q.AwardExp, &q.AwardCoins, &q.AwardItemID, &q.TalkQuest, &q.MissionID, &q.AwardItemCount)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("dictionary: 查询任务详情失败: %w", err)
+	}
+	q.Title = strings.TrimSpace(title.String)
+	return &q, nil
+}
+
+// GetTownNPCs 查询指定城镇包含的所有 NPC 编号列表。
+func (r *sqliteRepository) GetTownNPCs(townID int) ([]int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.db == nil {
+		return nil, errors.New("dictionary: database not connected")
+	}
+
+	query := `SELECT DISTINCT npcid FROM NPCposition WHERE townid = ? ORDER BY id ASC`
+	rows, err := r.db.Query(query, townID)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: 查询城镇 NPC 失败: %w", err)
+	}
+	defer rows.Close()
+
+	var npcs []int
+	for rows.Next() {
+		var nid int
+		if err := rows.Scan(&nid); err == nil && nid > 0 {
+			npcs = append(npcs, nid)
+		}
+	}
+	return npcs, nil
+}
+
+// GetQuestNPCs 查询所有作为任务发起者的 NPC 编号集合。
+func (r *sqliteRepository) GetQuestNPCs() (map[int]bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.db == nil {
+		return nil, errors.New("dictionary: database not connected")
+	}
+
+	query := `SELECT DISTINCT BeginNPCId FROM Quests WHERE BeginNPCId > 0`
+	rows, err := r.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: 查询任务 NPC 失败: %w", err)
+	}
+	defer rows.Close()
+
+	res := make(map[int]bool)
+	for rows.Next() {
+		var nid int
+		if err := rows.Scan(&nid); err == nil && nid > 0 {
+			res[nid] = true
+		}
+	}
+	return res, nil
+}
+
+
 

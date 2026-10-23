@@ -1101,6 +1101,228 @@ func TestDungeonSweep_PipelineExecutionOrder(t *testing.T) {
 	}
 }
 
+type mockQuestDungeonRepo struct {
+	quests   map[int]*dictionary.Quest
+	townNPCs map[int][]int
+}
+
+func (m *mockQuestDungeonRepo) GetItem(id int) (*dictionary.Item, error) {
+	return nil, dictionary.ErrNotFound
+}
+func (m *mockQuestDungeonRepo) GetNPC(id int) (*dictionary.NPC, error) {
+	return nil, dictionary.ErrNotFound
+}
+func (m *mockQuestDungeonRepo) GetRoleType(id int) (*dictionary.RoleType, error) {
+	return nil, dictionary.ErrNotFound
+}
+func (m *mockQuestDungeonRepo) GetMission(id int) (*dictionary.Mission, error) {
+	return nil, dictionary.ErrNotFound
+}
+func (m *mockQuestDungeonRepo) GetHighestMission(sweepElite bool) (*dictionary.Mission, error) {
+	return &dictionary.Mission{ID: 43, Name: "万妖皇", MissionLock: 9999}, nil
+}
+func (m *mockQuestDungeonRepo) GetHighestMissionByLevel(level int, sweepElite bool) (*dictionary.Mission, error) {
+	return &dictionary.Mission{ID: 43, Name: "万妖皇", MissionLock: 9999}, nil
+}
+func (m *mockQuestDungeonRepo) GetHighestMissionByType(missionType int) (*dictionary.Mission, error) {
+	return &dictionary.Mission{ID: 43, Name: "万妖皇", MissionLock: 9999}, nil
+}
+func (m *mockQuestDungeonRepo) GetHighestMissionByTypeAndLevel(level int, missionType int) (*dictionary.Mission, error) {
+	return &dictionary.Mission{ID: 43, Name: "万妖皇", MissionLock: 9999}, nil
+}
+func (m *mockQuestDungeonRepo) GetQuestMissions(questType int, playerLevel int) ([]int, error) {
+	return nil, nil
+}
+func (m *mockQuestDungeonRepo) GetQuest(id int) (*dictionary.Quest, error) {
+	if q, ok := m.quests[id]; ok {
+		return q, nil
+	}
+	return nil, dictionary.ErrNotFound
+}
+func (m *mockQuestDungeonRepo) GetTownNPCs(townID int) ([]int, error) {
+	return m.townNPCs[townID], nil
+}
+func (m *mockQuestDungeonRepo) GetQuestNPCs() (map[int]bool, error) {
+	res := make(map[int]bool)
+	for _, q := range m.quests {
+		if q.BeginNPCID > 0 {
+			res[q.BeginNPCID] = true
+		}
+	}
+	return res, nil
+}
+func (m *mockQuestDungeonRepo) SearchItems(keyword string) ([]*dictionary.Item, error) {
+	return nil, nil
+}
+func (m *mockQuestDungeonRepo) Close() error {
+	return nil
+}
+
+// TestDungeonSweep_QuestCycleCompleteFlow 验证完整的任务闭环自动化驱动:
+// 1. 扫描 NPC 发现可接任务 (Quest 145) ->
+// 2. 接取任务 (accept_quest) ->
+// 3. 挑战关卡推进任务 (EnterMission 88) ->
+// 4. 达成并交付任务 (complete_quest) ->
+// 5. 无更多任务时退出任务循环 (break) ->
+// 6. 流转至后续流水线 (精英副本扫荡 -> 最高等级副本扫荡)。
+func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
+	sess, srvConn := createTestSession(t, 50)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	// 初始化角色在扬州城 (TownID=22)
+	sess.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.TownID = 22
+		ps.Level = 35
+	})
+
+	repo := &mockQuestDungeonRepo{
+		townNPCs: map[int][]int{
+			22: {48}, // 扬州城 NPC 48 (秀秀)
+		},
+		quests: map[int]*dictionary.Quest{
+			145: {
+				ID:         145,
+				Type:       2, // 支线任务
+				Title:      "蚕丝",
+				BeginNPCID: 48,
+				EndNPCID:   48,
+				MissionID:  88, // 对应副本 88
+				AwardExp:   5000,
+				AwardCoins: 20000,
+			},
+		},
+	}
+
+	var events []string
+	var eventsMu sync.Mutex
+	recordEvent := func(evt string) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, evt)
+	}
+
+	var questOffered atomic.Bool
+	questOffered.Store(true)
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDQuestGetNPCQuests:
+			recordEvent("get_npc_quests")
+			// 回复 NPC 48 的任务列表
+			w := protocol.NewWriter()
+			if questOffered.Load() {
+				w.WriteUint16(1)          // 1 个任务
+				w.WriteInt32(145)         // Quest 145
+				w.WriteUint8(1)           // 1=可接取
+			} else {
+				w.WriteUint16(0)          // 无更多任务
+			}
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestGetNPCQuests, w.Bytes()))
+			return true
+
+		case protocol.ActionIDQuestAccept:
+			recordEvent("accept_quest")
+			// 接取后，NPC 处不再提供该任务
+			questOffered.Store(false)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x00}))
+			return true
+
+		case protocol.ActionMissionEnter, protocol.ActionMissionSweep:
+			recordEvent("mission_sweep")
+			resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
+				Success:   true,
+				MissionID: 88,
+				Times:     1,
+				CostPower: 5,
+				GainExp:   2500,
+				GainCoins: 12000,
+				Message:   "通关成功",
+			})
+			_ = protocol.WritePacket(srvConn, resPkt)
+			return true
+
+		case protocol.ActionIDQuestComplete:
+			recordEvent("complete_quest")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestComplete, []byte{0x00}))
+			return true
+
+		case protocol.ActionHeroMissionList:
+			recordEvent("hero_list")
+			w := protocol.NewWriter()
+			w.WriteUint32(0)
+			w.WriteUint8(1)
+			w.WriteUint32(10)
+			w.WriteUint32(1)
+			w.WriteUint32(1001)
+			w.WriteUint16(43)
+			w.WriteUint8(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+			return true
+
+		case protocol.ActionHeroMissionSelect:
+			recordEvent("hero_select")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
+			return true
+
+		case protocol.ActionHeroMissionSweep:
+			recordEvent("hero_sweep")
+			w := protocol.NewWriter()
+			w.WriteBytes([]byte{0x00, 0x00, 0x01})
+			w.WriteUint32(1001)
+			w.WriteUint16(43)
+			w.WriteUint8(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+			return true
+
+		case protocol.ActionHeroMissionClose:
+			recordEvent("hero_close")
+			return true
+		}
+		return false
+	})
+
+	cfg := dungeon.SweepConfig{
+		MaxBatchTimes: 5,
+		Pipeline: []string{
+			"push_mainline",
+			"push_side",
+			"sweep_elite",
+			"sweep_highest_main",
+		},
+	}
+	routine := dungeon.NewDungeonSweepRoutine(repo, cfg)
+	err := routine.Execute(context.Background(), sess, nil)
+	if err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("任务循环流水线执行失败: %v", err)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+
+	// 验证关键时序: get_npc_quests -> accept_quest -> mission_sweep -> complete_quest -> hero_sweep -> mission_sweep (最高主线)
+	expectedOrder := []string{
+		"get_npc_quests",
+		"accept_quest",
+		"mission_sweep",
+		"complete_quest",
+		"hero_sweep",
+		"mission_sweep",
+	}
+
+	currentIdx := 0
+	for _, evt := range events {
+		if currentIdx < len(expectedOrder) && evt == expectedOrder[currentIdx] {
+			currentIdx++
+		}
+	}
+
+	if currentIdx != len(expectedOrder) {
+		t.Fatalf("实际执行事件时序未满足完整闭环期望, 完成进度 %d/%d. 实际事件列表: %v", currentIdx, len(expectedOrder), events)
+	}
+}
+
+
 
 
 

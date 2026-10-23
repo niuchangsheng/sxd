@@ -96,6 +96,7 @@ type PlayerState struct {
 	StateSource int64 `json:"state_source"`
 	BagCapacity int   `json:"bag_capacity"`
 	TownID      int   `json:"town_id"`
+	Quests      map[uint32]uint32 `json:"quests"`
 }
 
 // RoleSession 代表与游戏服务器建立的长连接角色会话。
@@ -160,7 +161,7 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		}
 	}
 
-	return &RoleSession{
+	s := &RoleSession{
 		cfg:            cfg,
 		isCustomDialer: isCustom,
 		state:          StateDisconnected,
@@ -173,8 +174,30 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 			Coins:       36226117234,
 			Ingots:      39409,
 			BagCapacity: 20,
+			Quests:      make(map[uint32]uint32),
 		},
 	}
+
+	// 注册任务列表下发协议监听器 (Module 3, Action 9)
+	s.RegisterHandler(protocol.ActionIDQuestList, func(pkt *protocol.Packet) {
+		if pkt == nil {
+			return
+		}
+		items, err := protocol.ParsePlayerQuestListResponse(pkt.Payload)
+		if err == nil && len(items) > 0 {
+			s.playerMu.Lock()
+			if s.playerState.Quests == nil {
+				s.playerState.Quests = make(map[uint32]uint32)
+			}
+			for _, it := range items {
+				s.playerState.Quests[uint32(it.QuestID)] = uint32(it.State)
+			}
+			s.playerMu.Unlock()
+			slog.Info("收到玩家全量任务列表同步", "role_id", s.cfg.RoleID, "total_quests", len(items))
+		}
+	})
+
+	return s
 }
 
 // RoleID 获取会话绑定的角色唯一标识符。
@@ -191,7 +214,43 @@ func (s *RoleSession) RoleName() string {
 func (s *RoleSession) GetPlayerState() PlayerState {
 	s.playerMu.RLock()
 	defer s.playerMu.RUnlock()
-	return s.playerState
+	state := s.playerState
+	if state.Quests != nil {
+		qCopy := make(map[uint32]uint32, len(state.Quests))
+		for k, v := range state.Quests {
+			qCopy[k] = v
+		}
+		state.Quests = qCopy
+	}
+	return state
+}
+
+// GetQuests 获取当前角色身上已接任务的快照 (QuestID -> State: 0-进行中, 1-可交)。
+func (s *RoleSession) GetQuests() map[uint32]uint32 {
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	res := make(map[uint32]uint32, len(s.playerState.Quests))
+	for k, v := range s.playerState.Quests {
+		res[k] = v
+	}
+	return res
+}
+
+// SetQuestState 更新指定任务的状态。
+func (s *RoleSession) SetQuestState(questID uint32, state uint32) {
+	s.playerMu.Lock()
+	defer s.playerMu.Unlock()
+	if s.playerState.Quests == nil {
+		s.playerState.Quests = make(map[uint32]uint32)
+	}
+	s.playerState.Quests[questID] = state
+}
+
+// RemoveQuest 从身上移除已完成或放弃的任务。
+func (s *RoleSession) RemoveQuest(questID uint32) {
+	s.playerMu.Lock()
+	defer s.playerMu.Unlock()
+	delete(s.playerState.Quests, questID)
 }
 
 // GetStamina 获取当前总剩余体力 (基础体力 + 存储/额外体力)。
