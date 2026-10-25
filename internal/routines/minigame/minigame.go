@@ -244,3 +244,291 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 	)
 }
 
+// NewEraTravelRoutine 构造山河纪元游历掷骰与奇遇领奖任务 (Feature 10: 山河游历)。
+func NewEraTravelRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"era_travel",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行益智任务: 山河纪元游历掷骰与寻宝", "role_id", session.RoleID())
+
+			// 1. 查询游历状态 (Mod 850, Act 4)
+			statePkt := protocol.BuildEraTravelGetStatePacket(protocol.ActionIDTownEnter)
+			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(sCtx, statePkt, protocol.ActionIDEraTravelGetState)
+			sCancel()
+
+			if err != nil || resp == nil {
+				slog.Warn("查询山河游历状态超时", "err", err)
+				return nil
+			}
+
+			// 2. 掷骰移动 (Mod 850, Act 0)
+			rollPkt := protocol.BuildEraTravelRollDicePacket(1, protocol.ActionIDEraTravelGetState)
+			rCtx, rCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(rCtx, rollPkt, protocol.ActionIDEraTravelRollDice)
+			rCancel()
+
+			// 3. 奇遇画卷事件结算 (Mod 635, Act 0)
+			eventPkt := protocol.NewPacket(protocol.ActionIDEraEventSettle, protocol.NewWriter().WriteUint32(protocol.ActionIDEraTravelRollDice).Bytes())
+			eCtx, eCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(eCtx, eventPkt, protocol.ActionIDEraEventSettle)
+			eCancel()
+
+			slog.Info("山河游历掷骰与事件结算完成", "role_id", session.RoleID())
+			return nil
+		},
+	)
+}
+
+// NewLingDaoRoutine 构造灵道初解任务领悟任务 (Feature 11: 灵道初解)。
+func NewLingDaoRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"lingdao_practice",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行益智任务: 灵道初解修炼与任务领悟", "role_id", session.RoleID())
+
+			// 1. 查询灵道修炼进度 (Mod 658, Act 0)
+			statusPkt := protocol.BuildLingDaoGetStatusPacket(protocol.ActionIDTownEnter)
+			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(sCtx, statusPkt, protocol.ActionIDLingDaoGetStatus)
+			sCancel()
+
+			if err != nil || resp == nil {
+				slog.Warn("查询灵道状态超时", "err", err)
+				return nil
+			}
+
+			// 2. 提交初解任务领悟 (Mod 711, Act 0)
+			compPkt := protocol.BuildLingDaoComprehendPacket(protocol.ActionIDLingDaoGetStatus)
+			cCtx, cCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(cCtx, compPkt, protocol.ActionIDLingDaoComprehend)
+			cCancel()
+
+			slog.Info("灵道初解阶段领悟完成", "role_id", session.RoleID())
+			return nil
+		},
+	)
+}
+
+// NewHuanshouRoutine 构造山海幻兽入侵挑战与扫荡任务 (Feature 12: 山海幻兽)。
+func NewHuanshouRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"huanshou_invade",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行益智任务: 山海幻兽入侵推图与扫荡", "role_id", session.RoleID())
+
+			// 1. 查询幻兽面板 (Mod 701, Act 0)
+			panelPkt := protocol.BuildHuanshouPanelPacket(protocol.ActionIDTownEnter)
+			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(pCtx, panelPkt, protocol.ActionIDHuanshouPanel)
+			pCancel()
+
+			// 2. 选定入侵章节并挑战 (Mod 696, Act 1 & 2)
+			chapPkt := protocol.NewPacket(protocol.ActionIDHuanshouInvadeChapter, protocol.NewWriter().WriteUint32(protocol.ActionIDHuanshouPanel).Bytes())
+			cCtx, cCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(cCtx, chapPkt, protocol.ActionIDHuanshouInvadeChapter)
+			cCancel()
+
+			chalPkt := protocol.BuildHuanshouInvadeChallengePacket(1, protocol.ActionIDHuanshouInvadeChapter)
+			chCtx, chCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(chCtx, chalPkt, protocol.ActionIDHuanshouInvadeChallenge)
+			chCancel()
+
+			// 3. 极速秒完成扫荡 (Mod 696, Act 3)
+			sweepPkt := protocol.BuildHuanshouInvadeSweepPacket(protocol.ActionIDHuanshouInvadeChallenge)
+			swCtx, swCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(swCtx, sweepPkt, protocol.ActionIDHuanshouInvadeSweep)
+			swCancel()
+
+			slog.Info("山海幻兽入侵扫荡轮次完成", "role_id", session.RoleID())
+			return nil
+		},
+	)
+}
+
+// NewWuFaRoutine 构造悟法领域感悟抽卡与技能配置任务 (Feature 14: 悟法领域)。
+func NewWuFaRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"wufa_field",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行益智任务: 悟法领域技能感悟与领悟", "role_id", session.RoleID())
+
+			// 1. 查询领域属性 (Mod 658, Act 1)
+			infoPkt := protocol.BuildWuFaFieldInfoPacket(2, protocol.ActionIDTownEnter)
+			iCtx, iCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(iCtx, infoPkt, protocol.ActionIDWuFaFieldInfo)
+			iCancel()
+
+			// 2. 悟法感悟抽卡 (Mod 658, Act 0)
+			drawPkt := protocol.BuildWuFaDrawCardPacket(protocol.ActionIDWuFaFieldInfo)
+			dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(dCtx, drawPkt, protocol.ActionIDWuFaDrawCard)
+			dCancel()
+
+			if err == nil && resp != nil {
+				slog.Info("悟法领域技能感悟成功", "role_id", session.RoleID())
+			}
+			return nil
+		},
+	)
+}
+
+// NewMasterPracticeRoutine 构造宗师修行挑战与突破任务 (Feature 15: 宗师修行)。
+func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"master_practice",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行益智任务: 宗师修行试炼与境界突破", "role_id", session.RoleID())
+
+			// 1. 查询宗师修行面板 (Mod 665, Act 1)
+			panelPkt := protocol.BuildMasterPracticePanelPacket(protocol.ActionIDTownEnter)
+			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(pCtx, panelPkt, protocol.ActionIDMasterPracticePanel)
+			pCancel()
+
+			if err != nil || resp == nil {
+				slog.Warn("查询宗师修行状态超时", "err", err)
+				return nil
+			}
+
+			// 2. 选定心法 (Mod 665, Act 3)
+			skillPkt := protocol.BuildMasterPracticeSelectSkillPacket(1, 1, protocol.ActionIDMasterPracticePanel)
+			sCtx, sCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(sCtx, skillPkt, protocol.ActionIDMasterPracticeSelectSkill)
+			sCancel()
+
+			// 3. 发起试炼挑战 (Mod 665, Act 2)
+			chalPkt := protocol.BuildMasterPracticeChallengePacket(protocol.ActionIDMasterPracticeSelectSkill)
+			cCtx, cCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(cCtx, chalPkt, protocol.ActionIDMasterPracticeChallenge)
+			cCancel()
+
+			// 4. 境界突破 (Mod 665, Act 5)
+			breakPkt := protocol.BuildMasterPracticeBreakthroughPacket(1, 1, protocol.ActionIDMasterPracticeChallenge)
+			bCtx, bCancel := context.WithTimeout(ctx, 2*time.Second)
+			bResp, bErr := session.Call(bCtx, breakPkt, protocol.ActionIDMasterPracticeBreakthrough)
+			bCancel()
+
+			if bErr == nil && bResp != nil {
+				slog.Info("宗师境界突破成功", "role_id", session.RoleID())
+			}
+			return nil
+		},
+	)
+}
+
+// NewTreasureHouseRoutine 构造天帝宝库自选与开启抽奖任务 (Feature 16: 天帝宝库)。
+func NewTreasureHouseRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"treasure_house",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行益智任务: 天帝宝库自选与开启抽奖", "role_id", session.RoleID())
+
+			// 1. 查询宝库基本信息 (Mod 594, Act 2)
+			infoPkt := protocol.BuildTreasureHouseInfoPacket(protocol.ActionIDTownEnter)
+			iCtx, iCancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(iCtx, infoPkt, protocol.ActionIDTreasureHouseInfo)
+			iCancel()
+
+			if err != nil || resp == nil {
+				slog.Warn("查询天帝宝库状态超时", "err", err)
+				return nil
+			}
+
+			// 2. 拉取奖池 (Mod 594, Act 9)
+			poolPkt := protocol.BuildTreasureHousePoolPacket(protocol.ActionIDTreasureHouseInfo)
+			pCtx, pCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(pCtx, poolPkt, protocol.ActionIDTreasureHousePool)
+			pCancel()
+
+			// 3. 设定自选大奖 (Mod 594, Act 3: 依据抓包设定三档奖品)
+			selects := []protocol.TreasureAwardSelect{
+				{TierID: 1, ItemID: 50},
+				{TierID: 2, ItemID: 25},
+				{TierID: 3, ItemID: 42},
+			}
+			selPkt := protocol.BuildTreasureHouseSelectPacket(selects, protocol.ActionIDTreasureHousePool)
+			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(sCtx, selPkt, protocol.ActionIDTreasureHouseSelect)
+			sCancel()
+
+			// 4. 确认锁定自选大奖 (Mod 594, Act 4)
+			confPkt := protocol.BuildTreasureHouseConfirmPacket(1, protocol.ActionIDTreasureHouseSelect)
+			cCtx, cCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(cCtx, confPkt, protocol.ActionIDTreasureHouseConfirm)
+			cCancel()
+
+			// 5. 消耗宝库钥匙开启抽奖 (Mod 594, Act 6)
+			drawPkt := protocol.BuildTreasureHouseDrawPacket(protocol.ActionIDTreasureHouseConfirm)
+			dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
+			dResp, dErr := session.Call(dCtx, drawPkt, protocol.ActionIDTreasureHouseDraw)
+			dCancel()
+
+			if dErr == nil && dResp != nil {
+				slog.Info("天帝宝库开启抽奖成功", "role_id", session.RoleID())
+			}
+			return nil
+		},
+	)
+}
+

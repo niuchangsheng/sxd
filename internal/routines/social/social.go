@@ -7,10 +7,86 @@ package social
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"sxd-pie-ng/internal/client"
+	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
 )
+
+// NewJieYuanBoxRoutine 构造结缘宝箱批量开启任务 (Feature 2: 结缘宝箱，除了传说，其他都开)。
+func NewJieYuanBoxRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"jieyuan_box",
+		"social",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行结缘任务: 结缘宝箱自动开启 (严格排除传说宝箱)", "role_id", session.RoleID())
+
+			// 1. 查询背包持有的结缘宝箱列表 (Mod 232, Act 30)
+			queryPkt := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDTownEnter)
+			callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(callCtx, queryPkt, protocol.ActionIDJieYuanBoxList)
+			cancel()
+
+			if err != nil || resp == nil {
+				slog.Warn("查询结缘宝箱列表超时或失败", "err", err)
+				return nil
+			}
+
+			boxes, err := protocol.ParseJieYuanBoxListResult(resp.Payload)
+			if err != nil {
+				slog.Warn("解析结缘宝箱列表失败", "err", err)
+				return nil
+			}
+
+			// 2. 严格遵循规则: 除了传说 (3942)，其他都开
+			openable := protocol.FilterOpenableJieYuanBoxes(boxes)
+			if len(openable) == 0 {
+				slog.Info("无待开启的非传说结缘宝箱", "total_kinds", len(boxes))
+				return nil
+			}
+
+			var totalOpened int
+			prevAct := protocol.ActionIDJieYuanBoxList
+
+			for _, box := range openable {
+				// 2.1 开箱前置握手 (Mod 528, Act 1)
+				prepPkt := protocol.BuildJieYuanBoxOpenContextPacket(prevAct)
+				pCtx, pCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+				_, _ = session.Call(pCtx, prepPkt, protocol.ActionIDJieYuanBoxOpenContext)
+				pCancel()
+
+				// 2.2 发送批量开启指令 (Mod 232, Act 34)
+				openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, box.Count, protocol.ActionIDJieYuanBoxOpenContext)
+				oCtx, oCancel := context.WithTimeout(ctx, 2*time.Second)
+				openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)
+				oCancel()
+
+				prevAct = protocol.ActionIDJieYuanBoxOpen
+				if oErr == nil && openResp != nil {
+					totalOpened += int(box.Count)
+					slog.Info("结缘宝箱开启成功",
+						"item_id", box.ItemID,
+						"count", box.Count,
+						"legendary_skipped", true,
+					)
+				}
+			}
+
+			slog.Info("结缘宝箱批量开启流程完成", "role_id", session.RoleID(), "total_opened", totalOpened)
+			return nil
+		},
+	)
+}
 
 // NewGuildActivitiesRoutine 构造仙盟神兽与捐献任务。
 func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {

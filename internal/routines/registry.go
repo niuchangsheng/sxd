@@ -35,6 +35,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "mail_collect", Name: "邮件一键收取", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动一键领取系统邮件与好友信件附件", DefaultOn: false},
 		{ID: "online_gift", Name: "在线成长礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取各时段在线时长福利与成长礼包", DefaultOn: false},
 		{ID: "vip_welfare", Name: "VIP特权与俸禄", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取VIP每日礼包与官职俸禄", DefaultOn: false},
+		{ID: "god_bless", Name: "跨服天神赐福", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领用跨服天神赐福增益点数", DefaultOn: false},
 
 		// 2. Farming 领域 (6)
 		{ID: "herb_garden", Name: "药园种植巡检", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动药园播种、施肥、除草与成熟采摘", DefaultOn: true},
@@ -50,14 +51,17 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "homestead", Name: "住宅与夫妻宝箱", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "住宅家具祝福领取与夫妻宝箱日常互动", DefaultOn: false},
 		{ID: "friendship", Name: "好友结义与送花", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "好友自动送花互动与结义羁绊维护", DefaultOn: false},
 		{ID: "fame_blessing", Name: "仙界尊像膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "仙界膜拜前三名霸主大神与声望祝福获取", DefaultOn: false},
+		{ID: "jieyuan_box", Name: "结缘宝箱开启", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "批量开启结缘宝箱 (除了传说，其他都开)", DefaultOn: false},
 
-		// 4. Dungeon 领域 (6)
+		// 4. Dungeon 领域 (8)
 		{ID: "dungeon_sweep", Name: "关卡体力扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/精英关卡体力自动消耗与装备材料扫荡", DefaultOn: true},
 		{ID: "six_realms", Name: "六道轮回挑战", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "六道轮回塔爬塔与灵件自动熔炼分解", DefaultOn: false},
-		{ID: "demon_tower", Name: "伏魔塔与试炼", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "伏魔塔日常挑战与怪物试炼通关", DefaultOn: false},
+		{ID: "demon_tower", Name: "伏魔锁妖塔挑战", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "锁妖塔日常挑战与怪物试炼通关", DefaultOn: false},
 		{ID: "training_room", Name: "仙界练功房", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "仙界练功房普通/高级场挂机收益维护", DefaultOn: false},
 		{ID: "zodiac_challenge", Name: "生肖挑战与金油", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "十二生肖关卡挑战与金油炼化突破", DefaultOn: false},
 		{ID: "spirit_trial", Name: "精灵试炼扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "精灵副本星级通关挑战与材料扫荡", DefaultOn: false},
+		{ID: "qimen_dunjia", Name: "奇门遁甲法阵", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "奇门遁甲法阵星图注灵与布阵生效", DefaultOn: false},
+		{ID: "xunxian_road", Name: "寻仙之路推图", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "寻仙之路关卡挑战与节点宝箱领用", DefaultOn: false},
 
 		// 5. PVP 领域 (6)
 		{ID: "arena", Name: "本服竞技场", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "本服竞技场自动寻找适宜对手挑战与排名领奖", DefaultOn: false},
@@ -75,6 +79,12 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "fishing", Name: "自动钓鱼命格", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动水域钓鱼与猎命命格吞噬融合", DefaultOn: false},
 		{ID: "scratch_card", Name: "幸运刮刮卡", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "日常免费刮刮卡福利抽取", DefaultOn: false},
 		{ID: "ice_cave", Name: "一键冰窟探险", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "一键五锤最优路径通关与金币领取", DefaultOn: false},
+		{ID: "era_travel", Name: "山河纪元游历", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "山河纪元游历掷骰子与奇遇寻宝", DefaultOn: false},
+		{ID: "lingdao_practice", Name: "灵道初解修炼", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "灵道初解任务领悟与阶段进阶", DefaultOn: false},
+		{ID: "huanshou_invade", Name: "山海幻兽入侵", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "山海幻兽入侵副本推图与极速扫荡", DefaultOn: false},
+		{ID: "wufa_field", Name: "悟法领域感悟", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "悟法领域属性加成与秘籍感悟抽卡", DefaultOn: false},
+		{ID: "master_practice", Name: "宗师修行试炼", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "宗师修行心法挑战与境界突破", DefaultOn: false},
+		{ID: "treasure_house", Name: "天帝宝库自选", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "天帝宝库自选大奖与钥匙抽奖开启", DefaultOn: false},
 	}
 }
 
@@ -141,6 +151,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewOnlineGiftRoutine()
 	case "vip_welfare":
 		return daily.NewVIPWelfareRoutine()
+	case "god_bless":
+		return daily.NewGodBlessRoutine()
 
 	// 2. Farming
 	case "herb_garden":
@@ -167,6 +179,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewFriendshipRoutine()
 	case "fame_blessing":
 		return social.NewFameBlessingRoutine()
+	case "jieyuan_box":
+		return social.NewJieYuanBoxRoutine()
 
 	// 4. Dungeon
 	case "dungeon_sweep":
@@ -181,6 +195,10 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return dungeon.NewZodiacRoutine()
 	case "spirit_trial":
 		return dungeon.NewSpiritTrialRoutine()
+	case "qimen_dunjia":
+		return dungeon.NewQiMenRoutine()
+	case "xunxian_road":
+		return dungeon.NewXunXianRoutine()
 
 	// 5. PVP
 	case "arena":
@@ -211,6 +229,18 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewScratchCardRoutine()
 	case "ice_cave":
 		return minigame.NewIceCaveRoutine()
+	case "era_travel":
+		return minigame.NewEraTravelRoutine()
+	case "lingdao_practice":
+		return minigame.NewLingDaoRoutine()
+	case "huanshou_invade":
+		return minigame.NewHuanshouRoutine()
+	case "wufa_field":
+		return minigame.NewWuFaRoutine()
+	case "master_practice":
+		return minigame.NewMasterPracticeRoutine()
+	case "treasure_house":
+		return minigame.NewTreasureHouseRoutine()
 
 	default:
 		return nil

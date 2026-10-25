@@ -171,7 +171,7 @@ func NewGodsAndDemonsRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewCaravanHijackRoutine 构造阵营劫镖任务。
+// NewCaravanHijackRoutine 构造阵营劫镖任务 (Feature 7: 劫镖)。
 func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"caravan_hijack",
@@ -180,7 +180,46 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行对抗任务: 阵营商队巡查与自动截击")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行对抗任务: 阵营商队巡查与自动劫镖拦截", "role_id", session.RoleID())
+
+			// 1. 获取当前运镖队伍列表 (Mod 314, Act 1)
+			listPkt := protocol.BuildCaravanGetListPacket(protocol.ActionIDTownEnter)
+			callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(callCtx, listPkt, protocol.ActionIDCaravanGetList)
+			cancel()
+
+			if err != nil || resp == nil {
+				slog.Warn("获取劫镖队伍列表超时或无可用目标", "err", err)
+				return nil
+			}
+
+			// 2. 查询拦截目标详情 (Mod 314, Act 0)
+			detailPkt := protocol.BuildCaravanGetDetailPacket(protocol.ActionIDCaravanGetList)
+			dCtx, dCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(dCtx, detailPkt, protocol.ActionIDCaravanGetDetail)
+			dCancel()
+
+			// 3. 发起劫镖拦截攻击 (Mod 314, Act 12)
+			hijackPkt := protocol.BuildCaravanHijackPacket(1, protocol.ActionIDCaravanGetDetail)
+			hCtx, hCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(hCtx, hijackPkt, protocol.ActionIDCaravanHijack)
+			hCancel()
+
+			// 4. 战斗结果结算 (Mod 314, Act 2)
+			settlePkt := protocol.BuildCaravanSettlePacket(protocol.ActionIDCaravanHijack)
+			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
+			sResp, sErr := session.Call(sCtx, settlePkt, protocol.ActionIDCaravanSettle)
+			sCancel()
+
+			if sErr == nil && sResp != nil {
+				slog.Info("劫镖战斗结算完成，已获取声望与铜钱奖励", "role_id", session.RoleID())
+			}
 			return nil
 		},
 	)

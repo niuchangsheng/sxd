@@ -99,5 +99,33 @@ func TestSubdomains_Instances(t *testing.T) {
 	if ie.Name() != "imperial_exam" {
 		t.Errorf("imperial_exam name mismatch: %s", ie.Name())
 	}
+
+	// 验证 16 大抓包新功能实例正常
+	checks := []struct {
+		r    scheduler.ActivityRoutine
+		want string
+	}{
+		{social.NewJieYuanBoxRoutine(), "jieyuan_box"},
+		{daily.NewGodBlessRoutine(), "god_bless"},
+		{daily.NewOnlineGiftRoutine(), "online_gift"},
+		{daily.NewDailyQuestRoutine(), "daily_quest"},
+		{farming.NewSpiritPoolRoutine(), "spirit_pool"},
+		{pvp.NewCaravanHijackRoutine(), "caravan_hijack"},
+		{dungeon.NewQiMenRoutine(), "qimen_dunjia"},
+		{dungeon.NewXunXianRoutine(), "xunxian_road"},
+		{dungeon.NewDemonTowerRoutine(), "demon_tower"},
+		{minigame.NewEraTravelRoutine(), "era_travel"},
+		{minigame.NewLingDaoRoutine(), "lingdao_practice"},
+		{minigame.NewHuanshouRoutine(), "huanshou_invade"},
+		{minigame.NewWuFaRoutine(), "wufa_field"},
+		{minigame.NewMasterPracticeRoutine(), "master_practice"},
+		{minigame.NewTreasureHouseRoutine(), "treasure_house"},
+	}
+
+	for _, tc := range checks {
+		if tc.r == nil || tc.r.Name() != tc.want {
+			t.Errorf("玩法实例不符或为空: want=%s, got=%v", tc.want, tc.r)
+		}
+	}
 }
 

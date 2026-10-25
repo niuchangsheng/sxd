@@ -599,7 +599,7 @@ func NewSixRealmsRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewDemonTowerRoutine 构造伏魔塔与怪物试炼任务。
+// NewDemonTowerRoutine 构造锁妖塔与怪物试炼挑战任务 (Feature 9: 锁妖塔)。
 func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"demon_tower",
@@ -608,7 +608,144 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行副本任务: 伏魔塔挑战与怪物试炼")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行副本任务: 锁妖塔挑战与试炼推图", "role_id", session.RoleID())
+
+			// 1. 发送进入锁妖塔指定层指令 (Mod 701, Act 1)
+			enterPkt := protocol.BuildDemonTowerEnterPacket(3, 31, protocol.ActionIDTownEnter)
+			callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(callCtx, enterPkt, protocol.ActionIDDemonTowerEnter)
+			cancel()
+
+			if err != nil || resp == nil {
+				slog.Warn("进入锁妖塔超时或未开放", "err", err)
+				return nil
+			}
+
+			// 2. 选择战斗 Buff (Mod 705, Act 6)
+			buffPkt := protocol.BuildDemonTowerBuffPacket(1, protocol.ActionIDDemonTowerEnter)
+			bCtx, bCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(bCtx, buffPkt, protocol.ActionIDDemonTowerBuff)
+			bCancel()
+
+			// 3. 校验并同步阵型 (Mod 312, Act 38)
+			deployPkt := protocol.NewPacket(protocol.ActionIDDemonTowerDeploy, protocol.NewWriter().WriteUint32(protocol.ActionIDDemonTowerBuff).Bytes())
+			dCtx, dCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(dCtx, deployPkt, protocol.ActionIDDemonTowerDeploy)
+			dCancel()
+
+			slog.Info("锁妖塔挑战轮次完成", "role_id", session.RoleID())
+			return nil
+		},
+	)
+}
+
+// NewQiMenRoutine 构造奇门遁甲阵法星图升级与布设任务 (Feature 4: 奇门遁甲)。
+func NewQiMenRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"qimen_dunjia",
+		"dungeon",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行玩法任务: 奇门遁甲法阵巡检与星图注灵", "role_id", session.RoleID())
+
+			// 1. 查询法阵信息 (Mod 486, Act 7)
+			arrayPkt := protocol.BuildQiMenArrayInfoPacket(protocol.ActionIDTownEnter)
+			aCtx, aCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(aCtx, arrayPkt, protocol.ActionIDQiMenArrayInfo)
+			aCancel()
+
+			// 2. 查询阵眼傀儡 (Mod 485, Act 0)
+			puppetPkt := protocol.BuildQiMenPuppetInfoPacket(protocol.ActionIDQiMenArrayInfo)
+			pCtx, pCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(pCtx, puppetPkt, protocol.ActionIDQiMenPuppetInfo)
+			pCancel()
+
+			// 3. 升级星图注灵 (Mod 486, Act 1)
+			starPkt := protocol.BuildQiMenUpgradeStarPacket(protocol.ActionIDQiMenPuppetInfo)
+			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(sCtx, starPkt, protocol.ActionIDQiMenUpgradeStar)
+			sCancel()
+
+			// 4. 布阵生效与确认 (Mod 584, Act 1 & 3)
+			depPkt := protocol.BuildQiMenFormationDeployPacket(protocol.ActionIDQiMenUpgradeStar)
+			dCtx, dCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(dCtx, depPkt, protocol.ActionIDQiMenFormationDeploy)
+			dCancel()
+
+			confPkt := protocol.BuildQiMenFormationConfirmPacket(protocol.ActionIDQiMenFormationDeploy)
+			cCtx, cCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(cCtx, confPkt, protocol.ActionIDQiMenFormationConfirm)
+			cCancel()
+
+			slog.Info("奇门遁甲阵法维护完成", "role_id", session.RoleID())
+			return nil
+		},
+	)
+}
+
+// NewXunXianRoutine 构造寻仙之路自动推图与宝箱领用任务 (Feature 8: 寻仙之路)。
+func NewXunXianRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"xunxian_road",
+		"dungeon",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行玩法任务: 寻仙之路自动推图与节点扫荡", "role_id", session.RoleID())
+
+			// 1. 查询当前寻仙关卡进度 (Mod 466, Act 1)
+			progPkt := protocol.BuildXunXianGetProgressPacket(protocol.ActionIDTownEnter)
+			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(pCtx, progPkt, protocol.ActionIDXunXianGetProgress)
+			pCancel()
+
+			if err != nil || resp == nil {
+				slog.Warn("查询寻仙之路进度超时", "err", err)
+				return nil
+			}
+
+			// 2. 依次挑战节点 (依据抓包 0xBC, 0xBD, 0xBE) 并领取节点宝箱 (Act 13)
+			nodes := []int32{0xBC, 0xBD, 0xBE}
+			var clearedCount int
+
+			for _, nID := range nodes {
+				chalPkt := protocol.BuildXunXianChallengePacket(nID, protocol.ActionIDXunXianGetProgress)
+				cCtx, cCancel := context.WithTimeout(ctx, 2*time.Second)
+				cResp, cErr := session.Call(cCtx, chalPkt, protocol.ActionIDXunXianChallenge)
+				cCancel()
+
+				if cErr == nil && cResp != nil {
+					// 领取节点宝箱 (Act 13)
+					chestPkt := protocol.BuildXunXianClaimChestPacket(protocol.ActionIDXunXianChallenge)
+					chCtx, chCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+					_, _ = session.Call(chCtx, chestPkt, protocol.ActionIDXunXianClaimChest)
+					chCancel()
+					clearedCount++
+				}
+			}
+
+			slog.Info("寻仙之路节点挑战与宝箱领取完成", "role_id", session.RoleID(), "cleared_nodes", clearedCount)
 			return nil
 		},
 	)

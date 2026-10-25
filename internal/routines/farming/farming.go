@@ -291,7 +291,17 @@ func NewPilgrimageRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		20*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行资源任务: 西天取经护送与拦截保护")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行资源任务: 西天取经巡检与护送", "role_id", session.RoleID())
+			pkt := protocol.BuildCaravanGetListPacket(protocol.ActionIDTownEnter)
+			cCtx, cCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(cCtx, pkt, protocol.ActionIDCaravanGetList)
+			cCancel()
 			return nil
 		},
 	)
@@ -312,16 +322,38 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewSpiritPoolRoutine 构造异兽与练池淬炼任务。
+// NewSpiritPoolRoutine 构造粗铁淬炼池与异兽提炼任务 (Feature 5: 淬炼粗铁)。
 func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"spirit_pool",
 		"farming",
 		scheduler.ScheduleLoop,
 		scheduler.PriorityLow,
-		60*time.Minute,
+		30*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行资源任务: 异兽驯养与淬炼池提炼")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行资源任务: 粗铁淬炼池提炼", "role_id", session.RoleID())
+
+			// 1. 查询淬炼池面板 (Mod 534, Act 5)
+			panelPkt := protocol.BuildRefinePoolPanelPacket(protocol.ActionIDTownEnter)
+			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
+			_, _ = session.Call(pCtx, panelPkt, protocol.ActionIDRefinePoolPanel)
+			pCancel()
+
+			// 2. 发起粗铁淬炼执行 (Mod 282, Act 1)
+			execPkt := protocol.BuildRefineExecutePacket(protocol.ActionIDRefinePoolPanel)
+			eCtx, eCancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := session.Call(eCtx, execPkt, protocol.ActionIDRefineExecute)
+			eCancel()
+
+			if err == nil && resp != nil {
+				slog.Info("粗铁淬炼提纯执行成功", "role_id", session.RoleID())
+			}
 			return nil
 		},
 	)
