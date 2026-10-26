@@ -142,7 +142,9 @@ func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 
 func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
 	for _, h := range m.handlers {
-		_ = h.Handle(ctx, r)
+		if h.Enabled(ctx, r.Level) {
+			_ = h.Handle(ctx, r)
+		}
 	}
 	return nil
 }
@@ -198,6 +200,7 @@ func run(ctx context.Context, args []string) error {
 	versionFlag := fs.Bool("v", false, "打印版本信息并退出")
 	configPath := fs.String("config", "configs/config.yaml", "配置文件路径")
 	browserLoginFlag := fs.Bool("browser-login", false, "启动前弹出浏览器交互登录以自动捕获/更新 Cookie")
+	debugFlag := fs.Bool("debug", false, "是否开启Debug日志输出 (默认关闭，屏幕仅输出业务Info及以上日志)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -208,9 +211,16 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	// 1. 初始化环形日志收集器与受管日志
+	// 1. 初始化环形日志收集器与受管日志 (默认Info，屏幕不展示debug日志)
+	logLevel := slog.LevelInfo
+	if *debugFlag {
+		logLevel = slog.LevelDebug
+	}
 	logBuf := web.NewLogBuffer(200)
-	stdoutHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	if *debugFlag {
+		logBuf.SetMinLevel(slog.LevelDebug)
+	}
+	stdoutHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
 	multiH := &multiHandler{
 		handlers: []slog.Handler{stdoutHandler, logBuf},
 	}

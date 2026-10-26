@@ -20,9 +20,10 @@ type LogEntry struct {
 
 // LogBuffer 环形内存日志收集缓冲区，实现 slog.Handler 接口。
 type LogBuffer struct {
-	maxSize int
-	entries []LogEntry
-	mu      sync.RWMutex
+	maxSize  int
+	minLevel slog.Level
+	entries  []LogEntry
+	mu       sync.RWMutex
 }
 
 // NewLogBuffer 创建指定容量的内存日志缓冲区。
@@ -31,14 +32,24 @@ func NewLogBuffer(maxSize int) *LogBuffer {
 		maxSize = 200
 	}
 	return &LogBuffer{
-		maxSize: maxSize,
-		entries: make([]LogEntry, 0, maxSize),
+		maxSize:  maxSize,
+		minLevel: slog.LevelInfo,
+		entries:  make([]LogEntry, 0, maxSize),
 	}
+}
+
+// SetMinLevel 设置缓冲区允许接收的最低日志级别。
+func (b *LogBuffer) SetMinLevel(level slog.Level) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.minLevel = level
 }
 
 // Enabled 报告是否启用特定级别的日志记录。
 func (b *LogBuffer) Enabled(ctx context.Context, level slog.Level) bool {
-	return true
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return level >= b.minLevel
 }
 
 // Handle 将日志记录存入环形缓冲区。

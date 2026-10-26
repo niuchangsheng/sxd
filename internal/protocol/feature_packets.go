@@ -6,6 +6,7 @@ package protocol
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/binary"
 	"fmt"
 	"io"
 )
@@ -587,6 +588,47 @@ func BuildTreasureHousePoolPacket(prevAct uint32) *Packet {
 	}
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDTreasureHousePool, w.Bytes())
+}
+
+// TreasureHousePool 表示天帝宝库三档候选奖池。
+type TreasureHousePool struct {
+	TotalCount int
+	Tier1Items []int32 // 一档候选道具
+	Tier2Items []int32 // 二档候选道具
+	Tier3Items []int32 // 三档候选道具
+}
+
+// ParseTreasureHousePoolResult 解析天帝宝库拉取奖池回包 (Module 594, Action 9)。
+func ParseTreasureHousePoolResult(payload []byte) (*TreasureHousePool, error) {
+	decomp := DecompressPayloadIfNeeded(payload)
+	if len(decomp) < 6 {
+		return nil, fmt.Errorf("%w: payload too short for pool", ErrInvalidPayload)
+	}
+	r := NewReader(decomp)
+	// 若前4字节为 ActionID 则跳过
+	if len(decomp) >= 4 && binary.BigEndian.Uint32(decomp[:4]) == ActionIDTreasureHousePool {
+		_, _ = r.ReadUint32()
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read pool count: %v", ErrInvalidPayload, err)
+	}
+	pool := &TreasureHousePool{TotalCount: int(count)}
+	for i := 0; i < int(count); i++ {
+		itemID, err := r.ReadInt32()
+		if err != nil {
+			break
+		}
+		_, _ = r.ReadInt32() // param
+		if i < 15 {
+			pool.Tier3Items = append(pool.Tier3Items, itemID)
+		} else if i < 30 {
+			pool.Tier2Items = append(pool.Tier2Items, itemID)
+		} else {
+			pool.Tier1Items = append(pool.Tier1Items, itemID)
+		}
+	}
+	return pool, nil
 }
 
 // BuildTreasureHouseSelectPacket 构造设定自选大奖封包 (Module 594, Action 3)。

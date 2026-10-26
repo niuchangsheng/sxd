@@ -552,11 +552,23 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				return nil
 			}
 
-			// 2. 拉取奖池 (Mod 594, Act 9)
+			// 2. 拉取奖池并解析当前可选道具 (Mod 594, Act 9)
 			poolPkt := protocol.BuildTreasureHousePoolPacket(protocol.ActionIDTreasureHouseInfo)
 			pCtx, pCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-			_, _ = session.Call(pCtx, poolPkt, protocol.ActionIDTreasureHousePool)
+			poolResp, poolErr := session.Call(pCtx, poolPkt, protocol.ActionIDTreasureHousePool)
 			pCancel()
+
+			if poolErr == nil && poolResp != nil {
+				if pool, pErr := protocol.ParseTreasureHousePoolResult(poolResp.Payload); pErr == nil && pool != nil {
+					slog.Info("天帝宝库备选奖池拉取成功",
+						"role_id", session.RoleID(),
+						"total_items", pool.TotalCount,
+						"tier1_options", pool.Tier1Items,
+						"tier2_options", pool.Tier2Items,
+						"tier3_options", pool.Tier3Items,
+					)
+				}
+			}
 
 			// 3. 设定自选大奖 (Mod 594, Act 3: 依据用户自定义或默认配置设定三档奖品)
 			selPkt := protocol.BuildTreasureHouseSelectPacket(cfg.Awards, protocol.ActionIDTreasureHousePool)
