@@ -62,7 +62,7 @@ type SchedulerConfig struct {
 // DungeonConfig 副本与推图自动化策略配置
 type DungeonConfig struct {
 	// Pipeline 策略优先级流水线，按先后顺序流转
-	// 可选值: "push_mainline" (推主线), "push_side" (推支线), "sweep_elite" (扫荡精英), "sweep_highest_main" (扫荡最高级主线)
+	// 可选值: "quest_cycle" (任务闭环驱动), "push_mainline" (推主线), "push_side" (推支线), "sweep_elite" (扫荡精英), "sweep_highest_main" (扫荡最高级主线)
 	Pipeline []string `yaml:"pipeline"`
 	// PreferPracticeQuickly 是否优先使用 Module 25 秒完成协议 (默认 true)
 	PreferPracticeQuickly bool `yaml:"prefer_practice_quickly"`

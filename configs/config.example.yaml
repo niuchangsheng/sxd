@@ -22,20 +22,37 @@ scheduler:
     min_seconds: 1.0
     max_seconds: 3.0
   routines:
-    dungeon_sweep: true
-    herb_garden: true
-    lucky_star: true
-    pilgrimage: true
-    arena: true
+    # 基础自动化模块
+    dungeon_sweep: true         # 副本推图与扫荡
+    lucky_star: true            # 吉星高照
+    pilgrimage: true            # 取经/护送
+    arena: true                 # 竞技场
+
+    # 16项抓包与日常核心功能
+    online_gift: true           # 1. 领取奖励 (在线礼包等)
+    jieyuan_box: true           # 2. 结缘宝箱 (除了传说，其他都开)
+    daily_quest: true           # 3. 领取日活跃奖励
+    qimen_dunjia: true          # 4. 奇门遁甲
+    spirit_pool: true           # 5. 淬炼粗铁 / 洗灵
+    god_bless: true             # 6. 天神赐福
+    caravan_hijack: true        # 7. 劫镖
+    xunxian_road: true          # 8. 寻仙之路
+    demon_tower: true           # 9. 锁妖塔
+    era_travel: true            # 10. 山河游历
+    lingdao_practice: true      # 11. 灵道初解
+    huanshou_invade: true       # 12. 山海幻兽
+    herb_garden: true           # 13. 药园种植
+    wufa_field: true            # 14. 悟法领域
+    master_practice: true       # 15. 宗师修行
+    treasure_house: true        # 16. 天帝宝库
 
   # 副本与推图自动化策略配置
   dungeon:
-    # 策略优先级流水线：优先推主线 -> 再推支线 -> 再扫荡精英 -> 最后兜底扫荡最高级主线副本
+    # 策略优先级流水线：循环接/做/交主支线任务直至无任务可做 -> 扫荡精英副本 -> 扫荡最高等级主线副本
     pipeline:
-      - "push_mainline"        # 1. 优先推主线 (推进未通关的主线剧情关卡)
-      - "push_side"            # 2. 再推支线 (推进未通关的支线任务关卡)
-      - "sweep_elite"          # 3. 再扫荡精英 (清空每日可用英雄/精英副本)
-      - "sweep_highest_main"   # 4. 最后兜底：扫荡当前角色已通关的最高级主线副本
+      - "quest_cycle"          # 1. 任务闭环驱动：循环接任务、完成任务，直到没有任务可做再 break
+      - "sweep_elite"          # 2. 扫荡精英副本：清空每日可用英雄/精英副本
+      - "sweep_highest_main"   # 3. 扫荡最高主线：消耗剩余体力冲级
 
     prefer_practice_quickly: true # 优先使用 Module 25 秒完成协议
     max_batch_times: 10           # 单次批处理最大扫荡次数
