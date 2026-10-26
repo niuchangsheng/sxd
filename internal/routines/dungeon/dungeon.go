@@ -446,7 +446,6 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 								}
 							}
 							_ = session.Send(protocol.BuildHeroMissionClosePacket())
-							slog.Info("DEBUG isExplicitPipeline check", "isExplicitPipeline", isExplicitPipeline, "cfgPipeline", cfg.Pipeline, "sweepPipeline", sweepPipeline)
 							if !isExplicitPipeline {
 								break sweepLoop
 							}
