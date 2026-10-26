@@ -5,12 +5,18 @@
 package minigame
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"strings"
 	"time"
 
 	"sxd-pie-ng/internal/client"
+	"sxd-pie-ng/internal/dictionary"
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/scheduler"
@@ -488,9 +494,22 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 	)
 }
 
+// AwardSelectorFunc 允许注入自定义交互选择器（例如命令行交互、Web交互回调或自动化测试桩）。
+type AwardSelectorFunc func(ctx context.Context, pool *protocol.TreasureHousePool, dict dictionary.Repository) ([]protocol.TreasureAwardSelect, error)
+
 // TreasureHouseConfig 天帝宝库自选大奖与开启抽奖配置。
 type TreasureHouseConfig struct {
-	// Awards 三档自选大奖列表 (对应 1档、2档、3档)
+	// DictRepo 静态数据库字典仓储 (用于解析大奖条目道具名及说明)
+	DictRepo dictionary.Repository
+	// Interactive 是否开启终端交互式输入自选大奖
+	Interactive bool
+	// In 用户交互输入流，默认为 os.Stdin
+	In io.Reader
+	// Out 交互提示输出流，默认为 os.Stdout
+	Out io.Writer
+	// Selector 自定义大奖选择逻辑 (优先级高于终端输入)
+	Selector AwardSelectorFunc
+	// Awards 预设三档自选大奖列表 (非交互模式或交互跳过/默认时的值)
 	Awards []protocol.TreasureAwardSelect
 	// MaxDrawTimes 单次调度最大抽奖次数 (默认 10)
 	MaxDrawTimes int
@@ -508,8 +527,186 @@ func DefaultTreasureHouseConfig() TreasureHouseConfig {
 	}
 }
 
+// formatAwardEntry 将候选道具条目 ID 格式化为直观的中文名称与数量描述。
+func formatAwardEntry(id int32, awardMap map[int]*dictionary.WishpoolAward, dict dictionary.Repository) string {
+	if awardMap != nil {
+		if a, ok := awardMap[int(id)]; ok && a != nil {
+			name := a.ItemName
+			if name == "" {
+				name = fmt.Sprintf("条目%d", a.ID)
+			}
+			desc := ""
+			if a.Description != "" {
+				desc = " (" + a.Description + ")"
+			}
+			if a.ItemNum > 1 {
+				return fmt.Sprintf("%s x%d (ID: %d)%s", name, a.ItemNum, id, desc)
+			}
+			return fmt.Sprintf("%s (ID: %d)%s", name, id, desc)
+		}
+	}
+	if dict != nil {
+		if item, err := dict.GetItem(int(id)); err == nil && item != nil {
+			return fmt.Sprintf("%s (道具ID: %d)", item.Name, id)
+		}
+	}
+	return fmt.Sprintf("条目 ID: %d", id)
+}
+
+// readLineWithTimeout 携带超时与上下文感知地读取一行输入。
+func readLineWithTimeout(ctx context.Context, reader *bufio.Reader, timeout time.Duration) (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, err := reader.ReadString('\n')
+		ch <- result{line: line, err: err}
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-timer.C:
+		return "", errors.New("输入等待超时")
+	case res := <-ch:
+		if res.err != nil && res.line == "" {
+			return "", res.err
+		}
+		return strings.TrimSpace(res.line), nil
+	}
+}
+
+// promptUserAwardSelection 在控制台打印当前服务端刷新出的各档候选大奖池并引导用户交互选择。
+func promptUserAwardSelection(
+	ctx context.Context,
+	in io.Reader,
+	out io.Writer,
+	pool *protocol.TreasureHousePool,
+	dict dictionary.Repository,
+	defaultAwards []protocol.TreasureAwardSelect,
+) []protocol.TreasureAwardSelect {
+	if in == nil {
+		in = os.Stdin
+	}
+	if out == nil {
+		out = os.Stdout
+	}
+
+	var awardMap map[int]*dictionary.WishpoolAward
+	if dict != nil {
+		awardMap, _ = dict.GetWishpoolAwards()
+	}
+
+	defaultMap := make(map[int]int32)
+	for _, a := range defaultAwards {
+		defaultMap[int(a.TierID)] = a.ItemID
+	}
+	if defaultMap[1] == 0 {
+		defaultMap[1] = 50
+	}
+	if defaultMap[2] == 0 {
+		defaultMap[2] = 25
+	}
+	if defaultMap[3] == 0 {
+		defaultMap[3] = 42
+	}
+
+	fmt.Fprintln(out, "\n====================【天帝宝库 当前候选大奖池】====================")
+	fmt.Fprintf(out, "服务端最新候选奖池刷新成功，共解析出 %d 项可选道具：\n", pool.TotalCount)
+
+	printTierOptions := func(tier int, items []int32, defID int32) {
+		defName := formatAwardEntry(defID, awardMap, dict)
+		fmt.Fprintf(out, "\n【第 %d 档大奖候选列表】 (直接回车默认: %s):\n", tier, defName)
+		for idx, itemID := range items {
+			entryName := formatAwardEntry(itemID, awardMap, dict)
+			fmt.Fprintf(out, "  [%2d] %s\n", idx+1, entryName)
+		}
+	}
+
+	printTierOptions(1, pool.Tier1Items, defaultMap[1])
+	printTierOptions(2, pool.Tier2Items, defaultMap[2])
+	printTierOptions(3, pool.Tier3Items, defaultMap[3])
+	fmt.Fprintln(out, "=================================================================")
+
+	reader := bufio.NewReader(in)
+
+	selectTier := func(tier int, items []int32, defID int32) int32 {
+		defName := formatAwardEntry(defID, awardMap, dict)
+		fmt.Fprintf(out, ">> 请选择【第 %d 档大奖】(输入 1-%d 序号、道具ID或名称, 直接回车默认选 [%s]): ", tier, len(items), defName)
+
+		input, err := readLineWithTimeout(ctx, reader, 60*time.Second)
+		if err != nil || input == "" {
+			fmt.Fprintf(out, "已采纳默认设定: %s\n", defName)
+			return defID
+		}
+
+		cleanInput := strings.TrimSpace(input)
+		lower := strings.ToLower(cleanInput)
+
+		// 1. 若以 id: 或 # 前缀指定道具 ID (如 id:14, #14)
+		if strings.HasPrefix(lower, "id:") || strings.HasPrefix(lower, "id ") || strings.HasPrefix(lower, "#") {
+			raw := strings.TrimLeft(lower, "id:# ")
+			var targetID int32
+			if _, err := fmt.Sscanf(raw, "%d", &targetID); err == nil {
+				for _, itm := range items {
+					if itm == targetID {
+						fmt.Fprintf(out, "成功选定第 %d 档 (按ID): %s\n", tier, formatAwardEntry(itm, awardMap, dict))
+						return itm
+					}
+				}
+			}
+		}
+
+		// 2. 按纯数字解析
+		var val int32
+		if _, scanErr := fmt.Sscanf(cleanInput, "%d", &val); scanErr == nil {
+			// 若数字在 1..len(items) 范围内，优先作为菜单项序号
+			if val >= 1 && int(val) <= len(items) {
+				picked := items[val-1]
+				fmt.Fprintf(out, "成功选定第 %d 档 (序号 %d): %s\n", tier, val, formatAwardEntry(picked, awardMap, dict))
+				return picked
+			}
+
+			// 若数字超出菜单序号范围，匹配条目 ID (例如 50, 25, 42)
+			for _, itm := range items {
+				if itm == val {
+					fmt.Fprintf(out, "成功选定第 %d 档 (道具ID %d): %s\n", tier, val, formatAwardEntry(itm, awardMap, dict))
+					return itm
+				}
+			}
+		}
+
+		// 3. 按道具名称匹配 (如输入 "鸿蒙紫气"、"血脉精华")
+		for _, itm := range items {
+			entryName := formatAwardEntry(itm, awardMap, dict)
+			if strings.Contains(entryName, cleanInput) {
+				fmt.Fprintf(out, "成功选定第 %d 档 (名称匹配): %s\n", tier, entryName)
+				return itm
+			}
+		}
+
+		fmt.Fprintf(out, "输入的编号不在本档候选池中，已采纳默认设定: %s\n", defName)
+		return defID
+	}
+
+	t1 := selectTier(1, pool.Tier1Items, defaultMap[1])
+	t2 := selectTier(2, pool.Tier2Items, defaultMap[2])
+	t3 := selectTier(3, pool.Tier3Items, defaultMap[3])
+
+	return []protocol.TreasureAwardSelect{
+		{TierID: 1, ItemID: t1},
+		{TierID: 2, ItemID: t2},
+		{TierID: 3, ItemID: t3},
+	}
+}
+
 // NewTreasureHouseRoutine 构造天帝宝库自选与开启抽奖任务 (Feature 16: 天帝宝库)。
-// 支持用户自定义选定一档、二档、三档大奖道具ID。
+// 支持先向服务端拉取刷新候选道具，再通过用户交互输入或自定义选择器选定一档、二档、三档大奖。
 func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRoutine {
 	cfg := DefaultTreasureHouseConfig()
 	if len(cfgs) > 0 {
@@ -537,6 +734,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			}
 			slog.Info("正在执行益智任务: 天帝宝库自选与开启抽奖",
 				"role_id", session.RoleID(),
+				"interactive", cfg.Interactive,
 				"awards_count", len(cfg.Awards),
 				"max_draw_times", cfg.MaxDrawTimes,
 			)
@@ -552,12 +750,13 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				return nil
 			}
 
-			// 2. 拉取奖池并解析当前可选道具 (Mod 594, Act 9)
+			// 2. 向服务端拉取刷新奖池并解析当前可选道具 (Mod 594, Act 9)
 			poolPkt := protocol.BuildTreasureHousePoolPacket(protocol.ActionIDTreasureHouseInfo)
-			pCtx, pCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
 			poolResp, poolErr := session.Call(pCtx, poolPkt, protocol.ActionIDTreasureHousePool)
 			pCancel()
 
+			selectedAwards := cfg.Awards
 			if poolErr == nil && poolResp != nil {
 				if pool, pErr := protocol.ParseTreasureHousePoolResult(poolResp.Payload); pErr == nil && pool != nil {
 					slog.Info("天帝宝库备选奖池拉取成功",
@@ -567,11 +766,20 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 						"tier2_options", pool.Tier2Items,
 						"tier3_options", pool.Tier3Items,
 					)
+
+					// 交互选奖：若配置了 Selector 则优先调用，否则若开启 Interactive 则通过交互式终端输入
+					if cfg.Selector != nil {
+						if chosen, cErr := cfg.Selector(ctx, pool, cfg.DictRepo); cErr == nil && len(chosen) >= 3 {
+							selectedAwards = chosen
+						}
+					} else if cfg.Interactive {
+						selectedAwards = promptUserAwardSelection(ctx, cfg.In, cfg.Out, pool, cfg.DictRepo, cfg.Awards)
+					}
 				}
 			}
 
-			// 3. 设定自选大奖 (Mod 594, Act 3: 依据用户自定义或默认配置设定三档奖品)
-			selPkt := protocol.BuildTreasureHouseSelectPacket(cfg.Awards, protocol.ActionIDTreasureHousePool)
+			// 3. 设定自选大奖 (Mod 594, Act 3: 依据用户交互输入或配置设定三档奖品)
+			selPkt := protocol.BuildTreasureHouseSelectPacket(selectedAwards, protocol.ActionIDTreasureHousePool)
 			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
 			_, _ = session.Call(sCtx, selPkt, protocol.ActionIDTreasureHouseSelect)
 			sCancel()

@@ -122,6 +122,9 @@ func (f *RegistryFactory) SetJieYuanBoxConfig(cfg social.JieYuanBoxConfig) {
 
 // SetTreasureHouseConfig 设置天帝宝库自选大奖与抽奖策略配置。
 func (f *RegistryFactory) SetTreasureHouseConfig(cfg minigame.TreasureHouseConfig) {
+	if cfg.DictRepo == nil {
+		cfg.DictRepo = f.dictRepo
+	}
 	f.treasureCfg = cfg
 }
 
@@ -254,7 +257,11 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "master_practice":
 		return minigame.NewMasterPracticeRoutine()
 	case "treasure_house":
-		return minigame.NewTreasureHouseRoutine(f.treasureCfg)
+		cfg := f.treasureCfg
+		if cfg.DictRepo == nil {
+			cfg.DictRepo = f.dictRepo
+		}
+		return minigame.NewTreasureHouseRoutine(cfg)
 
 	default:
 		return nil

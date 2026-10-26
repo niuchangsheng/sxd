@@ -144,4 +144,25 @@ func TestRepository_Queries(t *testing.T) {
 			t.Errorf("期望查出 32 级以下支线任务关卡列表: err=%v, count=%d", err, len(sideMissions))
 		}
 	})
+
+	t.Run("GetWishpoolAward", func(t *testing.T) {
+		award, err := repo.GetWishpoolAward(12)
+		if err != nil {
+			t.Fatalf("查询天帝宝库大奖失败: %v", err)
+		}
+		if award == nil || award.ID != 12 {
+			t.Fatalf("预期返回 ID 为 12 的大奖条目, 实际: %+v", award)
+		}
+		if award.ItemName == "" {
+			t.Errorf("预期解析出道具名称, 实际为空: %+v", award)
+		}
+
+		awards, err := repo.GetWishpoolAwards()
+		if err != nil {
+			t.Fatalf("查询全部天帝宝库大奖失败: %v", err)
+		}
+		if len(awards) < 30 {
+			t.Errorf("预期大奖映射数量 >= 30, 实际: %d", len(awards))
+		}
+	})
 }

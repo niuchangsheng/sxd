@@ -33,6 +33,14 @@ func (m *mockDictionaryRepo) SearchItems(keyword string) ([]*dictionary.Item, er
 	return []*dictionary.Item{}, nil
 }
 
+func (m *mockDictionaryRepo) GetWishpoolAward(id int) (*dictionary.WishpoolAward, error) {
+	return nil, dictionary.ErrNotFound
+}
+
+func (m *mockDictionaryRepo) GetWishpoolAwards() (map[int]*dictionary.WishpoolAward, error) {
+	return nil, nil
+}
+
 func (m *mockDictionaryRepo) Close() error {
 	return nil
 }

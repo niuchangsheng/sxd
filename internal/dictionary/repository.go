@@ -35,8 +35,19 @@ type Repository interface {
 	GetQuest(id int) (*Quest, error)
 	GetTownNPCs(townID int) ([]int, error)
 	GetQuestNPCs() (map[int]bool, error)
+	GetWishpoolAward(id int) (*WishpoolAward, error)
+	GetWishpoolAwards() (map[int]*WishpoolAward, error)
 	SearchItems(keyword string) ([]*Item, error)
 	Close() error
+}
+
+// WishpoolAward 表示天帝宝库/许愿池大奖条目元数据。
+type WishpoolAward struct {
+	ID          int    // 奖项条目 ID (1..51)
+	ItemID      int    // 关联道具 ID
+	ItemName    string // 道具名称
+	ItemNum     int    // 奖励数量
+	Description string // 描述
 }
 
 type sqliteRepository struct {
@@ -510,6 +521,55 @@ func (r *sqliteRepository) GetQuestNPCs() (map[int]bool, error) {
 		var nid int
 		if err := rows.Scan(&nid); err == nil && nid > 0 {
 			res[nid] = true
+		}
+	}
+	return res, nil
+}
+
+// GetWishpoolAward 查询天帝宝库/许愿池单个自选大奖信息。
+func (r *sqliteRepository) GetWishpoolAward(id int) (*WishpoolAward, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.db == nil {
+		return nil, errors.New("dictionary: database not connected")
+	}
+
+	query := `SELECT w.id, w.sxdname, w.itemnum, IFNULL(i.sxdname, ''), IFNULL(i.description, '')
+              FROM wishpoolaward w LEFT JOIN item i ON w.sxdname = i.id WHERE w.id = ? LIMIT 1`
+	var a WishpoolAward
+	err := r.db.QueryRow(query, id).Scan(&a.ID, &a.ItemID, &a.ItemNum, &a.ItemName, &a.Description)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("dictionary: 查询宝库大奖失败: %w", err)
+	}
+	return &a, nil
+}
+
+// GetWishpoolAwards 查询天帝宝库/许愿池全部大奖字典映射。
+func (r *sqliteRepository) GetWishpoolAwards() (map[int]*WishpoolAward, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.db == nil {
+		return nil, errors.New("dictionary: database not connected")
+	}
+
+	query := `SELECT w.id, w.sxdname, w.itemnum, IFNULL(i.sxdname, ''), IFNULL(i.description, '')
+              FROM wishpoolaward w LEFT JOIN item i ON w.sxdname = i.id ORDER BY w.id ASC`
+	rows, err := r.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: 查询全部宝库大奖失败: %w", err)
+	}
+	defer rows.Close()
+
+	res := make(map[int]*WishpoolAward)
+	for rows.Next() {
+		var a WishpoolAward
+		if err := rows.Scan(&a.ID, &a.ItemID, &a.ItemNum, &a.ItemName, &a.Description); err == nil {
+			res[a.ID] = &a
 		}
 	}
 	return res, nil

@@ -1151,6 +1151,12 @@ func (m *mockQuestDungeonRepo) GetQuestNPCs() (map[int]bool, error) {
 	}
 	return res, nil
 }
+func (m *mockQuestDungeonRepo) GetWishpoolAward(id int) (*dictionary.WishpoolAward, error) {
+	return nil, dictionary.ErrNotFound
+}
+func (m *mockQuestDungeonRepo) GetWishpoolAwards() (map[int]*dictionary.WishpoolAward, error) {
+	return nil, nil
+}
 func (m *mockQuestDungeonRepo) SearchItems(keyword string) ([]*dictionary.Item, error) {
 	return nil, nil
 }

@@ -77,6 +77,8 @@ type TreasureAwardConfig struct {
 
 // TreasureHouseConfig 天帝宝库配置
 type TreasureHouseConfig struct {
+	// Interactive 是否开启终端交互式输入自选大奖
+	Interactive bool `yaml:"interactive"`
 	// Awards 三档自选大奖列表
 	Awards []TreasureAwardConfig `yaml:"awards"`
 	// AwardIDs 简易道具ID列表，如 [50, 25, 42] 对应一、二、三档
