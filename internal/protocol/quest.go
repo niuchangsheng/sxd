@@ -121,6 +121,16 @@ func BuildCompleteQuestPacket(req CompleteQuestRequest) (*Packet, error) {
 	return NewPacket(ActionIDQuestComplete, w.Bytes()), nil
 }
 
+// BuildGetPlayerQuestListPacket 构造拉取玩家当前已接任务列表请求封包 (Module 3, Action 9)。
+func BuildGetPlayerQuestListPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = 0x00000002 // ActionIDPlayerGetInfo
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDQuestList, w.Bytes())
+}
+
 // PlayerQuestItem 玩家当前已接任务条目。
 type PlayerQuestItem struct {
 	QuestID int32

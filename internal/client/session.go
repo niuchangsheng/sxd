@@ -644,6 +644,37 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 	return nil
 }
 
+// SyncQuests 主动向服务端发送 Mod 3, Act 9 协议全量拉取当前已接任务列表并同步至内存状态快照。
+func (s *RoleSession) SyncQuests(ctx context.Context) ([]protocol.PlayerQuestItem, error) {
+	questListPkt := protocol.BuildGetPlayerQuestListPacket(protocol.ActionIDPlayerGetInfo)
+	qCtx, qCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer qCancel()
+
+	qResp, qErr := s.Call(qCtx, questListPkt, protocol.ActionIDQuestList)
+	if qErr != nil {
+		return nil, qErr
+	}
+	if qResp == nil {
+		return nil, errors.New("empty quest list response")
+	}
+
+	items, pErr := protocol.ParsePlayerQuestListResponse(qResp.Payload)
+	if pErr != nil {
+		return nil, pErr
+	}
+
+	s.playerMu.Lock()
+	if s.playerState.Quests == nil {
+		s.playerState.Quests = make(map[uint32]uint32)
+	}
+	for _, it := range items {
+		s.playerState.Quests[uint32(it.QuestID)] = uint32(it.State)
+	}
+	s.playerMu.Unlock()
+
+	slog.Info("成功同步服务端全量任务列表", "role_id", s.RoleID(), "total_quests", len(items))
+	return items, nil
+}
 
 // Start 启动独立 Goroutine 驱动的网络状态机会话。
 func (s *RoleSession) Start(parentCtx context.Context) error {

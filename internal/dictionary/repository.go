@@ -412,7 +412,7 @@ func (r *sqliteRepository) GetQuestMissions(questType int, playerLevel int) ([]i
 
 	query := `SELECT DISTINCT MissionId FROM Quests 
               WHERE Type = ? AND Level <= ? AND MissionId > 0 
-              ORDER BY Lock ASC, QuestsId ASC`
+              ORDER BY Lock DESC, QuestsId DESC`
 	rows, err := r.db.Query(query, questType, playerLevel)
 	if err != nil {
 		return nil, fmt.Errorf("dictionary: 查询任务关联关卡失败: %w", err)

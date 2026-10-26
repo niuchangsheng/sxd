@@ -954,6 +954,9 @@ func executeQuestCycle(
 
 	slog.Info("启动主线/支线任务闭环自动化驱动", "role_id", session.RoleID(), "town_id", session.GetPlayerState().TownID)
 
+	// 0. 主动向服务端全量同步当前已接任务列表 (Module 3, Action 9)
+	_, _ = session.SyncQuests(ctx)
+
 	for cycle := 1; cycle <= maxCycles; cycle++ {
 		if session.GetStamina() < powerPerSweep && !ensureStamina() {
 			slog.Info("推图体力耗尽且无可用补充道具，退出任务循环", "stamina", session.GetStamina())
@@ -1024,7 +1027,7 @@ func executeQuestCycle(
 
 		for _, npcID := range candidateNPCs {
 			npcPkt, _ := protocol.BuildGetNPCQuestsPacket(protocol.GetNPCQuestsRequest{NPCID: int32(npcID)})
-			npcCtx, npcCancel := context.WithTimeout(ctx, 300*time.Millisecond)
+			npcCtx, npcCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 			npcResp, npcErr := session.Call(npcCtx, npcPkt, protocol.ActionIDQuestGetNPCQuests)
 			npcCancel()
 
@@ -1038,10 +1041,41 @@ func executeQuestCycle(
 			}
 
 			for _, it := range items {
+				questID := uint32(it.QuestID)
+
+				// 1. 状态 2: 目标已达成，直接在 NPC 处完成并交付结算
+				if it.State == 2 {
+					q, _ := dictRepo.GetQuest(int(it.QuestID))
+					title := fmt.Sprintf("Quest#%d", questID)
+					if q != nil && q.Title != "" {
+						title = q.Title
+					}
+					slog.Info("NPC 处发现已达成任务，正在交付结算", "role_id", session.RoleID(), "npc_id", npcID, "quest_id", questID, "title", title)
+					compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: it.QuestID})
+					compCtx, compCancel := context.WithTimeout(ctx, 3*time.Second)
+					_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
+					compCancel()
+
+					session.RemoveQuest(questID)
+					if q != nil {
+						session.AddRewards(q.AwardExp, q.AwardCoins)
+						*totalGainExp += q.AwardExp
+						*totalGainCoins += q.AwardCoins
+					}
+					progressMade = true
+					time.Sleep(50 * time.Millisecond)
+					continue
+				}
+
+				// 2. 状态 0: 已经在进行中，同步到当前身上的任务列表
+				if it.State == 0 {
+					session.SetQuestState(questID, 0)
+					continue
+				}
+
 				if it.State != 1 {
 					continue // 仅接取状态为可接 (State == 1) 的任务
 				}
-				questID := uint32(it.QuestID)
 				questsNow := session.GetQuests()
 				if _, exists := questsNow[questID]; exists {
 					continue
@@ -1113,9 +1147,9 @@ func executeQuestCycle(
 
 			slog.Info("正在推进任务关卡挑战", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title, "mission_id", mid)
 
-			enterPkt := protocol.BuildEnterMissionPacket(uint32(mid))
+			sweepPkt, _ := protocol.BuildSweepPacket(protocol.SweepRequest{MissionID: uint32(mid), Times: 1})
 			enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
-			enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionMissionSweep)
+			enterResp, enterErr := session.Call(enterCtx, sweepPkt, protocol.ActionMissionSweep)
 			enterCancel()
 
 			challengeSuccess := false
@@ -1171,9 +1205,9 @@ func executeQuestCycle(
 					}
 
 					slog.Info("探测并推进未通关剧情关卡", "role_id", session.RoleID(), "type", qType, "mission_id", mid)
-					enterPkt := protocol.BuildEnterMissionPacket(uint32(mid))
+					sweepPkt, _ := protocol.BuildSweepPacket(protocol.SweepRequest{MissionID: uint32(mid), Times: 1})
 					enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
-					enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionMissionSweep)
+					enterResp, enterErr := session.Call(enterCtx, sweepPkt, protocol.ActionMissionSweep)
 					enterCancel()
 
 					if enterErr == nil && enterResp != nil {

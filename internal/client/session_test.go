@@ -438,3 +438,59 @@ func TestRoleSession_StLoginWithCredentials(t *testing.T) {
 
 	session.Close()
 }
+
+func TestRoleSession_SyncQuests(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(c2)
+			if err != nil {
+				return
+			}
+			if pkt.ActionID == protocol.ActionIDQuestList {
+				// 模拟下发 1 个已接任务 (Quest 157, State 0)
+				w := protocol.NewWriter()
+				w.WriteUint16(1)
+				w.WriteInt32(157)
+				w.WriteInt32(0)
+				w.WriteBytes(make([]byte, 15)) // 15B 扩展元数据
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-sync-quests",
+		RoleName:   "任务同步角色",
+		ServerAddr: "mock",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return c1, nil
+		},
+		Authenticator: func(s *client.RoleSession) error {
+			return nil
+		},
+	})
+	_ = session.Start(context.Background())
+	defer session.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	items, err := session.SyncQuests(context.Background())
+	if err != nil {
+		t.Fatalf("SyncQuests 失败: %v", err)
+	}
+	if len(items) != 1 || items[0].QuestID != 157 {
+		t.Fatalf("SyncQuests 任务数据不匹配: %+v", items)
+	}
+
+	quests := session.GetQuests()
+	if st, ok := quests[157]; !ok || st != 0 {
+		t.Fatalf("会话快照中任务状态未正确更新: %+v", quests)
+	}
+}
