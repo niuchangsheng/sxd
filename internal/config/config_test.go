@@ -50,6 +50,20 @@ func TestConfig_LoadExample(t *testing.T) {
 	if !cfg.Scheduler.Routines["herb_garden"] {
 		t.Errorf("expected herb_garden to be enabled")
 	}
+
+	// 验证结缘宝箱每批最多10个配置
+	if cfg.Scheduler.JieYuanBox.MaxBatchSize != 10 {
+		t.Errorf("expected jieyuan_box max_batch_size to be 10, got %d", cfg.Scheduler.JieYuanBox.MaxBatchSize)
+	}
+
+	// 验证天帝宝库三档大奖配置
+	awards := cfg.Scheduler.TreasureHouse.ResolveSelections()
+	if len(awards) != 3 {
+		t.Fatalf("expected 3 awards, got %d", len(awards))
+	}
+	if awards[0].ItemID != 50 || awards[1].ItemID != 25 || awards[2].ItemID != 42 {
+		t.Errorf("unexpected treasure awards: %+v", awards)
+	}
 }
 
 func TestConfig_ValidationDefaults(t *testing.T) {

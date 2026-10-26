@@ -62,3 +62,15 @@ scheduler:
         - "sweep_highest_main"  # 2. 扫荡最高主线 (消耗剩余自然体力冲级)
       max_batch_times: 10       # 单次批处理最大扫荡次数 (仅作用于扫荡)
       prefer_practice_quickly: true # 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
+
+  # 结缘宝箱配置 (每批最多10个，除了传说其他都开)
+  jieyuan_box:
+    max_batch_size: 10          # 每批最多开启数量 (上限 10 个)
+
+  # 天帝宝库自选三档大奖配置
+  treasure_house:
+    # 自选三档大奖道具ID (支持按档位配置或直接配置列表)
+    tier1_item_id: 50           # 一档自选大奖道具ID (默认 50)
+    tier2_item_id: 25           # 二档自选大奖道具ID (默认 25)
+    tier3_item_id: 42           # 三档自选大奖道具ID (默认 42)
+    max_draw_times: 10          # 单次最大连续抽奖轮数 (钥匙耗尽自动退出)

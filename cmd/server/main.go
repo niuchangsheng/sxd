@@ -24,6 +24,8 @@ import (
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/routines"
 	"sxd-pie-ng/internal/routines/dungeon"
+	"sxd-pie-ng/internal/routines/minigame"
+	"sxd-pie-ng/internal/routines/social"
 	"sxd-pie-ng/internal/scheduler"
 	"sxd-pie-ng/internal/web"
 )
@@ -278,6 +280,21 @@ func run(ctx context.Context, args []string) error {
 	dCfg.AutoReplenishStamina = cfg.Scheduler.Dungeon.AutoReplenishStamina
 	dCfg.MaxReplenishTimes = cfg.Scheduler.Dungeon.MaxReplenishTimes
 	factory.SetDungeonConfig(dCfg)
+
+	// 结缘宝箱配置 (每批最多10个)
+	jBoxCfg := social.DefaultJieYuanBoxConfig()
+	if cfg.Scheduler.JieYuanBox.MaxBatchSize > 0 {
+		jBoxCfg.MaxBatchSize = cfg.Scheduler.JieYuanBox.MaxBatchSize
+	}
+	factory.SetJieYuanBoxConfig(jBoxCfg)
+
+	// 天帝宝库自选三档大奖配置
+	thCfg := minigame.TreasureHouseConfig{
+		Awards:       cfg.Scheduler.TreasureHouse.ResolveSelections(),
+		MaxDrawTimes: cfg.Scheduler.TreasureHouse.MaxDrawTimes,
+	}
+	factory.SetTreasureHouseConfig(thCfg)
+
 	routineMgr := &routineManager{
 		enabledMap: make(map[string]bool),
 	}

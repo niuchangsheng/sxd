@@ -488,8 +488,40 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 	)
 }
 
+// TreasureHouseConfig 天帝宝库自选大奖与开启抽奖配置。
+type TreasureHouseConfig struct {
+	// Awards 三档自选大奖列表 (对应 1档、2档、3档)
+	Awards []protocol.TreasureAwardSelect
+	// MaxDrawTimes 单次调度最大抽奖次数 (默认 10)
+	MaxDrawTimes int
+}
+
+// DefaultTreasureHouseConfig 返回默认天帝宝库三档大奖配置 (对齐抓包基准: 50, 25, 42)。
+func DefaultTreasureHouseConfig() TreasureHouseConfig {
+	return TreasureHouseConfig{
+		Awards: []protocol.TreasureAwardSelect{
+			{TierID: 1, ItemID: 50},
+			{TierID: 2, ItemID: 25},
+			{TierID: 3, ItemID: 42},
+		},
+		MaxDrawTimes: 10,
+	}
+}
+
 // NewTreasureHouseRoutine 构造天帝宝库自选与开启抽奖任务 (Feature 16: 天帝宝库)。
-func NewTreasureHouseRoutine() scheduler.ActivityRoutine {
+// 支持用户自定义选定一档、二档、三档大奖道具ID。
+func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRoutine {
+	cfg := DefaultTreasureHouseConfig()
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
+	if len(cfg.Awards) == 0 {
+		cfg.Awards = DefaultTreasureHouseConfig().Awards
+	}
+	if cfg.MaxDrawTimes <= 0 {
+		cfg.MaxDrawTimes = 10
+	}
+
 	return scheduler.NewBaseRoutine(
 		"treasure_house",
 		"minigame",
@@ -503,7 +535,11 @@ func NewTreasureHouseRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			slog.Info("正在执行益智任务: 天帝宝库自选与开启抽奖", "role_id", session.RoleID())
+			slog.Info("正在执行益智任务: 天帝宝库自选与开启抽奖",
+				"role_id", session.RoleID(),
+				"awards_count", len(cfg.Awards),
+				"max_draw_times", cfg.MaxDrawTimes,
+			)
 
 			// 1. 查询宝库基本信息 (Mod 594, Act 2)
 			infoPkt := protocol.BuildTreasureHouseInfoPacket(protocol.ActionIDTownEnter)
@@ -522,13 +558,8 @@ func NewTreasureHouseRoutine() scheduler.ActivityRoutine {
 			_, _ = session.Call(pCtx, poolPkt, protocol.ActionIDTreasureHousePool)
 			pCancel()
 
-			// 3. 设定自选大奖 (Mod 594, Act 3: 依据抓包设定三档奖品)
-			selects := []protocol.TreasureAwardSelect{
-				{TierID: 1, ItemID: 50},
-				{TierID: 2, ItemID: 25},
-				{TierID: 3, ItemID: 42},
-			}
-			selPkt := protocol.BuildTreasureHouseSelectPacket(selects, protocol.ActionIDTreasureHousePool)
+			// 3. 设定自选大奖 (Mod 594, Act 3: 依据用户自定义或默认配置设定三档奖品)
+			selPkt := protocol.BuildTreasureHouseSelectPacket(cfg.Awards, protocol.ActionIDTreasureHousePool)
 			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
 			_, _ = session.Call(sCtx, selPkt, protocol.ActionIDTreasureHouseSelect)
 			sCancel()
@@ -542,7 +573,7 @@ func NewTreasureHouseRoutine() scheduler.ActivityRoutine {
 			// 5. 消耗宝库钥匙开启抽奖 (Mod 594, Act 6 与 Act 1 连续抽奖流)
 			drawCount := 0
 			prevAct := protocol.ActionIDTreasureHouseConfirm
-			for i := 0; i < 10; i++ {
+			for i := 0; i < cfg.MaxDrawTimes; i++ {
 				drawPkt := protocol.BuildTreasureHouseDrawPacket(prevAct)
 				dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
 				dResp, dErr := session.Call(dCtx, drawPkt, protocol.ActionIDTreasureHouseDraw)

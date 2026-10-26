@@ -69,4 +69,18 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 			t.Errorf("期望 ErrNotConnected, 实际: %v", err)
 		}
 	})
+
+	t.Run("天帝宝库自选三档大奖配置", func(t *testing.T) {
+		thCfg := DefaultTreasureHouseConfig()
+		if len(thCfg.Awards) != 3 {
+			t.Fatalf("期望默认三档大奖, 实际 %d 档", len(thCfg.Awards))
+		}
+		r := NewTreasureHouseRoutine(thCfg)
+		if r.Name() != "treasure_house" {
+			t.Fatalf("任务名称不匹配: %s", r.Name())
+		}
+		if err := r.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("天帝宝库执行异常: %v", err)
+		}
+	})
 }

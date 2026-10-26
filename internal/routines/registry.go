@@ -90,9 +90,11 @@ func GetAllDefinitions() []RoutineDefinition {
 
 // RegistryFactory 构建并注册所有玩法的统一工厂。
 type RegistryFactory struct {
-	qaEngine   qa.Engine
-	dictRepo   dictionary.Repository
-	dungeonCfg dungeon.SweepConfig
+	qaEngine    qa.Engine
+	dictRepo    dictionary.Repository
+	dungeonCfg  dungeon.SweepConfig
+	jieyuanCfg  social.JieYuanBoxConfig
+	treasureCfg minigame.TreasureHouseConfig
 }
 
 // NewRegistryFactory 创建注册工厂实例。
@@ -100,15 +102,27 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 	cfg := dungeon.DefaultSweepConfig()
 	cfg.PreferPracticeQuickly = true
 	return &RegistryFactory{
-		qaEngine:   qaEngine,
-		dictRepo:   dictRepo,
-		dungeonCfg: cfg,
+		qaEngine:    qaEngine,
+		dictRepo:    dictRepo,
+		dungeonCfg:  cfg,
+		jieyuanCfg:  social.DefaultJieYuanBoxConfig(),
+		treasureCfg: minigame.DefaultTreasureHouseConfig(),
 	}
 }
 
 // SetDungeonConfig 设置副本自动化策略配置。
 func (f *RegistryFactory) SetDungeonConfig(cfg dungeon.SweepConfig) {
 	f.dungeonCfg = cfg
+}
+
+// SetJieYuanBoxConfig 设置结缘宝箱策略配置。
+func (f *RegistryFactory) SetJieYuanBoxConfig(cfg social.JieYuanBoxConfig) {
+	f.jieyuanCfg = cfg
+}
+
+// SetTreasureHouseConfig 设置天帝宝库自选大奖与抽奖策略配置。
+func (f *RegistryFactory) SetTreasureHouseConfig(cfg minigame.TreasureHouseConfig) {
+	f.treasureCfg = cfg
 }
 
 // RegisterAll 根据配置开关，向角色调度器装配全量活动玩法。
@@ -180,7 +194,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "fame_blessing":
 		return social.NewFameBlessingRoutine()
 	case "jieyuan_box":
-		return social.NewJieYuanBoxRoutine()
+		return social.NewJieYuanBoxRoutine(f.jieyuanCfg)
 
 	// 4. Dungeon
 	case "dungeon", "dungeon_sweep":
@@ -240,7 +254,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "master_practice":
 		return minigame.NewMasterPracticeRoutine()
 	case "treasure_house":
-		return minigame.NewTreasureHouseRoutine()
+		return minigame.NewTreasureHouseRoutine(f.treasureCfg)
 
 	default:
 		return nil

@@ -14,8 +14,31 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
+// JieYuanBoxConfig 结缘宝箱开启配置。
+type JieYuanBoxConfig struct {
+	// MaxBatchSize 每批次最多开启数量 (按指令每批最多10个，默认10)
+	MaxBatchSize int
+}
+
+// DefaultJieYuanBoxConfig 返回默认结缘宝箱配置。
+func DefaultJieYuanBoxConfig() JieYuanBoxConfig {
+	return JieYuanBoxConfig{
+		MaxBatchSize: 10,
+	}
+}
+
 // NewJieYuanBoxRoutine 构造结缘宝箱批量开启任务 (Feature 2: 结缘宝箱，除了传说，其他都开)。
-func NewJieYuanBoxRoutine() scheduler.ActivityRoutine {
+// 每批次最多开启 10 个，严格排除传说结缘宝箱 (3942)。
+func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
+	cfg := DefaultJieYuanBoxConfig()
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
+	maxBatch := cfg.MaxBatchSize
+	if maxBatch <= 0 || maxBatch > 10 {
+		maxBatch = 10
+	}
+
 	return scheduler.NewBaseRoutine(
 		"jieyuan_box",
 		"social",
@@ -29,7 +52,10 @@ func NewJieYuanBoxRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			slog.Info("正在执行结缘任务: 结缘宝箱自动开启 (严格排除传说宝箱)", "role_id", session.RoleID())
+			slog.Info("正在执行结缘任务: 结缘宝箱自动开启 (每批最多10个，严格排除传说宝箱)",
+				"role_id", session.RoleID(),
+				"max_batch_size", maxBatch,
+			)
 
 			// 1. 查询背包持有的结缘宝箱列表 (Mod 232, Act 30)
 			queryPkt := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDTownEnter)
@@ -65,7 +91,7 @@ func NewJieYuanBoxRoutine() scheduler.ActivityRoutine {
 
 				for remaining > 0 && batchCount < maxBatchesPerItem {
 					batchCount++
-					openCount := int32(4)
+					openCount := int32(maxBatch)
 					if remaining < openCount {
 						openCount = remaining
 					}
@@ -76,7 +102,7 @@ func NewJieYuanBoxRoutine() scheduler.ActivityRoutine {
 					_, _ = session.Call(pCtx, prepPkt, protocol.ActionIDJieYuanBoxOpenContext)
 					pCancel()
 
-					// 2.2 发送批量开启指令 (Mod 232, Act 34: 抓包基准每批次开4个)
+					// 2.2 发送批量开启指令 (Mod 232, Act 34: 每批最多10个)
 					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, openCount, protocol.ActionIDJieYuanBoxOpenContext)
 					oCtx, oCancel := context.WithTimeout(ctx, 2*time.Second)
 					openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)

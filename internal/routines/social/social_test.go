@@ -55,4 +55,15 @@ func TestSocialRoutines_Execute(t *testing.T) {
 	if err := r2.Execute(context.Background(), session, nil); err != nil {
 		t.Fatalf("住宅任务执行失败: %v", err)
 	}
+
+	t.Run("结缘宝箱每批最多10个配置", func(t *testing.T) {
+		cfg := JieYuanBoxConfig{MaxBatchSize: 10}
+		r3 := NewJieYuanBoxRoutine(cfg)
+		if r3.Name() != "jieyuan_box" {
+			t.Fatalf("结缘宝箱名称不匹配: %s", r3.Name())
+		}
+		if err := r3.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("结缘宝箱任务执行异常: %v", err)
+		}
+	})
 }

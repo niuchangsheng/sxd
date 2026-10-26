@@ -81,11 +81,11 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				if plantResp, cErr := callWithTimeout(plantStatePkt, protocol.ActionIDFarmGetPlantState); cErr == nil && plantResp != nil {
 					prevAct = protocol.ActionIDFarmGetPlantState
 					if plantStateRes, psErr := protocol.ParseFarmPlantStateResult(plantResp.Payload); psErr == nil && len(plantStateRes.Fields) > 0 {
-						slog.Info("药园实时作物生长时间同步报文", "fields_count", len(plantStateRes.Fields), "hex", hex.EncodeToString(plantResp.Payload))
+						slog.Debug("药园实时作物生长时间同步报文", "fields_count", len(plantStateRes.Fields), "hex", hex.EncodeToString(plantResp.Payload))
 						stateMap := make(map[int32]protocol.FarmField)
 						for _, pf := range plantStateRes.Fields {
 							stateMap[pf.LandID] = pf
-							slog.Info("土地实时状态数据", "land_id", pf.LandID, "state", pf.State, "cooldown", pf.Cooldown, "seed_id", pf.SeedOrRoleID)
+							slog.Debug("土地实时状态数据", "land_id", pf.LandID, "state", pf.State, "cooldown", pf.Cooldown, "seed_id", pf.SeedOrRoleID)
 						}
 						for idx, f := range infoRes.Fields {
 							if realF, ok := stateMap[f.LandID]; ok {
@@ -185,7 +185,6 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 									"land_id", field.LandID,
 									"gain_exp", hResult.GainExp,
 									"gain_coins", hResult.GainCoins,
-									"hex", hex.EncodeToString(hResp.Payload),
 								)
 								// 采摘后地块变为空闲状态，可继续播种
 								field.State = 1
@@ -227,7 +226,6 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 										"seed_name", sName,
 										"seed_id", sID,
 										"cooldown_sec", pResult.Cooldown,
-										"hex", hex.EncodeToString(pResp.Payload),
 									)
 									field.State = 2
 
@@ -250,7 +248,6 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 													"land_id", field.LandID,
 													"gain_exp", hResult.GainExp,
 													"gain_coins", hResult.GainCoins,
-													"hex", hex.EncodeToString(hResp.Payload),
 												)
 											}
 										}

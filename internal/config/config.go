@@ -10,6 +10,8 @@ import (
 	"regexp"
 
 	"gopkg.in/yaml.v3"
+
+	"sxd-pie-ng/internal/protocol"
 )
 
 // Config 全局顶层配置结构体
@@ -51,12 +53,83 @@ type RoleConfig struct {
 
 // SchedulerConfig 任务调度器与防封配置
 type SchedulerConfig struct {
-	Jitter    JitterConfig           `yaml:"jitter"`
-	Preset    string                 `yaml:"preset"`
-	CronTimes []string               `yaml:"cron_times"`
-	Routines  map[string]bool        `yaml:"routines"`
-	Dungeon   DungeonConfig          `yaml:"dungeon"`
-	Expert    map[string]interface{} `yaml:"expert"`
+	Jitter        JitterConfig           `yaml:"jitter"`
+	Preset        string                 `yaml:"preset"`
+	CronTimes     []string               `yaml:"cron_times"`
+	Routines      map[string]bool        `yaml:"routines"`
+	Dungeon       DungeonConfig          `yaml:"dungeon"`
+	JieYuanBox    JieYuanBoxConfig       `yaml:"jieyuan_box"`
+	TreasureHouse TreasureHouseConfig    `yaml:"treasure_house"`
+	Expert        map[string]interface{} `yaml:"expert"`
+}
+
+// JieYuanBoxConfig 结缘宝箱配置
+type JieYuanBoxConfig struct {
+	// MaxBatchSize 每批最多开启数量 (每批最多10个，默认 10)
+	MaxBatchSize int `yaml:"max_batch_size"`
+}
+
+// TreasureAwardConfig 天帝宝库自选大奖条目
+type TreasureAwardConfig struct {
+	Tier   int32 `yaml:"tier"`
+	ItemID int32 `yaml:"item_id"`
+}
+
+// TreasureHouseConfig 天帝宝库配置
+type TreasureHouseConfig struct {
+	// Awards 三档自选大奖列表
+	Awards []TreasureAwardConfig `yaml:"awards"`
+	// AwardIDs 简易道具ID列表，如 [50, 25, 42] 对应一、二、三档
+	AwardIDs []int32 `yaml:"award_ids"`
+	// 分档直接指定大奖道具ID
+	Tier1ItemID int32 `yaml:"tier1_item_id"`
+	Tier2ItemID int32 `yaml:"tier2_item_id"`
+	Tier3ItemID int32 `yaml:"tier3_item_id"`
+	// MaxDrawTimes 单次运行最大抽奖次数 (默认 10)
+	MaxDrawTimes int `yaml:"max_draw_times"`
+}
+
+// ResolveSelections 解析为三档自选大奖模型
+func (c TreasureHouseConfig) ResolveSelections() []protocol.TreasureAwardSelect {
+	defaults := []protocol.TreasureAwardSelect{
+		{TierID: 1, ItemID: 50},
+		{TierID: 2, ItemID: 25},
+		{TierID: 3, ItemID: 42},
+	}
+	if len(c.Awards) >= 3 {
+		return []protocol.TreasureAwardSelect{
+			{TierID: 1, ItemID: c.Awards[0].ItemID},
+			{TierID: 2, ItemID: c.Awards[1].ItemID},
+			{TierID: 3, ItemID: c.Awards[2].ItemID},
+		}
+	}
+	if len(c.AwardIDs) >= 3 {
+		return []protocol.TreasureAwardSelect{
+			{TierID: 1, ItemID: c.AwardIDs[0]},
+			{TierID: 2, ItemID: c.AwardIDs[1]},
+			{TierID: 3, ItemID: c.AwardIDs[2]},
+		}
+	}
+	if c.Tier1ItemID > 0 || c.Tier2ItemID > 0 || c.Tier3ItemID > 0 {
+		t1 := c.Tier1ItemID
+		if t1 <= 0 {
+			t1 = 50
+		}
+		t2 := c.Tier2ItemID
+		if t2 <= 0 {
+			t2 = 25
+		}
+		t3 := c.Tier3ItemID
+		if t3 <= 0 {
+			t3 = 42
+		}
+		return []protocol.TreasureAwardSelect{
+			{TierID: 1, ItemID: t1},
+			{TierID: 2, ItemID: t2},
+			{TierID: 3, ItemID: t3},
+		}
+	}
+	return defaults
 }
 
 // QuestCycleConfig 剧情推图任务闭环配置
