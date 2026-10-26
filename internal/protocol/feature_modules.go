@@ -100,6 +100,8 @@ const (
 	ActionIDDemonTowerEnter uint32 = 0x02BD0001
 	// ActionIDDemonTowerBuff 锁妖塔战斗Buff选择 (Module 705, Action 6 -> 0x02C10006)
 	ActionIDDemonTowerBuff uint32 = 0x02C10006
+	// ActionIDDemonTowerBattle 锁妖塔战斗挑战/结算 (Module 705, Action 1 -> 0x02C10001)
+	ActionIDDemonTowerBattle uint32 = 0x02C10001
 	// ActionIDDemonTowerDeploy 锁妖塔阵型校验 (Module 312, Action 38 -> 0x01380026)
 	ActionIDDemonTowerDeploy uint32 = 0x01380026
 

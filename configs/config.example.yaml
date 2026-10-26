@@ -23,7 +23,7 @@ scheduler:
     max_seconds: 3.0
   routines:
     # 基础自动化模块
-    dungeon_sweep: true         # 副本推图与扫荡
+    dungeon: true               # 副本推图与扫荡 (统一命名为 dungeon)
     lucky_star: true            # 吉星高照
     pilgrimage: true            # 取经/护送
     arena: true                 # 竞技场
@@ -46,15 +46,19 @@ scheduler:
     master_practice: true       # 15. 宗师修行
     treasure_house: true        # 16. 天帝宝库
 
-  # 副本与推图自动化策略配置
+  # 副本与推图自动化策略配置 (包含推图与扫荡两大核心功能)
   dungeon:
-    # 策略优先级流水线：循环接/做/交主支线任务直至无任务可做 -> 扫荡精英副本 -> 扫荡最高等级主线副本
-    pipeline:
-      - "quest_cycle"          # 1. 任务闭环驱动：循环接任务、完成任务，直到没有任务可做再 break
-      - "sweep_elite"          # 2. 扫荡精英副本：清空每日可用英雄/精英副本
-      - "sweep_highest_main"   # 3. 扫荡最高主线：消耗剩余体力冲级
+    # 功能一：剧情推图 (循环接任务/做任务/交任务直至无任务可做)
+    quest_cycle:
+      enabled: true             # 启用任务闭环推图
+      auto_replenish_stamina: true  # 自动吃药补充体力 (仅作用于推图)
+      max_replenish_times: 10       # 单次推图最大自愈补充次数 (仅作用于推图)
 
-    prefer_practice_quickly: true # 优先使用 Module 25 秒完成协议
-    max_batch_times: 10           # 单次批处理最大扫荡次数
-    auto_replenish_stamina: true  # 体力不足时自动按 [包子 > 粽子 > 茶叶蛋] 自愈
-    max_replenish_times: 10       # 单次最大自愈补充次数
+    # 功能二：关卡扫荡 (优先扫荡每日精英，再扫荡最高主线关卡)
+    sweep:
+      enabled: true             # 启用关卡扫荡
+      pipeline:                 # 扫荡策略流水线 (优先 sweep_elite，再 sweep_highest_main)
+        - "sweep_elite"         # 1. 优先扫荡精英 (清空每日可用英雄/精英副本)
+        - "sweep_highest_main"  # 2. 扫荡最高主线 (消耗剩余自然体力冲级)
+      max_batch_times: 10       # 单次批处理最大扫荡次数 (仅作用于扫荡)
+      prefer_practice_quickly: true # 优先使用 Module 25 秒完成协议 (仅作用于扫荡)

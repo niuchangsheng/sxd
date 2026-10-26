@@ -54,7 +54,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "jieyuan_box", Name: "结缘宝箱开启", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "批量开启结缘宝箱 (除了传说，其他都开)", DefaultOn: false},
 
 		// 4. Dungeon 领域 (8)
-		{ID: "dungeon_sweep", Name: "关卡体力扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/精英关卡体力自动消耗与装备材料扫荡", DefaultOn: true},
+		{ID: "dungeon", Name: "副本推图与扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/支线任务闭环推图与关卡扫荡", DefaultOn: true},
 		{ID: "six_realms", Name: "六道轮回挑战", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "六道轮回塔爬塔与灵件自动熔炼分解", DefaultOn: false},
 		{ID: "demon_tower", Name: "伏魔锁妖塔挑战", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "锁妖塔日常挑战与怪物试炼通关", DefaultOn: false},
 		{ID: "training_room", Name: "仙界练功房", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "仙界练功房普通/高级场挂机收益维护", DefaultOn: false},
@@ -183,7 +183,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewJieYuanBoxRoutine()
 
 	// 4. Dungeon
-	case "dungeon_sweep":
+	case "dungeon", "dungeon_sweep":
 		return dungeon.NewDungeonSweepRoutine(f.dictRepo, f.dungeonCfg)
 	case "six_realms":
 		return dungeon.NewSixRealmsRoutine()

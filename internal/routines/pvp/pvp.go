@@ -205,8 +205,8 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 			_, _ = session.Call(dCtx, detailPkt, protocol.ActionIDCaravanGetDetail)
 			dCancel()
 
-			// 3. 发起劫镖拦截攻击 (Mod 314, Act 12)
-			hijackPkt := protocol.BuildCaravanHijackPacket(1, protocol.ActionIDCaravanGetDetail)
+			// 3. 发起劫镖拦截攻击 (Mod 314, Act 12: 载荷对齐抓包仅包含 PrevAct)
+			hijackPkt := protocol.BuildCaravanHijackPacket(protocol.ActionIDCaravanGetDetail)
 			hCtx, hCancel := context.WithTimeout(ctx, 2*time.Second)
 			_, _ = session.Call(hCtx, hijackPkt, protocol.ActionIDCaravanHijack)
 			hCancel()

@@ -359,7 +359,7 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			_, _ = session.Call(cCtx, chapPkt, protocol.ActionIDHuanshouInvadeChapter)
 			cCancel()
 
-			chalPkt := protocol.BuildHuanshouInvadeChallengePacket(1, protocol.ActionIDHuanshouInvadeChapter)
+			chalPkt := protocol.BuildHuanshouInvadeChallengePacket(protocol.ActionIDHuanshouInvadeChapter)
 			chCtx, chCancel := context.WithTimeout(ctx, 2*time.Second)
 			_, _ = session.Call(chCtx, chalPkt, protocol.ActionIDHuanshouInvadeChallenge)
 			chCancel()
@@ -370,7 +370,22 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			_, _ = session.Call(swCtx, sweepPkt, protocol.ActionIDHuanshouInvadeSweep)
 			swCancel()
 
-			slog.Info("山海幻兽入侵扫荡轮次完成", "role_id", session.RoleID())
+			// 4. 逐关扫荡入侵节点 (Mod 696, Act 4: 节点 1~8 依据抓包实采流)
+			prevAct := protocol.ActionIDHuanshouInvadeSweep
+			var clearedNodes int
+			for nodeID := int32(1); nodeID <= 8; nodeID++ {
+				nodePkt := protocol.BuildHuanshouInvadeNodePacket(nodeID, prevAct)
+				nCtx, nCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+				nResp, nErr := session.Call(nCtx, nodePkt, protocol.ActionIDHuanshouInvadeSettle)
+				nCancel()
+				if nErr == nil && nResp != nil {
+					clearedNodes++
+				}
+				prevAct = protocol.ActionIDHuanshouInvadeSettle
+				time.Sleep(30 * time.Millisecond)
+			}
+
+			slog.Info("山海幻兽入侵扫荡轮次完成", "role_id", session.RoleID(), "cleared_nodes", clearedNodes)
 			return nil
 		},
 	)
@@ -453,8 +468,14 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 			_, _ = session.Call(cCtx, chalPkt, protocol.ActionIDMasterPracticeChallenge)
 			cCancel()
 
+			// 3.1 极速通关试炼报告 (Mod 665, Act 4: 抓包实采 00 0f cc af 09 秒过试炼)
+			finishPkt := protocol.BuildMasterPracticeFastFinishPacket(protocol.ActionIDMasterPracticeChallenge)
+			fCtx, fCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			_, _ = session.Call(fCtx, finishPkt, protocol.ActionIDMasterPracticeSettle)
+			fCancel()
+
 			// 4. 境界突破 (Mod 665, Act 5)
-			breakPkt := protocol.BuildMasterPracticeBreakthroughPacket(1, 1, protocol.ActionIDMasterPracticeChallenge)
+			breakPkt := protocol.BuildMasterPracticeBreakthroughPacket(1, 1, protocol.ActionIDMasterPracticeSettle)
 			bCtx, bCancel := context.WithTimeout(ctx, 2*time.Second)
 			bResp, bErr := session.Call(bCtx, breakPkt, protocol.ActionIDMasterPracticeBreakthrough)
 			bCancel()
@@ -518,15 +539,32 @@ func NewTreasureHouseRoutine() scheduler.ActivityRoutine {
 			_, _ = session.Call(cCtx, confPkt, protocol.ActionIDTreasureHouseConfirm)
 			cCancel()
 
-			// 5. 消耗宝库钥匙开启抽奖 (Mod 594, Act 6)
-			drawPkt := protocol.BuildTreasureHouseDrawPacket(protocol.ActionIDTreasureHouseConfirm)
-			dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
-			dResp, dErr := session.Call(dCtx, drawPkt, protocol.ActionIDTreasureHouseDraw)
-			dCancel()
+			// 5. 消耗宝库钥匙开启抽奖 (Mod 594, Act 6 与 Act 1 连续抽奖流)
+			drawCount := 0
+			prevAct := protocol.ActionIDTreasureHouseConfirm
+			for i := 0; i < 10; i++ {
+				drawPkt := protocol.BuildTreasureHouseDrawPacket(prevAct)
+				dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
+				dResp, dErr := session.Call(dCtx, drawPkt, protocol.ActionIDTreasureHouseDraw)
+				dCancel()
 
-			if dErr == nil && dResp != nil {
-				slog.Info("天帝宝库开启抽奖成功", "role_id", session.RoleID())
+				if dErr != nil || dResp == nil {
+					break
+				}
+				drawCount++
+				prevAct = protocol.ActionIDTreasureHouseDraw
+
+				// 每次抽奖后刷新宝库状态 (Act 1)
+				refPkt := protocol.BuildTreasureHouseRefreshPacket(prevAct)
+				rCtx, rCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+				_, _ = session.Call(rCtx, refPkt, protocol.ActionIDTreasureHouseRefresh)
+				rCancel()
+				prevAct = protocol.ActionIDTreasureHouseRefresh
+
+				time.Sleep(50 * time.Millisecond)
 			}
+
+			slog.Info("天帝宝库抽奖流程完成", "role_id", session.RoleID(), "draw_count", drawCount)
 			return nil
 		},
 	)

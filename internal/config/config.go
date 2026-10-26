@@ -59,19 +59,34 @@ type SchedulerConfig struct {
 	Expert    map[string]interface{} `yaml:"expert"`
 }
 
+// QuestCycleConfig 剧情推图任务闭环配置
+type QuestCycleConfig struct {
+	Enabled              bool `yaml:"enabled"`
+	AutoReplenishStamina bool `yaml:"auto_replenish_stamina"` // 自动吃药补充体力 (仅作用于推图)
+	MaxReplenishTimes    int  `yaml:"max_replenish_times"`    // 单次推图最大自愈补充次数 (仅作用于推图)
+}
+
+// DungeonSweepFeatureConfig 副本关卡扫荡配置
+type DungeonSweepFeatureConfig struct {
+	Enabled               bool     `yaml:"enabled"`
+	Pipeline              []string `yaml:"pipeline"`                // 扫荡优先级流水线: "sweep_elite", "sweep_highest_main"
+	MaxBatchTimes         int      `yaml:"max_batch_times"`         // 扫荡批次单次最大执行次数 (仅作用于扫荡)
+	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"` // 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
+}
+
 // DungeonConfig 副本与推图自动化策略配置
 type DungeonConfig struct {
-	// Pipeline 策略优先级流水线，按先后顺序流转
-	// 可选值: "quest_cycle" (任务闭环驱动), "push_mainline" (推主线), "push_side" (推支线), "sweep_elite" (扫荡精英), "sweep_highest_main" (扫荡最高级主线)
-	Pipeline []string `yaml:"pipeline"`
-	// PreferPracticeQuickly 是否优先使用 Module 25 秒完成协议 (默认 true)
-	PreferPracticeQuickly bool `yaml:"prefer_practice_quickly"`
-	// MaxBatchTimes 扫荡批次单次最大执行次数 (默认 10)
-	MaxBatchTimes int `yaml:"max_batch_times"`
-	// AutoReplenishStamina 当体力不足时是否自动按 [包子 > 粽子 > 茶叶蛋] 优先级吃道具自愈 (默认 true)
-	AutoReplenishStamina bool `yaml:"auto_replenish_stamina"`
-	// MaxReplenishTimes 单次执行自动补充体力的最大次数 (默认 10)
-	MaxReplenishTimes int `yaml:"max_replenish_times"`
+	// 功能一: 剧情推图 (循环接任务/做任务/交任务直至无任务可做)
+	QuestCycle QuestCycleConfig `yaml:"quest_cycle"`
+	// 功能二: 关卡扫荡 (优先扫荡精英副本，再扫荡最高等级主线副本)
+	Sweep DungeonSweepFeatureConfig `yaml:"sweep"`
+
+	// 向下兼容既有顶层扁平配置字段
+	Pipeline              []string `yaml:"pipeline"`
+	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"`
+	MaxBatchTimes         int      `yaml:"max_batch_times"`
+	AutoReplenishStamina  bool     `yaml:"auto_replenish_stamina"`
+	MaxReplenishTimes     int      `yaml:"max_replenish_times"`
 }
 
 // JitterConfig 抖动上下限配置 (秒)

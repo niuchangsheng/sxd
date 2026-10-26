@@ -59,27 +59,45 @@ func NewJieYuanBoxRoutine() scheduler.ActivityRoutine {
 			prevAct := protocol.ActionIDJieYuanBoxList
 
 			for _, box := range openable {
-				// 2.1 开箱前置握手 (Mod 528, Act 1)
-				prepPkt := protocol.BuildJieYuanBoxOpenContextPacket(prevAct)
-				pCtx, pCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-				_, _ = session.Call(pCtx, prepPkt, protocol.ActionIDJieYuanBoxOpenContext)
-				pCancel()
+				remaining := box.Count
+				maxBatchesPerItem := 50 // 单个道具最大批次上限，防止无限循环
+				batchCount := 0
 
-				// 2.2 发送批量开启指令 (Mod 232, Act 34)
-				openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, box.Count, protocol.ActionIDJieYuanBoxOpenContext)
-				oCtx, oCancel := context.WithTimeout(ctx, 2*time.Second)
-				openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)
-				oCancel()
+				for remaining > 0 && batchCount < maxBatchesPerItem {
+					batchCount++
+					openCount := int32(4)
+					if remaining < openCount {
+						openCount = remaining
+					}
 
-				prevAct = protocol.ActionIDJieYuanBoxOpen
-				if oErr == nil && openResp != nil {
-					totalOpened += int(box.Count)
-					slog.Info("结缘宝箱开启成功",
-						"item_id", box.ItemID,
-						"count", box.Count,
-						"legendary_skipped", true,
-					)
+					// 2.1 开箱前置握手 (Mod 528, Act 1)
+					prepPkt := protocol.BuildJieYuanBoxOpenContextPacket(prevAct)
+					pCtx, pCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+					_, _ = session.Call(pCtx, prepPkt, protocol.ActionIDJieYuanBoxOpenContext)
+					pCancel()
+
+					// 2.2 发送批量开启指令 (Mod 232, Act 34: 抓包基准每批次开4个)
+					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, openCount, protocol.ActionIDJieYuanBoxOpenContext)
+					oCtx, oCancel := context.WithTimeout(ctx, 2*time.Second)
+					openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)
+					oCancel()
+
+					prevAct = protocol.ActionIDJieYuanBoxOpen
+					if oErr == nil && openResp != nil {
+						totalOpened += int(openCount)
+						remaining -= openCount
+					} else {
+						break
+					}
+
+					time.Sleep(50 * time.Millisecond)
 				}
+
+				slog.Info("结缘宝箱批次处理完成",
+					"item_id", box.ItemID,
+					"opened", box.Count-remaining,
+					"legendary_skipped", true,
+				)
 			}
 
 			slog.Info("结缘宝箱批量开启流程完成", "role_id", session.RoleID(), "total_opened", totalOpened)

@@ -74,7 +74,7 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 	}
 
 	// 7. 劫镖 (Module 314, Action 12)
-	pRob := protocol.BuildCaravanHijackPacket(12345, 0)
+	pRob := protocol.BuildCaravanHijackPacket(0)
 	if pRob.ActionID != protocol.ActionIDCaravanHijack {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDCaravanHijack, pRob.ActionID)
 	}
@@ -85,10 +85,14 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDXunXianChallenge, pXunXian.ActionID)
 	}
 
-	// 9. 锁妖塔 (Module 701, Action 1)
+	// 9. 锁妖塔 (Module 701, Action 1 & Module 705, Action 1)
 	pDemon := protocol.BuildDemonTowerEnterPacket(3, 31, 0)
 	if pDemon.ActionID != protocol.ActionIDDemonTowerEnter {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDDemonTowerEnter, pDemon.ActionID)
+	}
+	pDemonBattle := protocol.BuildDemonTowerBattlePacket(0)
+	if pDemonBattle.ActionID != protocol.ActionIDDemonTowerBattle {
+		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDDemonTowerBattle, pDemonBattle.ActionID)
 	}
 
 	// 10. 山河游历 (Module 850, Action 0)
@@ -103,10 +107,14 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDLingDaoComprehend, pLing.ActionID)
 	}
 
-	// 12. 山海幻兽 (Module 696, Action 2)
-	pHuan := protocol.BuildHuanshouInvadeChallengePacket(99, 0)
+	// 12. 山海幻兽 (Module 696, Action 2 & Action 4)
+	pHuan := protocol.BuildHuanshouInvadeChallengePacket(0)
 	if pHuan.ActionID != protocol.ActionIDHuanshouInvadeChallenge {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDHuanshouInvadeChallenge, pHuan.ActionID)
+	}
+	pHuanNode := protocol.BuildHuanshouInvadeNodePacket(1, 0)
+	if pHuanNode.ActionID != protocol.ActionIDHuanshouInvadeSettle {
+		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDHuanshouInvadeSettle, pHuanNode.ActionID)
 	}
 
 	// 14. 悟法领域 (Module 658, Action 0)

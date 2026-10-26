@@ -49,8 +49,8 @@ func TestRoutines_DefinitionsAndRegistry(t *testing.T) {
 
 	// 验证特定玩法自定义开关
 	customMap := map[string]bool{
-		"herb_garden":   false,
-		"dungeon_sweep": false,
+		"herb_garden": false,
+		"dungeon":     false,
 	}
 	sched2 := scheduler.NewRoleScheduler("role-test-2", nil, fastJitter)
 	regCount2 := factory.RegisterAll(sched2, customMap)
@@ -76,8 +76,8 @@ func TestSubdomains_Instances(t *testing.T) {
 	}
 
 	dg := dungeon.NewDungeonSweepRoutine(nil)
-	if dg.Name() != "dungeon_sweep" {
-		t.Errorf("dungeon_sweep name mismatch: %s", dg.Name())
+	if dg.Name() != "dungeon" {
+		t.Errorf("dungeon name mismatch: %s", dg.Name())
 	}
 
 	p := pvp.NewArenaRoutine()

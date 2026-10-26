@@ -263,9 +263,9 @@ func BuildCaravanGetDetailPacket(prevAct uint32) *Packet {
 }
 
 // BuildCaravanHijackPacket 构造发起打劫拦截封包 (Module 314, Action 12)。
-func BuildCaravanHijackPacket(targetID int32, prevAct uint32) *Packet {
+// 依据 haha.pcapng 抓包事实: 载荷仅包含 PrevAct (0x013A0000)。
+func BuildCaravanHijackPacket(prevAct uint32) *Packet {
 	w := NewWriter()
-	w.WriteInt32(targetID)
 	if prevAct == 0 {
 		prevAct = ActionIDCaravanGetDetail
 	}
@@ -345,6 +345,35 @@ func BuildDemonTowerBuffPacket(buffID int32, prevAct uint32) *Packet {
 	return NewPacket(ActionIDDemonTowerBuff, w.Bytes())
 }
 
+// BuildDemonTowerBattlePacket 构造锁妖塔战斗触发与结算封包 (Module 705, Action 1)。
+func BuildDemonTowerBattlePacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint32(1)
+	if prevAct == 0 {
+		prevAct = ActionIDDemonTowerDeploy
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDDemonTowerBattle, w.Bytes())
+}
+
+// ParseDemonTowerPanelResult 解析锁妖塔主面板回包 (Module 701, Action 0)，提取当前所在层与试炼怪编号。
+func ParseDemonTowerPanelResult(payload []byte) (layer int32, trialID int32, err error) {
+	decomp := DecompressPayloadIfNeeded(payload)
+	if len(decomp) < 8 {
+		return 3, 31, nil // 默认兜底层
+	}
+	r := NewReader(decomp)
+	layer, err = r.ReadInt32()
+	if err != nil {
+		return 3, 31, nil
+	}
+	trialID, err = r.ReadInt32()
+	if err != nil {
+		return layer, 31, nil
+	}
+	return layer, trialID, nil
+}
+
 // --------------------------------------------------------------------------------
 // 10. 山河游历
 // --------------------------------------------------------------------------------
@@ -409,14 +438,25 @@ func BuildHuanshouPanelPacket(prevAct uint32) *Packet {
 }
 
 // BuildHuanshouInvadeChallengePacket 构造挑战幻兽入侵副本封包 (Module 696, Action 2)。
-func BuildHuanshouInvadeChallengePacket(missionID int32, prevAct uint32) *Packet {
+// 依据 haha.pcapng 抓包事实: 载荷仅包含 PrevAct。
+func BuildHuanshouInvadeChallengePacket(prevAct uint32) *Packet {
 	w := NewWriter()
-	w.WriteInt32(missionID)
 	if prevAct == 0 {
 		prevAct = ActionIDHuanshouPanel
 	}
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDHuanshouInvadeChallenge, w.Bytes())
+}
+
+// BuildHuanshouInvadeNodePacket 构造山海幻兽入侵逐关挑战扫荡封包 (Module 696, Action 4)。
+func BuildHuanshouInvadeNodePacket(nodeID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(nodeID)
+	if prevAct == 0 {
+		prevAct = ActionIDHuanshouInvadeChallenge
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDHuanshouInvadeSettle, w.Bytes())
 }
 
 // BuildHuanshouInvadeSweepPacket 构造秒完成幻兽入侵扫荡封包 (Module 696, Action 3)。
@@ -492,6 +532,19 @@ func BuildMasterPracticeChallengePacket(prevAct uint32) *Packet {
 	}
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDMasterPracticeChallenge, w.Bytes())
+}
+
+// BuildMasterPracticeFastFinishPacket 构造宗师试炼极速通关封包 (Module 665, Action 4)。
+// 依据抓包实采: 00 0f cc af 09 + PrevAct
+func BuildMasterPracticeFastFinishPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint32(0x000FCCAF)
+	w.WriteUint8(0x09)
+	if prevAct == 0 {
+		prevAct = ActionIDMasterPracticeChallenge
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDMasterPracticeSettle, w.Bytes())
 }
 
 // BuildMasterPracticeBreakthroughPacket 构造突破宗师境界封包 (Module 665, Action 5)。

@@ -223,6 +223,7 @@ func NewOnlineGiftRoutine() scheduler.ActivityRoutine {
 						successCount++
 					}
 				}
+				time.Sleep(60 * time.Millisecond)
 			}
 
 			slog.Info("在线礼包奖励领取完成", "role_id", session.RoleID(), "success_count", successCount)
