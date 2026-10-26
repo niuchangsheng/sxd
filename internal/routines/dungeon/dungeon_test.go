@@ -1234,8 +1234,17 @@ func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x00}))
 			return true
 
-		case protocol.ActionMissionEnter, protocol.ActionMissionSweep:
+		case protocol.ActionMissionEnter, protocol.ActionMissionSweep, protocol.ActionIDPracticeStart:
 			recordEvent("mission_sweep")
+			if pkt.ActionID == protocol.ActionIDPracticeStart {
+				resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+					Result:    protocol.PracticeResultSuccess,
+					MissionID: 88,
+					Count:     1,
+				})
+				_ = protocol.WritePacket(srvConn, resPkt)
+				return true
+			}
 			resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
 				Success:   true,
 				MissionID: 88,

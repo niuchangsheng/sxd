@@ -81,10 +81,12 @@ func BuildStartPracticePacket(req StartPracticeRequest) (*Packet, error) {
 	w.WriteInt16(req.Count)
 	// 3. 写入 AutoSale (1 字节有符号整型)
 	w.WriteInt8(req.AutoSale)
-	// 4. 若指定了 PrevAct，追加 4 字节前序动作号 (兼容测试抓包)
-	if req.PrevAct != 0 {
-		w.WriteUint32(req.PrevAct)
+	// 4. 追加 4 字节前序动作号 (若未指定则默认前序为 ActionIDPracticeGetStatus 0x00190000，对齐 c2s_m25_a1.bin)
+	prevAct := req.PrevAct
+	if prevAct == 0 {
+		prevAct = ActionIDPracticeGetStatus
 	}
+	w.WriteUint32(prevAct)
 
 	return NewPacket(ActionIDPracticeStart, w.Bytes()), nil
 }
@@ -163,9 +165,11 @@ func ParseStartPracticeResult(payload []byte) (*StartPracticeResult, error) {
 func BuildQuicklyPacket(req QuicklyRequest) (*Packet, error) {
 	w := NewWriter()
 	w.WriteInt16(req.Count)
-	if req.PrevAct != 0 {
-		w.WriteUint32(req.PrevAct)
+	prevAct := req.PrevAct
+	if prevAct == 0 {
+		prevAct = ActionIDPracticeStart
 	}
+	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDPracticeQuickly, w.Bytes()), nil
 }
 
@@ -277,9 +281,10 @@ type PracticeStatusResult struct {
 func BuildPracticeGetStatusPacket(missionID int32, prevAct uint32) (*Packet, error) {
 	w := NewWriter()
 	w.WriteInt32(missionID)
-	if prevAct != 0 {
-		w.WriteUint32(prevAct)
+	if prevAct == 0 {
+		prevAct = ActionIDPlayerGetInfo
 	}
+	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDPracticeGetStatus, w.Bytes()), nil
 }
 

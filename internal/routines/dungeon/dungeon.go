@@ -1147,16 +1147,54 @@ func executeQuestCycle(
 
 			slog.Info("正在推进任务关卡挑战", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title, "mission_id", mid)
 
-			sweepPkt, _ := protocol.BuildSweepPacket(protocol.SweepRequest{MissionID: uint32(mid), Times: 1})
-			enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
-			enterResp, enterErr := session.Call(enterCtx, sweepPkt, protocol.ActionMissionSweep)
-			enterCancel()
-
 			challengeSuccess := false
-			if enterErr == nil && enterResp != nil {
-				if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
-					challengeSuccess = true
-					_ = session.Send(protocol.BuildQuickFinishPacket())
+
+			// 优先尝试 Module 25 秒扫荡 (适用于普通主支线剧情关卡)
+			m25Req := protocol.StartPracticeRequest{
+				MissionID: int32(mid),
+				Count:     1,
+				AutoSale:  1,
+				PrevAct:   protocol.ActionIDPracticeGetStatus,
+			}
+			statusPkt, _ := protocol.BuildPracticeGetStatusPacket(int32(mid), protocol.ActionIDPlayerGetInfo)
+			statusCtx, statusCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
+			statusCancel()
+			if statusErr == nil && statusResp != nil {
+				if st, sErr := protocol.ParsePracticeStatusResult(statusResp.Payload); sErr == nil && st != nil && st.IsPracticing == 1 {
+					quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0, PrevAct: protocol.ActionIDPracticeGetStatus})
+					_ = session.Send(quickPkt)
+					time.Sleep(50 * time.Millisecond)
+				}
+			}
+
+			m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
+			m25Ctx, m25Cancel := context.WithTimeout(ctx, 3*time.Second)
+			m25Resp, m25Err := session.Call(m25Ctx, m25Pkt, protocol.ActionIDPracticeStart)
+			m25Cancel()
+
+			if m25Err == nil && m25Resp != nil {
+				if m25Res, pErr := protocol.ParseStartPracticeResult(m25Resp.Payload); pErr == nil && m25Res != nil {
+					if m25Res.Result == protocol.PracticeResultSuccess {
+						quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0, PrevAct: protocol.ActionIDPracticeStart})
+						_ = session.Send(quickPkt)
+						challengeSuccess = true
+					}
+				}
+			}
+
+			// 若 Module 25 未成功，降级尝试 Module 35 关卡扫荡 (适用于英雄/精英关卡)
+			if !challengeSuccess {
+				sweepPkt, _ := protocol.BuildSweepPacket(protocol.SweepRequest{MissionID: uint32(mid), Times: 1})
+				enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
+				enterResp, enterErr := session.Call(enterCtx, sweepPkt, protocol.ActionMissionSweep)
+				enterCancel()
+
+				if enterErr == nil && enterResp != nil {
+					if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
+						challengeSuccess = true
+						_ = session.Send(protocol.BuildQuickFinishPacket())
+					}
 				}
 			}
 
@@ -1205,26 +1243,70 @@ func executeQuestCycle(
 					}
 
 					slog.Info("探测并推进未通关剧情关卡", "role_id", session.RoleID(), "type", qType, "mission_id", mid)
-					sweepPkt, _ := protocol.BuildSweepPacket(protocol.SweepRequest{MissionID: uint32(mid), Times: 1})
-					enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
-					enterResp, enterErr := session.Call(enterCtx, sweepPkt, protocol.ActionMissionSweep)
-					enterCancel()
 
-					if enterErr == nil && enterResp != nil {
-						if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
-							_ = session.Send(protocol.BuildQuickFinishPacket())
-							cost := powerPerSweep
-							remStamina, _ := session.ConsumeStamina(cost)
-							session.AddRewards(2500, 12000)
-							*totalCostStamina += cost
-							*totalGainExp += 2500
-							*totalGainCoins += 12000
-							clearedMissions[mid] = true
-							progressMade = true
-							slog.Info("剧情关卡推进挑战成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
+					plotSuccess := false
+
+					// 优先尝试 Module 25 秒扫荡
+					m25Req := protocol.StartPracticeRequest{
+						MissionID: int32(mid),
+						Count:     1,
+						AutoSale:  1,
+						PrevAct:   protocol.ActionIDPracticeGetStatus,
+					}
+					statusPkt, _ := protocol.BuildPracticeGetStatusPacket(int32(mid), protocol.ActionIDPlayerGetInfo)
+					statusCtx, statusCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+					statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
+					statusCancel()
+					if statusErr == nil && statusResp != nil {
+						if st, sErr := protocol.ParsePracticeStatusResult(statusResp.Payload); sErr == nil && st != nil && st.IsPracticing == 1 {
+							quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0, PrevAct: protocol.ActionIDPracticeGetStatus})
+							_ = session.Send(quickPkt)
 							time.Sleep(50 * time.Millisecond)
-							break
 						}
+					}
+
+					m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
+					m25Ctx, m25Cancel := context.WithTimeout(ctx, 3*time.Second)
+					m25Resp, m25Err := session.Call(m25Ctx, m25Pkt, protocol.ActionIDPracticeStart)
+					m25Cancel()
+
+					if m25Err == nil && m25Resp != nil {
+						if m25Res, pErr := protocol.ParseStartPracticeResult(m25Resp.Payload); pErr == nil && m25Res != nil {
+							if m25Res.Result == protocol.PracticeResultSuccess {
+								quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0, PrevAct: protocol.ActionIDPracticeStart})
+								_ = session.Send(quickPkt)
+								plotSuccess = true
+							}
+						}
+					}
+
+					// 降级尝试 Module 35
+					if !plotSuccess {
+						sweepPkt, _ := protocol.BuildSweepPacket(protocol.SweepRequest{MissionID: uint32(mid), Times: 1})
+						enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
+						enterResp, enterErr := session.Call(enterCtx, sweepPkt, protocol.ActionMissionSweep)
+						enterCancel()
+
+						if enterErr == nil && enterResp != nil {
+							if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
+								_ = session.Send(protocol.BuildQuickFinishPacket())
+								plotSuccess = true
+							}
+						}
+					}
+
+					if plotSuccess {
+						cost := powerPerSweep
+						remStamina, _ := session.ConsumeStamina(cost)
+						session.AddRewards(2500, 12000)
+						*totalCostStamina += cost
+						*totalGainExp += 2500
+						*totalGainCoins += 12000
+						clearedMissions[mid] = true
+						progressMade = true
+						slog.Info("剧情关卡推进挑战成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
+						time.Sleep(50 * time.Millisecond)
+						break
 					}
 					failedMissions[mid] = true
 					break
