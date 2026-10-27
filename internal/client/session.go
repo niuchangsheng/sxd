@@ -184,11 +184,9 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 			return
 		}
 		items, err := protocol.ParsePlayerQuestListResponse(pkt.Payload)
-		if err == nil && len(items) > 0 {
+		if err == nil {
 			s.playerMu.Lock()
-			if s.playerState.Quests == nil {
-				s.playerState.Quests = make(map[uint32]uint32)
-			}
+			s.playerState.Quests = make(map[uint32]uint32, len(items))
 			for _, it := range items {
 				s.playerState.Quests[uint32(it.QuestID)] = uint32(it.State)
 			}
@@ -646,8 +644,12 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 
 // SyncQuests 主动向服务端发送 Mod 3, Act 9 协议全量拉取当前已接任务列表并同步至内存状态快照。
 func (s *RoleSession) SyncQuests(ctx context.Context) ([]protocol.PlayerQuestItem, error) {
-	questListPkt := protocol.BuildGetPlayerQuestListPacket(protocol.ActionIDPlayerGetInfo)
-	qCtx, qCancel := context.WithTimeout(ctx, 3*time.Second)
+	questListPkt := protocol.BuildGetPlayerQuestListPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	qCtx, qCancel := context.WithTimeout(ctx, timeout)
 	defer qCancel()
 
 	qResp, qErr := s.Call(qCtx, questListPkt, protocol.ActionIDQuestList)
@@ -664,9 +666,7 @@ func (s *RoleSession) SyncQuests(ctx context.Context) ([]protocol.PlayerQuestIte
 	}
 
 	s.playerMu.Lock()
-	if s.playerState.Quests == nil {
-		s.playerState.Quests = make(map[uint32]uint32)
-	}
+	s.playerState.Quests = make(map[uint32]uint32, len(items))
 	for _, it := range items {
 		s.playerState.Quests[uint32(it.QuestID)] = uint32(it.State)
 	}
@@ -734,11 +734,35 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 		return ErrNotConnected
 	}
 
+	if p != nil {
+		mod := p.ActionID >> 16
+		if prev := s.lastActionID.Load(); prev != 0 {
+			if (p.ActionID == protocol.ActionIDItemGetPackList && len(p.Payload) == 0) ||
+				(p.ActionID == protocol.ActionIDItemUseGrid && len(p.Payload) == 2) {
+				cloned := make([]byte, len(p.Payload)+4)
+				copy(cloned, p.Payload)
+				binary.BigEndian.PutUint32(cloned[len(p.Payload):], prev)
+				p = &protocol.Packet{
+					ActionID:   p.ActionID,
+					Payload:    cloned,
+					HasPrevAct: true,
+				}
+			} else if (p.HasPrevAct || mod == 3 || mod == 4 || mod == 25 || p.ActionID == s.cfg.HeartbeatActionID) && len(p.Payload) >= 4 {
+				cloned := make([]byte, len(p.Payload))
+				copy(cloned, p.Payload)
+				binary.BigEndian.PutUint32(cloned[len(cloned)-4:], prev)
+				p = &protocol.Packet{
+					ActionID:   p.ActionID,
+					Payload:    cloned,
+					HasPrevAct: p.HasPrevAct,
+				}
+			}
+		}
+	}
+
 	err := protocol.WritePacket(s.conn, p)
 	if err == nil && p != nil {
-		if p.ActionID != s.cfg.HeartbeatActionID {
-			s.lastActionID.Store(p.ActionID)
-		}
+		s.lastActionID.Store(p.ActionID)
 		slog.Debug("发送网关请求", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", p.ActionID, p.ActionID>>16, p.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(p.Payload))
 	}
 	return err
@@ -828,6 +852,7 @@ func (s *RoleSession) runLoop() {
 
 		s.writeMu.Lock()
 		s.conn = conn
+		s.lastActionID.Store(0)
 		s.writeMu.Unlock()
 
 		// 2. 启动读循环通道

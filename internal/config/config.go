@@ -240,7 +240,12 @@ func Load(path string) (*Config, error) {
 		cfg.Scheduler.Expert = make(map[string]interface{})
 	}
 
-	if len(cfg.Scheduler.Dungeon.Pipeline) == 0 {
+	hasSubDungeon := cfg.Scheduler.Dungeon.QuestCycle.Enabled ||
+		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
+		cfg.Scheduler.Dungeon.Sweep.Enabled ||
+		cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes > 0 ||
+		len(cfg.Scheduler.Dungeon.Sweep.Pipeline) > 0
+	if len(cfg.Scheduler.Dungeon.Pipeline) == 0 && !hasSubDungeon {
 		cfg.Scheduler.Dungeon.Pipeline = []string{
 			"push_mainline",
 			"push_side",

@@ -260,8 +260,14 @@ func run(ctx context.Context, args []string) error {
 
 	factory := routines.NewRegistryFactory(qaEngine, dictRepo)
 	dCfg := dungeon.DefaultSweepConfig()
+	hasSubDungeon := cfg.Scheduler.Dungeon.QuestCycle.Enabled ||
+		cfg.Scheduler.Dungeon.QuestCycle.AutoReplenishStamina ||
+		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
+		cfg.Scheduler.Dungeon.Sweep.Enabled ||
+		cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes > 0 ||
+		len(cfg.Scheduler.Dungeon.Sweep.Pipeline) > 0
 	// 1. 剧情推图配置 (quest_cycle)
-	if cfg.Scheduler.Dungeon.QuestCycle.Enabled || cfg.Scheduler.Dungeon.QuestCycle.AutoReplenishStamina || cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 {
+	if hasSubDungeon {
 		dCfg.QuestCycle.Enabled = cfg.Scheduler.Dungeon.QuestCycle.Enabled
 		dCfg.QuestCycle.AutoReplenishStamina = cfg.Scheduler.Dungeon.QuestCycle.AutoReplenishStamina
 		dCfg.QuestCycle.MaxReplenishTimes = cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes
@@ -271,7 +277,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	// 2. 关卡扫荡配置 (sweep)
-	if cfg.Scheduler.Dungeon.Sweep.Enabled || cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes > 0 || len(cfg.Scheduler.Dungeon.Sweep.Pipeline) > 0 {
+	if hasSubDungeon {
 		dCfg.Sweep.Enabled = cfg.Scheduler.Dungeon.Sweep.Enabled
 		dCfg.Sweep.Pipeline = cfg.Scheduler.Dungeon.Sweep.Pipeline
 		dCfg.Sweep.MaxBatchTimes = cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes

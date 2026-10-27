@@ -18,11 +18,23 @@ const (
 	// ActionIDQuestGetNPCQuests 获取指定 NPC 的可接/已接任务列表 (Module 3, Action 1 -> 0x00030001)
 	ActionIDQuestGetNPCQuests uint32 = 0x00030001
 
-	// ActionIDQuestComplete 交付/完成任务领取奖励 (Module 3, Action 2 -> 0x00030002)
+	// ActionIDQuestComplete 按任务ID打开NPC任务交互信息 (Module 3, Action 2 -> 0x00030002)
 	ActionIDQuestComplete uint32 = 0x00030002
 
 	// ActionIDQuestAccept 接受任务 (Module 3, Action 3 -> 0x00030003)
 	ActionIDQuestAccept uint32 = 0x00030003
+
+	// ActionIDQuestFinish 完成纯对话类任务目标 (Module 3, Action 4 -> 0x00030004)
+	ActionIDQuestFinish uint32 = 0x00030004
+
+	// ActionIDQuestSubmitComplete 交付已完成任务并领取奖励 (Module 3, Action 5 -> 0x00030005)
+	ActionIDQuestSubmitComplete uint32 = 0x00030005
+
+	// ActionIDQuestListPlayer 拉取玩家已接任务列表简表 (Module 3, Action 6 -> 0x00030006)
+	ActionIDQuestListPlayer uint32 = 0x00030006
+
+	// ActionIDQuestCanReceive 查询城镇可接任务列表 (Module 3, Action 8 -> 0x00030008)
+	ActionIDQuestCanReceive uint32 = 0x00030008
 
 	// ActionIDQuestList 玩家当前任务列表与状态更新 (Module 3, Action 9 -> 0x00030009)
 	ActionIDQuestList uint32 = 0x00030009
@@ -109,7 +121,7 @@ type CompleteQuestRequest struct {
 	PrevAct uint32
 }
 
-// BuildCompleteQuestPacket 构造交付任务请求封包 (Module 3, Action 2)。
+// BuildCompleteQuestPacket 构造打开任务交付对话请求封包 (Module 3, Action 2)。
 func BuildCompleteQuestPacket(req CompleteQuestRequest) (*Packet, error) {
 	w := NewWriter()
 	w.WriteInt32(req.QuestID)
@@ -119,6 +131,39 @@ func BuildCompleteQuestPacket(req CompleteQuestRequest) (*Packet, error) {
 	}
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDQuestComplete, w.Bytes()), nil
+}
+
+// BuildFinishQuestPacket 构造完成对话类任务请求封包 (Module 3, Action 4)。
+func BuildFinishQuestPacket(questID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(questID)
+	if prevAct == 0 {
+		prevAct = ActionIDQuestList
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDQuestFinish, w.Bytes())
+}
+
+// BuildSubmitCompleteQuestPacket 构造交付已完成任务领取奖励请求封包 (Module 3, Action 5)。
+func BuildSubmitCompleteQuestPacket(questID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(questID)
+	if prevAct == 0 {
+		prevAct = ActionIDQuestList
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDQuestSubmitComplete, w.Bytes())
+}
+
+// BuildCanReceiveQuestPacket 构造查询指定城镇可接任务列表请求封包 (Module 3, Action 8)。
+func BuildCanReceiveQuestPacket(townID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(townID)
+	if prevAct == 0 {
+		prevAct = ActionIDQuestList
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDQuestCanReceive, w.Bytes())
 }
 
 // BuildGetPlayerQuestListPacket 构造拉取玩家当前已接任务列表请求封包 (Module 3, Action 9)。
@@ -133,8 +178,12 @@ func BuildGetPlayerQuestListPacket(prevAct uint32) *Packet {
 
 // PlayerQuestItem 玩家当前已接任务条目。
 type PlayerQuestItem struct {
-	QuestID int32
-	State   int32 // 0=进行中 (未完成目标), 1=已完成可交付
+	QuestID      int32
+	State        int32 // -1=等级不足, 0=可接取, 1=已接进行中, 2=已完成可交付
+	NeedType     uint8 // 0=MONSTER, 1=GETITEM, 2=GETQUESTITEM, 3=SCENEITEM, 4=NOONE
+	TargetID     int32 // 首个目标怪物或道具 ID
+	CurrentCount int32 // 当前已完成进度
+	MaxCount     int32 // 目标需求总数量
 }
 
 // ParsePlayerQuestListResponse 解析玩家当前任务列表。支持透明 zlib 解压。
@@ -174,14 +223,30 @@ func ParsePlayerQuestListResponse(payload []byte) ([]PlayerQuestItem, error) {
 		}
 		qid, _ := r.ReadInt32()
 		state, _ := r.ReadInt32()
-		items = append(items, PlayerQuestItem{
+		item := PlayerQuestItem{
 			QuestID: qid,
 			State:   state,
-		})
-		// 真实网关每个条目包含 23 字节 (4B QuestID + 4B State + 15B 扩展元数据)，跳过剩余 15 字节
-		if r.Remaining() >= 15 {
-			_, _ = r.ReadBytes(15)
 		}
+		// 真实网关条目扩展字段: 1B need_type + 2B need_count + need_count * 12B (3 * Int32)
+		if r.Remaining() >= 3 {
+			needType, _ := r.ReadUint8()
+			needCount, _ := r.ReadUint16()
+			item.NeedType = needType
+			for j := uint16(0); j < needCount; j++ {
+				if r.Remaining() < 12 {
+					break
+				}
+				tid, _ := r.ReadInt32()
+				cur, _ := r.ReadInt32()
+				max, _ := r.ReadInt32()
+				if j == 0 {
+					item.TargetID = tid
+					item.CurrentCount = cur
+					item.MaxCount = max
+				}
+			}
+		}
+		items = append(items, item)
 	}
 
 	return items, nil

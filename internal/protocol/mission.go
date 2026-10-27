@@ -39,6 +39,27 @@ const (
 	ActionHeroMissionQuickFinish uint32 = 0x006F0007
 	// ActionHeroMissionClose 关闭英雄副本扫荡界面 (Module 111, Action 14)
 	ActionHeroMissionClose uint32 = 0x006F000E
+
+	// Module 4 (Mod_Mission_Base) 剧情副本推进与首通挑战协议族
+	// ActionIDMissionGetSections 查询大地图章节已开放副本列表与状态 (Module 4, Action 0)
+	ActionIDMissionGetSections uint32 = 0x00040000
+	// ActionIDMissionPlotEnter 进入剧情副本关卡 (Module 4, Action 1)
+	ActionIDMissionPlotEnter uint32 = 0x00040001
+	// ActionIDMissionFightMonster 挑战副本内指定怪物编队 (Module 4, Action 2)
+	ActionIDMissionFightMonster uint32 = 0x00040002
+	// ActionIDMissionRank 结算副本通关星级与评价 (Module 4, Action 3)
+	ActionIDMissionRank uint32 = 0x00040003
+	// ActionIDMissionOpenBox 开启副本通关宝箱 (Module 4, Action 4)
+	ActionIDMissionOpenBox uint32 = 0x00040004
+	// ActionIDMissionPickupAward 拾取副本结算奖励 (Module 4, Action 5)
+	ActionIDMissionPickupAward uint32 = 0x00040005
+
+	// MissionResultSuccess Module 4 副本动作成功状态码 (0x0A = 10)
+	MissionResultSuccess uint8 = 0x0A
+	// MissionResultNotEnoughPower 体力不足状态码 (0x0C = 12)
+	MissionResultNotEnoughPower uint8 = 0x0C
+	// MissionResultPackFull 背包已满状态码 (0x0D = 13)
+	MissionResultPackFull uint8 = 0x0D
 )
 
 var (
@@ -342,5 +363,114 @@ func BuildHeroMissionQuickFinishPacket(instanceID uint32) *Packet {
 // BuildHeroMissionClosePacket 构造关闭英雄副本扫荡界面请求封包 (Module 111, Action 14)。
 func BuildHeroMissionClosePacket() *Packet {
 	return NewPacket(ActionHeroMissionClose, nil)
+}
+
+// MissionSectionItem 代表 Module 4 get_sections 返回的单个章节关卡状态条目 (10 字节)。
+type MissionSectionItem struct {
+	MissionID     int32
+	Status        int8  // 1=已通关, 0=已开放未通关
+	Rank          uint8 // 评价星级
+	IsBoss        int8  // 是否 Boss 关
+	CompleteCount int16 // 完成次数
+	Difficulty    int8  // 难度
+}
+
+// BuildMissionGetSectionsPacket 构造查询大地图章节副本进度请求封包 (Module 4, Action 0)。
+func BuildMissionGetSectionsPacket(mapID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(mapID)
+	if prevAct == 0 {
+		prevAct = ActionIDPlayerGetInfo
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDMissionGetSections, w.Bytes())
+}
+
+// ParseMissionGetSectionsResponse 解析大地图章节副本进度回包 (Module 4, Action 0)。
+func ParseMissionGetSectionsResponse(payload []byte) ([]MissionSectionItem, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("%w: get_sections payload too short", ErrInvalidPayload)
+	}
+	r := NewReader(payload)
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, err
+	}
+	items := make([]MissionSectionItem, 0, count)
+	for i := uint16(0); i < count; i++ {
+		if r.Remaining() < 10 {
+			break
+		}
+		mid, _ := r.ReadInt32()
+		status, _ := r.ReadInt8()
+		rank, _ := r.ReadUint8()
+		isBoss, _ := r.ReadInt8()
+		compCount, _ := r.ReadInt16()
+		diff, _ := r.ReadInt8()
+		items = append(items, MissionSectionItem{
+			MissionID:     mid,
+			Status:        status,
+			Rank:          rank,
+			IsBoss:        isBoss,
+			CompleteCount: compCount,
+			Difficulty:    diff,
+		})
+	}
+	return items, nil
+}
+
+// BuildMissionPlotEnterPacket 构造进入剧情副本关卡请求封包 (Module 4, Action 1)。
+func BuildMissionPlotEnterPacket(missionID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(missionID)
+	if prevAct == 0 {
+		prevAct = ActionIDMissionGetSections
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDMissionPlotEnter, w.Bytes())
+}
+
+// BuildMissionFightMonsterPacket 构造挑战副本内怪物编队请求封包 (Module 4, Action 2)。
+// 2026 网关协议结构: [Int32(monsterTeamID), Int8(attackType), Int32(hireRoleID), Uint32(prevAct)] (共 13 字节)。
+func BuildMissionFightMonsterPacket(monsterTeamID int32, attackType int8, hireRoleID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(monsterTeamID)
+	w.WriteInt8(attackType)
+	w.WriteInt32(hireRoleID)
+	if prevAct == 0 {
+		prevAct = ActionIDMissionPlotEnter
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDMissionFightMonster, w.Bytes())
+}
+
+// BuildMissionRankPacket 构造副本通关星级评价结算请求封包 (Module 4, Action 3)。
+func BuildMissionRankPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = ActionIDMissionFightMonster
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDMissionRank, w.Bytes())
+}
+
+// BuildMissionOpenBoxPacket 构造开启副本通关宝箱请求封包 (Module 4, Action 4)。
+func BuildMissionOpenBoxPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = ActionIDMissionRank
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDMissionOpenBox, w.Bytes())
+}
+
+// BuildMissionPickupAwardPacket 构造拾取副本通关奖励请求封包 (Module 4, Action 5)。
+func BuildMissionPickupAwardPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = ActionIDMissionOpenBox
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDMissionPickupAward, w.Bytes())
 }
 

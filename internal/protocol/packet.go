@@ -46,6 +46,8 @@ type Packet struct {
 	ActionID uint32
 	// Payload 封包承载的应用层数据载荷 (已透明解压)
 	Payload []byte
+	// HasPrevAct 标记载荷末尾 4 字节是否为动态前序动作号 (PrevAct)
+	HasPrevAct bool
 }
 
 // NewPacket 创建一个初始化好的 Packet 实例。
