@@ -31,16 +31,18 @@ type QuestCycleFeatureConfig struct {
 // SweepFeatureConfig 副本关卡扫荡配置
 type SweepFeatureConfig struct {
 	Enabled               bool     `json:"enabled"`
-	Pipeline              []string `json:"pipeline"`                // 扫荡流水线优先级: "sweep_elite", "sweep_highest_main"
+	Pipeline              []string `json:"pipeline"`                // 扫荡流水线优先级: "sweep_elite"
 	MaxBatchTimes         int      `json:"max_batch_times"`         // 扫荡批次单次最大执行次数 (仅作用于扫荡)
 	PreferPracticeQuickly bool     `json:"prefer_practice_quickly"` // 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
+	SellSweptItems        bool     `json:"sell_swept_items"`        // 扫荡精英副本后是否自动卖掉扫荡物
+	AutoSellSweptItems    bool     `json:"auto_sell_swept_items"`   // 别名
 }
 
 // SweepConfig 关卡推图与扫荡自定义策略配置。包含两大核心功能：剧情推图 与 关卡扫荡。
 type SweepConfig struct {
 	// 功能一: 剧情推图 (循环接任务/做任务/交任务直至无任务可做)
 	QuestCycle QuestCycleFeatureConfig `json:"quest_cycle"`
-	// 功能二: 关卡扫荡 (优先扫荡精英副本，再扫荡最高等级主线副本)
+	// 功能二: 关卡扫荡 (扫荡精英副本)
 	Sweep SweepFeatureConfig `json:"sweep"`
 
 	// Mode 扫荡模式 (默认 ModeAutoRecommend)
@@ -59,8 +61,12 @@ type SweepConfig struct {
 	AutoReplenishStamina bool
 	// MaxReplenishTimes 单次执行自动补充体力的最大次数 (默认 10)
 	MaxReplenishTimes int
+	// SellSweptItems 扫荡精英副本后是否自动卖掉扫荡物
+	SellSweptItems bool `json:"sell_swept_items"`
+	// AutoSellSweptItems 扫荡精英副本后是否自动卖掉扫荡物 (别名)
+	AutoSellSweptItems bool `json:"auto_sell_swept_items"`
 	// Pipeline 策略优先级流水线，按先后顺序流转
-	// 可选值: "push_mainline", "push_side", "sweep_elite", "sweep_highest_main"
+	// 可选值: "push_mainline", "push_side", "sweep_elite"
 	Pipeline []string
 }
 
@@ -74,9 +80,10 @@ func DefaultSweepConfig() SweepConfig {
 		},
 		Sweep: SweepFeatureConfig{
 			Enabled:               true,
-			Pipeline:              []string{"sweep_elite", "sweep_highest_main"},
+			Pipeline:              []string{"sweep_elite"},
 			MaxBatchTimes:         10,
 			PreferPracticeQuickly: false, // 默认为 false 以保障存量测试与原版辅助兼容
+			SellSweptItems:        false,
 		},
 		Mode:                  ModeAutoRecommend,
 		Category:              CategoryMainline,
@@ -86,6 +93,7 @@ func DefaultSweepConfig() SweepConfig {
 		AutoReplenishStamina:  true,
 		MaxReplenishTimes:     10,
 		Pipeline:              nil,
+		SellSweptItems:        false,
 	}
 }
 
@@ -126,6 +134,7 @@ func (c SweepConfig) ToDungeonSweepConfig() DungeonSweepConfig {
 		RequiredPowerPerSweep: 5,
 		PreferPracticeQuickly: c.PreferPracticeQuickly,
 		Pipeline:              c.Pipeline,
+		SellSweptItems:        c.Sweep.SellSweptItems || c.Sweep.AutoSellSweptItems || c.SellSweptItems || c.AutoSellSweptItems,
 	}
 }
 
@@ -141,12 +150,16 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 	if len(cfgs) > 0 {
 		c := cfgs[0]
 		hasSubConfig = c.QuestCycle.Enabled || c.QuestCycle.AutoReplenishStamina || c.QuestCycle.MaxReplenishTimes > 0 ||
-			c.Sweep.Enabled || c.Sweep.MaxBatchTimes > 0 || len(c.Sweep.Pipeline) > 0
+			c.Sweep.Enabled || c.Sweep.MaxBatchTimes > 0 || len(c.Sweep.Pipeline) > 0 ||
+			c.Sweep.SellSweptItems || c.Sweep.AutoSellSweptItems || c.SellSweptItems || c.AutoSellSweptItems
 
 		// 继承外层顶层兼容字段到子功能
 		if hasSubConfig {
 			cfg.QuestCycle = c.QuestCycle
 			cfg.Sweep = c.Sweep
+			if c.SellSweptItems || c.AutoSellSweptItems {
+				cfg.Sweep.SellSweptItems = true
+			}
 		} else {
 			// 若未显式配置子块，从顶层兼容字段继承
 			cfg.QuestCycle.AutoReplenishStamina = c.AutoReplenishStamina
@@ -160,6 +173,9 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				cfg.Sweep.MaxBatchTimes = c.MaxBatchTimes
 			}
 			cfg.Sweep.PreferPracticeQuickly = c.PreferPracticeQuickly
+			if c.SellSweptItems || c.AutoSellSweptItems {
+				cfg.Sweep.SellSweptItems = true
+			}
 			if len(c.Pipeline) > 0 {
 				cfg.Sweep.Pipeline = c.Pipeline
 			}
@@ -171,7 +187,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				if p == "quest_cycle" || p == "push_mainline" || p == "push_side" || p == "quest" {
 					cfg.QuestCycle.Enabled = true
 				}
-				if p == "sweep_elite" || p == "sweep_highest_main" {
+				if p == "sweep_elite" {
 					cfg.Sweep.Enabled = true
 				}
 			}
@@ -186,13 +202,17 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 		cfg.Category = c.Category
 		cfg.Mode = c.Mode
 		cfg.TargetMissionID = c.TargetMissionID
+		cfg.SellSweptItems = cfg.Sweep.SellSweptItems
 	}
 
+	if cfg.Sweep.SellSweptItems || cfg.Sweep.AutoSellSweptItems || cfg.SellSweptItems || cfg.AutoSellSweptItems {
+		cfg.Sweep.SellSweptItems = true
+	}
 	if cfg.Sweep.MaxBatchTimes <= 0 {
 		cfg.Sweep.MaxBatchTimes = 10
 	}
 	if len(cfg.Sweep.Pipeline) == 0 {
-		cfg.Sweep.Pipeline = []string{"sweep_elite", "sweep_highest_main"}
+		cfg.Sweep.Pipeline = []string{"sweep_elite"}
 	}
 
 	return scheduler.NewBaseRoutine(
@@ -291,7 +311,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 
 			// =========================================================================
 			// 功能二：关卡扫荡 (sweep)
-			// 特性：优先扫荡精英 (sweep_elite)，再扫荡最高等级主线 (sweep_highest_main)；
+			// 特性：扫荡精英副本 (sweep_elite)；
 			// 约束：max_batch_times 仅作用于扫荡；prefer_practice_quickly 仅作用于扫荡；
 			// 保护：扫荡阶段不吃体力药，仅消耗自然体力！
 			// =========================================================================
@@ -350,6 +370,67 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 					switch step {
 					case "sweep_elite":
 						// 扫荡精英 (Module 111 英雄/精英副本)
+						initialItemIDs := make(map[int32]bool)
+						if cfg.Sweep.SellSweptItems {
+							packCtx, packCancel := context.WithTimeout(ctx, 3*time.Second)
+							if packPkt, err := session.Call(packCtx, protocol.BuildGetPackItemListPacket(), protocol.ActionIDItemGetPackList); err == nil && packPkt != nil {
+								if pack, pErr := protocol.ParsePackItemListResponse(packPkt.Payload); pErr == nil && pack != nil {
+									for _, it := range pack.PackItems {
+										initialItemIDs[it.PlayerItemID] = true
+									}
+								}
+							}
+							packCancel()
+						}
+
+						sellSweptItems := func() {
+							if !cfg.Sweep.SellSweptItems {
+								return
+							}
+							packCtx, packCancel := context.WithTimeout(ctx, 3*time.Second)
+							packPkt, err := session.Call(packCtx, protocol.BuildGetPackItemListPacket(), protocol.ActionIDItemGetPackList)
+							packCancel()
+							if err != nil || packPkt == nil {
+								return
+							}
+							pack, pErr := protocol.ParsePackItemListResponse(packPkt.Payload)
+							if pErr != nil || pack == nil {
+								return
+							}
+
+							for _, it := range pack.PackItems {
+								if initialItemIDs[it.PlayerItemID] {
+									continue
+								}
+								// 检查道具字典价格：若道具字典明确标明 price <= 0 则不可售卖
+								if dictRepo != nil {
+									if dItem, dErr := dictRepo.GetItem(int(it.ItemID)); dErr == nil && dItem != nil && dItem.Price <= 0 {
+										initialItemIDs[it.PlayerItemID] = true
+										continue
+									}
+								}
+
+								sellPkt, sErr := protocol.BuildSellItemPacket(int16(it.GridID))
+								if sErr != nil {
+									continue
+								}
+								sellCtx, sellCancel := context.WithTimeout(ctx, 3*time.Second)
+								sellResp, callErr := session.Call(sellCtx, sellPkt, protocol.ActionIDItemSell)
+								sellCancel()
+								if callErr == nil && sellResp != nil {
+									if ok, _, _ := protocol.ParseSellItemResponse(sellResp.Payload); ok {
+										initialItemIDs[it.PlayerItemID] = true
+										slog.Info("自动卖出精英副本扫荡物成功",
+											"role_id", session.RoleID(),
+											"player_item_id", it.PlayerItemID,
+											"item_id", it.ItemID,
+											"grid_id", it.GridID,
+										)
+									}
+								}
+							}
+						}
+
 						listCtx, listCancel := context.WithTimeout(ctx, 3*time.Second)
 						listPkt, listErr := session.Call(listCtx, protocol.BuildHeroMissionListPacket(), protocol.ActionHeroMissionList)
 						listCancel()
@@ -418,7 +499,10 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 									)
 									time.Sleep(50 * time.Millisecond)
 								}
+								// 每一类英雄副本扫荡后，若开启卖掉扫荡物则及时卖出
+								sellSweptItems()
 							}
+							sellSweptItems()
 							_ = session.Send(protocol.BuildHeroMissionClosePacket())
 							if !isExplicitPipeline {
 								break sweepLoop
@@ -426,7 +510,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						}
 
 					case "sweep_highest_main":
-						// 扫荡当前角色最高级主线副本 (消耗剩余体力冲级)
+						// 扫荡当前角色最高级主线副本 (显式流水线冲级)
 						resolver := NewMissionResolver(dictRepo)
 						resolved, resErr := resolver.Resolve(cfg.ToDungeonSweepConfig(), state.Level, session.GetStamina())
 						missionID := 43
@@ -666,8 +750,28 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 	)
 }
 
+// SixRealmsConfig 六道轮回挑战与灵件处理策略配置。
+type SixRealmsConfig struct {
+	AutoReset      bool `yaml:"auto_reset" json:"auto_reset"`         // 通关后是否自动消耗每日免费重置次数
+	AutoSellBlue   bool `yaml:"auto_sell_blue" json:"auto_sell_blue"`   // 挑战获胜是否自动出售蓝色灵件
+	AutoSellPurple bool `yaml:"auto_sell_purple" json:"auto_sell_purple"` // 挑战获胜是否自动出售紫色灵件
+}
+
+// DefaultSixRealmsConfig 返回六道轮回默认策略配置。
+func DefaultSixRealmsConfig() SixRealmsConfig {
+	return SixRealmsConfig{
+		AutoReset:      true,
+		AutoSellBlue:   true,
+		AutoSellPurple: false,
+	}
+}
+
 // NewSixRealmsRoutine 构造六道轮回挑战与灵件分解任务。
-func NewSixRealmsRoutine() scheduler.ActivityRoutine {
+func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
+	cfg := DefaultSixRealmsConfig()
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
 	return scheduler.NewBaseRoutine(
 		"six_realms",
 		"dungeon",
@@ -675,7 +779,147 @@ func NewSixRealmsRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行副本任务: 六道轮回爬塔与灵件自动处理")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行副本任务: 六道轮回爬塔与灵件自动处理", "role_id", session.RoleID())
+
+			// 1. 获取当前六道轮回塔面板与进度信息
+			info, err := session.GetTowerInfo(ctx)
+			if err != nil {
+				slog.Warn("获取六道轮回塔信息失败或未开放", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+
+			layerName := protocol.TowerLayerName(info.Layer)
+			slog.Info("六道轮回塔当前状态",
+				"role_id", session.RoleID(),
+				"layer", info.Layer,
+				"layer_name", layerName,
+				"sequence_war", info.SequenceWar,
+				"sequence_max", info.SequenceMax,
+				"bag_num", info.BagNum,
+				"reset_num", info.ResetNum,
+				"reset_ingot", info.ResetIngot,
+			)
+
+			// 2. 检查等级门槛
+			minLevel := protocol.TowerLayerLevelLimit(info.Layer)
+			roleLevel := session.GetPlayerState().Level
+			if roleLevel > 0 && roleLevel < minLevel {
+				slog.Info("未达到当前六道挑战等级门槛，跳过挑战",
+					"role_id", session.RoleID(),
+					"role_level", roleLevel,
+					"required_level", minLevel,
+					"layer", info.Layer,
+				)
+				return nil
+			}
+
+			// 3. 检查灵件背包空间是否已满 (>= 20 为上限预警)
+			if info.BagNum >= 20 {
+				slog.Warn("灵件背包已满，暂停六道挑战以防灵件溢出丢弃", "role_id", session.RoleID(), "bag_num", info.BagNum)
+				return nil
+			}
+
+			// 4. 判断是否需要重置: 如果当前道已全部通关 (SequenceWar > 25)
+			if info.SequenceWar > 25 {
+				if cfg.AutoReset && info.ResetNum > 0 {
+					slog.Info("六道轮回当前道已全通，检测到今日剩余免费重置次数，执行重置",
+						"role_id", session.RoleID(),
+						"reset_num", info.ResetNum,
+					)
+					if jitter != nil {
+						_ = jitter.Wait(ctx)
+					}
+					resetRes, resetErr := session.ResetTowerLayer(ctx)
+					if resetErr != nil || resetRes.Result != protocol.TowerResultSuccess {
+						slog.Warn("六道轮回塔重置失败", "err", resetErr)
+						return nil
+					}
+					slog.Info("六道轮回塔重置成功", "role_id", session.RoleID(), "layer", resetRes.Layer)
+					// 刷新最新进度
+					if newInfo, nErr := session.GetTowerInfo(ctx); nErr == nil {
+						info = newInfo
+					} else {
+						info.SequenceWar = 1
+					}
+				} else {
+					slog.Info("六道轮回当前道今日已通关且无需重置或无免费重置次数，挑战完成",
+						"role_id", session.RoleID(),
+						"layer", info.Layer,
+						"layer_name", layerName,
+					)
+					return nil
+				}
+			}
+
+			// 5. 循环推进挑战未通关层数 (SequenceWar .. 25)
+			for info.SequenceWar <= 25 {
+				select {
+				case <-ctx.Done():
+					slog.Info("六道轮回挑战被外部上下文中断", "role_id", session.RoleID())
+					return ctx.Err()
+				default:
+				}
+
+				slog.Info("正在挑战六道轮回塔关卡",
+					"role_id", session.RoleID(),
+					"layer", info.Layer,
+					"layer_name", protocol.TowerLayerName(info.Layer),
+					"floor", info.SequenceWar,
+				)
+
+				// 自动卖出灵件策略
+				res, chErr := session.ChallengeTower(ctx, info.SequenceWar, cfg.AutoSellBlue, cfg.AutoSellPurple)
+				if chErr != nil {
+					slog.Warn("六道轮回塔挑战请求失败", "floor", info.SequenceWar, "err", chErr)
+					break
+				}
+
+				if res.Result == protocol.TowerResultSuccess {
+					slog.Info("六道轮回塔关卡挑战胜利",
+						"role_id", session.RoleID(),
+						"floor", info.SequenceWar,
+						"gain_exp", res.WarExp,
+						"gain_fame", res.WarFame,
+						"gain_coin", res.WarCoin,
+						"soul_id", res.WarSoulID,
+					)
+					if info.SequenceWar == 25 {
+						slog.Info("恭喜通关六道轮回当前道全部 25 层！",
+							"role_id", session.RoleID(),
+							"layer", info.Layer,
+							"layer_name", protocol.TowerLayerName(info.Layer),
+						)
+						info.SequenceWar = 26
+						break
+					}
+					info.SequenceWar++
+				} else {
+					// 挑战失败或者遭遇限制 (WAR_CD, FULL_BAG, NO_LV 等)
+					switch res.Result {
+					case protocol.TowerResultFullBag:
+						slog.Warn("灵件背包已满，终止六道轮回挑战", "role_id", session.RoleID())
+					case protocol.TowerResultWarCD:
+						slog.Warn("战斗处于冷却中", "role_id", session.RoleID())
+					case protocol.TowerResultFullTimes:
+						slog.Info("今日六道挑战次数已达上限", "role_id", session.RoleID())
+					default:
+						slog.Warn("六道轮回挑战未成功", "role_id", session.RoleID(), "result_code", res.Result)
+					}
+					break
+				}
+
+				if jitter != nil {
+					_ = jitter.Wait(ctx)
+				}
+			}
+
+			slog.Info("六道轮回爬塔任务执行完毕", "role_id", session.RoleID())
 			return nil
 		},
 	)

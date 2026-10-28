@@ -62,8 +62,10 @@ type DungeonSweepConfig struct {
 	RequiredPowerPerSweep int `json:"required_power_per_sweep"`
 	// PreferPracticeQuickly 是否优先使用 Module 25 秒扫荡协议
 	PreferPracticeQuickly bool `json:"prefer_practice_quickly"`
+	// SellSweptItems 扫荡后是否自动出售扫荡物
+	SellSweptItems bool `json:"sell_swept_items"`
 	// Pipeline 策略优先级流水线，按先后顺序流转
-	// 可选值: "push_mainline", "push_side", "sweep_elite", "sweep_highest_main"
+	// 可选值: "push_mainline", "push_side", "sweep_elite"
 	Pipeline []string `json:"pipeline"`
 }
 
@@ -80,6 +82,7 @@ func DefaultDungeonSweepConfig() DungeonSweepConfig {
 		RequiredPowerPerSweep: 5,
 		PreferPracticeQuickly: false,
 		Pipeline:              nil,
+		SellSweptItems:        false,
 	}
 }
 
@@ -99,8 +102,9 @@ func ExpertDungeonSweepConfig(missionID int, maxBatchTimes int) DungeonSweepConf
 		RequiredPowerPerSweep: 5,
 		PreferPracticeQuickly: false,
 		Pipeline: []string{
-			"sweep_highest_main",
+			"sweep_elite",
 		},
+		SellSweptItems: false,
 	}
 }
 

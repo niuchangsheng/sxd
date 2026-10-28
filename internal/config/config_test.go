@@ -51,6 +51,22 @@ func TestConfig_LoadExample(t *testing.T) {
 		t.Errorf("expected herb_garden to be enabled")
 	}
 
+	// 验证魔王试炼配置
+	if !cfg.Scheduler.Routines["beelzebub_trials"] {
+		t.Errorf("expected beelzebub_trials to be enabled")
+	}
+	if cfg.Scheduler.BeelzebubTrials.MinLevel != 0 || !cfg.Scheduler.BeelzebubTrials.AutoMoralAward {
+		t.Errorf("unexpected beelzebub_trials config: %+v", cfg.Scheduler.BeelzebubTrials)
+	}
+
+	// 验证六道轮回配置
+	if !cfg.Scheduler.Routines["six_realms"] {
+		t.Errorf("expected six_realms to be enabled")
+	}
+	if !cfg.Scheduler.SixRealms.AutoReset || !cfg.Scheduler.SixRealms.AutoSellBlue || cfg.Scheduler.SixRealms.AutoSellPurple {
+		t.Errorf("unexpected six_realms config: %+v", cfg.Scheduler.SixRealms)
+	}
+
 	// 验证结缘宝箱每批最多10个配置
 	if cfg.Scheduler.JieYuanBox.MaxBatchSize != 10 {
 		t.Errorf("expected jieyuan_box max_batch_size to be 10, got %d", cfg.Scheduler.JieYuanBox.MaxBatchSize)
@@ -63,6 +79,18 @@ func TestConfig_LoadExample(t *testing.T) {
 	}
 	if awards[0].ItemID != 50 || awards[1].ItemID != 25 || awards[2].ItemID != 42 {
 		t.Errorf("unexpected treasure awards: %+v", awards)
+	}
+
+	// 验证副本扫荡配置: 去掉 sweep_highest_main, 仅保留 sweep_elite, 开启 sell_swept_items
+	if !cfg.Scheduler.Dungeon.Sweep.Enabled {
+		t.Errorf("expected dungeon.sweep to be enabled")
+	}
+	if !cfg.Scheduler.Dungeon.Sweep.SellSweptItems {
+		t.Errorf("expected dungeon.sweep.sell_swept_items to be true")
+	}
+	pipeline := cfg.Scheduler.Dungeon.Sweep.Pipeline
+	if len(pipeline) != 1 || pipeline[0] != "sweep_elite" {
+		t.Errorf("expected sweep pipeline to be [sweep_elite], got %v", pipeline)
 	}
 }
 
@@ -88,6 +116,33 @@ server:
 	if cfg.Scheduler.Jitter.MinSeconds != 1.0 || cfg.Scheduler.Jitter.MaxSeconds != 3.0 {
 		t.Errorf("expected default jitter [1.0, 3.0], got [%v, %v]",
 			cfg.Scheduler.Jitter.MinSeconds, cfg.Scheduler.Jitter.MaxSeconds)
+	}
+	for _, p := range cfg.Scheduler.Dungeon.Pipeline {
+		if p == "sweep_highest_main" {
+			t.Errorf("expected default dungeon pipeline not to contain sweep_highest_main, got %v", cfg.Scheduler.Dungeon.Pipeline)
+		}
+	}
+}
+
+func TestConfig_LoadConfigYamlIfExists(t *testing.T) {
+	configPath := filepath.Join("..", "..", "configs", "config.yaml")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Skip("configs/config.yaml does not exist, skipping")
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("Load configs/config.yaml failed: %v", err)
+	}
+
+	if !cfg.Scheduler.Routines["beelzebub_trials"] {
+		t.Errorf("expected beelzebub_trials routine to be enabled in configs/config.yaml")
+	}
+	if cfg.Scheduler.BeelzebubTrials.MinLevel != 0 {
+		t.Errorf("expected min_level 0, got %d", cfg.Scheduler.BeelzebubTrials.MinLevel)
+	}
+	if !cfg.Scheduler.BeelzebubTrials.AutoMoralAward {
+		t.Errorf("expected auto_moral_award to be true")
 	}
 }
 

@@ -95,8 +95,11 @@ type PlayerState struct {
 	Ingots      int64 `json:"ingots"`
 	StateSource int64 `json:"state_source"`
 	BagCapacity int   `json:"bag_capacity"`
-	TownID      int   `json:"town_id"`
-	Quests      map[uint32]uint32 `json:"quests"`
+	TownID       int               `json:"town_id"`
+	Quests       map[uint32]uint32 `json:"quests"`
+	IsPracticing bool              `json:"is_practicing"`
+	PracticeExp  int64             `json:"practice_exp"`
+	Experience   int64             `json:"experience"`
 }
 
 // RoleSession 代表与游戏服务器建立的长连接角色会话。
@@ -192,6 +195,36 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 			}
 			s.playerMu.Unlock()
 			slog.Info("收到玩家全量任务列表同步", "role_id", s.cfg.RoleID, "total_quests", len(items))
+		}
+	})
+
+	// 注册城镇打坐练功通知监听器 (Module 0, Action 40)
+	s.RegisterHandler(protocol.ActionIDPlayerPracticeNotify, func(pkt *protocol.Packet) {
+		if pkt == nil {
+			return
+		}
+		notify, err := protocol.ParseTownPracticeNotify(pkt.Payload)
+		if err != nil {
+			slog.Debug("解析城镇打坐练功通知失败", "err", err)
+			return
+		}
+		s.playerMu.Lock()
+		defer s.playerMu.Unlock()
+		switch notify.NotifyType {
+		case protocol.PlayerPracticeNotifyStart:
+			s.playerState.IsPracticing = true
+			slog.Info("收到通知: 角色已进入城镇打坐练功状态", "role_id", s.cfg.RoleID)
+		case protocol.PlayerPracticeNotifyUpdate:
+			s.playerState.IsPracticing = true
+			s.playerState.PracticeExp = int64(notify.Exp)
+			slog.Debug("收到通知: 城镇打坐练功经验更新", "role_id", s.cfg.RoleID, "exp", notify.Exp, "super_exp", notify.SuperExp)
+		case protocol.PlayerPracticeNotifyFinished:
+			s.playerState.IsPracticing = false
+			s.playerState.PracticeExp = 0
+			slog.Info("收到通知: 城镇打坐练功已正常结束结算", "role_id", s.cfg.RoleID, "gain_exp", notify.Exp)
+		case protocol.PlayerPracticeNotifyCancel:
+			s.playerState.IsPracticing = false
+			slog.Info("收到通知: 城镇打坐练功已取消/中断", "role_id", s.cfg.RoleID)
 		}
 	})
 
@@ -636,6 +669,18 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 				"ingots", infoRes.Ingots,
 				"stamina", infoRes.Stamina,
 			)
+
+			// 5. 现代版神仙道机制：离线自动打坐，上线后直接结算并领取累积练功经验
+			go func() {
+				select {
+				case <-s.ctx.Done():
+					return
+				case <-time.After(500 * time.Millisecond):
+					if err := s.ClaimTownPracticeExp(s.ctx); err != nil {
+						slog.Debug("上线直接领取打坐经验跳过或无需领取", "role_id", s.RoleID(), "err", err)
+					}
+				}
+			}()
 		}
 	}
 
@@ -674,6 +719,639 @@ func (s *RoleSession) SyncQuests(ctx context.Context) ([]protocol.PlayerQuestIte
 
 	slog.Info("成功同步服务端全量任务列表", "role_id", s.RoleID(), "total_quests", len(items))
 	return items, nil
+}
+
+// StartTownPractice 发起城镇打坐练功请求 (Mod_Player_Base.start_practice, ActionID 0x00000024)。
+func (s *RoleSession) StartTownPractice(ctx context.Context) error {
+	pkt := protocol.BuildPlayerStartPracticePacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	_, err := s.Call(cCtx, pkt, protocol.ActionIDPlayerStartPractice)
+	if err != nil {
+		return fmt.Errorf("start town practice: %w", err)
+	}
+
+	s.playerMu.Lock()
+	s.playerState.IsPracticing = true
+	s.playerMu.Unlock()
+	slog.Info("角色已成功进入普通城镇打坐练功", "role_id", s.RoleID())
+	return nil
+}
+
+// GetTownPracticeData 获取城镇打坐练功实时数据 (Mod_Player_Base.get_practice_data, ActionID 0x00000025)。
+func (s *RoleSession) GetTownPracticeData(ctx context.Context) (*protocol.TownPracticeData, error) {
+	pkt := protocol.BuildPlayerGetPracticeDataPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDPlayerGetPracticeData)
+	if err != nil {
+		return nil, fmt.Errorf("get town practice data: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty town practice data response")
+	}
+
+	data, err := protocol.ParseTownPracticeDataResponse(resp.Payload)
+	if err != nil {
+		return nil, err
+	}
+
+	s.playerMu.Lock()
+	s.playerState.PracticeExp = data.PracticeExp
+	if data.PracticeTime > 0 || data.PracticeExp > 0 {
+		s.playerState.IsPracticing = true
+	}
+	s.playerMu.Unlock()
+
+	return data, nil
+}
+
+// CancelTownPractice 取消/中断当前城镇打坐练功 (Mod_Player_Base.cancel_practice, ActionID 0x00000027)。
+func (s *RoleSession) CancelTownPractice(ctx context.Context) error {
+	pkt := protocol.BuildPlayerCancelPracticePacket(s.LastActionID())
+	if err := s.Send(pkt); err != nil {
+		return fmt.Errorf("cancel town practice: %w", err)
+	}
+
+	s.playerMu.Lock()
+	s.playerState.IsPracticing = false
+	s.playerMu.Unlock()
+	return nil
+}
+
+// SignFinishedTownPractice 结算并领取城镇打坐练功累积经验 (Mod_Player_Base.sign_finished_practice, ActionID 0x00000026)。
+func (s *RoleSession) SignFinishedTownPractice(ctx context.Context) error {
+	pkt := protocol.BuildPlayerSignFinishedPracticePacket(s.LastActionID())
+	if err := s.Send(pkt); err != nil {
+		return fmt.Errorf("sign finished town practice: %w", err)
+	}
+
+	s.playerMu.Lock()
+	s.playerState.IsPracticing = false
+	s.playerState.PracticeExp = 0
+	s.playerMu.Unlock()
+	slog.Info("已触发领取城镇打坐练功累积经验", "role_id", s.RoleID())
+	return nil
+}
+
+// ClaimTownPracticeExp 上线直接结算并领取离线练功经验 (对齐客户端 MapViewBase.onCancelPraceice: 取消练功 + 确认结算)。
+func (s *RoleSession) ClaimTownPracticeExp(ctx context.Context) error {
+	// 0. 先主动查询离线打坐累积的待领取经验与打坐时长
+	if data, err := s.GetTownPracticeData(ctx); err == nil && data != nil {
+		if data.PracticeExp > 0 || data.PracticeTime > 0 {
+			slog.Info("正在结算离线城镇打坐累积经验",
+				"role_id", s.RoleID(),
+				"accumulated_exp", data.PracticeExp,
+				"practice_seconds", data.PracticeTime,
+			)
+		} else {
+			slog.Info("当前离线打坐累积经验为 0 (已领过或暂无待领经验)", "role_id", s.RoleID())
+			return nil
+		}
+	}
+
+	// 1. 发送 cancel_practice (Action 39)
+	_ = s.CancelTownPractice(ctx)
+	// 2. 发送 sign_finished_practice (Action 38)
+	return s.SignFinishedTownPractice(ctx)
+}
+
+// BeelzebubTrialsCheckCanChallenge 检查今日是否可挑战魔王试炼 (Module 57, Action 20)。
+func (s *RoleSession) BeelzebubTrialsCheckCanChallenge(ctx context.Context) (bool, error) {
+	pkt := protocol.BuildBeelzebubTrialsCheckCanChallengePacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsCheckCanChallenge)
+	if err != nil {
+		return false, fmt.Errorf("check beelzebub trials can challenge: %w", err)
+	}
+	if resp == nil {
+		return false, errors.New("empty beelzebub check response")
+	}
+	return protocol.ParseBeelzebubTrialsCheckCanChallengeResponse(resp.Payload)
+}
+
+// BeelzebubTrialsGetCanChallengeList 获取可挑战魔王编号列表 (Module 57, Action 22)。
+func (s *RoleSession) BeelzebubTrialsGetCanChallengeList(ctx context.Context) ([]int32, error) {
+	pkt := protocol.BuildBeelzebubTrialsGetCanChallengeListPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsGetCanChallengeList)
+	if err != nil {
+		return nil, fmt.Errorf("get beelzebub trials challenge list: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty beelzebub challenge list response")
+	}
+	return protocol.ParseBeelzebubTrialsGetCanChallengeListResponse(resp.Payload)
+}
+
+// BeelzebubTrialsOpen 打开魔王试炼面板并获取基础道行与活动信息 (Module 57, Action 1)。
+func (s *RoleSession) BeelzebubTrialsOpen(ctx context.Context) (*protocol.BeelzebubTrialsOpenData, error) {
+	pkt := protocol.BuildBeelzebubTrialsOpenPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsOpen)
+	if err != nil {
+		return nil, fmt.Errorf("open beelzebub trials: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty beelzebub trials open response")
+	}
+	return protocol.ParseBeelzebubTrialsOpenResponse(resp.Payload)
+}
+
+// BeelzebubTrialsCreateTeam 创建指定魔王挑战队伍 (Module 57, Action 4)。
+func (s *RoleSession) BeelzebubTrialsCreateTeam(ctx context.Context, bossID int32, teamType uint8) (uint8, error) {
+	pkt := protocol.BuildBeelzebubTrialsCreateTeamPacket(bossID, teamType, s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsCreateTeam)
+	if err != nil {
+		return 0, fmt.Errorf("create beelzebub trials team: %w", err)
+	}
+	if resp == nil {
+		return 0, errors.New("empty create team response")
+	}
+	return protocol.ParseBeelzebubTrialsCreateTeamResponse(resp.Payload)
+}
+
+// BeelzebubTrialsJoinTeam 加入已有魔王试炼队伍 (Module 57, Action 6)。
+func (s *RoleSession) BeelzebubTrialsJoinTeam(ctx context.Context, teamID int32) (uint8, error) {
+	pkt := protocol.BuildBeelzebubTrialsJoinTeamPacket(teamID, s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsJoinTeam)
+	if err != nil {
+		return 0, fmt.Errorf("join beelzebub trials team: %w", err)
+	}
+	if resp == nil {
+		return 0, errors.New("empty join team response")
+	}
+	return protocol.ParseBeelzebubTrialsJoinTeamResponse(resp.Payload)
+}
+
+// BeelzebubTrialsGetPlayerTeamInfo 获取当前魔王试炼队伍成员状态 (Module 57, Action 3)。
+func (s *RoleSession) BeelzebubTrialsGetPlayerTeamInfo(ctx context.Context) (int32, []protocol.BeelzebubTeamMember, error) {
+	pkt := protocol.BuildBeelzebubTrialsGetPlayerTeamInfoPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo)
+	if err != nil {
+		return 0, nil, fmt.Errorf("get beelzebub trials player team info: %w", err)
+	}
+	if resp == nil {
+		return 0, nil, errors.New("empty player team info response")
+	}
+	return protocol.ParseBeelzebubTrialsPlayerTeamInfoResponse(resp.Payload)
+}
+
+// BeelzebubTrialsGetHelperRoles 获取可调遣助战伙伴/镜像列表 (Module 57, Action 8)。
+func (s *RoleSession) BeelzebubTrialsGetHelperRoles(ctx context.Context) ([]protocol.BeelzebubHelperRole, error) {
+	pkt := protocol.BuildBeelzebubTrialsGetHelperRoleListPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsGetHelperRoleList)
+	if err != nil {
+		return nil, fmt.Errorf("get beelzebub helper roles: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty helper roles response")
+	}
+	return protocol.ParseBeelzebubTrialsHelperRoleListResponse(resp.Payload)
+}
+
+// BeelzebubTrialsChooseHelper 选择助战伙伴填充队伍二号或三号空位 (Module 57, Action 9)。
+func (s *RoleSession) BeelzebubTrialsChooseHelper(ctx context.Context, roleID int32, slot uint8) (uint8, error) {
+	pkt := protocol.BuildBeelzebubTrialsChooseHelperRolePacket(roleID, slot, s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsChooseHelperRole)
+	if err != nil {
+		return 0, fmt.Errorf("choose beelzebub helper role: %w", err)
+	}
+	if resp == nil {
+		return 0, errors.New("empty choose helper response")
+	}
+	return protocol.ParseBeelzebubTrialsChooseHelperRoleResponse(resp.Payload)
+}
+
+// BeelzebubTrialsFight 队长向服务器发起战斗指令 (Module 57, Action 13)。
+func (s *RoleSession) BeelzebubTrialsFight(ctx context.Context) (uint8, error) {
+	pkt := protocol.BuildBeelzebubTrialsFightPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsFight)
+	if err != nil {
+		return 0, fmt.Errorf("fight beelzebub trials: %w", err)
+	}
+	if resp == nil {
+		return 0, errors.New("empty fight response")
+	}
+	return protocol.ParseBeelzebubTrialsFightResponse(resp.Payload)
+}
+
+// BeelzebubTrialsGetWarResult 拉取魔王试炼战报结果与奖励结算 (Module 57, Action 14)。
+func (s *RoleSession) BeelzebubTrialsGetWarResult(ctx context.Context) (*protocol.BeelzebubTrialsWarResult, error) {
+	pkt := protocol.BuildBeelzebubTrialsGetWarResultPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsGetWarResult)
+	if err != nil {
+		return nil, fmt.Errorf("get beelzebub war result: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty war result response")
+	}
+	return protocol.ParseBeelzebubTrialsWarResultResponse(resp.Payload)
+}
+
+// BeelzebubTrialsLeaveWar 退出魔王试炼战斗结算场景 (Module 57, Action 16)。
+func (s *RoleSession) BeelzebubTrialsLeaveWar(ctx context.Context, warID int32) error {
+	pkt := protocol.BuildBeelzebubTrialsLeaveWarPacket(warID, s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	_, _ = s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsLeaveWar)
+	return nil
+}
+
+// BeelzebubTrialsExitTeam 退出或解散当前队伍 (Module 57, Action 7)。
+func (s *RoleSession) BeelzebubTrialsExitTeam(ctx context.Context) error {
+	pkt := protocol.BuildBeelzebubTrialsExitTeamPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	_, _ = s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsExitTeam)
+	return nil
+}
+
+// BeelzebubTrialsOpenMoral 查询当前道行属性与等级奖励信息 (Module 57, Action 23)。
+func (s *RoleSession) BeelzebubTrialsOpenMoral(ctx context.Context) (*protocol.BeelzebubMoralInfo, error) {
+	pkt := protocol.BuildBeelzebubTrialsOpenMoralPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsOpenMoral)
+	if err != nil {
+		return nil, fmt.Errorf("open beelzebub moral: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty open moral response")
+	}
+	return protocol.ParseBeelzebubTrialsOpenMoralResponse(resp.Payload)
+}
+
+// BeelzebubTrialsGetMoralAward 领取指定道行等级奖励 (Module 57, Action 24)。
+func (s *RoleSession) BeelzebubTrialsGetMoralAward(ctx context.Context, level int32) (uint8, error) {
+	pkt := protocol.BuildBeelzebubTrialsGetMoralAwardPacket(level, s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsGetMoralAward)
+	if err != nil {
+		return 0, fmt.Errorf("get beelzebub moral award: %w", err)
+	}
+	if resp == nil {
+		return 0, errors.New("empty moral award response")
+	}
+	return protocol.ParseBeelzebubTrialsGetMoralAwardResponse(resp.Payload)
+}
+
+// BeelzebubTrialsAutoChallenge 全自动执行魔王试炼单挑通关闭环：
+// 1. 检查今日试炼资格
+// 2. 拉取可挑战魔王列表并选定最高难度 (或优先选定 preferBossID)
+// 3. 自建队伍
+// 4. 招募助战镜像补齐队伍
+// 5. 发起战斗并拉取收益
+// 6. 清理离开战场与队伍
+// 7. 领取累积道行等级奖励
+func (s *RoleSession) BeelzebubTrialsAutoChallenge(ctx context.Context, preferBossID int32) (*protocol.BeelzebubTrialsWarResult, error) {
+	// 1. 检查今日挑战资格
+	canChallenge, err := s.BeelzebubTrialsCheckCanChallenge(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("检查魔王试炼挑战状态失败: %w", err)
+	}
+	if !canChallenge {
+		slog.Info("今日魔王试炼挑战次数已用尽，无需重复挑战", "role_id", s.RoleID())
+		return nil, nil
+	}
+
+	// 2. 拉取可挑战魔王列表
+	canList, err := s.BeelzebubTrialsGetCanChallengeList(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取可挑战魔王列表失败: %w", err)
+	}
+	if len(canList) == 0 {
+		slog.Warn("未检测到可挑战的魔王列表，退出魔王试炼", "role_id", s.RoleID())
+		return nil, nil
+	}
+
+	// 选定挑战目标
+	targetBossID := canList[len(canList)-1] // 默认选最高难度
+	if preferBossID > 0 {
+		for _, bid := range canList {
+			if bid == preferBossID {
+				targetBossID = preferBossID
+				break
+			}
+		}
+	}
+	bossName := protocol.BeelzebubTrialsBossName(targetBossID)
+	slog.Info("魔王试炼选定挑战目标", "role_id", s.RoleID(), "boss_id", targetBossID, "boss_name", bossName)
+
+	// 3. 自建队伍
+	cRes, err := s.BeelzebubTrialsCreateTeam(ctx, targetBossID, protocol.BeelzebubTrialsNotLimit)
+	if err != nil {
+		return nil, fmt.Errorf("创建试炼队伍失败: %w", err)
+	}
+	if cRes != protocol.BeelzebubTrialsSuccess {
+		return nil, fmt.Errorf("创建试炼队伍服务端返回失败代码: %d", cRes)
+	}
+
+	// 4. 招募助战镜像补齐队伍
+	helpers, err := s.BeelzebubTrialsGetHelperRoles(ctx)
+	if err != nil {
+		slog.Warn("获取助战伙伴列表异常", "err", err)
+	} else if len(helpers) > 0 {
+		slot := uint8(1)
+		for _, h := range helpers {
+			if slot > 2 {
+				break
+			}
+			if !h.InBody {
+				if _, err := s.BeelzebubTrialsChooseHelper(ctx, h.RoleID, slot); err == nil {
+					slog.Info("已成功招募助战镜像加入队伍", "role_id", s.RoleID(), "slot", slot, "helper_name", h.Name)
+					slot++
+				}
+			}
+		}
+	}
+
+	// 5. 发起战斗
+	fRes, err := s.BeelzebubTrialsFight(ctx)
+	if err != nil {
+		_ = s.BeelzebubTrialsExitTeam(ctx)
+		return nil, fmt.Errorf("发起魔王试炼战斗指令失败: %w", err)
+	}
+	if fRes != protocol.BeelzebubTrialsSuccess {
+		_ = s.BeelzebubTrialsExitTeam(ctx)
+		return nil, fmt.Errorf("发起战斗服务端返回错误代码: %d", fRes)
+	}
+
+	// 6. 获取战斗结果与收益结算
+	warRes, err := s.BeelzebubTrialsGetWarResult(ctx)
+	if err != nil {
+		slog.Warn("拉取战斗结算数据异常", "err", err)
+	} else {
+		slog.Info("魔王试炼战斗结算完成",
+			"role_id", s.RoleID(),
+			"boss_name", bossName,
+			"result", warRes.Result,
+			"award_fame", warRes.AwardFame,
+			"award_coin", warRes.AwardCoin,
+			"award_moral", warRes.AwardMoral,
+		)
+	}
+
+	// 7. 清理离场
+	_ = s.BeelzebubTrialsLeaveWar(ctx, 0)
+	_ = s.BeelzebubTrialsExitTeam(ctx)
+
+	// 8. 检查并领取道行升级奖励
+	if moral, err := s.BeelzebubTrialsOpenMoral(ctx); err == nil && moral != nil {
+		if moral.CanClaim && moral.Level > 0 {
+			if aRes, err := s.BeelzebubTrialsGetMoralAward(ctx, moral.Level); err == nil && aRes == protocol.BeelzebubTrialsSuccess {
+				slog.Info("已成功领取道行等级宝箱奖励", "role_id", s.RoleID(), "moral_lv", moral.Level)
+			}
+		}
+	}
+
+	return warRes, nil
+}
+
+// GetTowerInfo 查询六道轮回塔面板与当前挑战层进度 (Mod_Tower_Base.get_tower_info, ActionID 0x00200000)。
+func (s *RoleSession) GetTowerInfo(ctx context.Context) (*protocol.TowerInfo, error) {
+	pkt := protocol.BuildTowerGetInfoPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDTowerGetInfo)
+	if err != nil {
+		return nil, fmt.Errorf("get tower info: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty tower info response")
+	}
+
+	return protocol.ParseTowerInfoResponse(resp.Payload)
+}
+
+// SellItem 出售背包指定格位物品 (Mod_Item_Base.player_sell_item, ActionID 0x00020049)。
+func (s *RoleSession) SellItem(ctx context.Context, gridID int16) (bool, error) {
+	pkt, err := protocol.BuildSellItemPacket(gridID)
+	if err != nil {
+		return false, fmt.Errorf("build sell item packet: %w", err)
+	}
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDItemSell)
+	if err != nil {
+		return false, fmt.Errorf("sell item grid %d: %w", gridID, err)
+	}
+	if resp == nil {
+		return false, errors.New("empty sell item response")
+	}
+
+	success, _, pErr := protocol.ParseSellItemResponse(resp.Payload)
+	return success, pErr
+}
+
+// ChallengeTower 发起六道轮回塔单层战斗挑战 (Mod_Tower_Base.start_challenge, ActionID 0x00200002)。
+func (s *RoleSession) ChallengeTower(ctx context.Context, warIdx uint8, autoSellL, autoSellZ bool) (*protocol.TowerChallengeResult, error) {
+	pkt := protocol.BuildTowerChallengePacket(warIdx, autoSellL, autoSellZ, s.LastActionID())
+	timeout := 5 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDTowerStartChallenge)
+	if err != nil {
+		return nil, fmt.Errorf("challenge tower: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty tower challenge response")
+	}
+
+	return protocol.ParseTowerChallengeResponse(resp.Payload)
+}
+
+// ResetTowerLayer 重置六道轮回塔层数 (Mod_Tower_Base.reset_layer, ActionID 0x00200003)。
+func (s *RoleSession) ResetTowerLayer(ctx context.Context) (*protocol.TowerResetResult, error) {
+	pkt := protocol.BuildTowerResetPacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDTowerResetLayer)
+	if err != nil {
+		return nil, fmt.Errorf("reset tower layer: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty tower reset response")
+	}
+
+	return protocol.ParseTowerResetResponse(resp.Payload)
+}
+
+// StartTowerAutoChallenge 发起六道轮回自动挑战/爬塔扫荡 (Mod_Tower_Base.start_auto_challenge, ActionID 0x00200004)。
+func (s *RoleSession) StartTowerAutoChallenge(ctx context.Context, autoSellL, autoSellZ bool) error {
+	pkt := protocol.BuildTowerStartAutoChallengePacket(autoSellL, autoSellZ, s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDTowerStartAutoChallenge)
+	if err != nil {
+		return fmt.Errorf("start tower auto challenge: %w", err)
+	}
+	if resp != nil && len(resp.Payload) > 0 {
+		code, _ := protocol.ParseTowerAutoChallengeResponse(resp.Payload)
+		if code != protocol.TowerResultSuccess {
+			return fmt.Errorf("start tower auto challenge failed with code %d", code)
+		}
+	}
+	return nil
+}
+
+// QuicklyTowerAutoChallenge 立即加速秒完成六道轮回自动爬塔 (Mod_Tower_Base.quickly_auto_challenge, ActionID 0x00200007)。
+func (s *RoleSession) QuicklyTowerAutoChallenge(ctx context.Context, autoSellL, autoSellZ bool) error {
+	pkt := protocol.BuildTowerQuicklyAutoChallengePacket(autoSellL, autoSellZ, s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDTowerQuicklyAutoChallenge)
+	if err != nil {
+		return fmt.Errorf("quickly tower auto challenge: %w", err)
+	}
+	if resp != nil && len(resp.Payload) > 0 {
+		code, _ := protocol.ParseTowerAutoChallengeResponse(resp.Payload)
+		if code != protocol.TowerResultSuccess {
+			return fmt.Errorf("quickly tower auto challenge failed with code %d", code)
+		}
+	}
+	return nil
+}
+
+// StopTowerAutoChallenge 停止六道轮回自动爬塔 (Mod_Tower_Base.stop_auto_challenge, ActionID 0x00200005)。
+func (s *RoleSession) StopTowerAutoChallenge(ctx context.Context) error {
+	pkt := protocol.BuildTowerStopAutoChallengePacket(s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	_, err := s.Call(cCtx, pkt, protocol.ActionIDTowerStopAutoChallenge)
+	return err
 }
 
 // Start 启动独立 Goroutine 驱动的网络状态机会话。
@@ -738,7 +1416,8 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 		mod := p.ActionID >> 16
 		if prev := s.lastActionID.Load(); prev != 0 {
 			if (p.ActionID == protocol.ActionIDItemGetPackList && len(p.Payload) == 0) ||
-				(p.ActionID == protocol.ActionIDItemUseGrid && len(p.Payload) == 2) {
+				(p.ActionID == protocol.ActionIDItemUseGrid && len(p.Payload) == 2) ||
+				(p.ActionID == protocol.ActionIDItemSell && len(p.Payload) == 2) {
 				cloned := make([]byte, len(p.Payload)+4)
 				copy(cloned, p.Payload)
 				binary.BigEndian.PutUint32(cloned[len(p.Payload):], prev)
@@ -1205,6 +1884,172 @@ func runMockGameServer(conn net.Conn) {
 				NewRank: 5,
 			})
 			_ = protocol.WritePacket(conn, resPkt)
+
+		case protocol.ActionIDPlayerStartPractice:
+			// 响应城镇打坐开始
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerStartPractice, []byte{}))
+
+		case protocol.ActionIDPlayerGetPracticeData:
+			// 响应城镇打坐练功数据查询
+			data := protocol.TownPracticeData{
+				PracticeTime:         1800,
+				PracticeExp:          250000,
+				PracticeSpeedNum:     24,
+				PracticeExpOne:       10000,
+				SuperTownPracticeExp: 2000,
+			}
+			resPkt, _ := protocol.BuildTownPracticeDataResponsePacket(data)
+			_ = protocol.WritePacket(conn, resPkt)
+
+		case protocol.ActionIDPlayerCancelPractice:
+			// 响应城镇打坐取消
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerCancelPractice, []byte{}))
+
+		case protocol.ActionIDPlayerSignFinishedPractice:
+			// 响应城镇打坐结束并结算经验
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerSignFinishedPractice, []byte{}))
+
+		case protocol.ActionIDTowerGetInfo:
+			// 响应六道轮回塔面板查询 (SequenceMax=25, Layer=1, SequenceWar=1, BagNum=2, ResetNum=1, ResetIngot=0, HideID=0, HighStone=50)
+			tw := protocol.NewWriter()
+			tw.WriteUint8(25) // SequenceMax
+			tw.WriteUint8(1)  // Layer
+			tw.WriteUint8(1)  // SequenceWar
+			tw.WriteUint8(2)  // BagNum
+			tw.WriteUint8(1)  // ResetNum
+			tw.WriteUint16(0) // ResetIngot
+			tw.WriteUint8(0)  // HideID
+			tw.WriteInt32(50) // HighStone
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTowerGetInfo, tw.Bytes()))
+
+		case protocol.ActionIDTowerStartChallenge:
+			// 响应六道轮回塔单关挑战成功
+			cw := protocol.NewWriter()
+			cw.WriteUint8(protocol.TowerResultSuccess) // Result: SUCCESS
+			cw.WriteInt32(1001)                       // WarSoulID
+			cw.WriteInt32(300000)                     // WarExp
+			cw.WriteInt32(300)                        // WarFame
+			cw.WriteInt32(50000)                      // WarCoin
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTowerStartChallenge, cw.Bytes()))
+
+		case protocol.ActionIDTowerResetLayer:
+			// 响应六道轮回重置
+			rw := protocol.NewWriter()
+			rw.WriteUint8(protocol.TowerResultSuccess) // Result
+			rw.WriteUint8(1)                          // Layer
+			rw.WriteUint16(50)                         // ResetIngot
+			rw.WriteUint8(0)                          // ResetNum
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTowerResetLayer, rw.Bytes()))
+
+		case protocol.ActionIDTowerStartAutoChallenge:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTowerStartAutoChallenge, []byte{protocol.TowerResultSuccess}))
+
+		case protocol.ActionIDTowerQuicklyAutoChallenge:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTowerQuicklyAutoChallenge, []byte{protocol.TowerResultSuccess}))
+
+		case protocol.ActionIDTowerStopAutoChallenge:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTowerStopAutoChallenge, []byte{}))
+
+		case protocol.ActionIDBeelzebubTrialsCheckCanChallenge:
+			// 响应魔王试炼可挑战检查
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsCheckCanChallenge, []byte{protocol.BeelzebubTrialsSuccess}))
+
+		case protocol.ActionIDBeelzebubTrialsGetCanChallengeList:
+			// 响应可挑战魔王列表: 3个魔王 (1, 71, 72: 魔掌门神识)
+			bw := protocol.NewWriter()
+			bw.WriteUint16(3)
+			bw.WriteInt32(1)
+			bw.WriteInt32(71)
+			bw.WriteInt32(72)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetCanChallengeList, bw.Bytes()))
+
+		case protocol.ActionIDBeelzebubTrialsOpen:
+			// 响应魔王试炼主面板
+			ow := protocol.NewWriter()
+			ow.WriteUint16(0) // 0 teams
+			ow.WriteInt32(0)  // int32
+			ow.WriteUint16(0) // 0 bosses in list
+			ow.WriteInt32(5000) // moralExp
+			ow.WriteInt32(3)    // moralLv
+			ow.WriteInt32(1)    // bGet (canClaim)
+			ow.WriteUint8(protocol.BeelzebubTrialsOnActivity)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsOpen, ow.Bytes()))
+
+		case protocol.ActionIDBeelzebubTrialsCreateTeam:
+			// 响应创建队伍成功
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsCreateTeam, []byte{protocol.BeelzebubTrialsSuccess}))
+
+		case protocol.ActionIDBeelzebubTrialsJoinTeam:
+			// 响应加入队伍成功
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsJoinTeam, []byte{protocol.BeelzebubTrialsSuccess}))
+
+		case protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo:
+			// 响应队伍成员信息 (队长1人)
+			tiw := protocol.NewWriter()
+			tiw.WriteInt32(1001) // leader ID
+			tiw.WriteUint16(1)   // 1 member
+			tiw.WriteInt32(1001) // playerID
+			tiw.WriteString("大侠")
+			tiw.WriteString("主角")
+			tiw.WriteInt16(120)
+			tiw.WriteInt32(0)
+			tiw.WriteInt32(0)
+			tiw.WriteInt32(0)
+			tiw.WriteString("")
+			tiw.WriteInt16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo, tiw.Bytes()))
+
+		case protocol.ActionIDBeelzebubTrialsGetHelperRoleList:
+			// 响应助战伙伴列表 (2个助战镜像)
+			hw := protocol.NewWriter()
+			hw.WriteUint16(2)
+			hw.WriteInt32(501)
+			hw.WriteString("巨灵神镜像")
+			hw.WriteInt32(110)
+			hw.WriteInt32(1)
+			hw.WriteUint8(protocol.BeelzebubTrialsNoDeploy)
+			hw.WriteInt16(0)
+
+			hw.WriteInt32(502)
+			hw.WriteString("杨戬镜像")
+			hw.WriteInt32(115)
+			hw.WriteInt32(2)
+			hw.WriteUint8(protocol.BeelzebubTrialsNoDeploy)
+			hw.WriteInt16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetHelperRoleList, hw.Bytes()))
+
+		case protocol.ActionIDBeelzebubTrialsChooseHelperRole:
+			// 响应选择助战成功
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsChooseHelperRole, []byte{protocol.BeelzebubTrialsSuccess}))
+
+		case protocol.ActionIDBeelzebubTrialsFight:
+			// 响应发起战斗成功
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsFight, []byte{protocol.BeelzebubTrialsSuccess}))
+
+		case protocol.ActionIDBeelzebubTrialsGetWarResult:
+			// 响应战斗结算 (击败魔王，奖励声望2000，铜钱100万，道行500，经验20万)
+			ww := protocol.NewWriter()
+			ww.WriteUint8(protocol.BeelzebubTrialsSuccess) // warResult
+			ww.WriteInt32(0)                              // placeholder
+			ww.WriteInt32(0)                              // placeholder
+			ww.WriteUint16(0)                             // 0 war frames
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetWarResult, ww.Bytes()))
+
+		case protocol.ActionIDBeelzebubTrialsLeaveWar:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsLeaveWar, []byte{}))
+
+		case protocol.ActionIDBeelzebubTrialsExitTeam:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsExitTeam, []byte{protocol.BeelzebubTrialsSuccess}))
+
+		case protocol.ActionIDBeelzebubTrialsOpenMoral:
+			mw := protocol.NewWriter()
+			mw.WriteInt32(6000) // exp
+			mw.WriteInt32(2)    // lv
+			mw.WriteInt32(1)    // bGet
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsOpenMoral, mw.Bytes()))
+
+		case protocol.ActionIDBeelzebubTrialsGetMoralAward:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetMoralAward, []byte{protocol.BeelzebubTrialsSuccess}))
 		}
 	}
 }

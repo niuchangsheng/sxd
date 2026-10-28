@@ -111,3 +111,40 @@ func TestItemProtocol_UseGridItem(t *testing.T) {
 		t.Error("expected error for empty payload")
 	}
 }
+
+func TestItemProtocol_SellItem(t *testing.T) {
+	pkt, err := protocol.BuildSellItemPacket(8)
+	if err != nil {
+		t.Fatalf("build sell item packet failed: %v", err)
+	}
+	if pkt.ActionID != protocol.ActionIDItemSell {
+		t.Errorf("expected action ID 0x%08X, got 0x%08X", protocol.ActionIDItemSell, pkt.ActionID)
+	}
+	if len(pkt.Payload) != 2 || pkt.Payload[0] != 0 || pkt.Payload[1] != 8 {
+		t.Errorf("unexpected payload: %v", pkt.Payload)
+	}
+
+	// 验证成功响应 (20)
+	ok, code, err := protocol.ParseSellItemResponse([]byte{20})
+	if err != nil || !ok || code != 20 {
+		t.Errorf("expected success with 20, got ok=%v, code=%d, err=%v", ok, code, err)
+	}
+
+	// 验证成功响应 (0)
+	ok, code, err = protocol.ParseSellItemResponse([]byte{0})
+	if err != nil || !ok || code != 0 {
+		t.Errorf("expected success with 0, got ok=%v, code=%d, err=%v", ok, code, err)
+	}
+
+	// 验证失败响应 (1)
+	ok, code, err = protocol.ParseSellItemResponse([]byte{1})
+	if err != nil || ok || code != 1 {
+		t.Errorf("expected failure with 1, got ok=%v, code=%d, err=%v", ok, code, err)
+	}
+
+	// 验证超短响应
+	_, _, err = protocol.ParseSellItemResponse([]byte{})
+	if err == nil {
+		t.Error("expected error for empty payload")
+	}
+}

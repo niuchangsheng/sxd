@@ -265,6 +265,10 @@ func run(ctx context.Context, args []string) error {
 		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
 		cfg.Scheduler.Dungeon.Sweep.Enabled ||
 		cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes > 0 ||
+		cfg.Scheduler.Dungeon.Sweep.SellSweptItems ||
+		cfg.Scheduler.Dungeon.Sweep.AutoSellSweptItems ||
+		cfg.Scheduler.Dungeon.SellSweptItems ||
+		cfg.Scheduler.Dungeon.AutoSellSweptItems ||
 		len(cfg.Scheduler.Dungeon.Sweep.Pipeline) > 0
 	// 1. 剧情推图配置 (quest_cycle)
 	if hasSubDungeon {
@@ -282,12 +286,14 @@ func run(ctx context.Context, args []string) error {
 		dCfg.Sweep.Pipeline = cfg.Scheduler.Dungeon.Sweep.Pipeline
 		dCfg.Sweep.MaxBatchTimes = cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes
 		dCfg.Sweep.PreferPracticeQuickly = cfg.Scheduler.Dungeon.Sweep.PreferPracticeQuickly
+		dCfg.Sweep.SellSweptItems = cfg.Scheduler.Dungeon.Sweep.SellSweptItems || cfg.Scheduler.Dungeon.Sweep.AutoSellSweptItems || cfg.Scheduler.Dungeon.SellSweptItems || cfg.Scheduler.Dungeon.AutoSellSweptItems
 	} else {
 		if len(cfg.Scheduler.Dungeon.Pipeline) > 0 {
 			dCfg.Sweep.Pipeline = cfg.Scheduler.Dungeon.Pipeline
 		}
 		dCfg.Sweep.PreferPracticeQuickly = cfg.Scheduler.Dungeon.PreferPracticeQuickly
 		dCfg.Sweep.MaxBatchTimes = cfg.Scheduler.Dungeon.MaxBatchTimes
+		dCfg.Sweep.SellSweptItems = cfg.Scheduler.Dungeon.SellSweptItems || cfg.Scheduler.Dungeon.AutoSellSweptItems
 	}
 
 	dCfg.Pipeline = cfg.Scheduler.Dungeon.Pipeline
@@ -295,6 +301,7 @@ func run(ctx context.Context, args []string) error {
 	dCfg.MaxBatchTimes = cfg.Scheduler.Dungeon.MaxBatchTimes
 	dCfg.AutoReplenishStamina = cfg.Scheduler.Dungeon.AutoReplenishStamina
 	dCfg.MaxReplenishTimes = cfg.Scheduler.Dungeon.MaxReplenishTimes
+	dCfg.SellSweptItems = dCfg.Sweep.SellSweptItems
 	factory.SetDungeonConfig(dCfg)
 
 	// 结缘宝箱配置 (每批最多10个)
@@ -312,6 +319,26 @@ func run(ctx context.Context, args []string) error {
 		MaxDrawTimes: cfg.Scheduler.TreasureHouse.MaxDrawTimes,
 	}
 	factory.SetTreasureHouseConfig(thCfg)
+
+	// 魔王试炼自动化策略配置
+	btCfg := dungeon.DefaultBeelzebubTrialsConfig()
+	if cfg.Scheduler.BeelzebubTrials.PreferBossID > 0 {
+		btCfg.PreferBossID = cfg.Scheduler.BeelzebubTrials.PreferBossID
+	}
+	if cfg.Scheduler.BeelzebubTrials.MinLevel > 0 {
+		btCfg.MinLevel = cfg.Scheduler.BeelzebubTrials.MinLevel
+	}
+	btCfg.AutoMoralAward = cfg.Scheduler.BeelzebubTrials.AutoMoralAward
+	factory.SetBeelzebubTrialsConfig(btCfg)
+
+	// 六道轮回挑战与灵件策略配置
+	srCfg := dungeon.DefaultSixRealmsConfig()
+	if cfg.Scheduler.SixRealms.AutoReset || cfg.Scheduler.SixRealms.AutoSellBlue || cfg.Scheduler.SixRealms.AutoSellPurple {
+		srCfg.AutoReset = cfg.Scheduler.SixRealms.AutoReset
+		srCfg.AutoSellBlue = cfg.Scheduler.SixRealms.AutoSellBlue
+		srCfg.AutoSellPurple = cfg.Scheduler.SixRealms.AutoSellPurple
+	}
+	factory.SetSixRealmsConfig(srCfg)
 
 	routineMgr := &routineManager{
 		enabledMap: make(map[string]bool),

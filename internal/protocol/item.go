@@ -219,3 +219,23 @@ func ParseUseGridItemResponse(payload []byte) (bool, uint8, error) {
 	isSuccess := resultCode == ItemActionSuccess || resultCode == ItemSuccess
 	return isSuccess, resultCode, nil
 }
+
+// BuildSellItemPacket 构造出售背包指定格位物品封包 (Mod 2, Act 73)。
+func BuildSellItemPacket(gridID int16) (*Packet, error) {
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.BigEndian, gridID); err != nil {
+		return nil, fmt.Errorf("protocol/item: encode grid_id failed: %w", err)
+	}
+	return NewPacket(ActionIDItemSell, buf.Bytes()), nil
+}
+
+// ParseSellItemResponse 解析出售物品应答 (Mod 2, Act 73)。
+func ParseSellItemResponse(payload []byte) (bool, uint8, error) {
+	if len(payload) < 1 {
+		return false, 0, ErrItemPayloadShort
+	}
+	resultCode := payload[0]
+	// 神仙道业务中 20 为 ACTION_SUCCESS，0 为常规 SUCCESS
+	isSuccess := resultCode == ItemActionSuccess || resultCode == ItemSuccess
+	return isSuccess, resultCode, nil
+}

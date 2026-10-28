@@ -158,7 +158,9 @@ func TestDungeonSweep_NormalExecution(t *testing.T) {
 		t.Logf("本地未找到 Pieb.db，将使用降级关卡模式测试: %v", err)
 	}
 
-	routine := dungeon.NewDungeonSweepRoutine(dictRepo)
+	routine := dungeon.NewDungeonSweepRoutine(dictRepo, dungeon.SweepConfig{
+		Pipeline: []string{"sweep_highest_main"},
+	})
 	ctx := context.Background()
 
 	err = routine.Execute(ctx, sess, nil)
@@ -203,7 +205,9 @@ func TestDungeonSweep_StaminaDepleted_SmartCooling(t *testing.T) {
 
 	startMockDungeonServer(srvConn, nil)
 
-	routine := dungeon.NewDungeonSweepRoutine(nil)
+	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		Pipeline: []string{"sweep_elite"},
+	})
 	ctx := context.Background()
 
 	err := routine.Execute(ctx, sess, nil)
@@ -222,7 +226,9 @@ func TestDungeonSweep_BagFull(t *testing.T) {
 		ps.BagCapacity = 0
 	})
 
-	routine := dungeon.NewDungeonSweepRoutine(nil)
+	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		Pipeline: []string{"sweep_elite"},
+	})
 	ctx := context.Background()
 
 	err := routine.Execute(ctx, sess, nil)
@@ -243,6 +249,7 @@ func TestDungeonSweep_201Stamina_MultiBatchDepletion(t *testing.T) {
 
 	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
 		MaxBatchTimes: 10,
+		Pipeline:      []string{"sweep_highest_main"},
 	})
 	ctx := context.Background()
 
@@ -302,6 +309,7 @@ func TestDungeonSweep_CustomBatchAndExactDeduction(t *testing.T) {
 
 	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
 		MaxBatchTimes: 3,
+		Pipeline:      []string{"sweep_highest_main"},
 	})
 	ctx := context.Background()
 
@@ -456,7 +464,9 @@ func TestDungeonSweep_ServerResponse_RewardSync(t *testing.T) {
 		return false
 	})
 
-	routine := dungeon.NewDungeonSweepRoutine(nil)
+	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		Pipeline: []string{"sweep_highest_main"},
+	})
 	err := routine.Execute(context.Background(), sess, nil)
 	if err != nil {
 		t.Fatalf("扫荡执行失败: %v", err)
@@ -495,7 +505,9 @@ func TestDungeonSweep_ServerRejection_StaminaDepleted(t *testing.T) {
 		return false
 	})
 
-	routine := dungeon.NewDungeonSweepRoutine(nil)
+	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		Pipeline: []string{"sweep_highest_main"},
+	})
 	err := routine.Execute(context.Background(), sess, nil)
 	if !errors.Is(err, scheduler.ErrStaminaDepleted) {
 		t.Fatalf("期望服务端拒绝时触发 ErrStaminaDepleted, 实际返回: %v", err)
@@ -524,7 +536,9 @@ func TestDungeonSweep_ServerRejection_BagFull(t *testing.T) {
 		return false
 	})
 
-	routine := dungeon.NewDungeonSweepRoutine(nil)
+	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		Pipeline: []string{"sweep_highest_main"},
+	})
 	err := routine.Execute(context.Background(), sess, nil)
 	if !errors.Is(err, scheduler.ErrBagFull) {
 		t.Fatalf("期望服务端拒绝时触发 ErrBagFull, 实际返回: %v", err)
@@ -591,7 +605,9 @@ func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
 		return false
 	})
 
-	routine := dungeon.NewDungeonSweepRoutine(nil)
+	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		Pipeline: []string{"sweep_elite"},
+	})
 	err := routine.Execute(context.Background(), sess, nil)
 	if err != nil {
 		t.Fatalf("执行英雄副本扫荡失败: %v", err)
@@ -658,11 +674,17 @@ func TestDungeonSweep_Module25_PracticeQuickly(t *testing.T) {
 	cfg := dungeon.SweepConfig{
 		MaxBatchTimes:         2,
 		PreferPracticeQuickly: true,
+		Pipeline:              []string{"sweep_highest_main"},
 	}
 	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
 	err := routine.Execute(context.Background(), sess, nil)
 	if err != nil {
 		t.Fatalf("执行 Module 25 秒扫荡失败: %v", err)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for (m25StartCount.Load() < 2 || m25QuicklyCount.Load() < 2) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	if m25StartCount.Load() != 2 {
@@ -720,6 +742,7 @@ func TestDungeonSweep_Module25_FallbackToLegacy(t *testing.T) {
 	cfg := dungeon.SweepConfig{
 		MaxBatchTimes:         1,
 		PreferPracticeQuickly: true,
+		Pipeline:              []string{"sweep_highest_main"},
 	}
 	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
 	err := routine.Execute(context.Background(), sess, nil)
@@ -762,6 +785,7 @@ func TestDungeonSweep_SemanticCoolingOff_Module25(t *testing.T) {
 		cfg := dungeon.SweepConfig{
 			MaxBatchTimes:         1,
 			PreferPracticeQuickly: true,
+			Pipeline:              []string{"sweep_highest_main"},
 		}
 		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
 		err := routine.Execute(context.Background(), sess, nil)
@@ -791,6 +815,7 @@ func TestDungeonSweep_SemanticCoolingOff_Module25(t *testing.T) {
 		cfg := dungeon.SweepConfig{
 			MaxBatchTimes:         1,
 			PreferPracticeQuickly: true,
+			Pipeline:              []string{"sweep_highest_main"},
 		}
 		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
 		err := routine.Execute(context.Background(), sess, nil)
@@ -1335,6 +1360,272 @@ func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
 	if currentIdx != len(expectedOrder) {
 		t.Fatalf("实际执行事件时序未满足完整闭环期望, 完成进度 %d/%d. 实际事件列表: %v", currentIdx, len(expectedOrder), events)
 	}
+}
+
+func TestSixRealmsRoutine_ExecutionFlow(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	var sequenceWar atomic.Int32
+	sequenceWar.Store(24)
+	var resetCount atomic.Int32
+	resetCount.Store(1)
+
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDTowerGetInfo:
+				w := protocol.NewWriter()
+				w.WriteUint8(25)                     // SequenceMax
+				w.WriteUint8(1)                      // Layer: 1 (地狱道)
+				w.WriteUint8(uint8(sequenceWar.Load())) // SequenceWar
+				w.WriteUint8(5)                      // BagNum
+				w.WriteUint8(uint8(resetCount.Load())) // ResetNum
+				w.WriteUint16(0)                     // ResetIngot
+				w.WriteUint8(0)                      // HideID
+				w.WriteInt32(20)                     // HighStone
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerGetInfo, w.Bytes()))
+
+			case protocol.ActionIDTowerStartChallenge:
+				sequenceWar.Add(1)
+				cw := protocol.NewWriter()
+				cw.WriteUint8(protocol.TowerResultSuccess)
+				cw.WriteInt32(1001)   // SoulID
+				cw.WriteInt32(100000) // Exp
+				cw.WriteInt32(200)    // Fame
+				cw.WriteInt32(10000)  // Coin
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerStartChallenge, cw.Bytes()))
+
+			case protocol.ActionIDTowerResetLayer:
+				resetCount.Store(0)
+				sequenceWar.Store(1)
+				rw := protocol.NewWriter()
+				rw.WriteUint8(protocol.TowerResultSuccess)
+				rw.WriteUint8(1)
+				rw.WriteUint16(50)
+				rw.WriteUint8(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerResetLayer, rw.Bytes()))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:            "role-six-realms-test",
+		RoleName:          "六道测试玩家",
+		ServerAddr:        "mock-pipe",
+		HeartbeatInterval: 1 * time.Second,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error {
+			return nil
+		},
+	})
+	_ = session.Start(context.Background())
+	defer session.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	routine := dungeon.NewSixRealmsRoutine()
+	if routine.Name() != "six_realms" {
+		t.Fatalf("unexpected routine identity: name=%s", routine.Name())
+	}
+
+	// 执行六道轮回 Routine
+	err := routine.Execute(context.Background(), session, nil)
+	if err != nil {
+		t.Fatalf("SixRealmsRoutine.Execute failed: %v", err)
+	}
+
+	if cur := sequenceWar.Load(); cur <= 25 {
+		t.Errorf("expected sequenceWar to advance past 25, got %d", cur)
+	}
+}
+
+func TestDungeonSweep_SweepElite_SellSweptItems(t *testing.T) {
+	t.Run("SellSweptItems_Enabled", func(t *testing.T) {
+		sess, srvConn := createTestSession(t, 25)
+		defer sess.Close()
+		defer srvConn.Close()
+
+		var heroSweepCount atomic.Int32
+		var soldGrids []int16
+		var soldMu sync.Mutex
+		var getPackCount atomic.Int32
+
+		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+			switch pkt.ActionID {
+			case protocol.ActionHeroMissionList:
+				w := protocol.NewWriter()
+				w.WriteUint32(0)
+				w.WriteUint8(1)
+				w.WriteUint32(5)
+				w.WriteUint16(0)
+				w.WriteUint16(1)
+				w.WriteUint32(1001)
+				w.WriteUint16(43)
+				w.WriteUint8(1)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+				return true
+
+			case protocol.ActionHeroMissionSelect:
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
+				return true
+
+			case protocol.ActionHeroMissionSweep:
+				heroSweepCount.Add(1)
+				w := protocol.NewWriter()
+				w.WriteBytes([]byte{0x00, 0x00, 0x01})
+				w.WriteUint32(1001)
+				w.WriteUint16(43)
+				w.WriteUint8(1)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+				return true
+
+			case protocol.ActionHeroMissionQuickFinish, protocol.ActionHeroMissionClose:
+				return true
+
+			case protocol.ActionIDItemGetPackList:
+				c := getPackCount.Add(1)
+				buf := new(bytes.Buffer)
+				_ = binary.Write(buf, binary.BigEndian, int16(30))
+				_ = binary.Write(buf, binary.BigEndian, int32(28))
+
+				if c == 1 {
+					// 初始背包：仅有格位 1 的初始包子
+					_ = binary.Write(buf, binary.BigEndian, uint16(1))
+					_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+						PlayerItemID: 10001,
+						ItemID:       protocol.ItemIDSteamedBun,
+						GridID:       1,
+					})
+				} else {
+					// 扫荡后背包：出现格位 2 的降魔武器扫荡物 (ItemID 54)
+					_ = binary.Write(buf, binary.BigEndian, uint16(2))
+					_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+						PlayerItemID: 10001,
+						ItemID:       protocol.ItemIDSteamedBun,
+						GridID:       1,
+					})
+					_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+						PlayerItemID: 20002,
+						ItemID:       54,
+						GridID:       2,
+					})
+				}
+				_ = binary.Write(buf, binary.BigEndian, int16(10))
+				_ = binary.Write(buf, binary.BigEndian, uint16(0))
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
+				return true
+
+			case protocol.ActionIDItemSell:
+				gridID := int16(binary.BigEndian.Uint16(pkt.Payload[:2]))
+				soldMu.Lock()
+				soldGrids = append(soldGrids, gridID)
+				soldMu.Unlock()
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemSell, []byte{protocol.ItemActionSuccess}))
+				return true
+			}
+			return false
+		})
+
+		cfg := dungeon.SweepConfig{
+			MaxBatchTimes: 5,
+			Sweep: dungeon.SweepFeatureConfig{
+				Enabled:        true,
+				Pipeline:       []string{"sweep_elite"},
+				SellSweptItems: true,
+			},
+		}
+		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+		err := routine.Execute(context.Background(), sess, nil)
+		if err != nil {
+			t.Fatalf("执行英雄副本扫荡失败: %v", err)
+		}
+
+		if heroSweepCount.Load() != 1 {
+			t.Errorf("期望扫荡 1 次, 实际 %d 次", heroSweepCount.Load())
+		}
+
+		soldMu.Lock()
+		defer soldMu.Unlock()
+		if len(soldGrids) != 1 || soldGrids[0] != 2 {
+			t.Errorf("期望自动售出格位 2 的扫荡物, 实际售出格位: %v", soldGrids)
+		}
+	})
+
+	t.Run("SellSweptItems_Disabled", func(t *testing.T) {
+		sess, srvConn := createTestSession(t, 25)
+		defer sess.Close()
+		defer srvConn.Close()
+
+		var soldCount atomic.Int32
+
+		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+			switch pkt.ActionID {
+			case protocol.ActionHeroMissionList:
+				w := protocol.NewWriter()
+				w.WriteUint32(0)
+				w.WriteUint8(1)
+				w.WriteUint32(5)
+				w.WriteUint16(0)
+				w.WriteUint16(1)
+				w.WriteUint32(1001)
+				w.WriteUint16(43)
+				w.WriteUint8(1)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+				return true
+
+			case protocol.ActionHeroMissionSelect:
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
+				return true
+
+			case protocol.ActionHeroMissionSweep:
+				w := protocol.NewWriter()
+				w.WriteBytes([]byte{0x00, 0x00, 0x01})
+				w.WriteUint32(1001)
+				w.WriteUint16(43)
+				w.WriteUint8(1)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+				return true
+
+			case protocol.ActionHeroMissionQuickFinish, protocol.ActionHeroMissionClose:
+				return true
+
+			case protocol.ActionIDItemSell:
+				soldCount.Add(1)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemSell, []byte{protocol.ItemActionSuccess}))
+				return true
+			}
+			return false
+		})
+
+		cfg := dungeon.SweepConfig{
+			MaxBatchTimes: 5,
+			Sweep: dungeon.SweepFeatureConfig{
+				Enabled:        true,
+				Pipeline:       []string{"sweep_elite"},
+				SellSweptItems: false,
+			},
+		}
+		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+		err := routine.Execute(context.Background(), sess, nil)
+		if err != nil {
+			t.Fatalf("执行英雄副本扫荡失败: %v", err)
+		}
+
+		if soldCount.Load() != 0 {
+			t.Errorf("未开启卖出扫荡物时, 期望售出 0 次, 实际售出 %d 次", soldCount.Load())
+		}
+	})
 }
 
 

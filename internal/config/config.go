@@ -53,14 +53,33 @@ type RoleConfig struct {
 
 // SchedulerConfig 任务调度器与防封配置
 type SchedulerConfig struct {
-	Jitter        JitterConfig           `yaml:"jitter"`
-	Preset        string                 `yaml:"preset"`
-	CronTimes     []string               `yaml:"cron_times"`
-	Routines      map[string]bool        `yaml:"routines"`
-	Dungeon       DungeonConfig          `yaml:"dungeon"`
-	JieYuanBox    JieYuanBoxConfig       `yaml:"jieyuan_box"`
-	TreasureHouse TreasureHouseConfig    `yaml:"treasure_house"`
-	Expert        map[string]interface{} `yaml:"expert"`
+	Jitter          JitterConfig           `yaml:"jitter"`
+	Preset          string                 `yaml:"preset"`
+	CronTimes       []string               `yaml:"cron_times"`
+	Routines        map[string]bool        `yaml:"routines"`
+	Dungeon         DungeonConfig          `yaml:"dungeon"`
+	SixRealms       SixRealmsConfig        `yaml:"six_realms"`
+	BeelzebubTrials BeelzebubTrialsConfig  `yaml:"beelzebub_trials"`
+	JieYuanBox      JieYuanBoxConfig       `yaml:"jieyuan_box"`
+	TreasureHouse   TreasureHouseConfig    `yaml:"treasure_house"`
+	Expert          map[string]interface{} `yaml:"expert"`
+}
+
+// SixRealmsConfig 六道轮回挑战与灵件配置
+type SixRealmsConfig struct {
+	AutoReset      bool `yaml:"auto_reset"`       // 当前道通关后是否自动消耗免费次数重置 (默认 true)
+	AutoSellBlue   bool `yaml:"auto_sell_blue"`   // 挑战获胜时是否自动卖出蓝色灵件 (默认 true)
+	AutoSellPurple bool `yaml:"auto_sell_purple"` // 挑战获胜时是否自动卖出紫色灵件 (默认 false)
+}
+
+// BeelzebubTrialsConfig 魔王试炼自动化策略配置
+type BeelzebubTrialsConfig struct {
+	// PreferBossID 优先挑战的魔王编号 (0 表示自动选择最高难度魔王)
+	PreferBossID int32 `yaml:"prefer_boss_id"`
+	// AutoMoralAward 是否自动领取道行等级宝箱奖励 (默认 true)
+	AutoMoralAward bool `yaml:"auto_moral_award"`
+	// MinLevel 开启等级门槛 (默认 70 级开放魔王试炼)
+	MinLevel int `yaml:"min_level"`
 }
 
 // JieYuanBoxConfig 结缘宝箱配置
@@ -144,16 +163,18 @@ type QuestCycleConfig struct {
 // DungeonSweepFeatureConfig 副本关卡扫荡配置
 type DungeonSweepFeatureConfig struct {
 	Enabled               bool     `yaml:"enabled"`
-	Pipeline              []string `yaml:"pipeline"`                // 扫荡优先级流水线: "sweep_elite", "sweep_highest_main"
+	Pipeline              []string `yaml:"pipeline"`                // 扫荡优先级流水线: "sweep_elite"
 	MaxBatchTimes         int      `yaml:"max_batch_times"`         // 扫荡批次单次最大执行次数 (仅作用于扫荡)
 	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"` // 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
+	SellSweptItems        bool     `yaml:"sell_swept_items"`        // 扫荡精英副本后是否自动卖掉扫荡物
+	AutoSellSweptItems    bool     `yaml:"auto_sell_swept_items"`   // 扫荡精英副本后是否自动卖掉扫荡物 (兼容别名)
 }
 
 // DungeonConfig 副本与推图自动化策略配置
 type DungeonConfig struct {
 	// 功能一: 剧情推图 (循环接任务/做任务/交任务直至无任务可做)
 	QuestCycle QuestCycleConfig `yaml:"quest_cycle"`
-	// 功能二: 关卡扫荡 (优先扫荡精英副本，再扫荡最高等级主线副本)
+	// 功能二: 关卡扫荡 (扫荡精英副本)
 	Sweep DungeonSweepFeatureConfig `yaml:"sweep"`
 
 	// 向下兼容既有顶层扁平配置字段
@@ -162,6 +183,8 @@ type DungeonConfig struct {
 	MaxBatchTimes         int      `yaml:"max_batch_times"`
 	AutoReplenishStamina  bool     `yaml:"auto_replenish_stamina"`
 	MaxReplenishTimes     int      `yaml:"max_replenish_times"`
+	SellSweptItems        bool     `yaml:"sell_swept_items"`
+	AutoSellSweptItems    bool     `yaml:"auto_sell_swept_items"`
 }
 
 // JitterConfig 抖动上下限配置 (秒)
@@ -244,14 +267,20 @@ func Load(path string) (*Config, error) {
 		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
 		cfg.Scheduler.Dungeon.Sweep.Enabled ||
 		cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes > 0 ||
+		cfg.Scheduler.Dungeon.Sweep.SellSweptItems ||
+		cfg.Scheduler.Dungeon.Sweep.AutoSellSweptItems ||
+		cfg.Scheduler.Dungeon.SellSweptItems ||
+		cfg.Scheduler.Dungeon.AutoSellSweptItems ||
 		len(cfg.Scheduler.Dungeon.Sweep.Pipeline) > 0
 	if len(cfg.Scheduler.Dungeon.Pipeline) == 0 && !hasSubDungeon {
 		cfg.Scheduler.Dungeon.Pipeline = []string{
 			"push_mainline",
 			"push_side",
 			"sweep_elite",
-			"sweep_highest_main",
 		}
+	}
+	if cfg.Scheduler.Dungeon.SellSweptItems || cfg.Scheduler.Dungeon.AutoSellSweptItems {
+		cfg.Scheduler.Dungeon.Sweep.SellSweptItems = true
 	}
 	// 默认启用秒完成
 	if !cfg.Scheduler.Dungeon.PreferPracticeQuickly {
@@ -266,6 +295,11 @@ func Load(path string) (*Config, error) {
 	// AutoReplenishStamina 默认为 true
 	if !cfg.Scheduler.Dungeon.AutoReplenishStamina {
 		cfg.Scheduler.Dungeon.AutoReplenishStamina = true
+	}
+
+	// BeelzebubTrials 默认等级门槛 0 (由服务端资格检查自动决定)
+	if cfg.Scheduler.BeelzebubTrials.MinLevel < 0 {
+		cfg.Scheduler.BeelzebubTrials.MinLevel = 0
 	}
 
 	if cfg.Accounts == nil {

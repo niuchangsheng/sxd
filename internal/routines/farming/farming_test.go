@@ -231,3 +231,195 @@ func TestHerbGardenRoutine_FullBusinessFlow(t *testing.T) {
 	c2.Close()
 	serverWg.Wait()
 }
+
+// TestPilgrimageRoutine_Metadata 验证西天取经 Routine 元数据
+func TestPilgrimageRoutine_Metadata(t *testing.T) {
+	routine := farming.NewPilgrimageRoutine()
+	if routine.Name() != "pilgrimage" {
+		t.Fatalf("任务名称不匹配: %s", routine.Name())
+	}
+	if dr, ok := routine.(scheduler.DetailedRoutine); ok {
+		if dr.Domain() != "farming" {
+			t.Fatalf("领域不匹配: %s", dr.Domain())
+		}
+	}
+}
+
+// TestPilgrimageRoutine_UnconnectedGuard 验证西天取经未连接卫语句
+func TestPilgrimageRoutine_UnconnectedGuard(t *testing.T) {
+	routine := farming.NewPilgrimageRoutine()
+	err := routine.Execute(context.Background(), nil, nil)
+	if err != client.ErrNotConnected {
+		t.Fatalf("期望返回 ErrNotConnected, 实际得到: %v", err)
+	}
+}
+
+// TestPilgrimageRoutine_FullBusinessFlow 验证西天取经面板打开、使者刷新、申请好友保护与启程全链路
+func TestPilgrimageRoutine_FullBusinessFlow(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	var openCalls atomic.Int32
+	var infoCalls atomic.Int32
+	var refreshCalls atomic.Int32
+	var applyCalls atomic.Int32
+	var startCalls atomic.Int32
+	var closeCalls atomic.Int32
+
+	var serverWg sync.WaitGroup
+	serverWg.Add(1)
+
+	go func() {
+		defer serverWg.Done()
+		for {
+			pkt, err := protocol.ReadPacket(c2)
+			if err != nil {
+				return
+			}
+
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerLogin:
+				respPayload := []byte{
+					0x00, 0x00, 0x00, 0x00, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x00, 0x10, 0x85, 0x01,
+				}
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerLogin, respPayload))
+
+			case protocol.ActionIDPlayerInitStep1:
+				respPayload := []byte{0x00, 0x00, 0x13, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x13, 0x0f, 0x00, 0x00, 0x13, 0x12}
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep1, respPayload))
+
+			case protocol.ActionIDPlayerInitStep2:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00}))
+
+			case protocol.ActionIDPlayerInitStep3:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep3, make([]byte, 8)))
+
+			case protocol.ActionIDPlayerGetInfo:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerGetInfo, []byte{
+					0x00, 0x09, 0xe6, 0xa2, 0xa6, 0xe4, 0xb8, 0x80, 0xe5, 0x9c, 0xba,
+					0x00, 0x00, 0x01, 0x2c,
+					0x00, 0x00, 0x00, 0x64,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x01, 0x2c,
+				}))
+
+			case protocol.ActionHeartbeat:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+
+			// 西天取经业务动作响应
+			case protocol.ActionIDTakeBibleOpen:
+				openCalls.Add(1)
+				w := protocol.NewWriter()
+				w.WriteInt32(1)
+				w.WriteUint8(2)  // CanTakeTimes = 2
+				w.WriteInt32(0)
+				w.WriteInt32(0)  // CD = 0
+				w.WriteUint16(0)
+				w.WriteUint8(2)  // ProtectTimes = 2
+				w.WriteUint8(3)  // RobTimes = 3
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDTakeBibleOpen, w.Bytes()))
+
+			case protocol.ActionIDTakeBibleGetInfo:
+				infoCalls.Add(1)
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.TakeBibleSuccess)
+				w.WriteInt8(protocol.TakeBibleShaWuJing) // 沙悟净 (可刷新)
+				w.WriteInt32(0)                         // ProtectPlayerID = 0 (未保护)
+				w.WriteInt16(0)
+				// 1 个在线空闲好友
+				w.WriteUint16(1)
+				w.WriteInt32(999)
+				w.WriteString("齐天大圣")
+				w.WriteInt8(2)
+				w.WriteInt8(1) // online
+				w.WriteInt8(0) // not escorting
+				// 尾部字段
+				w.WriteInt8(1)
+				w.WriteInt8(3)
+				w.WriteUint8(0) // not busy
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDTakeBibleGetInfo, w.Bytes()))
+
+			case protocol.ActionIDTakeBibleRefresh:
+				refreshCalls.Add(1)
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.TakeBibleSuccess)
+				w.WriteInt8(protocol.TakeBibleTangSeng) // 成功刷新为唐僧
+				w.WriteInt16(50)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDTakeBibleRefresh, w.Bytes()))
+
+			case protocol.ActionIDTakeBibleApplyFriend:
+				applyCalls.Add(1)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDTakeBibleApplyFriend, []byte{protocol.TakeBibleSuccess}))
+
+			case protocol.ActionIDTakeBibleStart:
+				startCalls.Add(1)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDTakeBibleStart, []byte{protocol.TakeBibleSuccess}))
+
+			case protocol.ActionIDTakeBibleClose:
+				closeCalls.Add(1)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDTakeBibleClose, []byte{}))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-pilgrim-01",
+		RoleName:   "取经行者",
+		Username:   "pilgrim_user",
+		Hash:       "dummy_pilgrim_hash",
+		ServerAddr: "pilgrim-test-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return c1, nil
+		},
+	})
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("session.Start 失败: %v", err)
+	}
+	defer session.Close()
+
+	activeDeadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(activeDeadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("会话未进入激活态: %s", session.State())
+	}
+
+	routine := farming.NewPilgrimageRoutine()
+	execCtx, execCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer execCancel()
+
+	err := routine.Execute(execCtx, session, nil)
+	if err != nil {
+		t.Fatalf("取经 Routine 执行失败: %v", err)
+	}
+
+	if openCalls.Load() != 1 {
+		t.Errorf("期望 open_take_bible 调用 1 次, 实际 %d 次", openCalls.Load())
+	}
+	if infoCalls.Load() != 1 {
+		t.Errorf("期望 get_take_bible_info 调用 1 次, 实际 %d 次", infoCalls.Load())
+	}
+	if refreshCalls.Load() != 1 {
+		t.Errorf("期望 refresh 使者调用 1 次, 实际 %d 次", refreshCalls.Load())
+	}
+	if applyCalls.Load() != 0 {
+		t.Errorf("期望不发起 apply_friend 好友保护, 实际调用 %d 次", applyCalls.Load())
+	}
+	if startCalls.Load() != 1 {
+		t.Errorf("期望 start_take_bible 启程调用 1 次, 实际 %d 次", startCalls.Load())
+	}
+	if closeCalls.Load() != 1 {
+		t.Errorf("期望 close_take_bible 安全关闭调用 1 次, 实际 %d 次", closeCalls.Load())
+	}
+
+	session.Close()
+	c1.Close()
+	c2.Close()
+	serverWg.Wait()
+}

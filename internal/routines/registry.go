@@ -36,6 +36,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "online_gift", Name: "在线成长礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取各时段在线时长福利与成长礼包", DefaultOn: false},
 		{ID: "vip_welfare", Name: "VIP特权与俸禄", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取VIP每日礼包与官职俸禄", DefaultOn: false},
 		{ID: "god_bless", Name: "跨服天神赐福", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领用跨服天神赐福增益点数", DefaultOn: false},
+		{ID: "town_practice", Name: "城镇打坐练功", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "上线自动结算并领取离线城镇打坐练功经验", DefaultOn: true},
 
 		// 2. Farming 领域 (6)
 		{ID: "herb_garden", Name: "药园种植巡检", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动药园播种、施肥、除草与成熟采摘", DefaultOn: true},
@@ -62,6 +63,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "spirit_trial", Name: "精灵试炼扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "精灵副本星级通关挑战与材料扫荡", DefaultOn: false},
 		{ID: "qimen_dunjia", Name: "奇门遁甲法阵", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "奇门遁甲法阵星图注灵与布阵生效", DefaultOn: false},
 		{ID: "xunxian_road", Name: "寻仙之路推图", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "寻仙之路关卡挑战与节点宝箱领用", DefaultOn: false},
+		{ID: "beelzebub_trials", Name: "魔王试炼", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "自动创建队伍、招募助战镜像、挑战每日魔王试炼并领取道行奖励", DefaultOn: false},
 
 		// 5. PVP 领域 (6)
 		{ID: "arena", Name: "本服竞技场", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "本服竞技场自动寻找适宜对手挑战与排名领奖", DefaultOn: false},
@@ -90,11 +92,13 @@ func GetAllDefinitions() []RoutineDefinition {
 
 // RegistryFactory 构建并注册所有玩法的统一工厂。
 type RegistryFactory struct {
-	qaEngine    qa.Engine
-	dictRepo    dictionary.Repository
-	dungeonCfg  dungeon.SweepConfig
-	jieyuanCfg  social.JieYuanBoxConfig
-	treasureCfg minigame.TreasureHouseConfig
+	qaEngine     qa.Engine
+	dictRepo     dictionary.Repository
+	dungeonCfg   dungeon.SweepConfig
+	sixRealmsCfg dungeon.SixRealmsConfig
+	beelzebubCfg dungeon.BeelzebubTrialsConfig
+	jieyuanCfg   social.JieYuanBoxConfig
+	treasureCfg  minigame.TreasureHouseConfig
 }
 
 // NewRegistryFactory 创建注册工厂实例。
@@ -102,17 +106,29 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 	cfg := dungeon.DefaultSweepConfig()
 	cfg.PreferPracticeQuickly = true
 	return &RegistryFactory{
-		qaEngine:    qaEngine,
-		dictRepo:    dictRepo,
-		dungeonCfg:  cfg,
-		jieyuanCfg:  social.DefaultJieYuanBoxConfig(),
-		treasureCfg: minigame.DefaultTreasureHouseConfig(),
+		qaEngine:     qaEngine,
+		dictRepo:     dictRepo,
+		dungeonCfg:   cfg,
+		sixRealmsCfg: dungeon.DefaultSixRealmsConfig(),
+		beelzebubCfg: dungeon.DefaultBeelzebubTrialsConfig(),
+		jieyuanCfg:   social.DefaultJieYuanBoxConfig(),
+		treasureCfg:  minigame.DefaultTreasureHouseConfig(),
 	}
 }
 
 // SetDungeonConfig 设置副本自动化策略配置。
 func (f *RegistryFactory) SetDungeonConfig(cfg dungeon.SweepConfig) {
 	f.dungeonCfg = cfg
+}
+
+// SetSixRealmsConfig 设置六道轮回自动化策略配置。
+func (f *RegistryFactory) SetSixRealmsConfig(cfg dungeon.SixRealmsConfig) {
+	f.sixRealmsCfg = cfg
+}
+
+// SetBeelzebubTrialsConfig 设置魔王试炼策略配置。
+func (f *RegistryFactory) SetBeelzebubTrialsConfig(cfg dungeon.BeelzebubTrialsConfig) {
+	f.beelzebubCfg = cfg
 }
 
 // SetJieYuanBoxConfig 设置结缘宝箱策略配置。
@@ -170,6 +186,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewVIPWelfareRoutine()
 	case "god_bless":
 		return daily.NewGodBlessRoutine()
+	case "town_practice":
+		return daily.NewTownPracticeRoutine()
 
 	// 2. Farming
 	case "herb_garden":
@@ -203,7 +221,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "dungeon", "dungeon_sweep":
 		return dungeon.NewDungeonSweepRoutine(f.dictRepo, f.dungeonCfg)
 	case "six_realms":
-		return dungeon.NewSixRealmsRoutine()
+		return dungeon.NewSixRealmsRoutine(f.sixRealmsCfg)
 	case "demon_tower":
 		return dungeon.NewDemonTowerRoutine()
 	case "training_room":
@@ -216,6 +234,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return dungeon.NewQiMenRoutine()
 	case "xunxian_road":
 		return dungeon.NewXunXianRoutine()
+	case "beelzebub_trials":
+		return dungeon.NewBeelzebubTrialsRoutine(f.beelzebubCfg)
 
 	// 5. PVP
 	case "arena":

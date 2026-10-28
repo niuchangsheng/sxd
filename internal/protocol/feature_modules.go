@@ -12,7 +12,9 @@ const (
 	ModuleJieYuanBox         uint16 = 232 // 结缘宝箱与缘分模块 (0x00E8)
 	ModuleRefinePoolExec     uint16 = 282 // 粗铁淬炼执行模块 (0x011A)
 	ModuleDailyAssistant     uint16 = 293 // 小助手活跃度领奖模块 (0x0125)
-	ModuleCaravanRob         uint32 = 314 // 西天取经与商队劫镖模块 (0x013A)
+	ModuleCaravanRob         uint32 = 314 // 阵营商队劫镖模块 (0x013A)
+	ModuleTakeBible          uint16 = 30  // 西天取经与护送取经模块 (0x001E)
+	ModuleStTakeBible        uint16 = 114 // 圣域/跨服取经模块 (0x0072)
 	ModuleSeekImmortal       uint16 = 466 // 寻仙之路副本模块 (0x01D2)
 	ModuleQiMenPuppet        uint16 = 485 // 奇门遁甲阵眼傀儡模块 (0x01E5)
 	ModuleQiMenArray         uint16 = 486 // 奇门遁甲法阵星图模块 (0x01E6)
@@ -88,6 +90,41 @@ const (
 	ActionIDCaravanHijack uint32 = 0x013A000C
 	// ActionIDCaravanSettle 劫镖战斗结果结算 (Module 314, Action 2 -> 0x013A0002)
 	ActionIDCaravanSettle uint32 = 0x013A0002
+
+	// ActionIDTakeBibleOpen 打开西天取经主面板 (Module 30, Action 0 -> 0x001E0000)
+	ActionIDTakeBibleOpen uint32 = 0x001E0000
+	// ActionIDTakeBibleClose 关闭取经面板 (Module 30, Action 1 -> 0x001E0001)
+	ActionIDTakeBibleClose uint32 = 0x001E0001
+	// ActionIDTakeBibleGetInfo 查询当前取经准备状态、使者类型与保护列表 (Module 30, Action 2 -> 0x001E0002)
+	ActionIDTakeBibleGetInfo uint32 = 0x001E0002
+	// ActionIDTakeBibleApplyFriend 申请指定好友护送取经 (Module 30, Action 3 -> 0x001E0003)
+	ActionIDTakeBibleApplyFriend uint32 = 0x001E0003
+	// ActionIDTakeBibleCancelApply 取消好友护送申请 (Module 30, Action 4 -> 0x001E0004)
+	ActionIDTakeBibleCancelApply uint32 = 0x001E0004
+	// ActionIDTakeBibleApproveApply 同意好友护送申请 (Module 30, Action 5 -> 0x001E0005)
+	ActionIDTakeBibleApproveApply uint32 = 0x001E0005
+	// ActionIDTakeBibleRejectApply 拒绝好友护送申请 (Module 30, Action 6 -> 0x001E0006)
+	ActionIDTakeBibleRejectApply uint32 = 0x001E0006
+	// ActionIDTakeBibleBuyProtection 购买元宝护送保护 (Module 30, Action 7 -> 0x001E0007)
+	ActionIDTakeBibleBuyProtection uint32 = 0x001E0007
+	// ActionIDTakeBibleRefresh 刷新取经使者等级 (Module 30, Action 8 -> 0x001E0008)
+	ActionIDTakeBibleRefresh uint32 = 0x001E0008
+	// ActionIDTakeBibleGetPlayer 查询取经路线上指定玩家队伍详情 (Module 30, Action 9 -> 0x001E0009)
+	ActionIDTakeBibleGetPlayer uint32 = 0x001E0009
+	// ActionIDTakeBibleStart 正式启程开始护送取经 (Module 30, Action 10 -> 0x001E000A)
+	ActionIDTakeBibleStart uint32 = 0x001E000A
+	// ActionIDTakeBibleRob 发起拦截/打劫他人取经队伍 (Module 30, Action 11 -> 0x001E000B)
+	ActionIDTakeBibleRob uint32 = 0x001E000B
+	// ActionIDTakeBibleNotify 取经事件推送 (Module 30, Action 12 -> 0x001E000C)
+	ActionIDTakeBibleNotify uint32 = 0x001E000C
+	// ActionIDTakeBibleQuickly 极速到达/加速取经完成 (Module 30, Action 14 -> 0x001E000E)
+	ActionIDTakeBibleQuickly uint32 = 0x001E000E
+	// ActionIDTakeBibleGetRobCD 查询拦截打劫冷却时间与次数 (Module 30, Action 16 -> 0x001E0010)
+	ActionIDTakeBibleGetRobCD uint32 = 0x001E0010
+	// ActionIDTakeBibleClearRobCD 清除拦截冷却倒计时 (Module 30, Action 17 -> 0x001E0011)
+	ActionIDTakeBibleClearRobCD uint32 = 0x001E0011
+	// ActionIDTakeBibleBuyBless 购买取经鼓舞祝福 (Module 30, Action 18 -> 0x001E0012)
+	ActionIDTakeBibleBuyBless uint32 = 0x001E0012
 
 	// ActionIDXunXianGetProgress 查询寻仙之路关卡进度 (Module 466, Action 1 -> 0x01D20001)
 	ActionIDXunXianGetProgress uint32 = 0x01D20001

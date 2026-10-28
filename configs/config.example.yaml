@@ -24,6 +24,9 @@ scheduler:
   routines:
     # 基础自动化模块
     dungeon: true               # 副本推图与扫荡 (统一命名为 dungeon)
+    six_realms: true            # 六道轮回爬塔与灵件处理 (每日免费重置/自动爬塔/蓝装自动出售)
+    town_practice: true         # 城镇打坐练功 (上线自动结算并领取离线经验)
+    beelzebub_trials: true      # 魔王试炼 (自建队伍、招募助战镜像、挑战每日魔王并领道行奖励)
     lucky_star: true            # 吉星高照
     pilgrimage: true            # 取经/护送
     arena: true                 # 竞技场
@@ -54,14 +57,26 @@ scheduler:
       auto_replenish_stamina: true  # 自动吃药补充体力 (仅作用于推图)
       max_replenish_times: 10       # 单次推图最大自愈补充次数 (仅作用于推图)
 
-    # 功能二：关卡扫荡 (优先扫荡每日精英，再扫荡最高主线关卡)
+    # 功能二：关卡扫荡 (扫荡每日精英副本)
     sweep:
       enabled: true             # 启用关卡扫荡
-      pipeline:                 # 扫荡策略流水线 (优先 sweep_elite，再 sweep_highest_main)
-        - "sweep_elite"         # 1. 优先扫荡精英 (清空每日可用英雄/精英副本)
-        - "sweep_highest_main"  # 2. 扫荡最高主线 (消耗剩余自然体力冲级)
+      pipeline:                 # 扫荡策略流水线 (仅 sweep_elite)
+        - "sweep_elite"         # 1. 扫荡精英 (清空每日可用英雄/精英副本)
+      sell_swept_items: true    # 扫荡后是否自动卖掉扫荡物 (默认 true)
       max_batch_times: 10       # 单次批处理最大扫荡次数 (仅作用于扫荡)
       prefer_practice_quickly: true # 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
+
+  # 六道轮回爬塔与封灵灵件自动化策略配置
+  six_realms:
+    auto_reset: true            # 当前道全通后是否自动消耗每日免费次数重置 (默认 true)
+    auto_sell_blue: true        # 挑战关卡获胜后是否自动卖出蓝色灵件 (默认 true)
+    auto_sell_purple: false     # 挑战关卡获胜后是否自动卖出紫色灵件 (默认 false，保留紫色封灵灵件)
+
+  # 魔王试炼自动化策略配置
+  beelzebub_trials:
+    prefer_boss_id: 0           # 优先挑战的魔王编号 (0 表示自动选择最高难度魔王；如指定 72 为魔掌门神识)
+    auto_moral_award: true      # 战斗后自动查询并领取道行等级宝箱奖励
+    min_level: 0                # 开启等级门槛 (0 表示由服务端资格检查自动决定，不设客户端硬编码限制)
 
   # 结缘宝箱配置 (每批最多10个，除了传说其他都开)
   jieyuan_box:
