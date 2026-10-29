@@ -88,6 +88,9 @@ func TestConfig_LoadExample(t *testing.T) {
 	if !cfg.Scheduler.Dungeon.Sweep.SellSweptItems {
 		t.Errorf("expected dungeon.sweep.sell_swept_items to be true")
 	}
+	if cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina != 200 {
+		t.Errorf("expected quest_cycle.max_replenish_stamina to be 200, got %d", cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina)
+	}
 	pipeline := cfg.Scheduler.Dungeon.Sweep.Pipeline
 	if len(pipeline) != 1 || pipeline[0] != "sweep_elite" {
 		t.Errorf("expected sweep pipeline to be [sweep_elite], got %v", pipeline)

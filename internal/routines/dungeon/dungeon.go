@@ -25,7 +25,8 @@ import (
 type QuestCycleFeatureConfig struct {
 	Enabled              bool `json:"enabled"`
 	AutoReplenishStamina bool `json:"auto_replenish_stamina"` // 体力不足时自动按 [包子 > 粽子 > 茶叶蛋] 自愈 (仅作用于推图)
-	MaxReplenishTimes    int  `json:"max_replenish_times"`    // 单次推图最大自愈补充次数 (仅作用于推图)
+	MaxReplenishStamina  int  `json:"max_replenish_stamina"`  // 单次推图最大补充体力上限 (点数，仅作用于推图；包子5/粽子10/茶叶蛋50)
+	MaxReplenishTimes    int  `json:"max_replenish_times"`    // 兼容旧字段：单次推图最大自愈补充次数 (仅作用于推图)
 }
 
 // SweepFeatureConfig 副本关卡扫荡配置
@@ -59,7 +60,9 @@ type SweepConfig struct {
 	PreferPracticeQuickly bool
 	// AutoReplenishStamina 当主线或支线等副本无体力继续时，是否自动按 [包子 > 粽子 > 茶叶蛋] 优先级吃道具补充体力 (默认 true)
 	AutoReplenishStamina bool
-	// MaxReplenishTimes 单次执行自动补充体力的最大次数 (默认 10)
+	// MaxReplenishStamina 单次执行自动补充体力的最大点数上限 (默认 200，每个包子5/粽子10/茶叶蛋50)
+	MaxReplenishStamina int
+	// MaxReplenishTimes 单次执行自动补充体力的最大次数 (兼容旧配置，默认 10)
 	MaxReplenishTimes int
 	// SellSweptItems 扫荡精英副本后是否自动卖掉扫荡物
 	SellSweptItems bool `json:"sell_swept_items"`
@@ -76,6 +79,7 @@ func DefaultSweepConfig() SweepConfig {
 		QuestCycle: QuestCycleFeatureConfig{
 			Enabled:              false, // 默认纯扫荡；由 yaml 或 pipeline 显式开启
 			AutoReplenishStamina: true,
+			MaxReplenishStamina:  200,
 			MaxReplenishTimes:    10,
 		},
 		Sweep: SweepFeatureConfig{
@@ -91,6 +95,7 @@ func DefaultSweepConfig() SweepConfig {
 		MaxBatchTimes:         10,
 		PreferPracticeQuickly: false,
 		AutoReplenishStamina:  true,
+		MaxReplenishStamina:   200,
 		MaxReplenishTimes:     10,
 		Pipeline:              nil,
 		SellSweptItems:        false,
@@ -119,6 +124,14 @@ func (c SweepConfig) ToDungeonSweepConfig() DungeonSweepConfig {
 	if maxBatch <= 0 {
 		maxBatch = 10
 	}
+	maxReplenishStamina := c.MaxReplenishStamina
+	if maxReplenishStamina <= 0 {
+		if c.MaxReplenishTimes > 0 {
+			maxReplenishStamina = c.MaxReplenishTimes * 10
+		} else {
+			maxReplenishStamina = 200
+		}
+	}
 	maxReplenish := c.MaxReplenishTimes
 	if maxReplenish <= 0 {
 		maxReplenish = 10
@@ -129,6 +142,7 @@ func (c SweepConfig) ToDungeonSweepConfig() DungeonSweepConfig {
 		TargetMissionID:       c.TargetMissionID,
 		SweepElite:            c.SweepElite,
 		AutoReplenishStamina:  c.AutoReplenishStamina,
+		MaxReplenishStamina:   maxReplenishStamina,
 		MaxReplenishTimes:     maxReplenish,
 		MaxBatchTimes:         maxBatch,
 		RequiredPowerPerSweep: 5,
@@ -149,13 +163,21 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 	hasSubConfig := false
 	if len(cfgs) > 0 {
 		c := cfgs[0]
-		hasSubConfig = c.QuestCycle.Enabled || c.QuestCycle.AutoReplenishStamina || c.QuestCycle.MaxReplenishTimes > 0 ||
+		hasSubConfig = c.QuestCycle.Enabled || c.QuestCycle.AutoReplenishStamina ||
+			c.QuestCycle.MaxReplenishStamina > 0 || c.QuestCycle.MaxReplenishTimes > 0 ||
 			c.Sweep.Enabled || c.Sweep.MaxBatchTimes > 0 || len(c.Sweep.Pipeline) > 0 ||
 			c.Sweep.SellSweptItems || c.Sweep.AutoSellSweptItems || c.SellSweptItems || c.AutoSellSweptItems
 
 		// 继承外层顶层兼容字段到子功能
 		if hasSubConfig {
 			cfg.QuestCycle = c.QuestCycle
+			if cfg.QuestCycle.MaxReplenishStamina <= 0 {
+				if cfg.QuestCycle.MaxReplenishTimes > 0 {
+					cfg.QuestCycle.MaxReplenishStamina = cfg.QuestCycle.MaxReplenishTimes * 10
+				} else {
+					cfg.QuestCycle.MaxReplenishStamina = 200
+				}
+			}
 			cfg.Sweep = c.Sweep
 			if c.SellSweptItems || c.AutoSellSweptItems {
 				cfg.Sweep.SellSweptItems = true
@@ -163,8 +185,10 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 		} else {
 			// 若未显式配置子块，从顶层兼容字段继承
 			cfg.QuestCycle.AutoReplenishStamina = c.AutoReplenishStamina
-			if c.MaxReplenishTimes > 0 {
-				cfg.QuestCycle.MaxReplenishTimes = c.MaxReplenishTimes
+			if c.MaxReplenishStamina > 0 {
+				cfg.QuestCycle.MaxReplenishStamina = c.MaxReplenishStamina
+			} else if c.MaxReplenishTimes > 0 {
+				cfg.QuestCycle.MaxReplenishStamina = c.MaxReplenishTimes * 10
 			}
 			if c.Category == CategorySide || (c.Category == CategoryMainline && c.AutoReplenishStamina) {
 				cfg.QuestCycle.Enabled = true
@@ -196,6 +220,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 		cfg.Pipeline = c.Pipeline
 		cfg.MaxBatchTimes = c.MaxBatchTimes
 		cfg.AutoReplenishStamina = c.AutoReplenishStamina
+		cfg.MaxReplenishStamina = c.MaxReplenishStamina
 		cfg.MaxReplenishTimes = c.MaxReplenishTimes
 		cfg.PreferPracticeQuickly = c.PreferPracticeQuickly
 		cfg.SweepElite = c.SweepElite
@@ -263,7 +288,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			}
 
 			if shouldRunQuest {
-				replenishCount := 0
+				replenishedStamina := 0
 				questEnsureStamina := func() bool {
 					if session.GetStamina() >= powerPerSweep {
 						return true
@@ -272,12 +297,16 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 					if !cfg.QuestCycle.AutoReplenishStamina {
 						return false
 					}
-					maxTimes := cfg.QuestCycle.MaxReplenishTimes
-					if maxTimes <= 0 {
-						maxTimes = 10
+					maxStamina := cfg.QuestCycle.MaxReplenishStamina
+					if maxStamina <= 0 {
+						if cfg.QuestCycle.MaxReplenishTimes > 0 {
+							maxStamina = cfg.QuestCycle.MaxReplenishTimes * 10
+						} else {
+							maxStamina = 200
+						}
 					}
-					for session.GetStamina() < powerPerSweep && replenishCount < maxTimes {
-						ok, _, _, err := TryReplenishStamina(ctx, session)
+					for session.GetStamina() < powerPerSweep && replenishedStamina < maxStamina {
+						ok, itemName, addedPoints, err := TryReplenishStamina(ctx, session)
 						if err != nil {
 							slog.Warn("推图尝试自动补充体力异常", "role_id", session.RoleID(), "err", err)
 							break
@@ -285,7 +314,14 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						if !ok {
 							break // 背包中无可用体力道具
 						}
-						replenishCount++
+						replenishedStamina += addedPoints
+						slog.Info("推图自愈补充体力成功",
+							"role_id", session.RoleID(),
+							"item", itemName,
+							"added_stamina", addedPoints,
+							"total_replenished", replenishedStamina,
+							"max_replenish_stamina", maxStamina,
+						)
 					}
 					return session.GetStamina() >= powerPerSweep
 				}

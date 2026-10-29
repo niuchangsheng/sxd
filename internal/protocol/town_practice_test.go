@@ -14,11 +14,11 @@ func TestTownPractice_BuildPackets(t *testing.T) {
 		if pkt.ActionID != protocol.ActionIDPlayerStartPractice {
 			t.Fatalf("expected ActionID 0x%08X, got 0x%08X", protocol.ActionIDPlayerStartPractice, pkt.ActionID)
 		}
-		if !pkt.HasPrevAct {
-			t.Errorf("expected HasPrevAct to be true")
+		if pkt.HasPrevAct {
+			t.Errorf("expected HasPrevAct to be false")
 		}
-		if len(pkt.Payload) != 4 {
-			t.Errorf("expected payload length 4, got %d", len(pkt.Payload))
+		if len(pkt.Payload) != 0 {
+			t.Errorf("expected payload length 0, got %d", len(pkt.Payload))
 		}
 	})
 
@@ -27,8 +27,11 @@ func TestTownPractice_BuildPackets(t *testing.T) {
 		if pkt.ActionID != protocol.ActionIDPlayerGetPracticeData {
 			t.Fatalf("expected ActionID 0x%08X, got 0x%08X", protocol.ActionIDPlayerGetPracticeData, pkt.ActionID)
 		}
-		if !pkt.HasPrevAct {
-			t.Errorf("expected HasPrevAct to be true")
+		if pkt.HasPrevAct {
+			t.Errorf("expected HasPrevAct to be false")
+		}
+		if len(pkt.Payload) != 0 {
+			t.Errorf("expected payload length 0, got %d", len(pkt.Payload))
 		}
 	})
 
@@ -37,8 +40,11 @@ func TestTownPractice_BuildPackets(t *testing.T) {
 		if pkt.ActionID != protocol.ActionIDPlayerSignFinishedPractice {
 			t.Fatalf("expected ActionID 0x%08X, got 0x%08X", protocol.ActionIDPlayerSignFinishedPractice, pkt.ActionID)
 		}
-		if !pkt.HasPrevAct {
-			t.Errorf("expected HasPrevAct to be true")
+		if pkt.HasPrevAct {
+			t.Errorf("expected HasPrevAct to be false")
+		}
+		if len(pkt.Payload) != 0 {
+			t.Errorf("expected payload length 0, got %d", len(pkt.Payload))
 		}
 	})
 
@@ -47,8 +53,11 @@ func TestTownPractice_BuildPackets(t *testing.T) {
 		if pkt.ActionID != protocol.ActionIDPlayerCancelPractice {
 			t.Fatalf("expected ActionID 0x%08X, got 0x%08X", protocol.ActionIDPlayerCancelPractice, pkt.ActionID)
 		}
-		if !pkt.HasPrevAct {
-			t.Errorf("expected HasPrevAct to be true")
+		if pkt.HasPrevAct {
+			t.Errorf("expected HasPrevAct to be false")
+		}
+		if len(pkt.Payload) != 0 {
+			t.Errorf("expected payload length 0, got %d", len(pkt.Payload))
 		}
 	})
 }

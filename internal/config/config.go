@@ -157,7 +157,8 @@ func (c TreasureHouseConfig) ResolveSelections() []protocol.TreasureAwardSelect 
 type QuestCycleConfig struct {
 	Enabled              bool `yaml:"enabled"`
 	AutoReplenishStamina bool `yaml:"auto_replenish_stamina"` // 自动吃药补充体力 (仅作用于推图)
-	MaxReplenishTimes    int  `yaml:"max_replenish_times"`    // 单次推图最大自愈补充次数 (仅作用于推图)
+	MaxReplenishStamina  int  `yaml:"max_replenish_stamina"`  // 单次推图最大补充体力上限 (点数，仅作用于推图；包子5/粽子10/茶叶蛋50)
+	MaxReplenishTimes    int  `yaml:"max_replenish_times"`    // 兼容旧配置：单次推图最大自愈补充次数 (仅作用于推图)
 }
 
 // DungeonSweepFeatureConfig 副本关卡扫荡配置
@@ -182,6 +183,7 @@ type DungeonConfig struct {
 	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"`
 	MaxBatchTimes         int      `yaml:"max_batch_times"`
 	AutoReplenishStamina  bool     `yaml:"auto_replenish_stamina"`
+	MaxReplenishStamina   int      `yaml:"max_replenish_stamina"`
 	MaxReplenishTimes     int      `yaml:"max_replenish_times"`
 	SellSweptItems        bool     `yaml:"sell_swept_items"`
 	AutoSellSweptItems    bool     `yaml:"auto_sell_swept_items"`
@@ -264,6 +266,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	hasSubDungeon := cfg.Scheduler.Dungeon.QuestCycle.Enabled ||
+		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina > 0 ||
 		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
 		cfg.Scheduler.Dungeon.Sweep.Enabled ||
 		cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes > 0 ||
@@ -288,6 +291,20 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Scheduler.Dungeon.MaxBatchTimes <= 0 {
 		cfg.Scheduler.Dungeon.MaxBatchTimes = 10
+	}
+	if cfg.Scheduler.Dungeon.MaxReplenishStamina <= 0 {
+		if cfg.Scheduler.Dungeon.MaxReplenishTimes > 0 {
+			cfg.Scheduler.Dungeon.MaxReplenishStamina = cfg.Scheduler.Dungeon.MaxReplenishTimes * 10
+		} else {
+			cfg.Scheduler.Dungeon.MaxReplenishStamina = 200
+		}
+	}
+	if cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina <= 0 {
+		if cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 {
+			cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina = cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes * 10
+		} else {
+			cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina = 200
+		}
 	}
 	if cfg.Scheduler.Dungeon.MaxReplenishTimes <= 0 {
 		cfg.Scheduler.Dungeon.MaxReplenishTimes = 10

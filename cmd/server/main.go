@@ -262,6 +262,7 @@ func run(ctx context.Context, args []string) error {
 	dCfg := dungeon.DefaultSweepConfig()
 	hasSubDungeon := cfg.Scheduler.Dungeon.QuestCycle.Enabled ||
 		cfg.Scheduler.Dungeon.QuestCycle.AutoReplenishStamina ||
+		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina > 0 ||
 		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
 		cfg.Scheduler.Dungeon.Sweep.Enabled ||
 		cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes > 0 ||
@@ -274,9 +275,11 @@ func run(ctx context.Context, args []string) error {
 	if hasSubDungeon {
 		dCfg.QuestCycle.Enabled = cfg.Scheduler.Dungeon.QuestCycle.Enabled
 		dCfg.QuestCycle.AutoReplenishStamina = cfg.Scheduler.Dungeon.QuestCycle.AutoReplenishStamina
+		dCfg.QuestCycle.MaxReplenishStamina = cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina
 		dCfg.QuestCycle.MaxReplenishTimes = cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes
 	} else {
 		dCfg.QuestCycle.AutoReplenishStamina = cfg.Scheduler.Dungeon.AutoReplenishStamina
+		dCfg.QuestCycle.MaxReplenishStamina = cfg.Scheduler.Dungeon.MaxReplenishStamina
 		dCfg.QuestCycle.MaxReplenishTimes = cfg.Scheduler.Dungeon.MaxReplenishTimes
 	}
 
@@ -300,6 +303,7 @@ func run(ctx context.Context, args []string) error {
 	dCfg.PreferPracticeQuickly = cfg.Scheduler.Dungeon.PreferPracticeQuickly
 	dCfg.MaxBatchTimes = cfg.Scheduler.Dungeon.MaxBatchTimes
 	dCfg.AutoReplenishStamina = cfg.Scheduler.Dungeon.AutoReplenishStamina
+	dCfg.MaxReplenishStamina = cfg.Scheduler.Dungeon.MaxReplenishStamina
 	dCfg.MaxReplenishTimes = cfg.Scheduler.Dungeon.MaxReplenishTimes
 	dCfg.SellSweptItems = dCfg.Sweep.SellSweptItems
 	factory.SetDungeonConfig(dCfg)

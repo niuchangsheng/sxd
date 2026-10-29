@@ -1628,6 +1628,67 @@ func TestDungeonSweep_SweepElite_SellSweptItems(t *testing.T) {
 	})
 }
 
+// TestDungeonSweep_MaxReplenishStamina_Limit 验证单次推图按体力点数上限熔断机制:
+// 当累计补充体力达到 max_replenish_stamina (例如 10 点) 后，不再继续吃药。
+func TestDungeonSweep_MaxReplenishStamina_Limit(t *testing.T) {
+	sess, srvConn := createTestSession(t, 0)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var usedCount int32
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		if pkt.ActionID == protocol.ActionIDItemGetPackList {
+			buf := new(bytes.Buffer)
+			_ = binary.Write(buf, binary.BigEndian, int16(30))
+			_ = binary.Write(buf, binary.BigEndian, int32(27))
+			_ = binary.Write(buf, binary.BigEndian, uint16(2))
+
+			// 格位 1: 粽子 (ID 1444, +10体力)
+			_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+				PlayerItemID: 101,
+				ItemID:       protocol.ItemIDRiceDumpling,
+				GridID:       1,
+			})
+			// 格位 2: 茶叶蛋 (ID 2016, +50体力)
+			_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+				PlayerItemID: 102,
+				ItemID:       protocol.ItemIDTeaEgg,
+				GridID:       2,
+			})
+
+			_ = binary.Write(buf, binary.BigEndian, int16(10))
+			_ = binary.Write(buf, binary.BigEndian, uint16(0))
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
+			return true
+		}
+
+		if pkt.ActionID == protocol.ActionIDItemUseGrid {
+			atomic.AddInt32(&usedCount, 1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemUseGrid, []byte{protocol.ItemActionSuccess}))
+			return true
+		}
+
+		return false
+	})
+
+	cfg := dungeon.SweepConfig{
+		QuestCycle: dungeon.QuestCycleFeatureConfig{
+			Enabled:              true,
+			AutoReplenishStamina: true,
+			MaxReplenishStamina:  10, // 上限 10 点，吃一个粽子(+10)后即达到上限，不能再吃茶叶蛋(+50)
+		},
+		Category: dungeon.CategoryMainline,
+	}
+
+	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
+	_ = routine.Execute(context.Background(), sess, nil)
+
+	// 验证最多只消耗了 1 次粽子 (+10 点体力)，没有继续消耗茶叶蛋
+	if atomic.LoadInt32(&usedCount) > 1 {
+		t.Errorf("期望达到体力点数上限后停止吃药，实际吃药次数: %d", atomic.LoadInt32(&usedCount))
+	}
+}
+
 
 
 

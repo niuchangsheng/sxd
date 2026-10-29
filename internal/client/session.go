@@ -804,25 +804,11 @@ func (s *RoleSession) SignFinishedTownPractice(ctx context.Context) error {
 	return nil
 }
 
-// ClaimTownPracticeExp 上线直接结算并领取离线练功经验 (对齐客户端 MapViewBase.onCancelPraceice: 取消练功 + 确认结算)。
+// ClaimTownPracticeExp 上线直接结算并领取离线练功经验 (对齐官方客户端 MapViewBase.onCancelPraceice: 取消练功 + 确认结算)。
 func (s *RoleSession) ClaimTownPracticeExp(ctx context.Context) error {
-	// 0. 先主动查询离线打坐累积的待领取经验与打坐时长
-	if data, err := s.GetTownPracticeData(ctx); err == nil && data != nil {
-		if data.PracticeExp > 0 || data.PracticeTime > 0 {
-			slog.Info("正在结算离线城镇打坐累积经验",
-				"role_id", s.RoleID(),
-				"accumulated_exp", data.PracticeExp,
-				"practice_seconds", data.PracticeTime,
-			)
-		} else {
-			slog.Info("当前离线打坐累积经验为 0 (已领过或暂无待领经验)", "role_id", s.RoleID())
-			return nil
-		}
-	}
-
-	// 1. 发送 cancel_practice (Action 39)
+	// 1. 官方流水线：先发送 cancel_practice (Mod 0, Act 39)
 	_ = s.CancelTownPractice(ctx)
-	// 2. 发送 sign_finished_practice (Action 38)
+	// 2. 官方流水线：再发送 sign_finished_practice (Mod 0, Act 38) 领取累积经验
 	return s.SignFinishedTownPractice(ctx)
 }
 
@@ -987,23 +973,13 @@ func (s *RoleSession) BeelzebubTrialsChooseHelper(ctx context.Context, roleID in
 }
 
 // BeelzebubTrialsFight 队长向服务器发起战斗指令 (Module 57, Action 13)。
+// 官方 AS3 Mod_BeelzebubTrials_Base 规范：Action 13 属于单向无回包发包指令，触发后由 Action 14 拉取完整战报。
 func (s *RoleSession) BeelzebubTrialsFight(ctx context.Context) (uint8, error) {
 	pkt := protocol.BuildBeelzebubTrialsFightPacket(s.LastActionID())
-	timeout := 3 * time.Second
-	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
-		timeout = 300 * time.Millisecond
-	}
-	cCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsFight)
-	if err != nil {
+	if err := s.Send(pkt); err != nil {
 		return 0, fmt.Errorf("fight beelzebub trials: %w", err)
 	}
-	if resp == nil {
-		return 0, errors.New("empty fight response")
-	}
-	return protocol.ParseBeelzebubTrialsFightResponse(resp.Payload)
+	return protocol.BeelzebubTrialsSuccess, nil
 }
 
 // BeelzebubTrialsGetWarResult 拉取魔王试炼战报结果与奖励结算 (Module 57, Action 14)。
@@ -1164,7 +1140,7 @@ func (s *RoleSession) BeelzebubTrialsAutoChallenge(ctx context.Context, preferBo
 		}
 	}
 
-	// 5. 发起战斗
+	// 5. 发起战斗 (单向通知指令)
 	fRes, err := s.BeelzebubTrialsFight(ctx)
 	if err != nil {
 		_ = s.BeelzebubTrialsExitTeam(ctx)
@@ -1173,6 +1149,13 @@ func (s *RoleSession) BeelzebubTrialsAutoChallenge(ctx context.Context, preferBo
 	if fRes != protocol.BeelzebubTrialsSuccess {
 		_ = s.BeelzebubTrialsExitTeam(ctx)
 		return nil, fmt.Errorf("发起战斗服务端返回错误代码: %d", fRes)
+	}
+
+	// 等待服务端生成战报
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(500 * time.Millisecond):
 	}
 
 	// 6. 获取战斗结果与收益结算

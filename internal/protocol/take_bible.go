@@ -109,139 +109,80 @@ type TakeBibleRobCDResult struct {
 
 // --------------------------------------------------------------------------------
 // 封包构造函数 (Packet Builders)
+// 官方 AS3 Mod_TakeBible_Base 规范：取经协议动作均无须携带前序 ActionID
 // --------------------------------------------------------------------------------
 
 // BuildTakeBibleOpenPacket 构造打开取经主面板封包 (Module 30, Action 0 -> 0x001E0000)。
-func BuildTakeBibleOpenPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTownEnter
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTakeBibleOpen, w.Bytes())
+func BuildTakeBibleOpenPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDTakeBibleOpen, nil)
 }
 
 // BuildTakeBibleClosePacket 构造关闭取经面板封包 (Module 30, Action 1 -> 0x001E0001)。
-func BuildTakeBibleClosePacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleOpen
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTakeBibleClose, w.Bytes())
+func BuildTakeBibleClosePacket(_ uint32) *Packet {
+	return NewPacket(ActionIDTakeBibleClose, nil)
 }
 
 // BuildTakeBibleGetInfoPacket 构造拉取取经准备详情封包 (Module 30, Action 2 -> 0x001E0002)。
-func BuildTakeBibleGetInfoPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleOpen
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTakeBibleGetInfo, w.Bytes())
+func BuildTakeBibleGetInfoPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDTakeBibleGetInfo, nil)
 }
 
 // BuildTakeBibleApplyFriendPacket 构造申请好友护送封包 (Module 30, Action 3 -> 0x001E0003)。
-func BuildTakeBibleApplyFriendPacket(friendPlayerID int32, prevAct uint32) *Packet {
+func BuildTakeBibleApplyFriendPacket(friendPlayerID int32, _ uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(friendPlayerID)
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleGetInfo
-	}
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDTakeBibleApplyFriend, w.Bytes())
 }
 
 // BuildTakeBibleCancelApplyPacket 构造取消好友护送申请封包 (Module 30, Action 4 -> 0x001E0004)。
-func BuildTakeBibleCancelApplyPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleApplyFriend
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTakeBibleCancelApply, w.Bytes())
+func BuildTakeBibleCancelApplyPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDTakeBibleCancelApply, nil)
 }
 
 // BuildTakeBibleApproveApplyPacket 构造同意好友护送申请封包 (Module 30, Action 5 -> 0x001E0005)。
-func BuildTakeBibleApproveApplyPacket(applyRoleID int32, prevAct uint32) *Packet {
+func BuildTakeBibleApproveApplyPacket(applyRoleID int32, _ uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(applyRoleID)
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleOpen
-	}
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDTakeBibleApproveApply, w.Bytes())
 }
 
 // BuildTakeBibleBuyProtectionPacket 构造购买元宝保护封包 (Module 30, Action 7 -> 0x001E0007)。
-func BuildTakeBibleBuyProtectionPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleGetInfo
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTakeBibleBuyProtection, w.Bytes())
+func BuildTakeBibleBuyProtectionPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDTakeBibleBuyProtection, nil)
 }
 
 // BuildTakeBibleRefreshPacket 构造刷新取经使者封包 (Module 30, Action 8 -> 0x001E0008)。
-func BuildTakeBibleRefreshPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleGetInfo
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTakeBibleRefresh, w.Bytes())
+func BuildTakeBibleRefreshPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDTakeBibleRefresh, nil)
 }
 
 // BuildTakeBibleStartPacket 构造正式启程开始护送取经封包 (Module 30, Action 10 -> 0x001E000A)。
-func BuildTakeBibleStartPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleGetInfo
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTakeBibleStart, w.Bytes())
+func BuildTakeBibleStartPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDTakeBibleStart, nil)
 }
 
 // BuildTakeBibleRobPacket 构造发起拦截打劫队伍封包 (Module 30, Action 11 -> 0x001E000B)。
-func BuildTakeBibleRobPacket(targetPlayerID int32, prevAct uint32) *Packet {
+func BuildTakeBibleRobPacket(targetPlayerID int32, _ uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(targetPlayerID)
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleOpen
-	}
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDTakeBibleRob, w.Bytes())
 }
 
 // BuildTakeBibleQuicklyPacket 构造加速到达/快速完成取经封包 (Module 30, Action 14 -> 0x001E000E)。
-func BuildTakeBibleQuicklyPacket(prevAct uint32) *Packet {
+func BuildTakeBibleQuicklyPacket(_ uint32) *Packet {
 	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleOpen
-	}
-	w.WriteUint32(prevAct)
+	w.WriteInt8(0) // type: ByteUtil
 	return NewPacket(ActionIDTakeBibleQuickly, w.Bytes())
 }
 
 // BuildTakeBibleGetRobCDPacket 构造查询拦截打劫 CD 封包 (Module 30, Action 16 -> 0x001E0010)。
-func BuildTakeBibleGetRobCDPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleOpen
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTakeBibleGetRobCD, w.Bytes())
+func BuildTakeBibleGetRobCDPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDTakeBibleGetRobCD, nil)
 }
 
 // BuildTakeBibleBuyBlessPacket 构造购买取经鼓舞祝福封包 (Module 30, Action 18 -> 0x001E0012)。
-func BuildTakeBibleBuyBlessPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTakeBibleGetInfo
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTakeBibleBuyBless, w.Bytes())
+func BuildTakeBibleBuyBlessPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDTakeBibleBuyBless, nil)
 }
 
 // --------------------------------------------------------------------------------

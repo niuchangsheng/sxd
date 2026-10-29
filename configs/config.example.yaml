@@ -55,7 +55,7 @@ scheduler:
     quest_cycle:
       enabled: true             # 启用任务闭环推图
       auto_replenish_stamina: true  # 自动吃药补充体力 (仅作用于推图)
-      max_replenish_times: 10       # 单次推图最大自愈补充次数 (仅作用于推图)
+      max_replenish_stamina: 200    # 单次推图最大补充体力上限 (点数，仅作用于推图；包子5/粽子10/茶叶蛋50)
 
     # 功能二：关卡扫荡 (扫荡每日精英副本)
     sweep:

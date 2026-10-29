@@ -134,111 +134,89 @@ type BeelzebubMoralInfo struct {
 }
 
 // --- 报文构造函数 (Packet Builders) ---
+// 官方 AS3 Mod_BeelzebubTrials_Base 规范：魔王试炼协议动作均无须携带前序 ActionID
 
 // BuildBeelzebubTrialsCheckCanChallengePacket 构造检查今日是否可挑战魔王封包 (Module 57, Action 20)。
-func BuildBeelzebubTrialsCheckCanChallengePacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDBeelzebubTrialsCheckCanChallenge, w.Bytes())
+func BuildBeelzebubTrialsCheckCanChallengePacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsCheckCanChallenge, nil)
 }
 
 // BuildBeelzebubTrialsGetCanChallengeListPacket 构造获取可挑战魔王列表封包 (Module 57, Action 22)。
-func BuildBeelzebubTrialsGetCanChallengeListPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDBeelzebubTrialsGetCanChallengeList, w.Bytes())
+func BuildBeelzebubTrialsGetCanChallengeListPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsGetCanChallengeList, nil)
 }
 
 // BuildBeelzebubTrialsOpenPacket 构造打开魔王试炼主面板封包 (Module 57, Action 1)。
-func BuildBeelzebubTrialsOpenPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDBeelzebubTrialsOpen, w.Bytes())
+func BuildBeelzebubTrialsOpenPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsOpen, nil)
 }
 
 // BuildBeelzebubTrialsCreateTeamPacket 构造创建魔王试炼队伍封包 (Module 57, Action 4)。
 // bossID: 挑战目标魔王编号；teamType: 0 (不限) 或 1 (仅限帮派)。
-func BuildBeelzebubTrialsCreateTeamPacket(bossID int32, teamType uint8, prevAct uint32) *Packet {
+func BuildBeelzebubTrialsCreateTeamPacket(bossID int32, teamType uint8, _ uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(bossID)
 	w.WriteUint8(teamType)
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDBeelzebubTrialsCreateTeam, w.Bytes())
 }
 
 // BuildBeelzebubTrialsJoinTeamPacket 构造加入魔王试炼队伍封包 (Module 57, Action 6)。
-func BuildBeelzebubTrialsJoinTeamPacket(teamID int32, prevAct uint32) *Packet {
+func BuildBeelzebubTrialsJoinTeamPacket(teamID int32, _ uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(teamID)
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDBeelzebubTrialsJoinTeam, w.Bytes())
 }
 
 // BuildBeelzebubTrialsGetPlayerTeamInfoPacket 构造获取当前队伍成员信息封包 (Module 57, Action 3)。
-func BuildBeelzebubTrialsGetPlayerTeamInfoPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDBeelzebubTrialsGetPlayerTeamInfo, w.Bytes())
+func BuildBeelzebubTrialsGetPlayerTeamInfoPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsGetPlayerTeamInfo, nil)
 }
 
 // BuildBeelzebubTrialsGetHelperRoleListPacket 构造获取助战伙伴/镜像列表封包 (Module 57, Action 8)。
-func BuildBeelzebubTrialsGetHelperRoleListPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDBeelzebubTrialsGetHelperRoleList, w.Bytes())
+func BuildBeelzebubTrialsGetHelperRoleListPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsGetHelperRoleList, nil)
 }
 
 // BuildBeelzebubTrialsChooseHelperRolePacket 构造选择助战伙伴上阵封包 (Module 57, Action 9)。
 // slot: 1 或 2，对应队伍的二号位与三号位。
-func BuildBeelzebubTrialsChooseHelperRolePacket(roleID int32, slot uint8, prevAct uint32) *Packet {
+func BuildBeelzebubTrialsChooseHelperRolePacket(roleID int32, slot uint8, _ uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(roleID)
 	w.WriteUint8(slot)
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDBeelzebubTrialsChooseHelperRole, w.Bytes())
 }
 
 // BuildBeelzebubTrialsFightPacket 构造发起魔王试炼战斗封包 (Module 57, Action 13)。
-func BuildBeelzebubTrialsFightPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDBeelzebubTrialsFight, w.Bytes())
+func BuildBeelzebubTrialsFightPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsFight, nil)
 }
 
 // BuildBeelzebubTrialsGetWarResultPacket 构造拉取魔王试炼战报与收益结算封包 (Module 57, Action 14)。
-func BuildBeelzebubTrialsGetWarResultPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDBeelzebubTrialsGetWarResult, w.Bytes())
+func BuildBeelzebubTrialsGetWarResultPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsGetWarResult, nil)
 }
 
 // BuildBeelzebubTrialsLeaveWarPacket 构造退出魔王试炼战场封包 (Module 57, Action 16)。
-func BuildBeelzebubTrialsLeaveWarPacket(warID int32, prevAct uint32) *Packet {
+func BuildBeelzebubTrialsLeaveWarPacket(warID int32, _ uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(warID)
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDBeelzebubTrialsLeaveWar, w.Bytes())
 }
 
 // BuildBeelzebubTrialsExitTeamPacket 构造退出/解散魔王试炼队伍封包 (Module 57, Action 7)。
-func BuildBeelzebubTrialsExitTeamPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDBeelzebubTrialsExitTeam, w.Bytes())
+func BuildBeelzebubTrialsExitTeamPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsExitTeam, nil)
 }
 
 // BuildBeelzebubTrialsOpenMoralPacket 构造查询道行信息封包 (Module 57, Action 23)。
-func BuildBeelzebubTrialsOpenMoralPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDBeelzebubTrialsOpenMoral, w.Bytes())
+func BuildBeelzebubTrialsOpenMoralPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsOpenMoral, nil)
 }
 
 // BuildBeelzebubTrialsGetMoralAwardPacket 构造领取道行奖励封包 (Module 57, Action 24)。
-func BuildBeelzebubTrialsGetMoralAwardPacket(level int32, prevAct uint32) *Packet {
+func BuildBeelzebubTrialsGetMoralAwardPacket(level int32, _ uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(level)
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDBeelzebubTrialsGetMoralAward, w.Bytes())
 }
 

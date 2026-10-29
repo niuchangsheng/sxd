@@ -39,39 +39,27 @@ type TownPracticeNotify struct {
 }
 
 // BuildPlayerStartPracticePacket 构造角色开始城镇打坐练功请求封包 (Module 0, Action 36 -> 0x00000024)。
-func BuildPlayerStartPracticePacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	pkt := NewPacket(ActionIDPlayerStartPractice, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+// 官方 AS3 Mod_Player_Base: request 为空数组 (0 载荷)。
+func BuildPlayerStartPracticePacket(_ uint32) *Packet {
+	return NewPacket(ActionIDPlayerStartPractice, nil)
 }
 
 // BuildPlayerGetPracticeDataPacket 构造获取城镇打坐练功实时数据请求封包 (Module 0, Action 37 -> 0x00000025)。
-func BuildPlayerGetPracticeDataPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	pkt := NewPacket(ActionIDPlayerGetPracticeData, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+// 官方 AS3 Mod_Player_Base: request 为空数组 (0 载荷)。
+func BuildPlayerGetPracticeDataPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDPlayerGetPracticeData, nil)
 }
 
 // BuildPlayerSignFinishedPracticePacket 构造确认结束练功并结算累积经验请求封包 (Module 0, Action 38 -> 0x00000026)。
-func BuildPlayerSignFinishedPracticePacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	pkt := NewPacket(ActionIDPlayerSignFinishedPractice, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+// 官方 AS3 Mod_Player_Base: request 为空数组 (0 载荷)。
+func BuildPlayerSignFinishedPracticePacket(_ uint32) *Packet {
+	return NewPacket(ActionIDPlayerSignFinishedPractice, nil)
 }
 
 // BuildPlayerCancelPracticePacket 构造取消/中断城镇打坐练功请求封包 (Module 0, Action 39 -> 0x00000027)。
-func BuildPlayerCancelPracticePacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(prevAct)
-	pkt := NewPacket(ActionIDPlayerCancelPractice, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+// 官方 AS3 Mod_Player_Base: request 为空数组 (0 载荷)。
+func BuildPlayerCancelPracticePacket(_ uint32) *Packet {
+	return NewPacket(ActionIDPlayerCancelPractice, nil)
 }
 
 // ParseTownPracticeDataResponse 反序列化城镇打坐练功数据响应载荷。

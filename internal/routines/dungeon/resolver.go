@@ -54,7 +54,9 @@ type DungeonSweepConfig struct {
 	SweepElite bool `json:"sweep_elite"`
 	// AutoReplenishStamina 当体力不足时是否自动吃背包体力道具 (包子/粽子/茶叶蛋)
 	AutoReplenishStamina bool `json:"auto_replenish_stamina"`
-	// MaxReplenishTimes 单次扫荡任务中自动补充体力的最大次数上限 (默认 10)
+	// MaxReplenishStamina 单次推图任务中自动补充体力的最大点数上限 (默认 200)
+	MaxReplenishStamina int `json:"max_replenish_stamina"`
+	// MaxReplenishTimes 单次扫荡任务中自动补充体力的最大次数上限 (兼容旧配置，默认 10)
 	MaxReplenishTimes int `json:"max_replenish_times"`
 	// MaxBatchTimes 单次执行批处理最大扫荡次数 (默认 10，上限 30)
 	MaxBatchTimes int `json:"max_batch_times"`
@@ -77,6 +79,7 @@ func DefaultDungeonSweepConfig() DungeonSweepConfig {
 		TargetMissionID:       0,
 		SweepElite:            false,
 		AutoReplenishStamina:  true,
+		MaxReplenishStamina:   200,
 		MaxReplenishTimes:     10,
 		MaxBatchTimes:         10,
 		RequiredPowerPerSweep: 5,
@@ -97,6 +100,7 @@ func ExpertDungeonSweepConfig(missionID int, maxBatchTimes int) DungeonSweepConf
 		TargetMissionID:       missionID,
 		SweepElite:            false,
 		AutoReplenishStamina:  true,
+		MaxReplenishStamina:   200,
 		MaxReplenishTimes:     10,
 		MaxBatchTimes:         maxBatchTimes,
 		RequiredPowerPerSweep: 5,
