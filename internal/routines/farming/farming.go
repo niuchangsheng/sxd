@@ -299,33 +299,59 @@ func NewPilgrimageRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行资源任务: 西天取经巡检与护送", "role_id", session.RoleID())
 
-			callWithTimeout := func(pkt *protocol.Packet, expectedAct uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			callWithTimeout := func(pkt *protocol.Packet, expectedAct uint32, d time.Duration) (*protocol.Packet, error) {
+				cCtx, cancel := context.WithTimeout(ctx, d)
 				defer cancel()
 				return session.Call(cCtx, pkt, expectedAct)
 			}
 
-			// 1. 打开西天取经主面板 (0x001E0000)
-			// 若服务端支持 Action 0 同步应答则处理概览数据；若服务端不响应 Action 0 则继续执行详情拉取
-			openPkt := protocol.BuildTakeBibleOpenPacket(session.LastActionID())
-			if openResp, err := callWithTimeout(openPkt, protocol.ActionIDTakeBibleOpen); err == nil && openResp != nil {
-				openRes, _ := protocol.ParseTakeBibleOpenResult(openResp.Payload)
-				if openRes != nil && openRes.CanTakeTimes <= 0 {
-					slog.Info("西天取经今日护送次数已用尽", "role_id", session.RoleID(), "remain_times", openRes.CanTakeTimes)
-					// 关闭面板
-					closePkt := protocol.BuildTakeBibleClosePacket(session.LastActionID())
-					_, _ = callWithTimeout(closePkt, protocol.ActionIDTakeBibleClose)
+			// 1. 优先尝试现代双轨网关圣域取经协议 (Module 456, Mod_StMobile_Base)
+			stInfoPkt := protocol.BuildStTakeBibleGetInfoPacket(session.LastActionID())
+			if stInfoResp, stErr := callWithTimeout(stInfoPkt, protocol.ActionIDStTakeBibleGetInfo, 2*time.Second); stErr == nil && stInfoResp != nil {
+				slog.Info("成功接入现代双轨西天取经网关 (Mod 456)", "role_id", session.RoleID())
+
+				// 尝试刷新取经使者品质 (非阻塞容错)
+				stRefPkt := protocol.BuildStTakeBibleRefreshPacket(session.LastActionID())
+				_, _ = callWithTimeout(stRefPkt, protocol.ActionIDStTakeBibleRefresh, 1*time.Second)
+
+				// 正式启程开始护送 (Action 6)
+				stStartPkt := protocol.BuildStTakeBibleStartPacket(session.LastActionID())
+				if stStartResp, startErr := callWithTimeout(stStartPkt, protocol.ActionIDStTakeBibleStart, 3*time.Second); startErr == nil && stStartResp != nil {
+					startCode, _ := protocol.ParseStTakeBibleStartResult(stStartResp.Payload)
+					switch startCode {
+					case protocol.StTakeBibleSuccess:
+						slog.Info("西天取经队伍已顺利启程护送", "role_id", session.RoleID())
+					case protocol.StTakeBibleTakingStatus:
+						slog.Info("西天取经队伍正在护送途中，无需重复启程", "role_id", session.RoleID())
+					case protocol.StTakeBibleFullTakeCount:
+						slog.Info("西天取经今日护送次数已用满 (3次)", "role_id", session.RoleID())
+					case protocol.StTakeBibleProtectTime:
+						slog.Info("西天取经当前处于护送保护中/今日已护送完成", "role_id", session.RoleID())
+					default:
+						slog.Info("西天取经完成巡检", "role_id", session.RoleID(), "status_code", startCode)
+					}
 					return nil
 				}
 			}
 
-			// 2. 拉取当前取经准备状态与使者数据 (0x001E0002)
+			// 2. 传统 Web 协议兜底回退 (Module 30, Mod_TakeBible_Base)
+			openPkt := protocol.BuildTakeBibleOpenPacket(session.LastActionID())
+			if openResp, err := callWithTimeout(openPkt, protocol.ActionIDTakeBibleOpen, 2*time.Second); err == nil && openResp != nil {
+				openRes, _ := protocol.ParseTakeBibleOpenResult(openResp.Payload)
+				if openRes != nil && openRes.CanTakeTimes <= 0 {
+					slog.Info("西天取经今日护送次数已用尽", "role_id", session.RoleID(), "remain_times", openRes.CanTakeTimes)
+					closePkt := protocol.BuildTakeBibleClosePacket(session.LastActionID())
+					_, _ = callWithTimeout(closePkt, protocol.ActionIDTakeBibleClose, 1*time.Second)
+					return nil
+				}
+			}
+
+			// 2.2 拉取当前取经准备状态与使者数据 (0x001E0002)
 			infoPkt := protocol.BuildTakeBibleGetInfoPacket(session.LastActionID())
-			infoResp, err := callWithTimeout(infoPkt, protocol.ActionIDTakeBibleGetInfo)
+			infoResp, err := callWithTimeout(infoPkt, protocol.ActionIDTakeBibleGetInfo, 2*time.Second)
 			if err != nil {
-				slog.Warn("拉取西天取经准备详情无应答，当前角色可能尚未解锁护送权限或该服取经已迁移",
+				slog.Info("西天取经准备详情无应答，当前角色可能尚未解锁护送权限或该服取经已迁移",
 					"role_id", session.RoleID(),
-					"error", err,
 				)
 				return nil
 			}
@@ -341,7 +367,7 @@ func NewPilgrimageRoutine() scheduler.ActivityRoutine {
 			if infoRes.IsBusy {
 				slog.Info("当前取经队伍已在途中，无需重复启程", "role_id", session.RoleID(), "angel", protocol.AngelName(infoRes.CurrentAngel))
 				closePkt := protocol.BuildTakeBibleClosePacket(prevAct)
-				_, _ = callWithTimeout(closePkt, protocol.ActionIDTakeBibleClose)
+				_, _ = callWithTimeout(closePkt, protocol.ActionIDTakeBibleClose, 1*time.Second)
 				return nil
 			}
 
@@ -349,7 +375,7 @@ func NewPilgrimageRoutine() scheduler.ActivityRoutine {
 			if infoRes.TotalTakeTimes >= 3 {
 				slog.Info("西天取经今日总护送次数已达上限 (3次)", "role_id", session.RoleID(), "total_times", infoRes.TotalTakeTimes)
 				closePkt := protocol.BuildTakeBibleClosePacket(prevAct)
-				_, _ = callWithTimeout(closePkt, protocol.ActionIDTakeBibleClose)
+				_, _ = callWithTimeout(closePkt, protocol.ActionIDTakeBibleClose, 1*time.Second)
 				return nil
 			}
 
@@ -360,10 +386,10 @@ func NewPilgrimageRoutine() scheduler.ActivityRoutine {
 				"remain_rob_times", infoRes.RobTimes,
 			)
 
-			// 3. 使者品质刷新策略: 若不是最高品质使者 (唐僧)，尝试刷新提升护送收益
+			// 2.3 使者品质刷新策略: 若不是最高品质使者 (唐僧)，尝试刷新提升护送收益
 			if infoRes.CurrentAngel < protocol.TakeBibleTangSeng {
 				refreshPkt := protocol.BuildTakeBibleRefreshPacket(prevAct)
-				if refResp, rErr := callWithTimeout(refreshPkt, protocol.ActionIDTakeBibleRefresh); rErr == nil && refResp != nil {
+				if refResp, rErr := callWithTimeout(refreshPkt, protocol.ActionIDTakeBibleRefresh, 2*time.Second); rErr == nil && refResp != nil {
 					prevAct = protocol.ActionIDTakeBibleRefresh
 					if refRes, prErr := protocol.ParseTakeBibleRefreshResult(refResp.Payload); prErr == nil && refRes.ResultCode == protocol.TakeBibleSuccess {
 						slog.Info("西天取经使者刷新成功",
@@ -377,9 +403,9 @@ func NewPilgrimageRoutine() scheduler.ActivityRoutine {
 				}
 			}
 
-			// 4. 正式启程开始护送 (0x001E000A) - 无需等待/邀请好友，直接独立启程
+			// 2.4 正式启程开始护送 (0x001E000A)
 			startPkt := protocol.BuildTakeBibleStartPacket(prevAct)
-			startResp, err := callWithTimeout(startPkt, protocol.ActionIDTakeBibleStart)
+			startResp, err := callWithTimeout(startPkt, protocol.ActionIDTakeBibleStart, 2*time.Second)
 			if err != nil {
 				return fmt.Errorf("farming: 启程西天取经失败: %w", err)
 			}
@@ -392,12 +418,12 @@ func NewPilgrimageRoutine() scheduler.ActivityRoutine {
 					"angel", protocol.AngelName(infoRes.CurrentAngel),
 				)
 			} else {
-				slog.Warn("启程西天取经返回异常状态", "role_id", session.RoleID(), "status_code", startCode)
+				slog.Info("启程西天取经返回状态", "role_id", session.RoleID(), "status_code", startCode)
 			}
 
-			// 5. 安全关闭取经主界面 (0x001E0001)
+			// 2.5 安全关闭取经主界面 (0x001E0001)
 			closePkt := protocol.BuildTakeBibleClosePacket(prevAct)
-			_, _ = callWithTimeout(closePkt, protocol.ActionIDTakeBibleClose)
+			_, _ = callWithTimeout(closePkt, protocol.ActionIDTakeBibleClose, 1*time.Second)
 			return nil
 		},
 	)

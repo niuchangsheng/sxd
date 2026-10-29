@@ -126,6 +126,26 @@ const (
 	// ActionIDTakeBibleBuyBless 购买取经鼓舞祝福 (Module 30, Action 18 -> 0x001E0012)
 	ActionIDTakeBibleBuyBless uint32 = 0x001E0012
 
+	// 现代圣域/移动端双轨取经协议 (Module 456 -> 0x01C8, Mod_StMobile_Base)
+	// ActionIDStTakeBibleGetInfo 查询当前西天取经详情与使者信息 (Module 456, Action 2 -> 0x01C80002)
+	ActionIDStTakeBibleGetInfo uint32 = 0x01C80002
+	// ActionIDStTakeBibleRefresh 刷新西天取经使者等级 (Module 456, Action 3 -> 0x01C80003)
+	ActionIDStTakeBibleRefresh uint32 = 0x01C80003
+	// ActionIDStTakeBibleBuyProtection 购买元宝护送保护 (Module 456, Action 4 -> 0x01C80004)
+	ActionIDStTakeBibleBuyProtection uint32 = 0x01C80004
+	// ActionIDStTakeBibleBuyBless 购买取经鼓舞祝福 (Module 456, Action 5 -> 0x01C80005)
+	ActionIDStTakeBibleBuyBless uint32 = 0x01C80005
+	// ActionIDStTakeBibleStart 正式启程开始护送取经 (Module 456, Action 6 -> 0x01C80006)
+	ActionIDStTakeBibleStart uint32 = 0x01C80006
+	// ActionIDStTakeBibleGetRecentRobPlayer 查询最近被劫玩家 (Module 456, Action 7 -> 0x01C80007)
+	ActionIDStTakeBibleGetRecentRobPlayer uint32 = 0x01C80007
+	// ActionIDStTakeBibleRob 发起取经拦截打劫 (Module 456, Action 8 -> 0x01C80008)
+	ActionIDStTakeBibleRob uint32 = 0x01C80008
+	// ActionIDStTakeBibleQuickly 加速快速完成取经 (Module 456, Action 9 -> 0x01C80009)
+	ActionIDStTakeBibleQuickly uint32 = 0x01C80009
+	// ActionIDStTakeBibleBuyRobTimes 购买打劫次数 (Module 456, Action 10 -> 0x01C8000A)
+	ActionIDStTakeBibleBuyRobTimes uint32 = 0x01C8000A
+
 	// ActionIDXunXianGetProgress 查询寻仙之路关卡进度 (Module 466, Action 1 -> 0x01D20001)
 	ActionIDXunXianGetProgress uint32 = 0x01D20001
 	// ActionIDXunXianChallenge 挑战寻仙之路关卡节点 (Module 466, Action 3 -> 0x01D20003)

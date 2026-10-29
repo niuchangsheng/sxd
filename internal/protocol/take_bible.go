@@ -62,6 +62,31 @@ const (
 )
 
 // --------------------------------------------------------------------------------
+// 现代圣域/移动端双轨取经 (Mod_StMobile_Base, Module 456 / 0x01C8) 常量
+// --------------------------------------------------------------------------------
+
+const (
+	StTakeBibleSuccess        uint8 = 0  // STM_SUCCESS: 成功
+	StTakeBibleFailed         uint8 = 1  // STM_FAILED: 失败
+	StTakeBibleNoRefresh      uint8 = 2  // STM_NO_REFRESH: 无需刷新
+	StTakeBibleBaiLongMa      uint8 = 3  // STM_BAI_LONG_MA: 白龙马
+	StTakeBibleShaWuJing      uint8 = 4  // STM_SHA_WU_JING: 沙悟净
+	StTakeBibleZhuBaJie       uint8 = 5  // STM_ZHU_BA_JIE: 猪八戒
+	StTakeBibleSunWuKong      uint8 = 6  // STM_SUN_WU_KONG: 孙悟空
+	StTakeBibleTangSeng       uint8 = 7  // STM_TANG_SENG: 唐僧
+	StTakeBibleNotEnoughIngot uint8 = 8  // STM_NOT_ENOUGH_INGOT: 元宝不足
+	StTakeBibleTakingStatus   uint8 = 9  // STM_TAKING_STATUS: 正在护送中
+	StTakeBibleRequestVip     uint8 = 10 // STM_REQUEST_VIP: VIP等级不足
+	StTakeBibleFullTakeCount  uint8 = 11 // STM_FULL_TAKE_COUNT: 今日护送取经次数已满
+	StTakeBibleReRob          uint8 = 12 // STM_REROB: 重复打劫
+	StTakeBibleProtectTime    uint8 = 13 // STM_PROTECT_TIME: 处于保护时间内
+	StTakeBibleFullRobCount   uint8 = 14 // STM_FULL_ROB_COUNT: 今日拦截次数已满
+	StTakeBibleInvalidPlayer  uint8 = 15 // STM_INVALID_PLAYER_ID: 无效玩家
+	StTakeBibleHaveCDTime     uint8 = 16 // STM_HAVE_CD_TIME: 拦截CD中
+	StTakeBibleBeRobAll       uint8 = 17 // STM_BE_ROB_ALL: 队伍已被抢光
+)
+
+// --------------------------------------------------------------------------------
 // 实体结构体定义
 // --------------------------------------------------------------------------------
 
@@ -183,6 +208,33 @@ func BuildTakeBibleGetRobCDPacket(_ uint32) *Packet {
 // BuildTakeBibleBuyBlessPacket 构造购买取经鼓舞祝福封包 (Module 30, Action 18 -> 0x001E0012)。
 func BuildTakeBibleBuyBlessPacket(_ uint32) *Packet {
 	return NewPacket(ActionIDTakeBibleBuyBless, nil)
+}
+
+// BuildStTakeBibleGetInfoPacket 构造拉取圣域取经准备详情封包 (Module 456, Action 2 -> 0x01C80002)。
+func BuildStTakeBibleGetInfoPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDStTakeBibleGetInfo, nil)
+}
+
+// BuildStTakeBibleRefreshPacket 构造刷新圣域取经使者封包 (Module 456, Action 3 -> 0x01C80003)。
+func BuildStTakeBibleRefreshPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDStTakeBibleRefresh, nil)
+}
+
+// BuildStTakeBibleBuyBlessPacket 构造购买圣域取经鼓舞祝福封包 (Module 456, Action 5 -> 0x01C80005)。
+func BuildStTakeBibleBuyBlessPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDStTakeBibleBuyBless, nil)
+}
+
+// BuildStTakeBibleStartPacket 构造圣域正式启程开始护送取经封包 (Module 456, Action 6 -> 0x01C80006)。
+func BuildStTakeBibleStartPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDStTakeBibleStart, nil)
+}
+
+// BuildStTakeBibleQuicklyPacket 构造加速到达/快速完成圣域取经封包 (Module 456, Action 9 -> 0x01C80009)。
+func BuildStTakeBibleQuicklyPacket(_ uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt8(0) // type: ByteUtil
+	return NewPacket(ActionIDStTakeBibleQuickly, w.Bytes())
 }
 
 // --------------------------------------------------------------------------------
@@ -337,6 +389,15 @@ func ParseTakeBibleApplyFriendResult(payload []byte) (uint8, error) {
 func ParseTakeBibleStartResult(payload []byte) (uint8, error) {
 	if len(payload) == 0 {
 		return TakeBibleSuccess, nil
+	}
+	r := NewReader(payload)
+	return r.ReadUint8()
+}
+
+// ParseStTakeBibleStartResult 解析开始圣域取经响应 (0x01C80006)。
+func ParseStTakeBibleStartResult(payload []byte) (uint8, error) {
+	if len(payload) == 0 {
+		return StTakeBibleSuccess, nil
 	}
 	r := NewReader(payload)
 	return r.ReadUint8()

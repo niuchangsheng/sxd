@@ -26,6 +26,33 @@ func TestBeelzebubTrialsBossName(t *testing.T) {
 	}
 }
 
+func TestBeelzebubTrialsBossLevel(t *testing.T) {
+	cases := []struct {
+		id   int32
+		want int32
+	}{
+		{7, 15},   // 幽鬼 (Level 15)
+		{8, 15},   // 将臣 (Level 15)
+		{66, 20},  // 魔化小蝶 (Level 20)
+		{71, 30},  // 魔掌门元识 (Level 30)
+		{72, 30},  // 魔掌门神识 (Level 30)
+		{13, 40},  // 魔化刑天 (Level 40)
+		{15, 50},  // 鬼眼 (Level 50)
+		{17, 60},  // 魔化天将 (Level 60)
+		{1, 100},  // 魔化大魔王 (Level 100)
+		{3, 150},  // 魔神蚩尤 (Level 150)
+		{159, 185}, // 龙之魔女 (Level 185)
+		{9999, 0}, // 未知 Boss
+	}
+
+	for _, c := range cases {
+		lv := BeelzebubTrialsBossLevel(c.id)
+		if lv != c.want {
+			t.Errorf("boss %d: got level %d, want %d", c.id, lv, c.want)
+		}
+	}
+}
+
 func TestBuildAndParseBeelzebubTrialsCheckCanChallenge(t *testing.T) {
 	pkt := BuildBeelzebubTrialsCheckCanChallengePacket(0x12345678)
 	if pkt.ActionID != ActionIDBeelzebubTrialsCheckCanChallenge {

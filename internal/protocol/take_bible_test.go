@@ -157,3 +157,38 @@ func TestTakeBible_Parsers(t *testing.T) {
 		t.Errorf("期望 白龙马, 实际 %s", protocol.AngelName(protocol.TakeBibleBaiLongMa))
 	}
 }
+
+func TestStTakeBible_PacketBuildersAndParsers(t *testing.T) {
+	pInfo := protocol.BuildStTakeBibleGetInfoPacket(0)
+	if pInfo.ActionID != protocol.ActionIDStTakeBibleGetInfo {
+		t.Fatalf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDStTakeBibleGetInfo, pInfo.ActionID)
+	}
+
+	pRef := protocol.BuildStTakeBibleRefreshPacket(0)
+	if pRef.ActionID != protocol.ActionIDStTakeBibleRefresh {
+		t.Fatalf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDStTakeBibleRefresh, pRef.ActionID)
+	}
+
+	pBless := protocol.BuildStTakeBibleBuyBlessPacket(0)
+	if pBless.ActionID != protocol.ActionIDStTakeBibleBuyBless {
+		t.Fatalf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDStTakeBibleBuyBless, pBless.ActionID)
+	}
+
+	pStart := protocol.BuildStTakeBibleStartPacket(0)
+	if pStart.ActionID != protocol.ActionIDStTakeBibleStart {
+		t.Fatalf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDStTakeBibleStart, pStart.ActionID)
+	}
+
+	pQuick := protocol.BuildStTakeBibleQuicklyPacket(0)
+	if pQuick.ActionID != protocol.ActionIDStTakeBibleQuickly {
+		t.Fatalf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDStTakeBibleQuickly, pQuick.ActionID)
+	}
+
+	// Parser test
+	wStart := protocol.NewWriter()
+	wStart.WriteUint8(protocol.StTakeBibleSuccess)
+	code, err := protocol.ParseStTakeBibleStartResult(wStart.Bytes())
+	if err != nil || code != protocol.StTakeBibleSuccess {
+		t.Fatalf("ParseStTakeBibleStartResult 失败: code=%d, err=%v", code, err)
+	}
+}

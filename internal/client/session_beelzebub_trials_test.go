@@ -136,6 +136,15 @@ func TestRoleSession_BeelzebubTrialsAutoChallenge(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	// 执行完整自动挑战闭环 (测试全自动从低等级优先锁定挑战)
+	resDefault, err := s.BeelzebubTrialsAutoChallenge(ctx, 0)
+	if err != nil {
+		t.Fatalf("BeelzebubTrialsAutoChallenge (default 0) failed: %v", err)
+	}
+	if resDefault == nil || resDefault.Result != protocol.BeelzebubTrialsSuccess {
+		t.Fatalf("expected successful challenge, got %+v", resDefault)
+	}
+
 	// 执行完整自动挑战闭环 (优先指定 Boss 72 魔掌门神识)
 	res, err := s.BeelzebubTrialsAutoChallenge(ctx, 72)
 	if err != nil {

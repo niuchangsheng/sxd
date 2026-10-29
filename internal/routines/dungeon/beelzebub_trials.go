@@ -39,7 +39,7 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 		"beelzebub_trials",
 		"dungeon",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		scheduler.PriorityHigh,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {

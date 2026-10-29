@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -806,6 +807,17 @@ func (s *RoleSession) SignFinishedTownPractice(ctx context.Context) error {
 
 // ClaimTownPracticeExp 上线直接结算并领取离线练功经验 (对齐官方客户端 MapViewBase.onCancelPraceice: 取消练功 + 确认结算)。
 func (s *RoleSession) ClaimTownPracticeExp(ctx context.Context) error {
+	s.playerMu.RLock()
+	curExp := s.playerState.PracticeExp
+	isPracticing := s.playerState.IsPracticing
+	s.playerMu.RUnlock()
+
+	if isPracticing && curExp > 0 {
+		slog.Info("正在结算并领取累积离线练功经验", "role_id", s.RoleID(), "practice_exp", curExp)
+	} else {
+		slog.Info("触发城镇打坐练功离线结算 (若有累积经验将由服务端推送并在总经验同步增加)", "role_id", s.RoleID())
+	}
+
 	// 1. 官方流水线：先发送 cancel_practice (Mod 0, Act 39)
 	_ = s.CancelTownPractice(ctx)
 	// 2. 官方流水线：再发送 sign_finished_practice (Mod 0, Act 38) 领取累积经验
@@ -1089,7 +1101,7 @@ func (s *RoleSession) BeelzebubTrialsAutoChallenge(ctx context.Context, preferBo
 		return nil, nil
 	}
 
-	// 2. 拉取可挑战魔王列表
+	// 2. 拉取可挑战魔王列表并按等级从低到高排序，挨个确认是否可以挑战
 	canList, err := s.BeelzebubTrialsGetCanChallengeList(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("获取可挑战魔王列表失败: %w", err)
@@ -1099,26 +1111,70 @@ func (s *RoleSession) BeelzebubTrialsAutoChallenge(ctx context.Context, preferBo
 		return nil, nil
 	}
 
-	// 选定挑战目标
-	targetBossID := canList[len(canList)-1] // 默认选最高难度
+	type candidateBoss struct {
+		id    int32
+		level int32
+		name  string
+	}
+	candidates := make([]candidateBoss, 0, len(canList))
+	for _, bid := range canList {
+		candidates = append(candidates, candidateBoss{
+			id:    bid,
+			level: protocol.BeelzebubTrialsBossLevel(bid),
+			name:  protocol.BeelzebubTrialsBossName(bid),
+		})
+	}
+
+	// 按照等级从低到高排序；等级相同时按 ID 升序排序
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].level != candidates[j].level {
+			return candidates[i].level < candidates[j].level
+		}
+		return candidates[i].id < candidates[j].id
+	})
+
+	// 若显式指定了 preferBossID，优先将其排在候选首位尝试
 	if preferBossID > 0 {
-		for _, bid := range canList {
-			if bid == preferBossID {
-				targetBossID = preferBossID
+		var prioritized []candidateBoss
+		for _, c := range candidates {
+			if c.id == preferBossID {
+				prioritized = append(prioritized, c)
 				break
 			}
 		}
+		for _, c := range candidates {
+			if c.id != preferBossID {
+				prioritized = append(prioritized, c)
+			}
+		}
+		candidates = prioritized
 	}
-	bossName := protocol.BeelzebubTrialsBossName(targetBossID)
-	slog.Info("魔王试炼选定挑战目标", "role_id", s.RoleID(), "boss_id", targetBossID, "boss_name", bossName)
 
-	// 3. 自建队伍
-	cRes, err := s.BeelzebubTrialsCreateTeam(ctx, targetBossID, protocol.BeelzebubTrialsNotLimit)
-	if err != nil {
-		return nil, fmt.Errorf("创建试炼队伍失败: %w", err)
+	// 3. 从等级低的开始，挨个确认是否可以挑战 (创建队伍成功即确认锁定目标)
+	var targetBossID int32
+	var bossName string
+	teamCreated := false
+
+	for _, cand := range candidates {
+		slog.Debug("正在确认魔王挑战资格", "role_id", s.RoleID(), "boss_id", cand.id, "boss_name", cand.name, "level", cand.level)
+		cRes, err := s.BeelzebubTrialsCreateTeam(ctx, cand.id, protocol.BeelzebubTrialsNotLimit)
+		if err != nil {
+			slog.Debug("创建试炼队伍网络异常，尝试下一个魔王", "role_id", s.RoleID(), "boss_id", cand.id, "err", err)
+			continue
+		}
+		if cRes == protocol.BeelzebubTrialsSuccess {
+			targetBossID = cand.id
+			bossName = cand.name
+			teamCreated = true
+			slog.Info("魔王试炼选定挑战目标 (低等级优先锁定)", "role_id", s.RoleID(), "boss_id", targetBossID, "boss_name", bossName, "level", cand.level)
+			break
+		}
+		slog.Debug("魔王当前无法挑战，尝试下一魔王", "role_id", s.RoleID(), "boss_id", cand.id, "boss_name", cand.name, "level", cand.level, "code", cRes)
 	}
-	if cRes != protocol.BeelzebubTrialsSuccess {
-		return nil, fmt.Errorf("创建试炼队伍服务端返回失败代码: %d", cRes)
+
+	if !teamCreated {
+		slog.Warn("经从低到高逐级确认，未检测到任何可挑战的魔王，退出魔王试炼", "role_id", s.RoleID())
+		return nil, nil
 	}
 
 	// 4. 招募助战镜像补齐队伍
