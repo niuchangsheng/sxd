@@ -139,7 +139,11 @@ func BuildTowerGetInfoPacket(prevAct uint32) *Packet {
 	if prevAct != 0 {
 		w.WriteUint32(prevAct)
 	}
-	return NewPacket(ActionIDTowerGetInfo, w.Bytes())
+	pkt := NewPacket(ActionIDTowerGetInfo, w.Bytes())
+	if prevAct != 0 {
+		pkt.HasPrevAct = true
+	}
+	return pkt
 }
 
 // BuildTowerChallengePacket 构造挑战六道轮回塔指定层封包 (Module 32, Action 2)。
@@ -162,7 +166,11 @@ func BuildTowerChallengePacket(warIdx uint8, autoSellL, autoSellZ bool, prevAct 
 	if prevAct != 0 {
 		w.WriteUint32(prevAct)
 	}
-	return NewPacket(ActionIDTowerStartChallenge, w.Bytes())
+	pkt := NewPacket(ActionIDTowerStartChallenge, w.Bytes())
+	if prevAct != 0 {
+		pkt.HasPrevAct = true
+	}
+	return pkt
 }
 
 // BuildTowerResetPacket 构造重置六道轮回塔层数封包 (Module 32, Action 3)。
@@ -171,7 +179,11 @@ func BuildTowerResetPacket(prevAct uint32) *Packet {
 	if prevAct != 0 {
 		w.WriteUint32(prevAct)
 	}
-	return NewPacket(ActionIDTowerResetLayer, w.Bytes())
+	pkt := NewPacket(ActionIDTowerResetLayer, w.Bytes())
+	if prevAct != 0 {
+		pkt.HasPrevAct = true
+	}
+	return pkt
 }
 
 // BuildTowerStartAutoChallengePacket 构造开始六道轮回自动爬塔/扫荡封包 (Module 32, Action 4)。
@@ -190,7 +202,11 @@ func BuildTowerStartAutoChallengePacket(autoSellL, autoSellZ bool, prevAct uint3
 	if prevAct != 0 {
 		w.WriteUint32(prevAct)
 	}
-	return NewPacket(ActionIDTowerStartAutoChallenge, w.Bytes())
+	pkt := NewPacket(ActionIDTowerStartAutoChallenge, w.Bytes())
+	if prevAct != 0 {
+		pkt.HasPrevAct = true
+	}
+	return pkt
 }
 
 // BuildTowerStopAutoChallengePacket 构造停止六道轮回自动挑战封包 (Module 32, Action 5)。
@@ -199,7 +215,11 @@ func BuildTowerStopAutoChallengePacket(prevAct uint32) *Packet {
 	if prevAct != 0 {
 		w.WriteUint32(prevAct)
 	}
-	return NewPacket(ActionIDTowerStopAutoChallenge, w.Bytes())
+	pkt := NewPacket(ActionIDTowerStopAutoChallenge, w.Bytes())
+	if prevAct != 0 {
+		pkt.HasPrevAct = true
+	}
+	return pkt
 }
 
 // BuildTowerQuicklyAutoChallengePacket 构造秒完成/加速自动挑战封包 (Module 32, Action 7)。
@@ -218,7 +238,11 @@ func BuildTowerQuicklyAutoChallengePacket(autoSellL, autoSellZ bool, prevAct uin
 	if prevAct != 0 {
 		w.WriteUint32(prevAct)
 	}
-	return NewPacket(ActionIDTowerQuicklyAutoChallenge, w.Bytes())
+	pkt := NewPacket(ActionIDTowerQuicklyAutoChallenge, w.Bytes())
+	if prevAct != 0 {
+		pkt.HasPrevAct = true
+	}
+	return pkt
 }
 
 // BuildSealSoulGetTowerKeyPacket 构造查询爬塔钥匙封包 (Module 34, Action 7)。

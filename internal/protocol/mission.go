@@ -383,7 +383,9 @@ func BuildMissionGetSectionsPacket(mapID int32, prevAct uint32) *Packet {
 		prevAct = ActionIDPlayerGetInfo
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMissionGetSections, w.Bytes())
+	pkt := NewPacket(ActionIDMissionGetSections, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // ParseMissionGetSectionsResponse 解析大地图章节副本进度回包 (Module 4, Action 0)。
@@ -427,21 +429,24 @@ func BuildMissionPlotEnterPacket(missionID int32, prevAct uint32) *Packet {
 		prevAct = ActionIDMissionGetSections
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMissionPlotEnter, w.Bytes())
+	pkt := NewPacket(ActionIDMissionPlotEnter, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // BuildMissionFightMonsterPacket 构造挑战副本内怪物编队请求封包 (Module 4, Action 2)。
-// 2026 网关协议结构: [Int32(monsterTeamID), Int8(attackType), Int32(hireRoleID), Uint32(prevAct)] (共 13 字节)。
-func BuildMissionFightMonsterPacket(monsterTeamID int32, attackType int8, hireRoleID int32, prevAct uint32) *Packet {
+// 官方 AS3 协议结构契约: [Int32(monsterTeamID), Int8(attackType), Uint32(prevAct)] (共 9 字节)。
+func BuildMissionFightMonsterPacket(monsterTeamID int32, attackType int8, prevAct uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(monsterTeamID)
 	w.WriteInt8(attackType)
-	w.WriteInt32(hireRoleID)
 	if prevAct == 0 {
 		prevAct = ActionIDMissionPlotEnter
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMissionFightMonster, w.Bytes())
+	pkt := NewPacket(ActionIDMissionFightMonster, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // BuildMissionRankPacket 构造副本通关星级评价结算请求封包 (Module 4, Action 3)。
@@ -451,7 +456,9 @@ func BuildMissionRankPacket(prevAct uint32) *Packet {
 		prevAct = ActionIDMissionFightMonster
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMissionRank, w.Bytes())
+	pkt := NewPacket(ActionIDMissionRank, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // BuildMissionOpenBoxPacket 构造开启副本通关宝箱请求封包 (Module 4, Action 4)。
@@ -461,7 +468,9 @@ func BuildMissionOpenBoxPacket(prevAct uint32) *Packet {
 		prevAct = ActionIDMissionRank
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMissionOpenBox, w.Bytes())
+	pkt := NewPacket(ActionIDMissionOpenBox, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // BuildMissionPickupAwardPacket 构造拾取副本通关奖励请求封包 (Module 4, Action 5)。
@@ -471,6 +480,8 @@ func BuildMissionPickupAwardPacket(prevAct uint32) *Packet {
 		prevAct = ActionIDMissionOpenBox
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMissionPickupAward, w.Bytes())
+	pkt := NewPacket(ActionIDMissionPickupAward, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 

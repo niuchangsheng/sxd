@@ -1445,8 +1445,8 @@ func TestSixRealmsRoutine_ExecutionFlow(t *testing.T) {
 		t.Fatalf("SixRealmsRoutine.Execute failed: %v", err)
 	}
 
-	if cur := sequenceWar.Load(); cur <= 25 {
-		t.Errorf("expected sequenceWar to advance past 25, got %d", cur)
+	if cur := sequenceWar.Load(); cur < 25 {
+		t.Errorf("expected sequenceWar to advance to at least 25, got %d", cur)
 	}
 }
 

@@ -128,6 +128,7 @@ type RoleSession struct {
 	isCustomDialer    bool
 
 	lastActionID atomic.Uint32
+	lastSendTime atomic.Int64
 }
 
 // NewRoleSession 构造一个新的角色会话实例。
@@ -670,18 +671,6 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 				"ingots", infoRes.Ingots,
 				"stamina", infoRes.Stamina,
 			)
-
-			// 5. 现代版神仙道机制：离线自动打坐，上线后直接结算并领取累积练功经验
-			go func() {
-				select {
-				case <-s.ctx.Done():
-					return
-				case <-time.After(500 * time.Millisecond):
-					if err := s.ClaimTownPracticeExp(s.ctx); err != nil {
-						slog.Debug("上线直接领取打坐经验跳过或无需领取", "role_id", s.RoleID(), "err", err)
-					}
-				}
-			}()
 		}
 	}
 
@@ -1015,17 +1004,10 @@ func (s *RoleSession) BeelzebubTrialsGetWarResult(ctx context.Context) (*protoco
 }
 
 // BeelzebubTrialsLeaveWar 退出魔王试炼战斗结算场景 (Module 57, Action 16)。
+// 根据官方 AS3 客户端协议实现，leave_war 为单向离场通知，服务端不回包。
 func (s *RoleSession) BeelzebubTrialsLeaveWar(ctx context.Context, warID int32) error {
 	pkt := protocol.BuildBeelzebubTrialsLeaveWarPacket(warID, s.LastActionID())
-	timeout := 3 * time.Second
-	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
-		timeout = 300 * time.Millisecond
-	}
-	cCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	_, _ = s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsLeaveWar)
-	return nil
+	return s.Send(pkt)
 }
 
 // BeelzebubTrialsExitTeam 退出或解散当前队伍 (Module 57, Action 7)。
@@ -1247,6 +1229,7 @@ func (s *RoleSession) BeelzebubTrialsAutoChallenge(ctx context.Context, preferBo
 
 // GetTowerInfo 查询六道轮回塔面板与当前挑战层进度 (Mod_Tower_Base.get_tower_info, ActionID 0x00200000)。
 func (s *RoleSession) GetTowerInfo(ctx context.Context) (*protocol.TowerInfo, error) {
+	// 1. 获取当前六道轮回塔面板与进度信息 (对齐前序动作号)
 	pkt := protocol.BuildTowerGetInfoPacket(s.LastActionID())
 	timeout := 3 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
@@ -1294,7 +1277,7 @@ func (s *RoleSession) SellItem(ctx context.Context, gridID int16) (bool, error) 
 // ChallengeTower 发起六道轮回塔单层战斗挑战 (Mod_Tower_Base.start_challenge, ActionID 0x00200002)。
 func (s *RoleSession) ChallengeTower(ctx context.Context, warIdx uint8, autoSellL, autoSellZ bool) (*protocol.TowerChallengeResult, error) {
 	pkt := protocol.BuildTowerChallengePacket(warIdx, autoSellL, autoSellZ, s.LastActionID())
-	timeout := 5 * time.Second
+	timeout := 10 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1465,14 +1448,14 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 					Payload:    cloned,
 					HasPrevAct: true,
 				}
-			} else if (p.HasPrevAct || mod == 3 || mod == 4 || mod == 25 || p.ActionID == s.cfg.HeartbeatActionID) && len(p.Payload) >= 4 {
+			} else if (p.HasPrevAct || mod == 3 || mod == 4 || mod == 25 || mod == 32 || p.ActionID == s.cfg.HeartbeatActionID) && len(p.Payload) >= 4 {
 				cloned := make([]byte, len(p.Payload))
 				copy(cloned, p.Payload)
 				binary.BigEndian.PutUint32(cloned[len(cloned)-4:], prev)
 				p = &protocol.Packet{
 					ActionID:   p.ActionID,
 					Payload:    cloned,
-					HasPrevAct: p.HasPrevAct,
+					HasPrevAct: true,
 				}
 			}
 		}
@@ -1480,7 +1463,10 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 
 	err := protocol.WritePacket(s.conn, p)
 	if err == nil && p != nil {
-		s.lastActionID.Store(p.ActionID)
+		s.lastSendTime.Store(time.Now().UnixNano())
+		if p.ActionID != s.cfg.HeartbeatActionID {
+			s.lastActionID.Store(p.ActionID)
+		}
 		slog.Debug("发送网关请求", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", p.ActionID, p.ActionID>>16, p.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(p.Payload))
 	}
 	return err
@@ -1499,8 +1485,11 @@ func (s *RoleSession) SendCompressed(p *protocol.Packet) error {
 	}
 
 	err := protocol.WriteCompressedPacket(s.conn, p)
-	if err == nil && p != nil && p.ActionID != s.cfg.HeartbeatActionID {
-		s.lastActionID.Store(p.ActionID)
+	if err == nil && p != nil {
+		s.lastSendTime.Store(time.Now().UnixNano())
+		if p.ActionID != s.cfg.HeartbeatActionID {
+			s.lastActionID.Store(p.ActionID)
+		}
 	}
 	return err
 }
@@ -1518,10 +1507,13 @@ func (s *RoleSession) SendRaw(data []byte) error {
 	}
 
 	_, err := s.conn.Write(data)
-	if err == nil && len(data) >= 8 {
-		actID := binary.BigEndian.Uint32(data[4:8])
-		if actID != s.cfg.HeartbeatActionID {
-			s.lastActionID.Store(actID)
+	if err == nil {
+		s.lastSendTime.Store(time.Now().UnixNano())
+		if len(data) >= 8 {
+			actID := binary.BigEndian.Uint32(data[4:8])
+			if actID != s.cfg.HeartbeatActionID {
+				s.lastActionID.Store(actID)
+			}
 		}
 	}
 	return err
@@ -1674,6 +1666,27 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 			return s.handleConnectFailure(err)
 
 		case <-ticker.C:
+			// 若当前正有业务请求在等待回包 (pendingCalls > 0)，严禁发送心跳包截断业务
+			s.handlerMu.Lock()
+			hasPending := false
+			for _, calls := range s.pendingCalls {
+				if len(calls) > 0 {
+					hasPending = true
+					break
+				}
+			}
+			s.handlerMu.Unlock()
+			if hasPending {
+				continue
+			}
+
+			// 仅在真实空闲期（距上次发送业务包超过心跳间隔）才发送保活心跳包
+			// 避免在耗时较长的战斗计算/大报文传输期间（如六道轮回塔、剧情挑战）用心跳包截断网关的会话传输
+			lastSend := time.Unix(0, s.lastSendTime.Load())
+			if time.Since(lastSend) < s.cfg.HeartbeatInterval {
+				continue
+			}
+
 			// 发送心跳包：携带 4 字节前序 ActionID（神仙道网关防假死与保活校验）
 			prevAct := s.lastActionID.Load()
 			if prevAct == 0 {
@@ -1687,7 +1700,6 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 				s.closeCurrentConn()
 				return s.handleConnectFailure(err)
 			}
-			s.lastActionID.Store(s.cfg.HeartbeatActionID)
 		}
 	}
 }

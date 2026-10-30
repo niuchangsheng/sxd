@@ -128,11 +128,53 @@ func main() {
 		fmt.Printf("6. town_quest_show err: %v\n", err)
 	}
 
-	// 7. list_player_quest (0x00030006)
-	if resp, err := callWithPrev(0x00030006, nil); err == nil {
-		d := decompressIfZlib(resp.Payload)
-		fmt.Printf("7. list_player_quest (%dB): %s\n", len(d), hex.EncodeToString(d))
+	// 8. Test enter_mission 139 and fight_monster
+	fmt.Println("=== Testing get_sections map 9 ===")
+	secResp, secErr := callWithPrev(protocol.ActionIDMissionGetSections, func(w *protocol.Writer) {
+		w.WriteInt32(9)
+	})
+	fmt.Printf("get_sections: err=%v resp_len=%d\n", secErr, len(secResp.Payload))
+	if secErr == nil && len(secResp.Payload) > 2 {
+		r := protocol.NewReader(secResp.Payload)
+		cnt, _ := r.ReadUint16()
+		fmt.Printf("Missions count in map 9: %d\n", cnt)
+		for i := uint16(0); i < cnt; i++ {
+			mid, _ := r.ReadInt32()
+			open, _ := r.ReadInt8()
+			b2, _ := r.ReadUint8()
+			b3, _ := r.ReadInt8()
+			s1, _ := r.ReadInt16()
+			b4, _ := r.ReadInt8()
+			fmt.Printf("  Mission %d: open=%d b2=%d b3=%d s1=%d b4=%d\n", mid, open, b2, b3, s1, b4)
+		}
+	}
+
+	fmt.Println("=== Testing enter_mission 139 ===")
+	enterResp, enterErr := callWithPrev(protocol.ActionIDMissionPlotEnter, func(w *protocol.Writer) {
+		w.WriteInt32(139)
+	})
+	if enterErr != nil {
+		fmt.Printf("enter_mission err: %v\n", enterErr)
 	} else {
-		fmt.Printf("7. list_player_quest err: %v\n", err)
+		fmt.Printf("enter_mission resp (%dB): %s\n", len(enterResp.Payload), hex.EncodeToString(enterResp.Payload))
+		r := protocol.NewReader(enterResp.Payload)
+		status, _ := r.ReadUint8()
+		mid, _ := r.ReadInt32()
+		stam, _ := r.ReadInt32()
+		b, _ := r.ReadInt8()
+		i1, _ := r.ReadInt32()
+		i2, _ := r.ReadInt32()
+		mCnt, _ := r.ReadUint16()
+		fmt.Printf("enter_mission: status=%d mid=%d stam=%d b=%d i1=%d i2=%d mCnt=%d\n", status, mid, stam, b, i1, i2, mCnt)
+		for j := uint16(0); j < mCnt; j++ {
+			mt, _ := r.ReadInt32()
+			fmt.Printf("  MonsterTeam[%d] = %d\n", j, mt)
+		}
+		dCnt, _ := r.ReadUint16()
+		fmt.Printf("  Defeated mCnt=%d\n", dCnt)
+		for j := uint16(0); j < dCnt; j++ {
+			mt, _ := r.ReadInt32()
+			fmt.Printf("  Defeated MonsterTeam[%d] = %d\n", j, mt)
+		}
 	}
 }

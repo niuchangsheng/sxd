@@ -6,6 +6,7 @@ package dungeon
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -861,8 +862,8 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 4. 判断是否需要重置: 如果当前道已全部通关 (SequenceWar > 25)
-			if info.SequenceWar > 25 {
+			// 4. 判断是否需要重置: 如果当前道已全部通关 (SequenceWar >= 25)
+			if info.SequenceWar >= 25 {
 				if cfg.AutoReset && info.ResetNum > 0 {
 					slog.Info("六道轮回当前道已全通，检测到今日剩余免费重置次数，执行重置",
 						"role_id", session.RoleID(),
@@ -881,7 +882,7 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 					if newInfo, nErr := session.GetTowerInfo(ctx); nErr == nil {
 						info = newInfo
 					} else {
-						info.SequenceWar = 1
+						info.SequenceWar = 0
 					}
 				} else {
 					slog.Info("六道轮回当前道今日已通关且无需重置或无免费重置次数，挑战完成",
@@ -893,8 +894,9 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 				}
 			}
 
-			// 5. 循环推进挑战未通关层数 (SequenceWar .. 25)
-			for info.SequenceWar <= 25 {
+			// 5. 循环推进挑战未通关层数 (从已通关层数后一关开始推进: SequenceWar + 1 .. 25)
+			nextFloor := info.SequenceWar + 1
+			for floor := nextFloor; floor <= 25; floor++ {
 				select {
 				case <-ctx.Done():
 					slog.Info("六道轮回挑战被外部上下文中断", "role_id", session.RoleID())
@@ -902,39 +904,41 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 				default:
 				}
 
+				// 服务端连续战斗存在冷却保护 (对齐官方客户端 CommonConstant.DelayTimeToWar，需留足间隔)
+				time.Sleep(1500 * time.Millisecond)
+
 				slog.Info("正在挑战六道轮回塔关卡",
 					"role_id", session.RoleID(),
 					"layer", info.Layer,
 					"layer_name", protocol.TowerLayerName(info.Layer),
-					"floor", info.SequenceWar,
+					"floor", floor,
 				)
 
 				// 自动卖出灵件策略
-				res, chErr := session.ChallengeTower(ctx, info.SequenceWar, cfg.AutoSellBlue, cfg.AutoSellPurple)
+				res, chErr := session.ChallengeTower(ctx, floor, cfg.AutoSellBlue, cfg.AutoSellPurple)
 				if chErr != nil {
-					slog.Warn("六道轮回塔挑战请求失败", "floor", info.SequenceWar, "err", chErr)
+					slog.Warn("六道轮回塔挑战请求失败", "floor", floor, "err", chErr)
 					break
 				}
 
 				if res.Result == protocol.TowerResultSuccess {
 					slog.Info("六道轮回塔关卡挑战胜利",
 						"role_id", session.RoleID(),
-						"floor", info.SequenceWar,
+						"floor", floor,
 						"gain_exp", res.WarExp,
 						"gain_fame", res.WarFame,
 						"gain_coin", res.WarCoin,
 						"soul_id", res.WarSoulID,
 					)
-					if info.SequenceWar == 25 {
+					info.SequenceWar = floor
+					if floor == 25 {
 						slog.Info("恭喜通关六道轮回当前道全部 25 层！",
 							"role_id", session.RoleID(),
 							"layer", info.Layer,
 							"layer_name", protocol.TowerLayerName(info.Layer),
 						)
-						info.SequenceWar = 26
 						break
 					}
-					info.SequenceWar++
 				} else {
 					// 挑战失败或者遭遇限制 (WAR_CD, FULL_BAG, NO_LV 等)
 					switch res.Result {
@@ -1451,6 +1455,7 @@ func executeQuestCycle(
 			break
 		}
 	}
+	resetTownScene(session)
 }
 
 // executeAuthoritativeQuestCycle 基于真实网关 Mod 3 (Mod_Quest_Base) 与 Mod 4 (Mod_Mission_Base) 驱动全自动主支线推图闭环。
@@ -1528,10 +1533,22 @@ func executeAuthoritativeQuestCycle(
 
 		// -----------------------------------------------------------------
 		// Step 2: 接取所有满足等级的可接取任务 (State == 0: Acceptable)
+		// 神仙道同时进行中的任务上限为 5 个 (State == 1)
 		// -----------------------------------------------------------------
 		acceptedAny := false
 		playerLevel := session.GetPlayerState().Level
+
+		activeCount := 0
 		for _, it := range items {
+			if it.State == 1 {
+				activeCount++
+			}
+		}
+
+		for _, it := range items {
+			if activeCount >= 5 {
+				break
+			}
 			if it.State != 0 {
 				continue
 			}
@@ -1558,6 +1575,7 @@ func executeAuthoritativeQuestCycle(
 				slog.Info("成功接受任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 				acceptedAny = true
 				progressMade = true
+				activeCount++
 				time.Sleep(80 * time.Millisecond)
 			} else {
 				var resCode uint8
@@ -1569,6 +1587,8 @@ func executeAuthoritativeQuestCycle(
 					return
 				}
 				slog.Warn("接受任务未成功", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title, "result", resCode, "err", accErr)
+				// 一旦接取任务超时或失败（如已达上限或服务端无响应），停止尝试后续任务，防止连续超时阻塞调度器
+				break
 			}
 		}
 
@@ -1693,6 +1713,7 @@ func executeAuthoritativeQuestCycle(
 			break
 		}
 	}
+	resetTownScene(session)
 }
 
 // submitCompleteQuest 向服务端发送完成并交付任务请求 (Mod 3, Act 5: complete_quest)。
@@ -1768,6 +1789,14 @@ func advanceQuestMission(
 	if err != nil || targetMission == nil {
 		return false
 	}
+	if q.Type != 1 {
+		slog.Info("任务关卡属于非主线剧情任务（支线/日常需扫荡），剧情推图跳过", "quest_id", q.ID, "title", q.Title, "type", q.Type)
+		return false
+	}
+	if targetMission.Type != 0 {
+		slog.Info("任务关卡属于非普通主线副本，剧情推图跳过", "quest_id", q.ID, "title", q.Title, "mission_id", targetMission.ID, "type", targetMission.Type)
+		return false
+	}
 
 	const maxStageSteps = 12
 	lastCount := initialCount
@@ -1783,7 +1812,7 @@ func advanceQuestMission(
 		var prereqMission *dictionary.Mission
 		if targetMission.MapID > 0 {
 			secPkt := protocol.BuildMissionGetSectionsPacket(int32(targetMission.MapID), session.LastActionID())
-			secCtx, secCancel := context.WithTimeout(ctx, 3*time.Second)
+			secCtx, secCancel := context.WithTimeout(ctx, 2*time.Second)
 			secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 			secCancel()
 
@@ -1822,6 +1851,17 @@ func advanceQuestMission(
 			}
 			clearedPrereq = true
 			continue
+		}
+
+		if clearedMissions[targetMission.ID] {
+			slog.Info("任务目标关卡已首通，跳过主线单人副本挑战（支线目标需通过扫荡完成）",
+				"role_id", session.RoleID(),
+				"quest_id", q.ID,
+				"title", q.Title,
+				"mission_id", targetMission.ID,
+			)
+			failedMissions[targetMission.ID] = true
+			return false
 		}
 
 		// 正式挑战任务目标关卡
@@ -1865,7 +1905,7 @@ func advanceQuestMission(
 				)
 				lastCount = matchedItem.CurrentCount
 				noCountGainRuns = 0
-				continue
+				return true
 			}
 			noCountGainRuns++
 			// 若杀怪任务挑战后计数未增长，或掉落物任务连续 2 次未掉落，退出本轮避免空转
@@ -1878,6 +1918,12 @@ func advanceQuestMission(
 	}
 
 	return clearedPrereq || lastCount > initialCount
+}
+
+func resetTownScene(session *client.RoleSession) {
+	// 在神仙道官方客户端架构中，通关剧情副本或任务流转退出后直接留在当前主界面，
+	// 严禁在会话运行中途重放登录期握手包 (0x0048/0x0063/0x00A50000/0x0002)，
+	// 否则会重置网关状态机，导致后续六道轮回等战斗协议被服务端静默丢弃。
 }
 
 // challengeStoryMission 使用 Module 4 (Mod_Mission_Base) 完整五步状态机通关指定剧情关卡：
@@ -1915,27 +1961,40 @@ func challengeStoryMission(
 		return false
 	}
 
-	// 1. 进入副本 (Mod 4, Act 1: enter_mission)
+	// 0. 激活章节关卡列表上下文 (Mod 4, Act 0: get_sections)，对齐官方前置调用链
+	if session.LastActionID() != protocol.ActionIDMissionGetSections {
+		mapID := int32(m.MapID)
+		if mapID <= 0 {
+			mapID = int32(m.SectionID)
+		}
+		secPkt := protocol.BuildMissionGetSectionsPacket(mapID, session.LastActionID())
+		secCtx, secCancel := context.WithTimeout(ctx, 2*time.Second)
+		_, _ = session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
+		secCancel()
+	}
+
+	// 1. 进入副本 (Mod 4, Act 1: enter_mission, 前置对齐 ActionIDMissionGetSections)
 	enterPkt := protocol.BuildMissionPlotEnterPacket(int32(m.ID), session.LastActionID())
-	enterCtx, enterCancel := context.WithTimeout(ctx, 4*time.Second)
+	enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
 	enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionIDMissionPlotEnter)
 	enterCancel()
 
 	if enterErr != nil || enterResp == nil || len(enterResp.Payload) == 0 {
 		slog.Warn("进入剧情副本未收到有效响应", "role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name, "err", enterErr)
+		resetTownScene(session)
 		return false
 	}
 
 	enterStatus := enterResp.Payload[0]
 	if enterStatus == 20 { // AWARD_BOX_NO_OPEN: 上次通关宝箱尚未开启或拾取，先行清理再重进
 		boxCtx, boxCancel := context.WithTimeout(ctx, 2*time.Second)
-		_, _ = session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(session.LastActionID()), protocol.ActionIDMissionOpenBox)
+		_, _ = session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(protocol.ActionIDMissionRank), protocol.ActionIDMissionOpenBox)
 		boxCancel()
 		pickCtx, pickCancel := context.WithTimeout(ctx, 2*time.Second)
-		_, _ = session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(session.LastActionID()), protocol.ActionIDMissionPickupAward)
+		_, _ = session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
 		pickCancel()
 
-		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), session.LastActionID())
+		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), protocol.ActionIDMissionGetSections)
 		enterCtxR, enterCancelR := context.WithTimeout(ctx, 4*time.Second)
 		enterResp, enterErr = session.Call(enterCtxR, enterPkt, protocol.ActionIDMissionPlotEnter)
 		enterCancelR()
@@ -1951,7 +2010,7 @@ func challengeStoryMission(
 		if !ensureStamina() {
 			return false
 		}
-		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), session.LastActionID())
+		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), protocol.ActionIDMissionGetSections)
 		enterCtx2, enterCancel2 := context.WithTimeout(ctx, 4*time.Second)
 		enterResp, enterErr = session.Call(enterCtx2, enterPkt, protocol.ActionIDMissionPlotEnter)
 		enterCancel2()
@@ -1966,44 +2025,63 @@ func challengeStoryMission(
 		return false
 	}
 
-	// 2. 逐波次挑战副本内全部怪物编队 (Mod 4, Act 2: fight_monster)
+	// 依据服务端 enter_mission 实时回包动态获取当前关卡待挑战怪物波次列表
+	// 官方回包规范: [UByte(status), Int32(mid), Int32(stam), Byte(b), Int32(i1), Int32(i2), Uint16(mCnt), ...[Int32(mt)]]
+	var activeMonsterTeams []int32
+	if len(enterResp.Payload) >= 20 {
+		mCnt := binary.BigEndian.Uint16(enterResp.Payload[18:20])
+		if mCnt == 0 {
+			slog.Info("剧情副本中无待挑战怪物（该关卡主线已通关）", "role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name)
+			clearedMissions[m.ID] = true
+			return false
+		}
+		r := protocol.NewReader(enterResp.Payload[20:])
+		for i := uint16(0); i < mCnt && r.Remaining() >= 4; i++ {
+			mt, _ := r.ReadInt32()
+			activeMonsterTeams = append(activeMonsterTeams, mt)
+		}
+	}
+	if len(activeMonsterTeams) > 0 {
+		monsterTeams = activeMonsterTeams
+	}
+
+	// 2. 逐波次挑战副本内怪物编队 (Mod 4, Act 2: fight_monster)
+	anyWaveSuccess := false
 	for idx, mtID := range monsterTeams {
 		if idx > 0 {
-			// 服务端连续战斗存在约 1.5s 冷却保护 (对齐客户端 CommonConstant.DelayTimeToWar)
+			// 服务端连续战斗存在冷却保护 (对齐客户端 CommonConstant.DelayTimeToWar)
 			select {
 			case <-ctx.Done():
-				return false
-			case <-time.After(1500 * time.Millisecond):
+				resetTownScene(session)
+				return anyWaveSuccess
+			case <-time.After(1000 * time.Millisecond):
 			}
 		}
 
-		var fightResp *protocol.Packet
-		var fightErr error
-		for attempt := 0; attempt < 2; attempt++ {
-			if attempt > 0 {
-				select {
-				case <-ctx.Done():
-					return false
-				case <-time.After(1500 * time.Millisecond):
-				}
-			}
-			fightPkt := protocol.BuildMissionFightMonsterPacket(mtID, 0, 0, session.LastActionID())
-			fightCtx, fightCancel := context.WithTimeout(ctx, 5*time.Second)
-			fightResp, fightErr = session.Call(fightCtx, fightPkt, protocol.ActionIDMissionFightMonster)
-			fightCancel()
-			if fightErr == nil && fightResp != nil && len(fightResp.Payload) > 0 {
-				break
-			}
-		}
+		fightPkt := protocol.BuildMissionFightMonsterPacket(mtID, 0, session.LastActionID())
+		fightCtx, fightCancel := context.WithTimeout(ctx, 3*time.Second)
+		fightResp, fightErr := session.Call(fightCtx, fightPkt, protocol.ActionIDMissionFightMonster)
+		fightCancel()
 
 		if fightErr != nil || fightResp == nil || len(fightResp.Payload) == 0 {
+			if anyWaveSuccess {
+				slog.Info("剧情副本已击败当前可用波次怪物，返回城镇同步进度", "role_id", session.RoleID(), "mission_id", m.ID, "monster_team_id", mtID)
+				resetTownScene(session)
+				return true
+			}
 			slog.Warn("剧情副本挑战怪物未收到响应", "role_id", session.RoleID(), "mission_id", m.ID, "monster_team_id", mtID, "err", fightErr)
+			resetTownScene(session)
 			return false
 		}
 
 		resByte := fightResp.Payload[len(fightResp.Payload)-1]
 		// 10 = SUCCESS, 19 = TRUNK_ALREADY_FIGHT, 30 = HASCHALLENGED (该波怪物已击败，继续下一波)
 		if resByte != protocol.MissionResultSuccess && resByte != 19 && resByte != 30 {
+			if anyWaveSuccess {
+				slog.Info("剧情副本后续波次暂不可用，返回城镇同步进度", "role_id", session.RoleID(), "mission_id", m.ID, "monster_team_id", mtID)
+				resetTownScene(session)
+				return true
+			}
 			slog.Warn("剧情副本战斗未获胜或受阻",
 				"role_id", session.RoleID(),
 				"mission_id", m.ID,
@@ -2012,24 +2090,29 @@ func challengeStoryMission(
 				"monster_team_id", mtID,
 				"result", resByte,
 			)
+			resetTownScene(session)
 			return false
 		}
+		anyWaveSuccess = true
 	}
 
 	// 3. 结算星级评价 (Mod 4, Act 3: rank_mission)
 	rankCtx, rankCancel := context.WithTimeout(ctx, 3*time.Second)
-	_, _ = session.Call(rankCtx, protocol.BuildMissionRankPacket(session.LastActionID()), protocol.ActionIDMissionRank)
+	_, _ = session.Call(rankCtx, protocol.BuildMissionRankPacket(protocol.ActionIDMissionFightMonster), protocol.ActionIDMissionRank)
 	rankCancel()
 
 	// 4. 开启通关宝箱 (Mod 4, Act 4: open_box)
 	boxCtx, boxCancel := context.WithTimeout(ctx, 3*time.Second)
-	_, _ = session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(session.LastActionID()), protocol.ActionIDMissionOpenBox)
+	_, _ = session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(protocol.ActionIDMissionRank), protocol.ActionIDMissionOpenBox)
 	boxCancel()
 
 	// 5. 拾取宝箱奖励 (Mod 4, Act 5: pickup_award)
 	pickCtx, pickCancel := context.WithTimeout(ctx, 3*time.Second)
-	_, _ = session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(session.LastActionID()), protocol.ActionIDMissionPickupAward)
+	_, _ = session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
 	pickCancel()
+
+	// 通关完成，返回城镇场景
+	resetTownScene(session)
 
 	// 预留战斗冷却间隔，避免下一关卡首波战斗触发服务端 CD
 	time.Sleep(1200 * time.Millisecond)
