@@ -789,17 +789,19 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 
 // SixRealmsConfig 六道轮回挑战与灵件处理策略配置。
 type SixRealmsConfig struct {
-	AutoReset      bool `yaml:"auto_reset" json:"auto_reset"`         // 通关后是否自动消耗每日免费重置次数
-	AutoSellBlue   bool `yaml:"auto_sell_blue" json:"auto_sell_blue"`   // 挑战获胜是否自动出售蓝色灵件
-	AutoSellPurple bool `yaml:"auto_sell_purple" json:"auto_sell_purple"` // 挑战获胜是否自动出售紫色灵件
+	AutoReset       bool `yaml:"auto_reset" json:"auto_reset"`         // 通关后是否自动消耗每日免费重置次数
+	AutoSellBlue    bool `yaml:"auto_sell_blue" json:"auto_sell_blue"`   // 挑战获胜是否自动出售蓝色灵件
+	AutoSellPurple  bool `yaml:"auto_sell_purple" json:"auto_sell_purple"` // 挑战获胜是否自动出售紫色灵件
+	MaxFloorRetries int  `yaml:"max_floor_retries" json:"max_floor_retries"` // 每层挑战失败最大重试次数 (每层单独计算，失败达到上限后退出)
 }
 
 // DefaultSixRealmsConfig 返回六道轮回默认策略配置。
 func DefaultSixRealmsConfig() SixRealmsConfig {
 	return SixRealmsConfig{
-		AutoReset:      true,
-		AutoSellBlue:   true,
-		AutoSellPurple: false,
+		AutoReset:       true,
+		AutoSellBlue:    true,
+		AutoSellPurple:  false,
+		MaxFloorRetries: 3,
 	}
 }
 
@@ -862,8 +864,8 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 4. 判断是否需要重置: 如果当前道已全部通关 (SequenceWar >= 25)
-			if info.SequenceWar >= 25 {
+			// 4. 判断是否需要重置: 如果当前道已全部通关 (SequenceWar > 25)
+			if info.SequenceWar > 25 {
 				if cfg.AutoReset && info.ResetNum > 0 {
 					slog.Info("六道轮回当前道已全通，检测到今日剩余免费重置次数，执行重置",
 						"role_id", session.RoleID(),
@@ -882,7 +884,7 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 					if newInfo, nErr := session.GetTowerInfo(ctx); nErr == nil {
 						info = newInfo
 					} else {
-						info.SequenceWar = 0
+						info.SequenceWar = 1
 					}
 				} else {
 					slog.Info("六道轮回当前道今日已通关且无需重置或无免费重置次数，挑战完成",
@@ -894,63 +896,115 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 				}
 			}
 
-			// 5. 循环推进挑战未通关层数 (从已通关层数后一关开始推进: SequenceWar + 1 .. 25)
-			nextFloor := info.SequenceWar + 1
-			for floor := nextFloor; floor <= 25; floor++ {
-				select {
-				case <-ctx.Done():
-					slog.Info("六道轮回挑战被外部上下文中断", "role_id", session.RoleID())
-					return ctx.Err()
-				default:
-				}
+			// 5. 循环推进挑战未通关层数 (SequenceWar .. 25)
+			// 注意: info.SequenceWar 是当前待挑战层数 (1~25)
+			startFloor := int(info.SequenceWar)
+			if startFloor <= 0 {
+				startFloor = 1
+			}
 
-				// 服务端连续战斗存在冷却保护 (对齐官方客户端 CommonConstant.DelayTimeToWar，需留足间隔)
-				time.Sleep(1500 * time.Millisecond)
+			maxRetries := cfg.MaxFloorRetries
+			if maxRetries <= 0 {
+				maxRetries = 3
+			}
 
-				slog.Info("正在挑战六道轮回塔关卡",
-					"role_id", session.RoleID(),
-					"layer", info.Layer,
-					"layer_name", protocol.TowerLayerName(info.Layer),
-					"floor", floor,
-				)
+			for floor := startFloor; floor <= 25; floor++ {
+				floorRetries := 0
+				floorWon := false
 
-				// 自动卖出灵件策略
-				res, chErr := session.ChallengeTower(ctx, floor, cfg.AutoSellBlue, cfg.AutoSellPurple)
-				if chErr != nil {
-					slog.Warn("六道轮回塔挑战请求失败", "floor", floor, "err", chErr)
-					break
-				}
+				for floorRetries < maxRetries {
+					select {
+					case <-ctx.Done():
+						slog.Info("六道轮回挑战被外部上下文中断", "role_id", session.RoleID())
+						return ctx.Err()
+					default:
+					}
 
-				if res.Result == protocol.TowerResultSuccess {
-					slog.Info("六道轮回塔关卡挑战胜利",
+					// 服务端连续战斗存在冷却保护 (对齐官方客户端 CommonConstant.DelayTimeToWar，需留足间隔)
+					time.Sleep(1500 * time.Millisecond)
+
+					slog.Info("正在挑战六道轮回塔关卡",
 						"role_id", session.RoleID(),
+						"layer", info.Layer,
+						"layer_name", protocol.TowerLayerName(info.Layer),
 						"floor", floor,
-						"gain_exp", res.WarExp,
-						"gain_fame", res.WarFame,
-						"gain_coin", res.WarCoin,
-						"soul_id", res.WarSoulID,
+						"retry", floorRetries,
+						"max_retries", maxRetries,
 					)
-					info.SequenceWar = floor
-					if floor == 25 {
-						slog.Info("恭喜通关六道轮回当前道全部 25 层！",
+
+					// 自动卖出灵件策略
+					res, chErr := session.ChallengeTower(ctx, uint8(floor), cfg.AutoSellBlue, cfg.AutoSellPurple)
+					if chErr != nil {
+						floorRetries++
+						slog.Warn("六道轮回塔挑战请求失败",
 							"role_id", session.RoleID(),
-							"layer", info.Layer,
-							"layer_name", protocol.TowerLayerName(info.Layer),
+							"floor", floor,
+							"retry", floorRetries,
+							"max_retries", maxRetries,
+							"err", chErr,
 						)
+						if floorRetries >= maxRetries {
+							slog.Warn("六道轮回当前层重试次数已达上限，终止挑战",
+								"role_id", session.RoleID(),
+								"floor", floor,
+								"retries", floorRetries,
+							)
+							return nil
+						}
+						continue
+					}
+
+					if res.Result == protocol.TowerResultSuccess {
+						slog.Info("六道轮回塔关卡挑战胜利",
+							"role_id", session.RoleID(),
+							"floor", floor,
+							"gain_exp", res.WarExp,
+							"gain_fame", res.WarFame,
+							"gain_coin", res.WarCoin,
+							"soul_id", res.WarSoulID,
+						)
+						info.SequenceWar = uint8(floor + 1)
+						floorWon = true
+						if floor == 25 {
+							slog.Info("恭喜通关六道轮回当前道全部 25 层！",
+								"role_id", session.RoleID(),
+								"layer", info.Layer,
+								"layer_name", protocol.TowerLayerName(info.Layer),
+							)
+						}
 						break
 					}
-				} else {
-					// 挑战失败或者遭遇限制 (WAR_CD, FULL_BAG, NO_LV 等)
-					switch res.Result {
-					case protocol.TowerResultFullBag:
+
+					// 检查不可重试的硬终止条件
+					if res.Result == protocol.TowerResultFullBag {
 						slog.Warn("灵件背包已满，终止六道轮回挑战", "role_id", session.RoleID())
-					case protocol.TowerResultWarCD:
-						slog.Warn("战斗处于冷却中", "role_id", session.RoleID())
-					case protocol.TowerResultFullTimes:
-						slog.Info("今日六道挑战次数已达上限", "role_id", session.RoleID())
-					default:
-						slog.Warn("六道轮回挑战未成功", "role_id", session.RoleID(), "result_code", res.Result)
+						return nil
 					}
+					if res.Result == protocol.TowerResultFullTimes {
+						slog.Info("今日六道挑战次数已达上限", "role_id", session.RoleID())
+						return nil
+					}
+
+					// 挑战失败或者遭遇限制 (WAR_CD, 战力不足等)，每层单独计算重试次数
+					floorRetries++
+					slog.Warn("六道轮回关卡挑战未成功",
+						"role_id", session.RoleID(),
+						"floor", floor,
+						"result_code", res.Result,
+						"retry", floorRetries,
+						"max_retries", maxRetries,
+					)
+					if floorRetries >= maxRetries {
+						slog.Warn("六道轮回当前层挑战失败已达最大重试次数，终止爬塔",
+							"role_id", session.RoleID(),
+							"floor", floor,
+							"retries", floorRetries,
+						)
+						return nil
+					}
+				}
+
+				if !floorWon {
 					break
 				}
 
@@ -1695,7 +1749,7 @@ func executeAuthoritativeQuestCycle(
 			slog.Info("正在推进任务关卡挑战", "role_id", session.RoleID(), "quest_id", q.ID, "title", q.Title, "mission_id", mid)
 
 			if advanceQuestMission(
-				ctx, session, dictRepo, q, it.CurrentCount, ensureStamina,
+				ctx, session, dictRepo, q, it.CurrentCount, it.MaxCount, ensureStamina,
 				totalCostStamina, totalGainExp, totalGainCoins,
 				clearedMissions, failedMissions,
 			) {
@@ -1722,16 +1776,7 @@ func executeAuthoritativeQuestCycle(
 //   - completedState == 0 (且为 16B 完整回包): 背包已满 (NPCDialogViewLang.PackFull)
 //   - completedState == -1 (0xFF): 任务物品不足或未达成 (NPCDialogViewLang.QuestItem)
 func submitCompleteQuest(ctx context.Context, session *client.RoleSession, questID int32) (succeeded bool, packFull bool) {
-	// 1. 先发送 npc_info_by_questid (0x00030002) 激活任务交付上下文
-	infoPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{
-		QuestID: questID,
-		PrevAct: session.LastActionID(),
-	})
-	infoCtx, infoCancel := context.WithTimeout(ctx, 2*time.Second)
-	_, _ = session.Call(infoCtx, infoPkt, protocol.ActionIDQuestComplete)
-	infoCancel()
-
-	// 2. 发送 complete_quest (0x00030005) 真正交付任务并领取奖励
+	// 1. 发送 complete_quest (0x00030005) 真正交付任务并领取奖励
 	subPkt := protocol.BuildSubmitCompleteQuestPacket(questID, session.LastActionID())
 	subCtx, subCancel := context.WithTimeout(ctx, 3*time.Second)
 	resp, err := session.Call(subCtx, subPkt, protocol.ActionIDQuestSubmitComplete)
@@ -1771,13 +1816,14 @@ func submitCompleteQuest(ctx context.Context, session *client.RoleSession, quest
 	return false, false
 }
 
-// advanceQuestMission 推进指定任务的关联剧情关卡（包含自动清理同章节前置未通关小关）。
+// advanceQuestMission 推进指定任务的关联剧情关卡（包含自动清理同章节前置未通关小关与秒扫荡闭环）。
 func advanceQuestMission(
 	ctx context.Context,
 	session *client.RoleSession,
 	dictRepo dictionary.Repository,
 	q *dictionary.Quest,
 	initialCount int32,
+	maxCount int32,
 	ensureStamina func() bool,
 	totalCostStamina *int,
 	totalGainExp *int64,
@@ -1789,8 +1835,8 @@ func advanceQuestMission(
 	if err != nil || targetMission == nil {
 		return false
 	}
-	if q.Type != 1 {
-		slog.Info("任务关卡属于非主线剧情任务（支线/日常需扫荡），剧情推图跳过", "quest_id", q.ID, "title", q.Title, "type", q.Type)
+	if q.Type != 1 && q.Type != 2 {
+		slog.Info("任务关卡属于非主线/支线剧情任务（日常需扫荡），剧情推图跳过", "quest_id", q.ID, "title", q.Title, "type", q.Type)
 		return false
 	}
 	if targetMission.Type != 0 {
@@ -1798,8 +1844,9 @@ func advanceQuestMission(
 		return false
 	}
 
-	const maxStageSteps = 12
+	const maxStageSteps = 10
 	lastCount := initialCount
+	targetMax := maxCount
 	noCountGainRuns := 0
 	clearedPrereq := false
 
@@ -1808,26 +1855,56 @@ func advanceQuestMission(
 			return clearedPrereq || lastCount > initialCount
 		}
 
-		// 查询目标章节已开放的关卡进度 (Mod 4, Act 0: get_sections)
-		var prereqMission *dictionary.Mission
-		if targetMission.MapID > 0 {
-			secPkt := protocol.BuildMissionGetSectionsPacket(int32(targetMission.MapID), session.LastActionID())
-			secCtx, secCancel := context.WithTimeout(ctx, 2*time.Second)
-			secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
-			secCancel()
+		// 计算本批次需要扫荡的次数 (单批最多 5 次以保持平稳)
+		batchCount := uint16(1)
+		if targetMax > lastCount {
+			needed := targetMax - lastCount
+			avail := int32(session.GetStamina() / 5)
+			if avail < needed && ensureStamina != nil {
+				if ensureStamina() {
+					avail = int32(session.GetStamina() / 5)
+				}
+			}
+			if needed > 0 && avail > 0 {
+				cnt := min(needed, avail)
+				if cnt > 5 {
+					cnt = 5
+				}
+				if cnt > 0 {
+					batchCount = uint16(cnt)
+				}
+			}
+		}
 
-			if secErr == nil && secResp != nil {
-				if sections, pErr := protocol.ParseMissionGetSectionsResponse(secResp.Payload); pErr == nil {
-					for _, sec := range sections {
-						if sec.Status == 1 {
-							clearedMissions[int(sec.MissionID)] = true
-						}
-						// 若存在已开放但未通关 (Status == 0) 的前置关卡，且其 MissionLock <= 目标关卡，优先通关前置小关
-						if sec.Status == 0 && int(sec.MissionID) != targetMission.ID && !failedMissions[int(sec.MissionID)] {
-							if sm, mErr := dictRepo.GetMission(int(sec.MissionID)); mErr == nil && sm != nil {
-								if sm.MissionLock <= targetMission.MissionLock {
-									if prereqMission == nil || sm.MissionLock < prereqMission.MissionLock {
-										prereqMission = sm
+		// 1. 优先尝试 Module 25 秒扫荡推进关卡
+		practiced, _, pErr := practiceMission(ctx, session, int32(targetMission.ID), batchCount, ensureStamina, totalCostStamina, totalGainExp, totalGainCoins)
+		if pErr != nil {
+			if errors.Is(pErr, scheduler.ErrStaminaDepleted) || errors.Is(pErr, scheduler.ErrBagFull) {
+				return clearedPrereq || lastCount > initialCount
+			}
+		}
+
+		if !practiced {
+			// 若 Module 25 扫荡受限（如首通尚未解锁），降级检查前置关卡并走剧情副本手动挑战
+			var prereqMission *dictionary.Mission
+			if targetMission.MapID > 0 {
+				secPkt := protocol.BuildMissionGetSectionsPacket(int32(targetMission.MapID), session.LastActionID())
+				secCtx, secCancel := context.WithTimeout(ctx, 2*time.Second)
+				secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
+				secCancel()
+
+				if secErr == nil && secResp != nil {
+					if sections, pErr := protocol.ParseMissionGetSectionsResponse(secResp.Payload); pErr == nil {
+						for _, sec := range sections {
+							if sec.Status == 1 {
+								clearedMissions[int(sec.MissionID)] = true
+							}
+							if sec.Status == 0 && int(sec.MissionID) != targetMission.ID && !failedMissions[int(sec.MissionID)] {
+								if sm, mErr := dictRepo.GetMission(int(sec.MissionID)); mErr == nil && sm != nil {
+									if sm.MissionLock <= targetMission.MissionLock {
+										if prereqMission == nil || sm.MissionLock < prereqMission.MissionLock {
+											prereqMission = sm
+										}
 									}
 								}
 							}
@@ -1835,41 +1912,30 @@ func advanceQuestMission(
 					}
 				}
 			}
-		}
 
-		if prereqMission != nil {
-			slog.Info("发现前置未通关剧情关卡，先行推进挑战",
-				"role_id", session.RoleID(),
-				"quest_id", q.ID,
-				"prereq_mission_id", prereqMission.ID,
-				"prereq_mission_name", prereqMission.Name,
-				"target_mission_id", targetMission.ID,
-			)
-			if !challengeStoryMission(ctx, session, prereqMission, ensureStamina, totalCostStamina, totalGainExp, totalGainCoins, clearedMissions) {
-				failedMissions[prereqMission.ID] = true
+			if prereqMission != nil {
+				slog.Info("发现前置未通关剧情关卡，先行推进挑战",
+					"role_id", session.RoleID(),
+					"quest_id", q.ID,
+					"prereq_mission_id", prereqMission.ID,
+					"prereq_mission_name", prereqMission.Name,
+					"target_mission_id", targetMission.ID,
+				)
+				if !challengeStoryMission(ctx, session, prereqMission, ensureStamina, totalCostStamina, totalGainExp, totalGainCoins, clearedMissions) {
+					failedMissions[prereqMission.ID] = true
+					return clearedPrereq || lastCount > initialCount
+				}
+				clearedPrereq = true
+				continue
+			}
+
+			// 正式挑战主线目标关卡
+			if !challengeStoryMission(ctx, session, targetMission, ensureStamina, totalCostStamina, totalGainExp, totalGainCoins, clearedMissions) {
 				return clearedPrereq || lastCount > initialCount
 			}
-			clearedPrereq = true
-			continue
 		}
 
-		if clearedMissions[targetMission.ID] {
-			slog.Info("任务目标关卡已首通，跳过主线单人副本挑战（支线目标需通过扫荡完成）",
-				"role_id", session.RoleID(),
-				"quest_id", q.ID,
-				"title", q.Title,
-				"mission_id", targetMission.ID,
-			)
-			failedMissions[targetMission.ID] = true
-			return false
-		}
-
-		// 正式挑战任务目标关卡
-		if !challengeStoryMission(ctx, session, targetMission, ensureStamina, totalCostStamina, totalGainExp, totalGainCoins, clearedMissions) {
-			return clearedPrereq || lastCount > initialCount
-		}
-
-		// 挑战成功后，同步任务状态检查是否已达成可交付 (State == 2) 或目标计数增长
+		// 2. 挑战/扫荡后，同步任务状态检查是否已达成可交付 (State == 2) 或目标计数增长
 		refreshed, sErr := session.SyncQuests(ctx)
 		if sErr == nil {
 			questState := int32(-1)
@@ -1896,7 +1962,10 @@ func advanceQuestMission(
 				// 任务已不在进行列表中（已自动完成）
 				return true
 			}
-			if matchedItem.MaxCount > 0 && matchedItem.CurrentCount > lastCount {
+			if matchedItem.MaxCount > 0 {
+				targetMax = matchedItem.MaxCount
+			}
+			if matchedItem.CurrentCount > lastCount {
 				slog.Info("任务目标进度更新",
 					"role_id", session.RoleID(),
 					"quest_id", q.ID,
@@ -1905,7 +1974,10 @@ func advanceQuestMission(
 				)
 				lastCount = matchedItem.CurrentCount
 				noCountGainRuns = 0
-				return true
+				if matchedItem.MaxCount > 0 && matchedItem.CurrentCount >= matchedItem.MaxCount {
+					continue
+				}
+				continue
 			}
 			noCountGainRuns++
 			// 若杀怪任务挑战后计数未增长，或掉落物任务连续 2 次未掉落，退出本轮避免空转
@@ -1918,6 +1990,94 @@ func advanceQuestMission(
 	}
 
 	return clearedPrereq || lastCount > initialCount
+}
+
+// practiceMission 使用 Module 25 (Mod_MissionPractice_Base) 执行关卡秒扫荡。
+func practiceMission(
+	ctx context.Context,
+	session *client.RoleSession,
+	missionID int32,
+	count uint16,
+	ensureStamina func() bool,
+	totalCostStamina *int,
+	totalGainExp *int64,
+	totalGainCoins *int64,
+) (bool, int, error) {
+	if session == nil {
+		return false, 0, client.ErrNotConnected
+	}
+	if session.GetStamina() < 5 && !ensureStamina() {
+		return false, 0, scheduler.ErrStaminaDepleted
+	}
+	if count <= 0 {
+		count = 1
+	}
+	maxAvail := uint16(session.GetStamina() / 5)
+	if count > maxAvail {
+		count = maxAvail
+	}
+	if count == 0 {
+		return false, 0, scheduler.ErrStaminaDepleted
+	}
+
+	// 1. 发起扫荡 (ActionIDPracticeStart: 0x00190001)
+	m25Req := protocol.StartPracticeRequest{
+		MissionID: missionID,
+		Count:     int16(count),
+		AutoSale:  1,
+	}
+	m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
+
+	callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
+	respPkt, callErr := session.Call(callCtx, m25Pkt, protocol.ActionIDPracticeStart)
+	callCancel()
+
+	if callErr != nil || respPkt == nil {
+		return false, 0, callErr
+	}
+
+	m25Res, pErr := protocol.ParseStartPracticeResult(respPkt.Payload)
+	if pErr != nil || m25Res == nil {
+		return false, 0, pErr
+	}
+
+	switch m25Res.Result {
+	case protocol.PracticeResultSuccess:
+		// 快速完成扫荡 (ActionIDPracticeQuickly: 0x00190003)
+		quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
+		_ = session.Send(quickPkt)
+
+		actualRounds := int(count)
+		if m25Res.Count > 0 && int(m25Res.Count) <= actualRounds {
+			actualRounds = int(m25Res.Count)
+		}
+		cost := actualRounds * 5
+		_, _ = session.ConsumeStamina(cost)
+		gainExp := int64(actualRounds) * 2500
+		gainCoins := int64(actualRounds) * 12000
+		session.AddRewards(gainExp, gainCoins)
+		if totalCostStamina != nil {
+			*totalCostStamina += cost
+		}
+		if totalGainExp != nil {
+			*totalGainExp += gainExp
+		}
+		if totalGainCoins != nil {
+			*totalGainCoins += gainCoins
+		}
+		return true, actualRounds, nil
+
+	case protocol.PracticeResultNotEnoughPower:
+		session.SetStamina(0)
+		session.SetExtraStamina(0)
+		return false, 0, scheduler.ErrStaminaDepleted
+
+	case protocol.PracticeResultBagFull:
+		return false, 0, scheduler.ErrBagFull
+
+	default:
+		return false, 0, fmt.Errorf("practice rejected with code %d", m25Res.Result)
+	}
 }
 
 func resetTownScene(session *client.RoleSession) {

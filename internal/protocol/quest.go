@@ -130,7 +130,9 @@ func BuildCompleteQuestPacket(req CompleteQuestRequest) (*Packet, error) {
 		prevAct = ActionIDQuestList
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDQuestComplete, w.Bytes()), nil
+	pkt := NewPacket(ActionIDQuestComplete, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt, nil
 }
 
 // BuildFinishQuestPacket 构造完成对话类任务请求封包 (Module 3, Action 4)。
@@ -141,7 +143,9 @@ func BuildFinishQuestPacket(questID int32, prevAct uint32) *Packet {
 		prevAct = ActionIDQuestList
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDQuestFinish, w.Bytes())
+	pkt := NewPacket(ActionIDQuestFinish, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // BuildSubmitCompleteQuestPacket 构造交付已完成任务领取奖励请求封包 (Module 3, Action 5)。
@@ -152,7 +156,9 @@ func BuildSubmitCompleteQuestPacket(questID int32, prevAct uint32) *Packet {
 		prevAct = ActionIDQuestList
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDQuestSubmitComplete, w.Bytes())
+	pkt := NewPacket(ActionIDQuestSubmitComplete, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // BuildCanReceiveQuestPacket 构造查询指定城镇可接任务列表请求封包 (Module 3, Action 8)。
@@ -163,7 +169,9 @@ func BuildCanReceiveQuestPacket(townID int32, prevAct uint32) *Packet {
 		prevAct = ActionIDQuestList
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDQuestCanReceive, w.Bytes())
+	pkt := NewPacket(ActionIDQuestCanReceive, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // BuildGetPlayerQuestListPacket 构造拉取玩家当前已接任务列表请求封包 (Module 3, Action 9)。
@@ -173,7 +181,9 @@ func BuildGetPlayerQuestListPacket(prevAct uint32) *Packet {
 		prevAct = 0x00000002 // ActionIDPlayerGetInfo
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDQuestList, w.Bytes())
+	pkt := NewPacket(ActionIDQuestList, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // PlayerQuestItem 玩家当前已接任务条目。

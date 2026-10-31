@@ -337,10 +337,13 @@ func run(ctx context.Context, args []string) error {
 
 	// 六道轮回挑战与灵件策略配置
 	srCfg := dungeon.DefaultSixRealmsConfig()
-	if cfg.Scheduler.SixRealms.AutoReset || cfg.Scheduler.SixRealms.AutoSellBlue || cfg.Scheduler.SixRealms.AutoSellPurple {
+	if cfg.Scheduler.SixRealms.AutoReset || cfg.Scheduler.SixRealms.AutoSellBlue || cfg.Scheduler.SixRealms.AutoSellPurple || cfg.Scheduler.SixRealms.MaxFloorRetries > 0 {
 		srCfg.AutoReset = cfg.Scheduler.SixRealms.AutoReset
 		srCfg.AutoSellBlue = cfg.Scheduler.SixRealms.AutoSellBlue
 		srCfg.AutoSellPurple = cfg.Scheduler.SixRealms.AutoSellPurple
+		if cfg.Scheduler.SixRealms.MaxFloorRetries > 0 {
+			srCfg.MaxFloorRetries = cfg.Scheduler.SixRealms.MaxFloorRetries
+		}
 	}
 	factory.SetSixRealmsConfig(srCfg)
 

@@ -67,6 +67,9 @@ func DefaultAuthenticator(s *RoleSession) error {
 				case protocol.PlayerPropExperience:
 					ps.Experience = int64(val)
 					slog.Info("角色总经验同步更新", "role_id", s.RoleID(), "experience", val)
+				case protocol.PlayerPropMaxExperience:
+					ps.MaxExperience = int64(val)
+					slog.Info("角色升级所需经验更新", "role_id", s.RoleID(), "max_experience", val)
 				case protocol.PlayerPropVIPLevel:
 					ps.VIP = int(val)
 				case protocol.PlayerPropPackEmptyNum:

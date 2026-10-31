@@ -61,8 +61,16 @@ type PlayerLoginResult struct {
 	Ingots int32
 	// Coins 当前铜钱数量
 	Coins int64
+	// Health 当前生命值
+	Health int64
+	// MaxHealth 最大生命值
+	MaxHealth int64
 	// Stamina 当前基础体力点数 (基准上限 300)
 	Stamina int32
+	// Experience 当前角色经验
+	Experience int64
+	// MaxExperience 角色当前等级升级所需总经验 (满级为 uint64 最大值或 0)
+	MaxExperience int64
 	// ExtraStamina 当前存储/额外/赠送体力点数 (Offset 116)
 	ExtraStamina int32
 	// MaxStamina 最大基础体力上限
@@ -211,8 +219,18 @@ func ParsePlayerLoginResult(payload []byte) (*PlayerLoginResult, error) {
 		res.Coins = int64(binary.BigEndian.Uint64(body[pos+8 : pos+16]))
 	}
 
+	if pos+32 <= len(body) {
+		res.Health = int64(binary.BigEndian.Uint64(body[pos+16 : pos+24]))
+		res.MaxHealth = int64(binary.BigEndian.Uint64(body[pos+24 : pos+32]))
+	}
+
 	if pos+36 <= len(body) {
 		res.Stamina = int32(binary.BigEndian.Uint32(body[pos+32 : pos+36]))
+	}
+
+	if pos+52 <= len(body) {
+		res.Experience = int64(binary.BigEndian.Uint64(body[pos+36 : pos+44]))
+		res.MaxExperience = int64(binary.BigEndian.Uint64(body[pos+44 : pos+52]))
 	}
 
 	if pos+56 <= len(body) {

@@ -101,6 +101,7 @@ type PlayerState struct {
 	IsPracticing bool              `json:"is_practicing"`
 	PracticeExp  int64             `json:"practice_exp"`
 	Experience   int64             `json:"experience"`
+	MaxExperience int64            `json:"max_experience"`
 }
 
 // RoleSession 代表与游戏服务器建立的长连接角色会话。
@@ -227,6 +228,50 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		case protocol.PlayerPracticeNotifyCancel:
 			s.playerState.IsPracticing = false
 			slog.Info("收到通知: 城镇打坐练功已取消/中断", "role_id", s.cfg.RoleID)
+		}
+	})
+
+	// 注册角色属性与体力更新动态通知监听器 (Module 0, Action 3)
+	s.RegisterHandler(protocol.ActionIDPlayerUpdateData, func(p *protocol.Packet) {
+		if p == nil || len(p.Payload) < 5 {
+			return
+		}
+		r := protocol.NewReader(p.Payload)
+		for r.Remaining() >= 5 {
+			prop, err := r.ReadUint8()
+			if err != nil {
+				break
+			}
+			val, err := r.ReadInt32()
+			if err != nil {
+				break
+			}
+			s.UpdatePlayerState(func(ps *PlayerState) {
+				switch prop {
+				case protocol.PlayerPropPower:
+					ps.Stamina = int(val)
+				case protocol.PlayerPropExtraPower:
+					ps.ExtraStamina = int(val)
+				case protocol.PlayerPropMaxPower:
+					ps.MaxStamina = int(val)
+				case protocol.PlayerPropCoins:
+					ps.Coins = int64(val)
+				case protocol.PlayerPropIngot:
+					ps.Ingots = int64(val)
+				case protocol.PlayerPropLevel:
+					ps.Level = int(val)
+				case protocol.PlayerPropExperience:
+					ps.Experience = int64(val)
+					slog.Info("角色总经验同步更新", "role_id", s.RoleID(), "experience", val)
+				case protocol.PlayerPropMaxExperience:
+					ps.MaxExperience = int64(val)
+					slog.Info("角色升级所需经验更新", "role_id", s.RoleID(), "max_experience", val)
+				case protocol.PlayerPropVIPLevel:
+					ps.VIP = int(val)
+				case protocol.PlayerPropPackEmptyNum:
+					ps.BagCapacity = int(val)
+				}
+			})
 		}
 	})
 
@@ -661,7 +706,17 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 				if infoRes.VIP > 0 {
 					ps.VIP = int(infoRes.VIP)
 				}
+				if infoRes.Experience > 0 {
+					ps.Experience = infoRes.Experience
+				}
+				if infoRes.MaxExperience > 0 {
+					ps.MaxExperience = infoRes.MaxExperience
+				}
 			})
+			remainingExp := int64(0)
+			if infoRes.MaxExperience > infoRes.Experience {
+				remainingExp = infoRes.MaxExperience - infoRes.Experience
+			}
 			slog.Info("网关握手与全量角色资产同步成功",
 				"role_id", s.RoleID(),
 				"role_name", infoRes.RoleName,
@@ -670,11 +725,70 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 				"coins", infoRes.Coins,
 				"ingots", infoRes.Ingots,
 				"stamina", infoRes.Stamina,
+				"exp", infoRes.Experience,
+				"max_exp", infoRes.MaxExperience,
+				"remaining_exp", remainingExp,
 			)
 		}
 	}
 
 	return nil
+}
+
+// FetchLatestPlayerInfo 主动向服务端拉取最新全量角色资产（包括经验、体力、铜钱等）并刷新本地状态快照。
+func (s *RoleSession) FetchLatestPlayerInfo(ctx context.Context) (*protocol.PlayerLoginResult, error) {
+	pkt := protocol.BuildPlayerGetInfoPacket(0)
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	fCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(fCtx, pkt, protocol.ActionIDPlayerGetInfo)
+	if err != nil {
+		return nil, fmt.Errorf("fetch latest player info: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty player info response")
+	}
+
+	infoRes, err := protocol.ParsePlayerLoginResult(resp.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("parse player info: %w", err)
+	}
+
+	s.UpdatePlayerState(func(ps *PlayerState) {
+		if infoRes.Level > 0 {
+			ps.Level = int(infoRes.Level)
+		}
+		if infoRes.Coins > 0 {
+			ps.Coins = infoRes.Coins
+		}
+		if infoRes.Ingots > 0 {
+			ps.Ingots = int64(infoRes.Ingots)
+		}
+		if infoRes.Stamina > 0 {
+			ps.Stamina = int(infoRes.Stamina)
+		}
+		if infoRes.ExtraStamina > 0 {
+			ps.ExtraStamina = int(infoRes.ExtraStamina)
+		}
+		if infoRes.MaxStamina > 0 {
+			ps.MaxStamina = int(infoRes.MaxStamina)
+		}
+		if infoRes.VIP > 0 {
+			ps.VIP = int(infoRes.VIP)
+		}
+		if infoRes.Experience > 0 {
+			ps.Experience = infoRes.Experience
+		}
+		if infoRes.MaxExperience > 0 {
+			ps.MaxExperience = infoRes.MaxExperience
+		}
+	})
+
+	return infoRes, nil
 }
 
 // SyncQuests 主动向服务端发送 Mod 3, Act 9 协议全量拉取当前已接任务列表并同步至内存状态快照。
@@ -794,22 +908,75 @@ func (s *RoleSession) SignFinishedTownPractice(ctx context.Context) error {
 	return nil
 }
 
-// ClaimTownPracticeExp 上线直接结算并领取离线练功经验 (对齐官方客户端 MapViewBase.onCancelPraceice: 取消练功 + 确认结算)。
+// GetNewPracticeData 获取现代新版离线打坐练功进度与累积经验 (Mod_NewPractice_Base.get_practice_info, ActionID 0x02480001)。
+func (s *RoleSession) GetNewPracticeData(ctx context.Context) (*protocol.NewPracticeInfo, error) {
+	pkt := protocol.BuildNewPracticeGetInfoPacket()
+	timeout := 5 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDNewPracticeGetInfo)
+	if err != nil {
+		return nil, err
+	}
+	info, err := protocol.ParseNewPracticeGetInfoResponse(resp.Payload)
+	if err != nil {
+		return nil, err
+	}
+	s.playerMu.Lock()
+	s.playerState.PracticeExp = info.PracticeExp
+	s.playerMu.Unlock()
+	return info, nil
+}
+
+// ClaimNewPracticeExp 一键领取现代新版打坐练功累积的经验与灵气 (Mod_NewPractice_Base.collect_all, ActionID 0x02480003)。
+func (s *RoleSession) ClaimNewPracticeExp(ctx context.Context) (*protocol.NewPracticeCollectResult, error) {
+	pkt := protocol.BuildNewPracticeCollectAllPacket()
+	timeout := 5 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDNewPracticeCollectAll)
+	if err != nil {
+		return nil, err
+	}
+	res, err := protocol.ParseNewPracticeCollectAllResponse(resp.Payload)
+	if err != nil {
+		return nil, err
+	}
+	s.playerMu.Lock()
+	s.playerState.PracticeExp = 0
+	s.playerMu.Unlock()
+	return res, nil
+}
+
+// ClaimTownPracticeExp 上线直接结算并领取离线练功经验。
+// 优先使用官方现代新版练功系统 (Mod_NewPractice_Base.collect_all)，无缝兼容老版双步结算流程。
 func (s *RoleSession) ClaimTownPracticeExp(ctx context.Context) error {
+	// 尝试现代打坐一键领取
+	if _, err := s.ClaimNewPracticeExp(ctx); err == nil {
+		return nil
+	}
+
+	// 回退机制：若服务端未开启新练功模块，执行老版结算流程
 	s.playerMu.RLock()
 	curExp := s.playerState.PracticeExp
 	isPracticing := s.playerState.IsPracticing
 	s.playerMu.RUnlock()
 
-	if isPracticing && curExp > 0 {
-		slog.Info("正在结算并领取累积离线练功经验", "role_id", s.RoleID(), "practice_exp", curExp)
-	} else {
-		slog.Info("触发城镇打坐练功离线结算 (若有累积经验将由服务端推送并在总经验同步增加)", "role_id", s.RoleID())
-	}
+	slog.Debug("回退执行老版打坐练功结算流水线",
+		"role_id", s.RoleID(),
+		"pending_exp", curExp,
+		"is_practicing", isPracticing,
+	)
 
-	// 1. 官方流水线：先发送 cancel_practice (Mod 0, Act 39)
 	_ = s.CancelTownPractice(ctx)
-	// 2. 官方流水线：再发送 sign_finished_practice (Mod 0, Act 38) 领取累积经验
 	return s.SignFinishedTownPractice(ctx)
 }
 
@@ -1959,6 +2126,27 @@ func runMockGameServer(conn net.Conn) {
 		case protocol.ActionIDPlayerSignFinishedPractice:
 			// 响应城镇打坐结束并结算经验
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerSignFinishedPractice, []byte{}))
+
+		case protocol.ActionIDNewPracticeGetInfo:
+			// 响应现代新版打坐练功数据查询
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.NewPracticeSuccess) // Result
+			w.WriteUint16(0)                          // AirList count = 0
+			w.WriteUint32(3600)                       // GatherTime
+			w.WriteUint32(259200)                     // MaxGatherTime
+			w.WriteInt64(300000)                      // PracticeExp (待领取打坐经验)
+			w.WriteInt32(1)                           // RouteLevel
+			w.WriteInt32(0)                           // AirAccRate
+			w.WriteInt32(0)                           // ExpAccRate
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDNewPracticeGetInfo, w.Bytes()))
+
+		case protocol.ActionIDNewPracticeCollectAll:
+			// 响应现代新版打坐练功一键领取
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.NewPracticeSuccess) // Result
+			w.WriteUint16(0)                          // AirList count = 0
+			w.WriteInt64(300000)                      // GainExp (实际增加经验)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDNewPracticeCollectAll, w.Bytes()))
 
 		case protocol.ActionIDTowerGetInfo:
 			// 响应六道轮回塔面板查询 (SequenceMax=25, Layer=1, SequenceWar=1, BagNum=2, ResetNum=1, ResetIngot=0, HideID=0, HighStone=50)

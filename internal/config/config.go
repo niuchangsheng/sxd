@@ -67,9 +67,10 @@ type SchedulerConfig struct {
 
 // SixRealmsConfig 六道轮回挑战与灵件配置
 type SixRealmsConfig struct {
-	AutoReset      bool `yaml:"auto_reset"`       // 当前道通关后是否自动消耗免费次数重置 (默认 true)
-	AutoSellBlue   bool `yaml:"auto_sell_blue"`   // 挑战获胜时是否自动卖出蓝色灵件 (默认 true)
-	AutoSellPurple bool `yaml:"auto_sell_purple"` // 挑战获胜时是否自动卖出紫色灵件 (默认 false)
+	AutoReset       bool `yaml:"auto_reset"`        // 当前道通关后是否自动消耗免费次数重置 (默认 true)
+	AutoSellBlue    bool `yaml:"auto_sell_blue"`    // 挑战获胜时是否自动卖出蓝色灵件 (默认 true)
+	AutoSellPurple  bool `yaml:"auto_sell_purple"`  // 挑战获胜时是否自动卖出紫色灵件 (默认 false)
+	MaxFloorRetries int  `yaml:"max_floor_retries"` // 每层挑战失败最大重试次数 (每层单独计算，失败达到上限后退出)
 }
 
 // BeelzebubTrialsConfig 魔王试炼自动化策略配置

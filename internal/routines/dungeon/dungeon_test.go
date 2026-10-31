@@ -1689,6 +1689,84 @@ func TestDungeonSweep_MaxReplenishStamina_Limit(t *testing.T) {
 	}
 }
 
+func TestSixRealmsRoutine_PerFloorRetry(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	var attempts atomic.Int32
+
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDTowerGetInfo:
+				w := protocol.NewWriter()
+				w.WriteUint8(25) // SequenceMax
+				w.WriteUint8(2)  // Layer: 2 (饿鬼道)
+				w.WriteUint8(20) // SequenceWar: 20
+				w.WriteUint8(5)  // BagNum
+				w.WriteUint8(1)  // ResetNum
+				w.WriteUint16(0) // ResetIngot
+				w.WriteUint8(0)  // HideID
+				w.WriteInt32(20) // HighStone
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerGetInfo, w.Bytes()))
+
+			case protocol.ActionIDTowerStartChallenge:
+				attempts.Add(1)
+				// 模拟挑战失败 (非 0 状态码，如 99 战败)
+				cw := protocol.NewWriter()
+				cw.WriteUint8(99) // Failure
+				cw.WriteInt32(0)
+				cw.WriteInt32(0)
+				cw.WriteInt32(0)
+				cw.WriteInt32(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerStartChallenge, cw.Bytes()))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:            "role-retry-test",
+		RoleName:          "重试测试玩家",
+		ServerAddr:        "mock-pipe",
+		HeartbeatInterval: 1 * time.Second,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error {
+			return nil
+		},
+	})
+	_ = session.Start(context.Background())
+	defer session.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cfg := dungeon.SixRealmsConfig{
+		AutoReset:       false,
+		AutoSellBlue:    true,
+		AutoSellPurple:  false,
+		MaxFloorRetries: 2, // 配置最大重试 2 次
+	}
+	routine := dungeon.NewSixRealmsRoutine(cfg)
+	err := routine.Execute(context.Background(), session, nil)
+	if err != nil {
+		t.Fatalf("SixRealmsRoutine.Execute failed: %v", err)
+	}
+
+	if total := attempts.Load(); total != 2 {
+		t.Errorf("expected exactly 2 challenge attempts for failed floor, got %d", total)
+	}
+}
+
+
 
 
 

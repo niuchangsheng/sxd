@@ -16,8 +16,22 @@ const (
 	ModuleArena           uint16 = 28 // 竞技场模块 (Mod_Arena_Base)
 	ModuleTower           uint16 = 32 // 六道轮回塔模块 (Mod_Tower_Base)
 	ModuleSealSoul        uint16 = 34 // 封灵与灵件模块 (Mod_SealSoul_Base)
-	ModuleHeroMission     uint16 = 35 // 英雄副本模块 (Mod_HeroMission_Base)
-	ModuleStLogin         uint16 = 94 // 跨服/网页登录模块 (Mod_StLogin_Base)
+	ModuleHeroMission     uint16 = 35  // 英雄副本模块 (Mod_HeroMission_Base)
+	ModuleStLogin         uint16 = 94  // 跨服/网页登录模块 (Mod_StLogin_Base)
+	ModuleNewPractice     uint16 = 584 // 新版城镇练功打坐模块 (Mod_NewPractice_Base)
+)
+
+const (
+	// ActionIDNewPracticeGetInfo 获取现代离线打坐练功进度与累积经验 (Module 584, Action 1 -> 0x02480001, Mod_NewPractice_Base.get_practice_info)
+	ActionIDNewPracticeGetInfo uint32 = 0x02480001
+	// ActionIDNewPracticeCollectAir 单独领取新打坐灵气 (Module 584, Action 2 -> 0x02480002, Mod_NewPractice_Base.collect_air)
+	ActionIDNewPracticeCollectAir uint32 = 0x02480002
+	// ActionIDNewPracticeCollectAll 一键领取新打坐全部经验与灵气 (Module 584, Action 3 -> 0x02480003, Mod_NewPractice_Base.collect_all)
+	ActionIDNewPracticeCollectAll uint32 = 0x02480003
+
+	// 新版练功打坐业务结果码
+	NewPracticeSuccess uint8 = 0
+	NewPracticeFailed  uint8 = 1
 )
 
 const (
