@@ -499,6 +499,9 @@ func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			// TODO(spirit_pool): 面板上应有两个「一键淬炼」入口, 分别对应两种产出。
+			// 当前实现的是铜钱一键淬炼 (产出玄铁 + 炼器精华), 另一种产出尚未确认,
+			// 待后续实机验证后补充对应的消耗类型/产物解析。
 			// 3. 一键淬炼所有已完成槽位 (铜钱消耗, 避免扣除元宝)
 			execPkt := protocol.BuildRefineExecutePacket(
 				protocol.RefinePoolQualityCoins,
