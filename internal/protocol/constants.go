@@ -110,6 +110,8 @@ const (
 	// ActionIDFateAnswer 仙履奇缘回答提交选项 (Module 21, Action 2 -> 0x00150002)
 	ActionIDFateAnswer uint32 = 0x00150002
 
+	// ActionIDArenaOpenPanel 打开本服竞技场面板 (Module 28, Action 0 -> 0x001C0000)
+	ActionIDArenaOpenPanel uint32 = 0x001C0000
 	// ActionIDArenaGetTimes 查询竞技场剩余挑战次数 (Module 28, Action 13 -> 0x001C000D)
 	ActionIDArenaGetTimes uint32 = 0x001C000D
 	// ActionIDArenaGetRanking 查询玩家竞技场排名 (Module 28, Action 12 -> 0x001C000C)

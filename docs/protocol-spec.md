@@ -184,12 +184,53 @@ classDiagram
 - `0x00190001 (25, 1)`：发起常规关卡体力扫荡（参数：关卡编号 `MissionID`、扫荡次数 `Times`）。
 - `0x00190002 (25, 2)`：使用扫荡券或元宝一键加速立即完成扫荡。
 
-### 4.5 Module 28 (0x1C): 竞技场模块 (`Mod_Arena_Base`)
-- `0x001C000C (28, 12)`：查询当前玩家排名与挑战冷却时间。
-- `0x001C000D (28, 13)`：查询今日剩余免费挑战次数。
-- `0x001C0000 (28, 0)`：获取可挑战对手列表（包含对手排位、战力与角色名）。
-- `0x001C0001 (28, 1)`：向指定排位对手发起挑战。
+### 4.5 Module 28 (0x1C): 竞技场模块 (`Mod_SuperSport_Base`)
+- `0x001C0000 (28, 0)`：竞技场主面板 `open_super_sport`。请求载荷为 4 字节 `prevAct`。回包线格式：
+  `Int32 myRank, Int16 winCount, Int32 fame, Int16 fameLevel, Int16 remainChallengeTimes,
+  Int16 remainBuyTimes, Int16 nextBuyPrice, Int32 awardCoin, Int32 awardFame, Int32 awardTime,
+  Int32 openTimer, Int32 cdTimer, [opponents], [warReports]`。
+  两个列表均以 `Uint16 count` 前缀开头，记录格式见下述 action 1 / 面板战报。
+- `0x001C0001 (28, 1)`：获取可挑战对手列表 `get_challenge_list`。记录线格式：
+  `Int32 rank, Int32 playerID, Int32 roleID, Int16 level, Uint16 nameLen, Bytes[nameLen] name,
+  Int32 awardCoin, Int32 awardFame`。
+  服务端**不下发战力**；`awardCoin`/`awardFame` 为击败该对手可获得的铜钱与声望奖励。
+- 面板战报记录（`[warReports]` 元素）线格式：
+  `Int32 warReportID, Uint8 isRead, Int32 attackPlayerID, String attackPlayerName,
+  Int32 defensePlayerID, String defensePlayerName, Int32 winPlayerID,
+  Int32 oldRank, Int32 newRank, String version, Int32 reportTimer`。
+  **胜负位**：`winPlayerID == 本方 PlayerID` 即为胜利；
+  **精确名次**：`oldRank` 为战前排名、`newRank` 为战后排名（数值越小排名越靠前，`oldRank > newRank` 表示名次上升）。
+- `0x001C0002 (28, 2)`：向指定排名对手发起挑战 `start_challenge`，请求载荷**仅**
+  `Int32(targetRank)` 4 字节；实测追加 `prevAct` 会被服务端静默丢弃且无任何回包。
+  回包线格式：
+  `Uint8 result, Int16 remain, Int32 cdTimer,
+  [ [Int32 awardFame, Int32 awardCoin, Int32 awardGun, Int32 scrapID, Int32 reportID,
+     [ [Uint8 deployType, Int32 winPlayerID, 双方阵容, 出手序列, Int32 x3] ],
+     [ [Int32 itemID, Int32 count] ] ] ]`。
+  `result = 0` 为受理成功，其余为错误码（1 排名无效、2 次数不足、3 冷却中……）。
+  **挑战回包的胜负位**为战报单元第 2 字段 `winPlayerID`；新名次不在本回包内，
+  需用 `reportID` 重新打开面板读取战报的 `oldRank/newRank`。
+- `0x001C0005 (28, 5)`：新竞技场战报服务端通知 `notify_new_sport_war_report`。
+- `0x001C000B (28, 11)`：排名变更服务端通知 `notify_global`。
+- `0x001C000C (28, 12)`：查询竞技场冷却时间 `get_cd_time`。
+- `0x001C000D (28, 13)`：查询今日剩余免费挑战次数 `get_challenge_times`。
 
 ### 4.6 Module 94 (0x5E): 跨服网关模块 (`Mod_StLogin_Base`)
 - `0x005E0000 (94, 0)`：向仙界跨服网关发送二次鉴权（参数：`Time1`, `Hash1`）。
 - `0x005E0001 (94, 1)`：进入仙界主城镇。
+
+### 4.7 Module 282 / 534: 粗铁淬炼池 (`Mod_RefinePool_Base`)
+- `0x011A0000 (282, 0)`：打开淬炼池面板，请求载荷仅 `prevAct`。回包线格式：
+  `Short iron_count, iron_count × [Byte seq, UByte produce_status, Int need_time, Int remain_time, Byte quality],
+  Byte cur_seq, Byte level, Int exp, UByte one_key_lock_flag, Int coins_need, Byte ingot_need,
+  Int lian_qi_jing_hua, Short xuan_tie`。
+  `produce_status`：0 空闲、1 生产中、2 已完成（可淬炼）、3 锁定、4 解锁。
+- `0x02160005 (534, 5)`：查询淬炼池资源面板，请求载荷 `Uint32(4) + prevAct`，回包固定 5 字节。
+- `0x011A0001 (282, 1)`：执行淬炼，请求载荷 `UByte refine_quality, UByte refine_type, UByte count, prevAct`。
+  `refine_quality`：5 铜钱、6 元宝；`refine_type`：7 普通、8 一键；`count` 为本次淬炼槽位数
+  （实机一键淬炼回包中 10 个已完成槽位均重新进入生产）。回包线格式：
+  `UByte result, Short iron_count, iron_count × iron, Byte cur_seq,
+  Short award_count, award_count × [Byte seq, UByte result, Byte quality, Short exp, [Int,Int] award_info, [Int,Int] extra_award_info],
+  Byte level, Int exp, UByte one_key_lock_flag, Int lian_qi_jing_hua, Short xuan_tie`。
+  主奖励为炼器精华（道具 4759）；`extra_award_info` 为实机新版本追加的暴击奖励列表，旧版协议未声明。
+- 采集自 `haha.pcapng`：`0x011A0000 → 0x02160005 → 0x011A0001` 三步链路，任一步缺失都会导致后续请求无回包。

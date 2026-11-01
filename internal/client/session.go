@@ -2182,21 +2182,59 @@ func runMockGameServer(conn net.Conn) {
 			resPkt, _ := protocol.BuildArenaGetTimesResultPacket(10)
 			_ = protocol.WritePacket(conn, resPkt)
 
+		case protocol.ActionIDArenaOpenPanel:
+			// 响应竞技场面板 (当前第 10 名, 含 1 条胜利战报)
+			panel := protocol.ArenaPanelResult{
+				MyRank:               10,
+				Fame:                 18000000,
+				FameLevel:            42,
+				RemainChallengeTimes: 10,
+				RemainBuyTimes:       100,
+				NextBuyPrice:         12,
+				Opponents: []protocol.ArenaOpponent{
+					{Rank: 5, PlayerID: 1001, RoleID: 1, Name: "初级剑仙", Level: 30, AwardCoin: 40000, AwardFame: 10},
+					{Rank: 4, PlayerID: 1002, RoleID: 2, Name: "天罗神将", Level: 40, AwardCoin: 45000, AwardFame: 10},
+					{Rank: 3, PlayerID: 1003, RoleID: 5, Name: "万妖统帅", Level: 50, AwardCoin: 50000, AwardFame: 10},
+				},
+				WarReports: []protocol.ArenaWarReport{
+					{
+						WarReportID:      340247349,
+						AttackPlayerID:   65536,
+						AttackPlayerName: "梦一场",
+						DefensePlayerID:  1003,
+						DefensePlayerName: "万妖统帅",
+						WinPlayerID:      65536,
+						OldRank:          20,
+						NewRank:          10,
+						Version:          "2026110201",
+						ReportTimer:      1793549704,
+					},
+				},
+			}
+			panelPkt, _ := protocol.BuildArenaPanelResultPacket(panel)
+			_ = protocol.WritePacket(conn, panelPkt)
+
 		case protocol.ActionIDArenaGetOpponents:
 			// 响应竞技场可挑战对手列表
 			opponents := []protocol.ArenaOpponent{
-				{Rank: 5, RoleID: 1001, Name: "初级剑仙", Career: 1, Level: 30, Score: 1000},
-				{Rank: 4, RoleID: 1002, Name: "天罗神将", Career: 2, Level: 40, Score: 1000},
-				{Rank: 3, RoleID: 1003, Name: "万妖统帅", Career: 5, Level: 50, Score: 1000},
+				{Rank: 5, PlayerID: 1001, RoleID: 1, Name: "初级剑仙", Level: 30, AwardCoin: 1000},
+				{Rank: 4, PlayerID: 1002, RoleID: 2, Name: "天罗神将", Level: 40, AwardCoin: 1000},
+				{Rank: 3, PlayerID: 1003, RoleID: 5, Name: "万妖统帅", Level: 50, AwardCoin: 1000},
 			}
 			resPkt, _ := protocol.BuildArenaGetOpponentsResultPacket(opponents)
 			_ = protocol.WritePacket(conn, resPkt)
 
 		case protocol.ActionIDArenaChallenge:
-			// 响应竞技场挑战胜利 (提升至第 5 名)
+			// 响应竞技场挑战结算: 胜利方为 65536, 战报编号与面板一致
 			resPkt, _ := protocol.BuildArenaChallengeResultPacket(protocol.ArenaChallengeResult{
-				Success: true,
-				NewRank: 5,
+				Result:      protocol.ArenaResultSuccess,
+				Success:     true,
+				RemainTimes: 9,
+				AwardFame:   90,
+				AwardCoin:   900000,
+				ReportID:    340247349,
+				DeployType:  3,
+				WinPlayerID: 65536,
 			})
 			_ = protocol.WritePacket(conn, resPkt)
 

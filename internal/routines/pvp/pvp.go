@@ -15,15 +15,16 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
-// SelectSoftPersimmonOpponent 软柿子挑选算法：优先挑选战力最低且排位靠前的对手。
+// SelectSoftPersimmonOpponent 软柿子挑选算法：优先挑选等级最低的对手；
+// 等级相同时选择排名数字更大 (排位更低、实力更弱) 的对手。
+// 服务端对手列表不下发战力，等级是唯一可直接比较的实力代理指标。
 func SelectSoftPersimmonOpponent(opponents []protocol.ArenaOpponent) protocol.ArenaOpponent {
 	if len(opponents) == 0 {
 		return protocol.ArenaOpponent{Rank: 5}
 	}
 	best := opponents[0]
 	for _, opp := range opponents[1:] {
-		// 战力更低，或者战力相当但排名更高 (Rank 更小)
-		if opp.FightValue < best.FightValue || (opp.FightValue == best.FightValue && opp.Rank < best.Rank) {
+		if opp.Level < best.Level || (opp.Level == best.Level && opp.Rank > best.Rank) {
 			best = opp
 		}
 	}
@@ -76,65 +77,150 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 3. 发送查询可挑战对手列表
-			opponentsPkt, err := protocol.BuildArenaGetOpponentsPacket(protocol.ArenaGetOpponentsRequest{
-				PrevAct: protocol.ActionIDArenaGetTimes,
-			})
-			if err != nil {
-				return fmt.Errorf("构造竞技场对手查询封包失败: %w", err)
+			// 3. 打开竞技场面板：一次拿到当前排名、可挑战对手与历史战报
+			openPanel := func() (*protocol.ArenaPanelResult, error) {
+				panelPkt, err := protocol.BuildArenaOpenPanelPacket(protocol.ArenaPanelRequest{
+					PrevAct: protocol.ActionIDArenaGetTimes,
+				})
+				if err != nil {
+					return nil, err
+				}
+				pCtx, pCancel := context.WithTimeout(ctx, 3*time.Second)
+				defer pCancel()
+				respPkt, err := session.Call(pCtx, panelPkt, protocol.ActionIDArenaOpenPanel)
+				if err != nil {
+					return nil, err
+				}
+				return protocol.ParseArenaPanelResult(respPkt.Payload)
 			}
 
-			oppCtx, oppCancel := context.WithTimeout(ctx, 3*time.Second)
-			defer oppCancel()
-
-			oppRespPkt, err := session.Call(oppCtx, opponentsPkt, protocol.ActionIDArenaGetOpponents)
+			panel, err := openPanel()
 			if err != nil {
-				return fmt.Errorf("查询竞技场对手列表失败: %w", err)
+				return fmt.Errorf("打开竞技场面板失败: %w", err)
+			}
+			slog.Info("竞技场面板已打开",
+				"role_id", session.RoleID(),
+				"my_rank", panel.MyRank,
+				"remain_challenge_times", panel.RemainChallengeTimes,
+				"opponents", len(panel.Opponents),
+				"war_reports", len(panel.WarReports),
+			)
+
+			opponents := panel.Opponents
+			if len(opponents) == 0 {
+				// 兼容保底: 面板未携带对手时退回独立对手查询协议
+				opponentsPkt, err := protocol.BuildArenaGetOpponentsPacket(protocol.ArenaGetOpponentsRequest{
+					PrevAct: protocol.ActionIDArenaGetTimes,
+				})
+				if err != nil {
+					return fmt.Errorf("构造竞技场对手查询封包失败: %w", err)
+				}
+				oppCtx, oppCancel := context.WithTimeout(ctx, 3*time.Second)
+				oppRespPkt, err := session.Call(oppCtx, opponentsPkt, protocol.ActionIDArenaGetOpponents)
+				oppCancel()
+				if err != nil {
+					return fmt.Errorf("查询竞技场对手列表失败: %w", err)
+				}
+				oppRes, err := protocol.ParseArenaGetOpponentsResult(oppRespPkt.Payload)
+				if err != nil {
+					return fmt.Errorf("解析竞技场对手回包失败: %w", err)
+				}
+				opponents = oppRes.Opponents
 			}
 
-			oppRes, err := protocol.ParseArenaGetOpponentsResult(oppRespPkt.Payload)
-			if err != nil {
-				return fmt.Errorf("解析竞技场对手回包失败: %w", err)
-			}
-
-			// 4. 软柿子筛选算法：锁定战力最低、胜率最高的挑战目标
-			target := SelectSoftPersimmonOpponent(oppRes.Opponents)
+			// 4. 软柿子筛选算法：锁定等级最低、排名最靠后的挑战目标
+			target := SelectSoftPersimmonOpponent(opponents)
 			slog.Info("竞技场软柿子筛选锁定目标",
 				"role_id", session.RoleID(),
 				"target_name", target.Name,
 				"target_rank", target.Rank,
-				"fight_value", target.FightValue,
+				"target_player_id", target.PlayerID,
+				"target_level", target.Level,
+				"target_role_id", target.RoleID,
+				"target_award_coin", target.AwardCoin,
+				"target_award_fame", target.AwardFame,
 			)
 
 			// 5. 发起挑战
 			challengePkt, err := protocol.BuildArenaChallengePacket(protocol.ArenaChallengeRequest{
 				TargetRank: target.Rank,
-				PrevAct:    protocol.ActionIDArenaGetOpponents,
+				PrevAct:    protocol.ActionIDArenaOpenPanel,
 			})
 			if err != nil {
 				return fmt.Errorf("构造竞技场挑战封包失败: %w", err)
 			}
 
-			chCtx, chCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			chCtx, chCancel := context.WithTimeout(ctx, 5*time.Second)
 			chRespPkt, err := session.Call(chCtx, challengePkt, protocol.ActionIDArenaChallenge)
 			chCancel()
 
-			if err == nil && chRespPkt != nil {
-				chRes, pErr := protocol.ParseArenaChallengeResult(chRespPkt.Payload)
-				if pErr == nil {
-					slog.Info("本服竞技场挑战完成",
-						"role_id", session.RoleID(),
-						"target_rank", target.Rank,
-						"success", chRes.Success,
-						"new_rank", chRes.NewRank,
-					)
-					return nil
-				}
+			if err != nil || chRespPkt == nil {
+				slog.Info("本服竞技场挑战指令已发送但未收到结算回包",
+					"role_id", session.RoleID(),
+					"target_rank", target.Rank,
+				)
+				return nil
 			}
 
-			slog.Info("本服竞技场挑战指令已发送",
+			chRes, err := protocol.ParseArenaChallengeResult(chRespPkt.Payload)
+			if err != nil {
+				return fmt.Errorf("解析竞技场挑战结算失败: %w", err)
+			}
+			if !chRes.Success {
+				slog.Info("本服竞技场挑战被服务端拒绝",
+					"role_id", session.RoleID(),
+					"target_rank", target.Rank,
+					"result", chRes.Result,
+					"remain_times", chRes.RemainTimes,
+				)
+				return nil
+			}
+
+			// 6. 战报胜负位: winPlayerID 等于本方 PlayerID 即为胜利
+			playerID := session.PlayerID()
+			win := chRes.IsWin(playerID)
+			slog.Info("本服竞技场战斗结算",
 				"role_id", session.RoleID(),
+				"player_id", playerID,
 				"target_rank", target.Rank,
+				"win", win,
+				"win_player_id", chRes.WinPlayerID,
+				"deploy_type", chRes.DeployType,
+				"report_id", chRes.ReportID,
+				"award_coin", chRes.AwardCoin,
+				"award_fame", chRes.AwardFame,
+				"award_gun", chRes.AwardGun,
+				"scrap_id", chRes.ScrapID,
+				"remain_times", chRes.RemainTimes,
+				"war_report_bytes", len(chRes.WarReport),
+			)
+
+			// 7. 重新打开面板，从对应战报读取 oldRank/newRank，锁定精确名次变化
+			refreshed, err := openPanel()
+			if err != nil {
+				slog.Warn("竞技场名次确认失败: 面板刷新异常", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			report := refreshed.FindWarReport(chRes.ReportID)
+			if report == nil {
+				slog.Info("竞技场名次已刷新但未找到对应战报",
+					"role_id", session.RoleID(),
+					"report_id", chRes.ReportID,
+					"my_rank", refreshed.MyRank,
+				)
+				return nil
+			}
+			slog.Info("本服竞技场名次结算完成",
+				"role_id", session.RoleID(),
+				"report_id", report.WarReportID,
+				"win", report.IsWin(playerID),
+				"win_player_id", report.WinPlayerID,
+				"old_rank", report.OldRank,
+				"new_rank", report.NewRank,
+				"rank_delta", report.RankDelta(),
+				"my_rank", refreshed.MyRank,
+				"attack_player", report.AttackPlayerName,
+				"defense_player", report.DefensePlayerName,
 			)
 			return nil
 		},

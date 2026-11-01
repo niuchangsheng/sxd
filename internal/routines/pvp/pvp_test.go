@@ -46,15 +46,15 @@ func TestArenaRoutine_Execute(t *testing.T) {
 
 	t.Run("软柿子筛选算法单测", func(t *testing.T) {
 		opponents := []protocol.ArenaOpponent{
-			{Rank: 10, RoleID: 101, Name: "强力剑宗", FightValue: 120000},
-			{Rank: 8, RoleID: 102, Name: "挂机小号", FightValue: 32000},
-			{Rank: 7, RoleID: 103, Name: "平民飞羽", FightValue: 55000},
-			{Rank: 6, RoleID: 104, Name: "老玩家", FightValue: 32000}, // 战力同为 32000，但 Rank 6 更靠前
+			{Rank: 10, RoleID: 101, Name: "强力剑宗", Level: 60},
+			{Rank: 8, RoleID: 102, Name: "挂机小号", Level: 20},
+			{Rank: 7, RoleID: 103, Name: "平民飞羽", Level: 30},
+			{Rank: 6, RoleID: 104, Name: "老玩家", Level: 20}, // 等级同为 20，但 Rank 8 排位更低、更弱
 		}
 
 		target := SelectSoftPersimmonOpponent(opponents)
-		if target.Rank != 6 || target.FightValue != 32000 {
-			t.Errorf("软柿子算法未能精准选出战力最低且排名最靠前者: %+v", target)
+		if target.Rank != 8 || target.Level != 20 {
+			t.Errorf("软柿子算法未能精准选出等级最低且排位最低者: %+v", target)
 		}
 	})
 
