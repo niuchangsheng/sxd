@@ -5,6 +5,7 @@
 package protocol_test
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
@@ -53,6 +54,23 @@ func TestMission_SweepPacket(t *testing.T) {
 	}
 	if !parsedRes.Success || parsedRes.CostPower != 50 || parsedRes.GainCoins != 120000 || parsedRes.Message != "扫荡完毕" {
 		t.Errorf("解析结算不一致: %+v", *parsedRes)
+	}
+}
+
+// TestMission_FightMonsterPacket_LiveFormat 锁定 2026 网关 13 字节 fight_monster 载荷布局。
+// 9 字节变体 (省略 hireRoleID) 会被服务端静默丢弃，必须保留 Int32 hireRoleID 占位。
+func TestMission_FightMonsterPacket_LiveFormat(t *testing.T) {
+	pkt := protocol.BuildMissionFightMonsterPacket(954, 0, 0, protocol.ActionIDMissionPlotEnter)
+	if pkt.ActionID != protocol.ActionIDMissionFightMonster {
+		t.Fatalf("ActionID 不匹配: %d", pkt.ActionID)
+	}
+	const wantHex = "000003ba000000000000040001"
+	gotHex := hex.EncodeToString(pkt.Payload)
+	if gotHex != wantHex {
+		t.Errorf("fight_monster 载荷不匹配: 期望 %s, 实际 %s", wantHex, gotHex)
+	}
+	if len(pkt.Payload) != 13 {
+		t.Errorf("fight_monster 载荷长度应为 13, 实际 %d", len(pkt.Payload))
 	}
 }
 

@@ -5,8 +5,6 @@
 package client
 
 import (
-	"log/slog"
-
 	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/protocol"
 )
@@ -38,46 +36,8 @@ func ApplyTicket(cfg *SessionConfig, ticket *platform.Ticket) {
 
 // DefaultAuthenticator 为角色会话提供标准登录认证握手、全局通知监听与四步场景同步调度。
 func DefaultAuthenticator(s *RoleSession) error {
-	// 1. 注册角色属性与体力更新动态通知监听器 (Mod_Player_Base 0x00000003)
-	s.RegisterHandler(protocol.ActionIDPlayerUpdateData, func(p *protocol.Packet) {
-		r := protocol.NewReader(p.Payload)
-		for r.Remaining() >= 5 {
-			prop, err := r.ReadUint8()
-			if err != nil {
-				break
-			}
-			val, err := r.ReadInt32()
-			if err != nil {
-				break
-			}
-			s.UpdatePlayerState(func(ps *PlayerState) {
-				switch prop {
-				case protocol.PlayerPropPower:
-					ps.Stamina = int(val)
-				case protocol.PlayerPropExtraPower:
-					ps.ExtraStamina = int(val)
-				case protocol.PlayerPropMaxPower:
-					ps.MaxStamina = int(val)
-				case protocol.PlayerPropCoins:
-					ps.Coins = int64(val)
-				case protocol.PlayerPropIngot:
-					ps.Ingots = int64(val)
-				case protocol.PlayerPropLevel:
-					ps.Level = int(val)
-				case protocol.PlayerPropExperience:
-					ps.Experience = int64(val)
-					slog.Info("角色总经验同步更新", "role_id", s.RoleID(), "experience", val)
-				case protocol.PlayerPropMaxExperience:
-					ps.MaxExperience = int64(val)
-					slog.Info("角色升级所需经验更新", "role_id", s.RoleID(), "max_experience", val)
-				case protocol.PlayerPropVIPLevel:
-					ps.VIP = int(val)
-				case protocol.PlayerPropPackEmptyNum:
-					ps.BagCapacity = int(val)
-				}
-			})
-		}
-	})
+	// 1. 角色属性/体力更新监听器 (Mod_Player_Base 0x00000003) 已由 NewRoleSession 统一注册,
+	//    此处重复注册会导致同一条属性变更被应用两次, 故不再注册。
 
 	// 2. 注册扫荡回包全局监听更新
 	s.RegisterHandler(protocol.ActionMissionSweep, func(p *protocol.Packet) {
@@ -90,4 +50,3 @@ func DefaultAuthenticator(s *RoleSession) error {
 	// 3. 执行严密的五阶段登录认证握手与城镇场景/全量资产初始化流水线
 	return DefaultGatewayAuthenticator(s)
 }
-

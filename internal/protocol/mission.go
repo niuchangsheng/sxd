@@ -435,11 +435,13 @@ func BuildMissionPlotEnterPacket(missionID int32, prevAct uint32) *Packet {
 }
 
 // BuildMissionFightMonsterPacket 构造挑战副本内怪物编队请求封包 (Module 4, Action 2)。
-// 官方 AS3 协议结构契约: [Int32(monsterTeamID), Int8(attackType), Uint32(prevAct)] (共 9 字节)。
-func BuildMissionFightMonsterPacket(monsterTeamID int32, attackType int8, prevAct uint32) *Packet {
+// 2026 网关实测格式: [Int32(monsterTeamID), Int8(attackType), Int32(hireRoleID), Uint32(prevAct)] (共 13 字节)。
+// 注意: 省略 hireRoleID 的 9 字节变体会被服务端静默丢弃且不产生任何回包。
+func BuildMissionFightMonsterPacket(monsterTeamID int32, attackType int8, hireRoleID int32, prevAct uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(monsterTeamID)
 	w.WriteInt8(attackType)
+	w.WriteInt32(hireRoleID)
 	if prevAct == 0 {
 		prevAct = ActionIDMissionPlotEnter
 	}
@@ -484,4 +486,3 @@ func BuildMissionPickupAwardPacket(prevAct uint32) *Packet {
 	pkt.HasPrevAct = true
 	return pkt
 }
-

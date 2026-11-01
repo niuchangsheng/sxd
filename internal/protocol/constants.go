@@ -6,16 +6,16 @@ package protocol
 
 const (
 	// 核心业务模块编号 (Module)
-	ModulePlayer          uint16 = 0  // 角色主模块 (Mod_Player_Base)
-	ModuleTown            uint16 = 1  // 城镇场景模块 (Mod_Town_Base)
-	ModuleItem            uint16 = 2  // 物品背包模块 (Mod_Item_Base)
-	ModuleMission         uint16 = 4  // 关卡任务模块 (Mod_Mission_Base)
-	ModuleFarm            uint16 = 13 // 药园农场模块 (Mod_Farm_Base)
-	ModuleFate            uint16 = 21 // 仙履奇缘模块 (Mod_Fate_Base)
-	ModuleMissionPractice uint16 = 25 // 副本挂机扫荡模块 (Mod_MissionPractice_Base)
-	ModuleArena           uint16 = 28 // 竞技场模块 (Mod_Arena_Base)
-	ModuleTower           uint16 = 32 // 六道轮回塔模块 (Mod_Tower_Base)
-	ModuleSealSoul        uint16 = 34 // 封灵与灵件模块 (Mod_SealSoul_Base)
+	ModulePlayer          uint16 = 0   // 角色主模块 (Mod_Player_Base)
+	ModuleTown            uint16 = 1   // 城镇场景模块 (Mod_Town_Base)
+	ModuleItem            uint16 = 2   // 物品背包模块 (Mod_Item_Base)
+	ModuleMission         uint16 = 4   // 关卡任务模块 (Mod_Mission_Base)
+	ModuleFarm            uint16 = 13  // 药园农场模块 (Mod_Farm_Base)
+	ModuleFate            uint16 = 21  // 仙履奇缘模块 (Mod_Fate_Base)
+	ModuleMissionPractice uint16 = 25  // 副本挂机扫荡模块 (Mod_MissionPractice_Base)
+	ModuleArena           uint16 = 28  // 竞技场模块 (Mod_Arena_Base)
+	ModuleTower           uint16 = 32  // 六道轮回塔模块 (Mod_Tower_Base)
+	ModuleSealSoul        uint16 = 34  // 封灵与灵件模块 (Mod_SealSoul_Base)
 	ModuleHeroMission     uint16 = 35  // 英雄副本模块 (Mod_HeroMission_Base)
 	ModuleStLogin         uint16 = 94  // 跨服/网页登录模块 (Mod_StLogin_Base)
 	ModuleNewPractice     uint16 = 584 // 新版城镇练功打坐模块 (Mod_NewPractice_Base)
@@ -43,9 +43,9 @@ const (
 	ActionIDItemSell uint32 = 0x00020049
 
 	// 体力道具 ID (来源于数据字典 Pieb.db item 表)
-	ItemIDSteamedBun    int32 = 1488 // 包子 (可补充 5 点体力)
-	ItemIDRiceDumpling  int32 = 1444 // 粽子 (可补充 10 点体力)
-	ItemIDTeaEgg        int32 = 2016 // 茶叶蛋 (可补充 50 点体力)
+	ItemIDSteamedBun   int32 = 1488 // 包子 (可补充 5 点体力)
+	ItemIDRiceDumpling int32 = 1444 // 粽子 (可补充 10 点体力)
+	ItemIDTeaEgg       int32 = 2016 // 茶叶蛋 (可补充 50 点体力)
 
 	// 物品使用业务结果码
 	ItemActionSuccess uint8 = 20
@@ -240,7 +240,7 @@ const (
 // 六道轮回塔挑战与重置结果码 (Mod_Tower_Base 状态标识)
 const (
 	TowerResultSuccess        uint8 = 0 // SUCCESS: 成功
-	TowerResultInvalidLayer    uint8 = 1 // INVALID_LAYER: 无效的层/道
+	TowerResultInvalidLayer   uint8 = 1 // INVALID_LAYER: 无效的层/道
 	TowerResultNoLv           uint8 = 2 // NO_LV: 等级不足
 	TowerResultWarCD          uint8 = 3 // WAR_CD: 战斗冷却中
 	TowerResultNotEnoughIngot uint8 = 4 // NOT_ENOUGH_INGOT: 元宝不足
@@ -248,7 +248,7 @@ const (
 	TowerResultFullBag        uint8 = 6 // FULL_BAG: 灵件背包已满
 )
 
-// 角色属性更新键 (Mod_Player_Base 属性枚举)
+// 角色属性更新键 (旧版 pie.exe Mod_Player_Base 属性枚举)
 const (
 	PlayerPropLevel         uint8 = 10 // 等级
 	PlayerPropIngot         uint8 = 11 // 元宝
@@ -262,6 +262,30 @@ const (
 	PlayerPropPackEmptyNum  uint8 = 25 // 背包剩余空闲格子数
 	PlayerPropVIPLevel      uint8 = 31 // VIP等级
 	PlayerPropExtraPower    uint8 = 77 // 存储/额外/赠送体力池 (Offset 116)
+)
+
+// 2026 网关 Mod_Player_Base.update_player_data 属性枚举。
+//
+// 实测 2026 网关在旧版枚举前插入了 8 个属性槽位, 因此属性 ID 整体 +8。
+// 已通过真实发包数据交叉验证:
+//   - 铜钱: 完成任务 251 奖励 80000 后由 50355193 变为 50435193 (prop 20)
+//   - 经验: 同任务奖励 240000 后由 63456 变为 303456 (prop 25)
+//   - 体力: 推图扫荡期间在 0..300 区间内增减 (prop 23)
+//   - 背包空格: 拾取掉落物后由 29 变为 28 (prop 33)
+//
+// 等级/元宝等字段按同一偏移推导, 应用时需再做合法性校验 (见 client.applyPlayerUpdateData)。
+const (
+	PlayerPropLevel2026         uint8 = 18 // 等级
+	PlayerPropIngot2026         uint8 = 19 // 元宝
+	PlayerPropCoins2026         uint8 = 20 // 铜钱
+	PlayerPropHealth2026        uint8 = 21 // 当前生命
+	PlayerPropMaxHealth2026     uint8 = 22 // 最大生命
+	PlayerPropPower2026         uint8 = 23 // 当前基础体力
+	PlayerPropMaxPower2026      uint8 = 24 // 最大基础体力
+	PlayerPropExperience2026    uint8 = 25 // 当前经验
+	PlayerPropMaxExperience2026 uint8 = 26 // 最大经验
+	PlayerPropPackEmptyNum2026  uint8 = 33 // 背包剩余空闲格子数
+	PlayerPropVIPLevel2026      uint8 = 39 // VIP等级
 )
 
 // 城镇打坐练功通知类型 (Mod_Player_Base 动作 40 通知子类型)

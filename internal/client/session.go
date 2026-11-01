@@ -87,21 +87,23 @@ type SessionConfig struct {
 
 // PlayerState 纳管角色在游戏世界中的动态属性与资源状态。
 type PlayerState struct {
-	Level       int   `json:"level"`
-	VIP         int   `json:"vip"`
-	Stamina     int   `json:"stamina"`
-	MaxStamina  int   `json:"max_stamina"`
-	ExtraStamina int  `json:"extra_stamina"`
-	Coins       int64 `json:"coins"`
-	Ingots      int64 `json:"ingots"`
-	StateSource int64 `json:"state_source"`
-	BagCapacity int   `json:"bag_capacity"`
-	TownID       int               `json:"town_id"`
-	Quests       map[uint32]uint32 `json:"quests"`
-	IsPracticing bool              `json:"is_practicing"`
-	PracticeExp  int64             `json:"practice_exp"`
-	Experience   int64             `json:"experience"`
-	MaxExperience int64            `json:"max_experience"`
+	Level          int               `json:"level"`
+	VIP            int               `json:"vip"`
+	Stamina        int               `json:"stamina"`
+	MaxStamina     int               `json:"max_stamina"`
+	ExtraStamina   int               `json:"extra_stamina"`
+	Coins          int64             `json:"coins"`
+	Ingots         int64             `json:"ingots"`
+	StateSource    int64             `json:"state_source"`
+	BagCapacity    int               `json:"bag_capacity"`
+	TownID         int               `json:"town_id"`
+	Quests         map[uint32]uint32 `json:"quests"`
+	IsPracticing   bool              `json:"is_practicing"`
+	PracticeExp    int64             `json:"practice_exp"`
+	Experience     int64             `json:"experience"`
+	MaxExperience  int64             `json:"max_experience"`
+	PlayerID       int32             `json:"player_id"`
+	OriginNickName string            `json:"origin_nick_name"`
 }
 
 // RoleSession 代表与游戏服务器建立的长连接角色会话。
@@ -233,46 +235,10 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 
 	// 注册角色属性与体力更新动态通知监听器 (Module 0, Action 3)
 	s.RegisterHandler(protocol.ActionIDPlayerUpdateData, func(p *protocol.Packet) {
-		if p == nil || len(p.Payload) < 5 {
+		if p == nil {
 			return
 		}
-		r := protocol.NewReader(p.Payload)
-		for r.Remaining() >= 5 {
-			prop, err := r.ReadUint8()
-			if err != nil {
-				break
-			}
-			val, err := r.ReadInt32()
-			if err != nil {
-				break
-			}
-			s.UpdatePlayerState(func(ps *PlayerState) {
-				switch prop {
-				case protocol.PlayerPropPower:
-					ps.Stamina = int(val)
-				case protocol.PlayerPropExtraPower:
-					ps.ExtraStamina = int(val)
-				case protocol.PlayerPropMaxPower:
-					ps.MaxStamina = int(val)
-				case protocol.PlayerPropCoins:
-					ps.Coins = int64(val)
-				case protocol.PlayerPropIngot:
-					ps.Ingots = int64(val)
-				case protocol.PlayerPropLevel:
-					ps.Level = int(val)
-				case protocol.PlayerPropExperience:
-					ps.Experience = int64(val)
-					slog.Info("角色总经验同步更新", "role_id", s.RoleID(), "experience", val)
-				case protocol.PlayerPropMaxExperience:
-					ps.MaxExperience = int64(val)
-					slog.Info("角色升级所需经验更新", "role_id", s.RoleID(), "max_experience", val)
-				case protocol.PlayerPropVIPLevel:
-					ps.VIP = int(val)
-				case protocol.PlayerPropPackEmptyNum:
-					ps.BagCapacity = int(val)
-				}
-			})
-		}
+		s.applyPlayerUpdateData(p.Payload)
 	})
 
 	return s
@@ -286,6 +252,23 @@ func (s *RoleSession) RoleID() string {
 // RoleName 获取会话绑定的角色显示名称。
 func (s *RoleSession) RoleName() string {
 	return s.cfg.RoleName
+}
+
+// PlayerID 获取角色在游戏服务端的数字标识 (PlayerID)。
+func (s *RoleSession) PlayerID() int32 {
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	return s.playerState.PlayerID
+}
+
+// OriginNickName 获取角色带区服后缀的官方完整名称 (例如 "曹植始.s1")。
+func (s *RoleSession) OriginNickName() string {
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	if s.playerState.OriginNickName != "" {
+		return s.playerState.OriginNickName
+	}
+	return s.RoleName()
 }
 
 // GetPlayerState 获取角色当前快照状态副本。
@@ -406,6 +389,111 @@ func (s *RoleSession) UpdatePlayerState(fn func(*PlayerState)) {
 	defer s.playerMu.Unlock()
 	if fn != nil {
 		fn(&s.playerState)
+	}
+}
+
+// applyPlayerUpdateData 解析并应用服务器主动下发的角色属性变更 (Module 0, Action 3)。
+//
+// 2026 网关采用 [Uint16 条数][Uint8 属性ID][Int64 数值] 批量布局, 与旧版
+// [Uint8 属性ID][Int32 数值] 重复布局完全不同。旧实现按 5 字节步长解析会把
+// 条数头当成属性 ID, 将 0x03190000 之类的错位值写入等级/体力, 造成状态污染,
+// 因此这里统一走 protocol.ParsePlayerUpdateData 并逐字段做合法性校验。
+func (s *RoleSession) applyPlayerUpdateData(payload []byte) {
+	updates, modern := protocol.ParsePlayerUpdateData(payload)
+	if len(updates) == 0 {
+		return
+	}
+
+	s.playerMu.Lock()
+	defer s.playerMu.Unlock()
+
+	for _, u := range updates {
+		if !modern {
+			s.applyLegacyPlayerProp(u)
+			continue
+		}
+		switch u.Prop {
+		case protocol.PlayerPropLevel2026:
+			if u.Value >= 1 && u.Value <= 999 {
+				s.playerState.Level = int(u.Value)
+			}
+		case protocol.PlayerPropIngot2026:
+			if u.Value >= 0 && u.Value <= 1_000_000_000_000 {
+				s.playerState.Ingots = u.Value
+			}
+		case protocol.PlayerPropCoins2026:
+			if u.Value >= 0 && u.Value <= 1_000_000_000_000_000 {
+				s.playerState.Coins = u.Value
+			}
+		case protocol.PlayerPropPower2026:
+			if u.Value >= 0 && u.Value <= 1_000_000 {
+				s.playerState.Stamina = int(u.Value)
+			}
+		case protocol.PlayerPropMaxPower2026:
+			if u.Value >= 0 && u.Value <= 1_000_000 {
+				s.playerState.MaxStamina = int(u.Value)
+			}
+		case protocol.PlayerPropExperience2026:
+			if u.Value >= 0 {
+				s.playerState.Experience = u.Value
+				slog.Info("角色总经验同步更新", "role_id", s.cfg.RoleID, "experience", u.Value)
+			}
+		case protocol.PlayerPropMaxExperience2026:
+			if u.Value >= 0 {
+				s.playerState.MaxExperience = u.Value
+				slog.Info("角色升级所需经验更新", "role_id", s.cfg.RoleID, "max_experience", u.Value)
+			}
+		case protocol.PlayerPropVIPLevel2026:
+			if u.Value >= 0 && u.Value <= 100 {
+				s.playerState.VIP = int(u.Value)
+			}
+		case protocol.PlayerPropPackEmptyNum2026:
+			if u.Value >= 0 && u.Value <= 100_000 {
+				s.playerState.BagCapacity = int(u.Value)
+			}
+		}
+	}
+}
+
+// applyLegacyPlayerProp 应用旧版 pie.exe 属性 ID 的变更, 仅供兼容布局使用。
+func (s *RoleSession) applyLegacyPlayerProp(u protocol.PlayerPropUpdate) {
+	switch u.Prop {
+	case protocol.PlayerPropPower:
+		if u.Value >= 0 && u.Value <= 1_000_000 {
+			s.playerState.Stamina = int(u.Value)
+		}
+	case protocol.PlayerPropMaxPower:
+		if u.Value >= 0 && u.Value <= 1_000_000 {
+			s.playerState.MaxStamina = int(u.Value)
+		}
+	case protocol.PlayerPropCoins:
+		if u.Value >= 0 {
+			s.playerState.Coins = u.Value
+		}
+	case protocol.PlayerPropIngot:
+		if u.Value >= 0 {
+			s.playerState.Ingots = u.Value
+		}
+	case protocol.PlayerPropLevel:
+		if u.Value >= 1 && u.Value <= 999 {
+			s.playerState.Level = int(u.Value)
+		}
+	case protocol.PlayerPropExperience:
+		if u.Value >= 0 {
+			s.playerState.Experience = u.Value
+		}
+	case protocol.PlayerPropMaxExperience:
+		if u.Value >= 0 {
+			s.playerState.MaxExperience = u.Value
+		}
+	case protocol.PlayerPropVIPLevel:
+		if u.Value >= 0 && u.Value <= 100 {
+			s.playerState.VIP = int(u.Value)
+		}
+	case protocol.PlayerPropPackEmptyNum:
+		if u.Value >= 0 && u.Value <= 100_000 {
+			s.playerState.BagCapacity = int(u.Value)
+		}
 	}
 }
 
@@ -634,6 +722,11 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 			if authResp.ResultCode != 4 && authResp.ResultCode != 0 {
 				return fmt.Errorf("client: authentication rejected by server: resultCode=%d", authResp.ResultCode)
 			}
+			if authResp.PlayerID > 0 {
+				s.UpdatePlayerState(func(ps *PlayerState) {
+					ps.PlayerID = authResp.PlayerID
+				})
+			}
 		} else {
 			res, pErr := protocol.ParsePlayerLoginResult(respPkt.Payload)
 			if pErr != nil {
@@ -685,6 +778,12 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 		infoRes, pErr := protocol.ParsePlayerLoginResult(step4Resp.Payload)
 		if pErr == nil && infoRes != nil {
 			s.UpdatePlayerState(func(ps *PlayerState) {
+				if infoRes.RoleName != "" {
+					ps.OriginNickName = infoRes.RoleName
+				}
+				if ps.PlayerID == 0 && infoRes.RoleID > 0 {
+					ps.PlayerID = int32(infoRes.RoleID)
+				}
 				if infoRes.Level > 0 {
 					ps.Level = int(infoRes.Level)
 				}
@@ -1777,7 +1876,6 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 		return false
 	}
 
-
 	s.setState(StateReconnecting)
 
 	// 计算指数退避等待时间：从 ReconnectInterval 开始递增，上限 30 秒
@@ -1964,7 +2062,6 @@ func runMockGameServer(conn net.Conn) {
 			binary.Write(&rawBuf, binary.BigEndian, int32(201))         // Stamina 201 点
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerGetInfo, rawBuf.Bytes()))
 
-
 		case protocol.ActionIDStLogin:
 			// 响应跨服登录成功，并推送 0x0300 初始体力
 			res := protocol.StLoginResult{
@@ -2088,9 +2185,9 @@ func runMockGameServer(conn net.Conn) {
 		case protocol.ActionIDArenaGetOpponents:
 			// 响应竞技场可挑战对手列表
 			opponents := []protocol.ArenaOpponent{
-				{Rank: 5, RoleID: 1001, Name: "初级剑仙", FightValue: 35000},
-				{Rank: 4, RoleID: 1002, Name: "天罗神将", FightValue: 68000},
-				{Rank: 3, RoleID: 1003, Name: "万妖统帅", FightValue: 92000},
+				{Rank: 5, RoleID: 1001, Name: "初级剑仙", Career: 1, Level: 30, Score: 1000},
+				{Rank: 4, RoleID: 1002, Name: "天罗神将", Career: 2, Level: 40, Score: 1000},
+				{Rank: 3, RoleID: 1003, Name: "万妖统帅", Career: 5, Level: 50, Score: 1000},
 			}
 			resPkt, _ := protocol.BuildArenaGetOpponentsResultPacket(opponents)
 			_ = protocol.WritePacket(conn, resPkt)
@@ -2165,19 +2262,19 @@ func runMockGameServer(conn net.Conn) {
 			// 响应六道轮回塔单关挑战成功
 			cw := protocol.NewWriter()
 			cw.WriteUint8(protocol.TowerResultSuccess) // Result: SUCCESS
-			cw.WriteInt32(1001)                       // WarSoulID
-			cw.WriteInt32(300000)                     // WarExp
-			cw.WriteInt32(300)                        // WarFame
-			cw.WriteInt32(50000)                      // WarCoin
+			cw.WriteInt32(1001)                        // WarSoulID
+			cw.WriteInt32(300000)                      // WarExp
+			cw.WriteInt32(300)                         // WarFame
+			cw.WriteInt32(50000)                       // WarCoin
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTowerStartChallenge, cw.Bytes()))
 
 		case protocol.ActionIDTowerResetLayer:
 			// 响应六道轮回重置
 			rw := protocol.NewWriter()
 			rw.WriteUint8(protocol.TowerResultSuccess) // Result
-			rw.WriteUint8(1)                          // Layer
+			rw.WriteUint8(1)                           // Layer
 			rw.WriteUint16(50)                         // ResetIngot
-			rw.WriteUint8(0)                          // ResetNum
+			rw.WriteUint8(0)                           // ResetNum
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTowerResetLayer, rw.Bytes()))
 
 		case protocol.ActionIDTowerStartAutoChallenge:
@@ -2205,9 +2302,9 @@ func runMockGameServer(conn net.Conn) {
 		case protocol.ActionIDBeelzebubTrialsOpen:
 			// 响应魔王试炼主面板
 			ow := protocol.NewWriter()
-			ow.WriteUint16(0) // 0 teams
-			ow.WriteInt32(0)  // int32
-			ow.WriteUint16(0) // 0 bosses in list
+			ow.WriteUint16(0)   // 0 teams
+			ow.WriteInt32(0)    // int32
+			ow.WriteUint16(0)   // 0 bosses in list
 			ow.WriteInt32(5000) // moralExp
 			ow.WriteInt32(3)    // moralLv
 			ow.WriteInt32(1)    // bGet (canClaim)
@@ -2269,9 +2366,9 @@ func runMockGameServer(conn net.Conn) {
 			// 响应战斗结算 (击败魔王，奖励声望2000，铜钱100万，道行500，经验20万)
 			ww := protocol.NewWriter()
 			ww.WriteUint8(protocol.BeelzebubTrialsSuccess) // warResult
-			ww.WriteInt32(0)                              // placeholder
-			ww.WriteInt32(0)                              // placeholder
-			ww.WriteUint16(0)                             // 0 war frames
+			ww.WriteInt32(0)                               // placeholder
+			ww.WriteInt32(0)                               // placeholder
+			ww.WriteUint16(0)                              // 0 war frames
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetWarResult, ww.Bytes()))
 
 		case protocol.ActionIDBeelzebubTrialsLeaveWar:
