@@ -62,7 +62,12 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 	}
 
 	// 5. 粗铁淬炼 (Module 282, Action 1)
-	pRefine := protocol.BuildRefineExecutePacket(protocol.ActionIDRefinePoolPanel)
+	pRefine := protocol.BuildRefineExecutePacket(
+		protocol.RefinePoolQualityCoins,
+		protocol.RefinePoolTypeOneKey,
+		10,
+		protocol.ActionIDRefinePoolPanel,
+	)
 	if pRefine.ActionID != protocol.ActionIDRefineExecute {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDRefineExecute, pRefine.ActionID)
 	}

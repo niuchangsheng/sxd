@@ -197,33 +197,8 @@ func BuildQiMenFormationConfirmPacket(prevAct uint32) *Packet {
 }
 
 // --------------------------------------------------------------------------------
-// 5. 淬炼粗铁
+// 5. 淬炼粗铁 (协议实现见 refine_pool.go)
 // --------------------------------------------------------------------------------
-
-// BuildRefinePoolPanelPacket 构造查询淬炼池面板封包 (Module 534, Action 5)。
-func BuildRefinePoolPanelPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(4) // 默认面板类型
-	if prevAct == 0 {
-		prevAct = ActionIDTownEnter
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDRefinePoolPanel, w.Bytes())
-}
-
-// BuildRefineExecutePacket 构造提交粗铁淬炼提纯封包 (Module 282, Action 1)。
-func BuildRefineExecutePacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	// 依据抓包实采: 06 07 0a 紧随 PrevAct
-	w.WriteUint8(0x06)
-	w.WriteUint8(0x07)
-	w.WriteUint8(0x0a)
-	if prevAct == 0 {
-		prevAct = ActionIDRefinePoolPanel
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDRefineExecute, w.Bytes())
-}
 
 // --------------------------------------------------------------------------------
 // 6. 天神赐福

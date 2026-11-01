@@ -445,7 +445,13 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 }
 
 // NewSpiritPoolRoutine 构造粗铁淬炼池与异兽提炼任务 (Feature 5: 淬炼粗铁)。
+//
+// 交互序列与实机抓包 (haha.pcapng) 对齐:
+//  1. Module 282, Action 0 打开淬炼池面板, 回包携带全部铁槽生产状态;
+//  2. Module 534, Action 5 查询淬炼池资源面板;
+//  3. Module 282, Action 1 以“一键淬炼”方式提炼所有已完成槽位。
 func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"spirit_pool",
 		"farming",
@@ -459,22 +465,87 @@ func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			slog.Info("正在执行资源任务: 粗铁淬炼池提炼", "role_id", session.RoleID())
+			slog.Info("正在执行资源任务: 粗铁淬炼池一键淬炼", "role_id", session.RoleID())
 
-			// 1. 查询淬炼池面板 (Mod 534, Act 5)
-			panelPkt := protocol.BuildRefinePoolPanelPacket(protocol.ActionIDTownEnter)
-			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
+			// 1. 打开淬炼池面板 (Mod 282, Act 0), 获取各铁槽生产状态
+			openPkt := protocol.BuildRefinePoolOpenPacket(session.LastActionID())
+			oCtx, oCancel := context.WithTimeout(ctx, callTimeout)
+			openResp, err := session.Call(oCtx, openPkt, protocol.ActionIDRefinePoolOpen)
+			oCancel()
+			if err != nil {
+				slog.Warn("打开粗铁淬炼池面板失败", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			panel, err := protocol.ParseRefinePoolOpenResponse(openResp.Payload)
+			if err != nil {
+				slog.Warn("解析粗铁淬炼池面板失败", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+
+			// 2. 查询淬炼池资源面板 (Mod 534, Act 5), 与实机抓包序列保持一致
+			panelPkt := protocol.BuildRefinePoolPanelPacket(protocol.ActionIDRefinePoolOpen)
+			pCtx, pCancel := context.WithTimeout(ctx, callTimeout)
 			_, _ = session.Call(pCtx, panelPkt, protocol.ActionIDRefinePoolPanel)
 			pCancel()
 
-			// 2. 发起粗铁淬炼执行 (Mod 282, Act 1)
-			execPkt := protocol.BuildRefineExecutePacket(protocol.ActionIDRefinePoolPanel)
-			eCtx, eCancel := context.WithTimeout(ctx, 2*time.Second)
+			done := panel.DoneCount()
+			if done == 0 {
+				slog.Info("淬炼池暂无已完成的粗铁, 跳过一键淬炼",
+					"role_id", session.RoleID(),
+					"iron_count", len(panel.Irons),
+					"level", panel.Level,
+					"lian_qi_jing_hua", panel.LianQiJingHua,
+				)
+				return nil
+			}
+
+			// 3. 一键淬炼所有已完成槽位 (铜钱消耗, 避免扣除元宝)
+			execPkt := protocol.BuildRefineExecutePacket(
+				protocol.RefinePoolQualityCoins,
+				protocol.RefinePoolTypeOneKey,
+				uint8(done),
+				protocol.ActionIDRefinePoolPanel,
+			)
+			eCtx, eCancel := context.WithTimeout(ctx, callTimeout)
 			resp, err := session.Call(eCtx, execPkt, protocol.ActionIDRefineExecute)
 			eCancel()
+			if err != nil {
+				slog.Warn("粗铁淬炼执行失败", "role_id", session.RoleID(), "done_slots", done, "err", err)
+				return nil
+			}
 
-			if err == nil && resp != nil {
-				slog.Info("粗铁淬炼提纯执行成功", "role_id", session.RoleID())
+			result, err := protocol.ParseRefineExecuteResponse(resp.Payload)
+			if err != nil {
+				slog.Warn("解析粗铁淬炼回包失败", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			var essence int32
+			for _, award := range result.Awards {
+				for _, item := range award.Items {
+					if item.ItemID == protocol.ItemRefineEssence {
+						essence += item.Count
+					}
+				}
+				for _, item := range award.ExtraItems {
+					if item.ItemID == protocol.ItemRefineEssence {
+						essence += item.Count
+					}
+				}
+			}
+			// 实测服务端在批量淬炼成功时也可能回传非 SUCCESS 的结果码,
+			// 因此以是否实际产出炼器精华作为成功判据, 避免误报失败。
+			attrs := []any{
+				"role_id", session.RoleID(),
+				"result", result.Result,
+				"refined_slots", len(result.Awards),
+				"essence_gained", essence,
+				"lian_qi_jing_hua", result.LianQiJingHua,
+				"level", result.Level,
+			}
+			if result.Result == protocol.RefinePoolResultSuccess || essence > 0 {
+				slog.Info("粗铁一键淬炼完成", attrs...)
+			} else {
+				slog.Warn("粗铁一键淬炼未产出炼器精华", attrs...)
 			}
 			return nil
 		},
