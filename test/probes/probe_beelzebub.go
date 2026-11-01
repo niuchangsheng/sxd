@@ -127,37 +127,18 @@ func main() {
 		return bossItems[i].ID < bossItems[j].ID
 	})
 
-	// 挨个确认是否可以挑战
-	for _, item := range bossItems {
-		cRes, err := sess.BeelzebubTrialsCreateTeam(ctx, item.ID, protocol.BeelzebubTrialsNotLimit)
-		if err != nil {
-			continue
-		}
-		if cRes == protocol.BeelzebubTrialsSuccess {
-			slog.Info("已锁定可挑战魔王并成功建队，开始挑战", "boss_id", item.ID, "boss_name", item.Name, "level", item.Level)
-			// 招募助战
-			helpers, _ := sess.BeelzebubTrialsGetHelperRoles(ctx)
-			slot := uint8(1)
-			for _, h := range helpers {
-				if slot > 2 {
-					break
-				}
-				if !h.InBody {
-					if _, err := sess.BeelzebubTrialsChooseHelper(ctx, h.RoleID, slot); err == nil {
-						slot++
-					}
-				}
-			}
-			// 发起战斗
-			fRes, err := sess.BeelzebubTrialsFight(ctx)
-			slog.Info("发起战斗", "fRes", fRes, "err", err)
-			time.Sleep(500 * time.Millisecond)
-			warRes, err := sess.BeelzebubTrialsGetWarResult(ctx)
-			slog.Info("结算战报", "warRes", warRes, "err", err)
-			_ = sess.BeelzebubTrialsLeaveWar(ctx, 0)
-			_ = sess.BeelzebubTrialsExitTeam(ctx)
-			slog.Info("挑战完成！")
-			break
-		}
+	// 逐关遍历可挑战列表，确保所有关卡都完成挑战闭环
+	warResults, err := sess.BeelzebubTrialsAutoChallengeAll(ctx, 0)
+	if err != nil {
+		slog.Error("魔王试炼逐关挑战失败", "err", err)
+		return
 	}
+	succeeded := 0
+	for i, warRes := range warResults {
+		if warRes != nil && warRes.Result == protocol.BeelzebubTrialsSuccess {
+			succeeded++
+		}
+		slog.Info("关卡战报", "index", i, "warRes", fmt.Sprintf("%+v", warRes))
+	}
+	slog.Info("魔王试炼逐关挑战结束", "total", len(warResults), "success", succeeded)
 }

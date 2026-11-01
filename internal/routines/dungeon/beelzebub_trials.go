@@ -80,19 +80,25 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 				return nil
 			}
 
-			// 4. 执行全自动组队、助战镜像配置、战斗与结算闭环
-			warRes, err := session.BeelzebubTrialsAutoChallenge(ctx, cfg.PreferBossID)
+			// 4. 遍历可挑战魔王列表，逐关执行组队、助战镜像配置、战斗与结算闭环
+			warResults, err := session.BeelzebubTrialsAutoChallengeAll(ctx, cfg.PreferBossID)
 			if err != nil {
 				return fmt.Errorf("魔王试炼自动挑战流程执行失败: %w", err)
 			}
 
-			if warRes != nil {
-				slog.Info("魔王试炼自动挑战圆满结束",
+			if len(warResults) == 0 {
+				slog.Info("魔王试炼暂无可挑战关卡或今日挑战次数已耗尽", "role_id", session.RoleID())
+			} else {
+				succeeded := 0
+				for _, warRes := range warResults {
+					if warRes != nil && warRes.Result == protocol.BeelzebubTrialsSuccess {
+						succeeded++
+					}
+				}
+				slog.Info("魔王试炼所有可挑战关卡已逐关完成",
 					"role_id", session.RoleID(),
-					"result", warRes.Result,
-					"award_fame", warRes.AwardFame,
-					"award_coin", warRes.AwardCoin,
-					"award_moral", warRes.AwardMoral,
+					"total", len(warResults),
+					"success", succeeded,
 				)
 			}
 
