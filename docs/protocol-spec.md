@@ -289,7 +289,7 @@ classDiagram
 ```
 Short protection_count, protection_count × [
     UByte protection, Byte take_time, Int award_coin, Short award_fame,
-    Short award_st_exp, Byte npc_level, Short npc_expe ],
+    Short award_st_exp, Byte npc_level, Int npc_expe ],
 Short protect_player_count, protect_player_count × [
     Int player_id, String nick_name, Byte remain_protect_times,
     Byte total_protect_times, Byte protect_status ],
@@ -299,6 +299,13 @@ Byte bless, Byte buff
 ```
 
 - `protection`：1 白龙马、2 沙悟净、3 猪八戒、4 孙悟空、5 唐僧。
+- **实机差异**：AS3 描述符把 `npc_expe` 声明为 `Short`，但 2026-11-02 在
+  `9x050.sxdweb.xd.com` 仙界节点抓到的 89 字节回包显示每个使者条目为
+  **15 字节**，即 `npc_expe` 是 4 字节 `Int`；按 `Short` 解析会在第二条使者
+  处错位并以 `unexpected EOF` 失败。该实机样本已固化为协议单测。
+- 实机 `get_take_bible_info` 首次返回：5 个使者（铜钱 230 万～2090 万、
+  使者经验 121～5914）、好友列表为空、`take_bible_times=0`、
+  `total_take_bible_times=8`、`refresh_price=0`、`can_protection=0`。
 - 常见结果码：`SUCCESS=9`、`TAKE_BIBLE_STATUS=13`、`NOT_ENOUGH_INGOT=16`、
   `FULL_TAKE_BIBLE_TIMES=18`、`PROTECT_TIME=20`、`FAILED=38`。
 - `get_take_bible_info` / `start_take_bible` 由客户端直接调用，二者均挂载在

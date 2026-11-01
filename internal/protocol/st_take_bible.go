@@ -89,8 +89,12 @@ type StTakeBibleCrossProtection struct {
 	AwardStExp int16
 	// NpcLevel 使者等级
 	NpcLevel int8
-	// NpcExpe 使者经验
-	NpcExpe int16
+	// NpcExpe 使者经验。
+	//
+	// 官方 AS3 描述符写的是 Short，但实机仙界节点 (s0 跨服) 每个使者条目
+	// 实际下发 15 字节，即该字段为 4 字节 Int；若按 Short 读取会导致后续
+	// 使者条目与好友列表整体错位 (实测报 unexpected EOF)。
+	NpcExpe int32
 }
 
 // StTakeBibleCrossProtectPlayer 代表可申请护送保护的好友信息。
@@ -150,8 +154,11 @@ func BuildStTakeBibleCrossStartPacket() *Packet {
 //
 // 线格式 (Mod_StTakeBible_Base.get_take_bible_info response):
 //
-//	[ [UByte protection, Byte takeTime, Int awardCoin, Short awardFame, Short awardStExp, Byte npcLevel, Short npcExpe] ],
+//	[ [UByte protection, Byte takeTime, Int awardCoin, Short awardFame, Short awardStExp, Byte npcLevel, Int npcExpe] ],
 //	[ [Int playerID, String nickName, Byte remainProtectTimes, Byte totalProtectTimes, Byte protectStatus] ],
+//
+// 注意：AS3 描述符将 npcExpe 声明为 Short，但实机仙界节点按 Int (4 字节) 下发，
+// 每个使者条目共 15 字节；此处以实机回包为准。
 //	UByte takeBibleTimes, Byte totalTakeBibleTimes, Short refreshPrice, Byte takeBibleStatus,
 //	UByte canProtection, String protectPlayer, Byte bless, Byte buff
 func ParseStTakeBibleCrossInfoResult(payload []byte) (*StTakeBibleCrossInfo, error) {
@@ -183,7 +190,7 @@ func ParseStTakeBibleCrossInfoResult(payload []byte) (*StTakeBibleCrossInfo, err
 		if p.NpcLevel, err = r.ReadInt8(); err != nil {
 			return nil, fmt.Errorf("%w: failed to read protection[%d].npc_level: %v", ErrInvalidPayload, i, err)
 		}
-		if p.NpcExpe, err = r.ReadInt16(); err != nil {
+		if p.NpcExpe, err = r.ReadInt32(); err != nil {
 			return nil, fmt.Errorf("%w: failed to read protection[%d].npc_expe: %v", ErrInvalidPayload, i, err)
 		}
 		res.ProtectionList = append(res.ProtectionList, p)

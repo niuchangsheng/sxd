@@ -382,7 +382,7 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession) boo
 	case protocol.StTakeBibleCrossMsgTakeBibleStatus:
 		slog.Info("仙界西天取经队伍正在护送途中，无需重复启程", "role_id", session.RoleID())
 	case protocol.StTakeBibleCrossMsgFullTakeBibleTimes:
-		slog.Info("仙界西天取经今日护送次数已用满 (3次)", "role_id", session.RoleID())
+		slog.Info("仙界西天取经今日护送次数已用满", "role_id", session.RoleID(), "total_times", info.TotalTakeBibleTimes)
 	case protocol.StTakeBibleCrossMsgProtectTime:
 		slog.Info("仙界西天取经当前处于护送保护时间", "role_id", session.RoleID())
 	case protocol.StTakeBibleCrossMsgNotEnoughIngot:
