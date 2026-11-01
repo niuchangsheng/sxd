@@ -158,14 +158,14 @@ func TestRoleSession_BeelzebubTrialsAutoChallenge(t *testing.T) {
 }
 
 // TestRoleSession_BeelzebubTrialsAutoChallengeAll 验证逐关挑战会遍历可挑战列表中的全部关卡，
-// 而不会在第一关建队成功后提前退出。
+// 并在清完初始关卡后刷新列表，继续挑战新解锁的隐藏/神秘层关卡。
 func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
 
 	var mu sync.Mutex
-	createdBosses := make([]int32, 0, 3)
+	createdBosses := make([]int32, 0, 5)
 	fightCount := 0
 
 	go func() {
@@ -181,11 +181,24 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 					[]byte{protocol.BeelzebubTrialsSuccess},
 				))
 			case protocol.ActionIDBeelzebubTrialsGetCanChallengeList:
+				// 初始只返回 3 个普通关卡；清完后服务端解锁 41(30 级) 与 42(60 级) 两个神秘层关卡。
+				mu.Lock()
+				completed := len(createdBosses)
+				mu.Unlock()
+
 				bw := protocol.NewWriter()
-				bw.WriteUint16(3)
+				count := uint16(3)
+				if completed >= 3 {
+					count = 5
+				}
+				bw.WriteUint16(count)
 				bw.WriteInt32(1)  // 魔化大魔王 (100 级)
 				bw.WriteInt32(71) // 魔掌门元识 (30 级)
 				bw.WriteInt32(72) // 魔掌门神识 (30 级)
+				if completed >= 3 {
+					bw.WriteInt32(41) // 30 级神秘层关卡
+					bw.WriteInt32(42) // 60 级神秘层关卡
+				}
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
 					protocol.ActionIDBeelzebubTrialsGetCanChallengeList, bw.Bytes(),
 				))
@@ -266,9 +279,9 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 		t.Fatalf("BeelzebubTrialsAutoChallengeAll failed: %v", err)
 	}
 
-	// 按等级从低到高排序: 71(30), 72(30), 1(100)，三关都应完成。
-	if len(results) != 3 {
-		t.Fatalf("expected 3 challenge results (all stages), got %d", len(results))
+	// 初始 3 关 + 刷新后新解锁的 2 个神秘层关卡，共 5 关都应完成。
+	if len(results) != 5 {
+		t.Fatalf("expected 5 challenge results (all stages incl. hidden), got %d", len(results))
 	}
 	for i, res := range results {
 		if res == nil || res.Result != protocol.BeelzebubTrialsSuccess {
@@ -278,10 +291,10 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if fightCount != 3 {
-		t.Fatalf("expected 3 fights (one per stage), got %d", fightCount)
+	if fightCount != 5 {
+		t.Fatalf("expected 5 fights (one per stage), got %d", fightCount)
 	}
-	wantBosses := []int32{71, 72, 1}
+	wantBosses := []int32{71, 72, 1, 41, 42}
 	if len(createdBosses) != len(wantBosses) {
 		t.Fatalf("expected create_team for %v, got %v", wantBosses, createdBosses)
 	}

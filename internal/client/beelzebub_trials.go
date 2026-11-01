@@ -24,12 +24,15 @@ type beelzebubCandidate struct {
 	name  string
 }
 
+// beelzebubMaxChallenges 单次运行的挑战次数安全上限，防止服务端列表异常导致死循环。
+const beelzebubMaxChallenges = 256
+
 // BeelzebubTrialsAutoChallengeAll 全自动遍历可挑战魔王列表，逐关完成挑战闭环。
 //
-// 与原单关版本的差异：原逻辑在建队成功后即 break，导致可挑战列表中的其余关卡永远不会被挑战；
+// 与原单关版本的差异：原逻辑在建队成功后即 break，导致可挑战列表中的其余关卡永远不会被挑战。
 // 本方法会对每个关卡依次执行「建队 -> 招募助战 -> 发起战斗 -> 拉取战报 -> 离场 -> 退队」，
-// 并在每关开始前重新检查剩余挑战次数，次数耗尽或列表全部处理完毕后停止。
-// 单关失败不会中断后续关卡，返回已完成的战报列表。
+// 并在每关结束以及列表耗尽时重新拉取可挑战列表，合并挑战过程中新解锁的隐藏/神秘层关卡，
+// 直到列表不再增长或挑战次数耗尽。单关失败不会中断后续关卡，返回已完成的战报列表。
 func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, preferBossID int32) ([]*protocol.BeelzebubTrialsWarResult, error) {
 	canChallenge, err := s.BeelzebubTrialsCheckCanChallenge(ctx)
 	if err != nil {
@@ -51,28 +54,48 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 		return nil, nil
 	}
 
-	candidates := orderBeelzebubCandidates(canList, preferBossID)
-	slog.Info("魔王试炼开始逐关挑战", "role_id", s.RoleID(), "total", len(candidates))
+	// queue 保存已发现的全部关卡 ID；seen 记录已完成（含失败）的关卡。
+	queue := append([]int32(nil), canList...)
+	seen := make(map[int32]bool, len(queue))
+	results := make([]*protocol.BeelzebubTrialsWarResult, 0, len(queue))
+	slog.Info("魔王试炼开始逐关挑战", "role_id", s.RoleID(), "total", len(queue))
 
-	results := make([]*protocol.BeelzebubTrialsWarResult, 0, len(candidates))
-	for i, cand := range candidates {
+	for attempts := 0; attempts < beelzebubMaxChallenges; {
 		if ctx.Err() != nil {
 			break
 		}
 
-		// 每关开始前重新确认挑战次数，避免次数耗尽后仍盲目发起战斗。
-		if i > 0 {
-			ok, cErr := s.BeelzebubTrialsCheckCanChallenge(ctx)
-			if cErr != nil {
-				slog.Warn("复检魔王试炼挑战次数失败，停止后续关卡", "role_id", s.RoleID(), "error", cErr)
-				break
-			}
-			if !ok {
-				slog.Info("今日魔王试炼挑战次数已耗尽，逐关挑战结束",
-					"role_id", s.RoleID(), "completed", len(results), "total", len(candidates))
-				break
-			}
+		// 每关开始前确认剩余挑战次数，避免次数耗尽后仍盲目发起战斗。
+		ok, cErr := s.BeelzebubTrialsCheckCanChallenge(ctx)
+		if cErr != nil {
+			slog.Warn("复检魔王试炼挑战次数失败，停止后续关卡", "role_id", s.RoleID(), "error", cErr)
+			break
 		}
+		if !ok {
+			slog.Info("今日魔王试炼挑战次数已耗尽，逐关挑战结束",
+				"role_id", s.RoleID(), "completed", len(results), "discovered", len(queue))
+			break
+		}
+
+		cand, found := nextBeelzebubCandidate(queue, seen, preferBossID)
+		if !found {
+			// 当前已知关卡已全部挑战完毕：刷新列表探测新解锁的隐藏/神秘层关卡。
+			fresh, fErr := s.BeelzebubTrialsGetCanChallengeList(ctx)
+			if fErr != nil {
+				slog.Warn("刷新魔王试炼可挑战列表失败，逐关挑战结束", "role_id", s.RoleID(), "error", fErr)
+				break
+			}
+			added, newIDs := mergeBeelzebubCandidates(&queue, seen, fresh)
+			if added == 0 {
+				break
+			}
+			slog.Info("魔王试炼检测到新解锁关卡",
+				"role_id", s.RoleID(), "count", added, "boss_ids", newIDs, "discovered", len(queue))
+			continue
+		}
+
+		seen[cand.id] = true
+		attempts++
 
 		warRes, cErr := s.beelzebubChallengeOne(ctx, cand)
 		if cErr != nil {
@@ -83,22 +106,57 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 				"level", cand.level,
 				"error", cErr,
 			)
-			continue
-		}
-		if warRes != nil {
+		} else if warRes != nil {
 			results = append(results, warRes)
 		}
 
-		if i+1 < len(candidates) {
-			select {
-			case <-ctx.Done():
-			case <-time.After(beelzebubTeamSettleDelay):
+		// 每关结束后立即刷新列表，尽早纳入新解锁的隐藏/神秘层关卡。
+		if fresh, fErr := s.BeelzebubTrialsGetCanChallengeList(ctx); fErr == nil {
+			if added, newIDs := mergeBeelzebubCandidates(&queue, seen, fresh); added > 0 {
+				slog.Info("魔王试炼检测到新解锁关卡",
+					"role_id", s.RoleID(), "count", added, "boss_ids", newIDs, "discovered", len(queue))
 			}
+		}
+
+		select {
+		case <-ctx.Done():
+		case <-time.After(beelzebubTeamSettleDelay):
 		}
 	}
 
 	s.claimBeelzebubMoralAward(ctx)
 	return results, nil
+}
+
+// nextBeelzebubCandidate 从已发现关卡中按等级顺序选出下一个尚未挑战的关卡。
+func nextBeelzebubCandidate(ids []int32, seen map[int32]bool, preferBossID int32) (beelzebubCandidate, bool) {
+	for _, cand := range orderBeelzebubCandidates(ids, preferBossID) {
+		if !seen[cand.id] {
+			return cand, true
+		}
+	}
+	return beelzebubCandidate{}, false
+}
+
+// mergeBeelzebubCandidates 将刷新回包中新出现的关卡并入 queue，返回新增数量与新关卡 ID。
+func mergeBeelzebubCandidates(queue *[]int32, seen map[int32]bool, fresh []int32) (int, []int32) {
+	existing := make(map[int32]bool, len(*queue))
+	for _, id := range *queue {
+		existing[id] = true
+	}
+
+	added := 0
+	var newIDs []int32
+	for _, id := range fresh {
+		if id <= 0 || seen[id] || existing[id] {
+			continue
+		}
+		*queue = append(*queue, id)
+		existing[id] = true
+		newIDs = append(newIDs, id)
+		added++
+	}
+	return added, newIDs
 }
 
 // beelzebubChallengeOne 完成单个魔王关卡的挑战闭环。
