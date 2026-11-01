@@ -78,23 +78,12 @@ func NewTownPracticeRoutine() scheduler.ActivityRoutine {
 			case <-time.After(800 * time.Millisecond):
 			}
 
-			// 5. 拉取角色最新状态并输出等级、经验与升级剩余经验
-			pInfo, pErr := session.FetchLatestPlayerInfo(ctx)
-			afterExp := beforeState.Experience
-			afterLevel := beforeState.Level
-			maxExp := beforeState.MaxExperience
+			// 5. 从角色本地状态快照读取最新经验并透明输出等级、经验与升级剩余经验
+			st := session.GetPlayerState()
+			afterExp := st.Experience
+			afterLevel := st.Level
+			maxExp := st.MaxExperience
 			roleName := session.RoleName()
-			if pErr == nil && pInfo != nil {
-				afterExp = pInfo.Experience
-				afterLevel = int(pInfo.Level)
-				maxExp = pInfo.MaxExperience
-				roleName = pInfo.RoleName
-			} else {
-				st := session.GetPlayerState()
-				afterExp = st.Experience
-				afterLevel = st.Level
-				maxExp = st.MaxExperience
-			}
 
 			gainExp := afterExp - beforeState.Experience
 			if collectResult != nil && collectResult.GainExp > 0 && gainExp <= 0 {
