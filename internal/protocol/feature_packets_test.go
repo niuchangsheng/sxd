@@ -162,6 +162,86 @@ func TestFeaturePackets_ParseJieYuanBoxList(t *testing.T) {
 	}
 }
 
+func TestOnlineGift_Packets(t *testing.T) {
+	q := protocol.BuildOnlineGiftCurrentPacket()
+	if q.ActionID != protocol.ActionIDPlayerGetCurrentOnlineGift {
+		t.Errorf("查询封包期望 ActionID 0x%08X, 实际 0x%08X",
+			protocol.ActionIDPlayerGetCurrentOnlineGift, q.ActionID)
+	}
+	if len(q.Payload) != 0 {
+		t.Errorf("查询封包请求体应为空, 实际 %d 字节", len(q.Payload))
+	}
+
+	c := protocol.BuildOnlineGiftClaimPacket()
+	if c.ActionID != protocol.ActionIDPlayerGetOnlineGift {
+		t.Errorf("领取封包期望 ActionID 0x%08X, 实际 0x%08X",
+			protocol.ActionIDPlayerGetOnlineGift, c.ActionID)
+	}
+	if len(c.Payload) != 0 {
+		t.Errorf("领取封包请求体应为空, 实际 %d 字节", len(c.Payload))
+	}
+}
+
+func TestOnlineGift_ParseCurrentResult(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteInt32(1700000000)
+	w.WriteUint16(2)
+	w.WriteInt32(1)
+	w.WriteInt32(3937)
+	w.WriteInt32(10)
+	w.WriteInt32(2)
+	w.WriteInt32(3940)
+	w.WriteInt32(5)
+
+	cur, err := protocol.ParseOnlineGiftCurrentResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("解析查询回包失败: %v", err)
+	}
+	if cur.TimeStamp != 1700000000 {
+		t.Errorf("time_stamp 期望 1700000000, 实际 %d", cur.TimeStamp)
+	}
+	if len(cur.Gifts) != 2 {
+		t.Fatalf("期望 2 项奖励, 实际 %d 项", len(cur.Gifts))
+	}
+	if cur.Gifts[1].Type != 2 || cur.Gifts[1].ItemID != 3940 || cur.Gifts[1].Value != 5 {
+		t.Errorf("第 2 项奖励解析异常: %+v", cur.Gifts[1])
+	}
+}
+
+func TestOnlineGift_ParseClaimResult(t *testing.T) {
+	// 成功回包: result=84, 1 项奖励, next_time_stamp=1700000600
+	w := protocol.NewWriter()
+	w.WriteUint8(protocol.PlayerActionSuccess)
+	w.WriteUint16(1)
+	w.WriteInt32(1)
+	w.WriteInt32(1488)
+	w.WriteInt32(3)
+	w.WriteInt32(1700000600)
+
+	claim, err := protocol.ParseOnlineGiftClaimResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("解析领取回包失败: %v", err)
+	}
+	if claim.Result != protocol.PlayerActionSuccess {
+		t.Errorf("result 期望 %d, 实际 %d", protocol.PlayerActionSuccess, claim.Result)
+	}
+	if len(claim.Gifts) != 1 || claim.Gifts[0].ItemID != 1488 {
+		t.Errorf("奖励列表解析异常: %+v", claim.Gifts)
+	}
+	if claim.NextTimeStamp != 1700000600 {
+		t.Errorf("next_time_stamp 期望 1700000600, 实际 %d", claim.NextTimeStamp)
+	}
+
+	// 实机 s0 回包: 64 0000 00000000 -> result=100, 空列表, next_time_stamp=0
+	live, err := protocol.ParseOnlineGiftClaimResult([]byte{0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	if err != nil {
+		t.Fatalf("解析实机回包失败: %v", err)
+	}
+	if live.Result != 100 || len(live.Gifts) != 0 || live.NextTimeStamp != 0 {
+		t.Errorf("实机回包解析异常: %+v", live)
+	}
+}
+
 func TestFeaturePackets_Decompress(t *testing.T) {
 	raw := []byte("hello sxd protocol payload")
 	var buf bytes.Buffer

@@ -46,9 +46,10 @@ const (
 )
 
 const (
-	// ActionIDItemClaimAward 领取在线/礼包奖励 (Module 2, Action 29 -> 0x0002001D)
+	// ActionIDItemClaimAward 领取序列号礼包奖励 (Module 2, Action 29 -> 0x0002001D, 来自 haha.pcapng)
+	// 注意: 非在线成长礼包; 在线成长礼包见 ActionIDPlayerGetOnlineGift (Module 0, Action 30)
 	ActionIDItemClaimAward uint32 = 0x0002001D
-	// ActionIDVipAwardQuery 查询VIP/在线奖励面板 (Module 42, Action 17 -> 0x002A0011)
+	// ActionIDVipAwardQuery 查询 VIP/序列号礼包面板 (Module 42, Action 17 -> 0x002A0011, 来自 haha.pcapng)
 	ActionIDVipAwardQuery uint32 = 0x002A0011
 
 	// ActionIDJieYuanBoxList 查询结缘宝箱库存列表 (Module 232, Action 30 -> 0x00E8001E)

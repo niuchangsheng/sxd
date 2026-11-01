@@ -53,6 +53,13 @@ const (
 )
 
 const (
+	// 玩家模块业务结果码 (Mod_Player_Base 类常量)
+	PlayerActionSuccess uint8 = 84 // ACTION_SUCCESS 操作成功
+	PlayerActionFailed  uint8 = 87 // ACTION_FAILED 操作失败 (在线礼包: 领取时间未到)
+	PlayerPackFull      uint8 = 88 // PACK_FULL 背包格子不足
+)
+
+const (
 	// ActionIDStLogin 跨服登录握手协议号 (Module 94, Action 0 -> 0x005E0000)
 	ActionIDStLogin uint32 = 0x005E0000
 
@@ -66,6 +73,10 @@ const (
 	ActionIDPlayerHeartbeat uint32 = 0x00000017
 	// ActionIDPlayerServerTime 同步服务器系统时间协议号 (Module 0, Action 22 -> 0x00000016, Mod_Player_Base.get_server_time)
 	ActionIDPlayerServerTime uint32 = 0x00000016
+	// ActionIDPlayerGetOnlineGift 领取在线成长礼包协议号 (Module 0, Action 30 -> 0x0000001E, Mod_Player_Base.player_get_online_gift)
+	ActionIDPlayerGetOnlineGift uint32 = 0x0000001E
+	// ActionIDPlayerGetCurrentOnlineGift 查询在线成长礼包当前状态协议号 (Module 0, Action 31 -> 0x0000001F, Mod_Player_Base.get_player_current_online_gift)
+	ActionIDPlayerGetCurrentOnlineGift uint32 = 0x0000001F
 	// ActionIDPlayerStartPractice 角色开始城镇打坐练功 (Module 0, Action 36 -> 0x00000024, Mod_Player_Base.start_practice)
 	ActionIDPlayerStartPractice uint32 = 0x00000024
 	// ActionIDPlayerGetPracticeData 获取角色城镇打坐练功数据 (Module 0, Action 37 -> 0x00000025, Mod_Player_Base.get_practice_data)

@@ -181,52 +181,93 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewOnlineGiftRoutine 构造在线福利与成长礼包领取任务 (Feature 1: 领取奖励)。
+// NewOnlineGiftRoutine 构造在线成长礼包领取任务 (Feature 1: 领取在线时长福利)。
+//
+// 协议基准 (原版客户端 Main.swf Mod_Player_Base.cinit / ActivitiesView):
+//   - get_player_current_online_gift -> Module 0, Action 31 (0x0000001F), 请求体为空
+//   - player_get_online_gift         -> Module 0, Action 30 (0x0000001E), 请求体为空
+//
+// 服务端按在线时长滚动发放礼包，客户端由服务器下发的 isGetOnlineGift / onlineGiftTime
+// 决定「立即领取」按钮是否出现；机器人侧以固定周期轮询查询并尝试领取。
+// 领取结果码: 84 成功, 87 未到时间, 88 背包已满。
 func NewOnlineGiftRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"online_gift",
 		"daily",
-		scheduler.ScheduleCron,
+		scheduler.ScheduleLoop,
 		scheduler.PriorityNormal,
-		0,
+		10*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
+				return client.ErrNotConnected
+			}
+			if session.State() != client.StateActive {
 				return client.ErrNotConnected
 			}
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			slog.Info("正在执行日常任务: 在线福利与礼包奖励领取", "role_id", session.RoleID())
+			slog.Info("正在执行日常任务: 在线成长礼包领取", "role_id", session.RoleID())
 
-			// 1. 查询奖励列表
-			queryPkt := protocol.NewPacket(protocol.ActionIDVipAwardQuery, protocol.NewWriter().WriteUint32(protocol.ActionIDTownEnter).Bytes())
-			callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			_, _ = session.Call(callCtx, queryPkt, protocol.ActionIDVipAwardQuery)
-			cancel()
-
-			// 2. 依据 haha.pcapng 抓包事实: 连续提取各序列在线奖励 (0x055A3412 ~ 0x055A3417)
-			baseSeq := uint32(0x055A3412)
-			prevAct := protocol.ActionIDVipAwardQuery
-			var successCount int
-
-			for i := uint32(0); i < 6; i++ {
-				seqID := baseSeq + i
-				pkt := protocol.BuildClaimAwardPacket(seqID, prevAct)
-				prevAct = protocol.ActionIDItemClaimAward
-
-				cCtx, cCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-				resp, err := session.Call(cCtx, pkt, protocol.ActionIDItemClaimAward)
-				cCancel()
-
-				if err == nil && resp != nil {
-					if ok, _ := protocol.ParseClaimAwardResult(resp.Payload); ok {
-						successCount++
-					}
+			// 1. 查询当前礼包状态 (仅用于诊断与日志, 不阻断领取)
+			qCtx, qCancel := context.WithTimeout(ctx, 3*time.Second)
+			qResp, qErr := session.Call(qCtx, protocol.BuildOnlineGiftCurrentPacket(), protocol.ActionIDPlayerGetCurrentOnlineGift)
+			qCancel()
+			if qErr != nil {
+				slog.Warn("在线礼包状态查询失败", "role_id", session.RoleID(), "err", qErr)
+			} else if qResp != nil {
+				if cur, err := protocol.ParseOnlineGiftCurrentResult(qResp.Payload); err != nil {
+					slog.Warn("在线礼包状态回包解析失败", "role_id", session.RoleID(), "err", err)
+				} else {
+					slog.Info("在线礼包当前状态",
+						"role_id", session.RoleID(),
+						"time_stamp", cur.TimeStamp,
+						"gift_count", len(cur.Gifts),
+						"gifts", cur.Gifts,
+					)
 				}
-				time.Sleep(60 * time.Millisecond)
 			}
 
-			slog.Info("在线礼包奖励领取完成", "role_id", session.RoleID(), "success_count", successCount)
+			// 2. 发起领取 (原版客户端点击「立即领取」的协议路径)
+			cCtx, cCancel := context.WithTimeout(ctx, 5*time.Second)
+			resp, err := session.Call(cCtx, protocol.BuildOnlineGiftClaimPacket(), protocol.ActionIDPlayerGetOnlineGift)
+			cCancel()
+			if err != nil {
+				return fmt.Errorf("daily: 在线礼包领取请求失败: %w", err)
+			}
+			claim, err := protocol.ParseOnlineGiftClaimResult(resp.Payload)
+			if err != nil {
+				return fmt.Errorf("daily: 在线礼包领取回包解析失败: %w", err)
+			}
+
+			switch claim.Result {
+			case protocol.PlayerActionSuccess:
+				slog.Info("在线礼包领取成功",
+					"role_id", session.RoleID(),
+					"gift_count", len(claim.Gifts),
+					"gifts", claim.Gifts,
+					"next_time_stamp", claim.NextTimeStamp,
+				)
+			case protocol.PlayerActionFailed:
+				slog.Info("在线礼包尚未到领取时间",
+					"role_id", session.RoleID(),
+					"result", claim.Result,
+					"next_time_stamp", claim.NextTimeStamp,
+				)
+			case protocol.PlayerPackFull:
+				slog.Warn("在线礼包领取失败: 背包格子不足",
+					"role_id", session.RoleID(),
+					"result", claim.Result,
+					"next_time_stamp", claim.NextTimeStamp,
+				)
+				return scheduler.ErrBagFull
+			default:
+				slog.Info("在线礼包领取返回未识别状态",
+					"role_id", session.RoleID(),
+					"result", claim.Result,
+					"next_time_stamp", claim.NextTimeStamp,
+				)
+			}
 			return nil
 		},
 	)

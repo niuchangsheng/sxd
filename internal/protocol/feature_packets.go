@@ -12,7 +12,111 @@ import (
 )
 
 // --------------------------------------------------------------------------------
-// 1. 领取奖励 (在线/系统礼包奖励)
+// 1. 在线成长礼包 (在线时长福利)
+// --------------------------------------------------------------------------------
+
+// OnlineGiftItem 表示在线成长礼包中的一项奖励。
+type OnlineGiftItem struct {
+	Type   int32 // 奖励类型
+	ItemID int32 // 道具/资源编号
+	Value  int32 // 数量
+}
+
+// OnlineGiftCurrent 表示在线成长礼包当前状态。
+type OnlineGiftCurrent struct {
+	TimeStamp int32            // 当前礼包的计时基准时间戳 (0 表示暂无待领取礼包)
+	Gifts     []OnlineGiftItem // 待领取奖励列表
+}
+
+// BuildOnlineGiftCurrentPacket 构造查询在线成长礼包状态封包 (Module 0, Action 31)。
+// 依据原版客户端 Mod_Player_Base.cinit: request 描述为空, 请求体为空。
+func BuildOnlineGiftCurrentPacket() *Packet {
+	return NewPacket(ActionIDPlayerGetCurrentOnlineGift, nil)
+}
+
+// ParseOnlineGiftCurrentResult 解析查询回包:
+// int32 time_stamp + uint16 count + count*(int32 type,int32 item_id,int32 value)。
+func ParseOnlineGiftCurrentResult(payload []byte) (*OnlineGiftCurrent, error) {
+	decomp := DecompressPayloadIfNeeded(payload)
+	if len(decomp) < 6 {
+		return nil, fmt.Errorf("%w: payload too short for online gift state", ErrInvalidPayload)
+	}
+	r := NewReader(decomp)
+	ts, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read time_stamp: %v", ErrInvalidPayload, err)
+	}
+	gifts, err := readOnlineGiftItems(r)
+	if err != nil {
+		return nil, err
+	}
+	return &OnlineGiftCurrent{TimeStamp: ts, Gifts: gifts}, nil
+}
+
+// OnlineGiftClaimResult 表示领取在线成长礼包回包。
+type OnlineGiftClaimResult struct {
+	Result        uint8            // 业务结果码: 84 成功 / 87 时间未到 / 88 背包已满
+	Gifts         []OnlineGiftItem // 本次领取到的奖励列表
+	NextTimeStamp int32            // 下一次礼包可领取的时间戳 (0 表示无后续礼包)
+}
+
+// BuildOnlineGiftClaimPacket 构造领取在线成长礼包封包 (Module 0, Action 30)。
+// 依据原版客户端 Mod_Player_Base.cinit: request 描述为空, 请求体为空。
+func BuildOnlineGiftClaimPacket() *Packet {
+	return NewPacket(ActionIDPlayerGetOnlineGift, nil)
+}
+
+// ParseOnlineGiftClaimResult 解析领取回包:
+// uint8 result + uint16 count + count*(int32 type,int32 item_id,int32 value) + int32 next_time_stamp。
+func ParseOnlineGiftClaimResult(payload []byte) (*OnlineGiftClaimResult, error) {
+	decomp := DecompressPayloadIfNeeded(payload)
+	if len(decomp) < 3 {
+		return nil, fmt.Errorf("%w: payload too short for online gift claim", ErrInvalidPayload)
+	}
+	r := NewReader(decomp)
+	result, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read claim result: %v", ErrInvalidPayload, err)
+	}
+	gifts, err := readOnlineGiftItems(r)
+	if err != nil {
+		return nil, err
+	}
+	claim := &OnlineGiftClaimResult{Result: result, Gifts: gifts}
+	// next_time_stamp 可能因服务端版本差异缺失, 缺失时保持 0
+	if nextTS, err := r.ReadInt32(); err == nil {
+		claim.NextTimeStamp = nextTS
+	}
+	return claim, nil
+}
+
+// readOnlineGiftItems 读取 uint16 count 及其后的 count 条 (type,item_id,value) 记录。
+func readOnlineGiftItems(r *Reader) ([]OnlineGiftItem, error) {
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read gift count: %v", ErrInvalidPayload, err)
+	}
+	var gifts []OnlineGiftItem
+	for i := 0; i < int(count); i++ {
+		typ, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: truncated gift type at %d: %v", ErrInvalidPayload, i, err)
+		}
+		itemID, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: truncated gift item_id at %d: %v", ErrInvalidPayload, i, err)
+		}
+		value, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: truncated gift value at %d: %v", ErrInvalidPayload, i, err)
+		}
+		gifts = append(gifts, OnlineGiftItem{Type: typ, ItemID: itemID, Value: value})
+	}
+	return gifts, nil
+}
+
+// --------------------------------------------------------------------------------
+// 1.1 序列号礼包领取 (haha.pcapng 实采协议, 非在线成长礼包)
 // --------------------------------------------------------------------------------
 
 // BuildClaimAwardPacket 构造领取指定序列号礼包封包 (Module 2, Action 29)。

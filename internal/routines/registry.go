@@ -33,7 +33,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "daily_sign_in", Name: "每日签到", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动完成每日签到与各种更新福利礼包领取", DefaultOn: false},
 		{ID: "daily_quest", Name: "每日日常小助手", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动完成小助手日常活跃度与常规跑环", DefaultOn: false},
 		{ID: "mail_collect", Name: "邮件一键收取", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动一键领取系统邮件与好友信件附件", DefaultOn: false},
-		{ID: "online_gift", Name: "在线成长礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取各时段在线时长福利与成长礼包", DefaultOn: false},
+		{ID: "online_gift", Name: "在线成长礼包", Domain: "daily", Schedule: scheduler.ScheduleLoop, Description: "定时轮询并领取各时段在线时长福利与成长礼包", DefaultOn: false},
 		{ID: "vip_welfare", Name: "VIP特权与俸禄", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取VIP每日礼包与官职俸禄", DefaultOn: false},
 		{ID: "god_bless", Name: "跨服天神赐福", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领用跨服天神赐福增益点数", DefaultOn: false},
 		{ID: "town_practice", Name: "城镇打坐练功", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "上线自动结算并领取离线城镇打坐练功经验", DefaultOn: true},
