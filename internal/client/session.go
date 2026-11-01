@@ -1369,7 +1369,7 @@ func (s *RoleSession) BeelzebubTrialsAutoChallenge(ctx context.Context, preferBo
 		candidates = append(candidates, candidateBoss{
 			id:    bid,
 			level: protocol.BeelzebubTrialsBossLevel(bid),
-			name:  protocol.BeelzebubTrialsBossName(bid),
+			name:  protocol.BeelzebubTrialsBossDisplayName(bid),
 		})
 	}
 

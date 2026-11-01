@@ -247,7 +247,7 @@ func orderBeelzebubCandidates(canList []int32, preferBossID int32) []beelzebubCa
 		candidates = append(candidates, beelzebubCandidate{
 			id:    bid,
 			level: protocol.BeelzebubTrialsBossLevel(bid),
-			name:  protocol.BeelzebubTrialsBossName(bid),
+			name:  protocol.BeelzebubTrialsBossDisplayName(bid),
 		})
 	}
 

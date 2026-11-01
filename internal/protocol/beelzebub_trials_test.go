@@ -12,8 +12,11 @@ func TestBeelzebubTrialsBossName(t *testing.T) {
 		{1, "魔化大魔王"},
 		{2, "魔化东皇"},
 		{3, "魔神蚩尤"},
+		{41, "魔剑"},
+		{42, "紫霞仙子"},
 		{71, "魔掌门元识"},
 		{72, "魔掌门神识"},
+		{82, "魔五道将军"},
 		{159, "龙之魔女"},
 		{9999, "试炼魔王(9999)"},
 	}
@@ -39,8 +42,11 @@ func TestBeelzebubTrialsBossLevel(t *testing.T) {
 		{13, 40},  // 魔化刑天 (Level 40)
 		{15, 50},  // 鬼眼 (Level 50)
 		{17, 60},  // 魔化天将 (Level 60)
+		{41, 30},  // 神秘层·魔剑 (Level 30)
+		{42, 60},  // 神秘层·紫霞仙子 (Level 60)
 		{1, 100},  // 魔化大魔王 (Level 100)
 		{3, 150},  // 魔神蚩尤 (Level 150)
+		{82, 60},  // 魔五道将军 (Level 60)
 		{159, 185}, // 龙之魔女 (Level 185)
 		{9999, 0}, // 未知 Boss
 	}
@@ -49,6 +55,35 @@ func TestBeelzebubTrialsBossLevel(t *testing.T) {
 		lv := BeelzebubTrialsBossLevel(c.id)
 		if lv != c.want {
 			t.Errorf("boss %d: got level %d, want %d", c.id, lv, c.want)
+		}
+	}
+}
+
+func TestBeelzebubTrialsBossSecretAndDisplayName(t *testing.T) {
+	cases := []struct {
+		id           int32
+		wantSecret   uint8
+		wantIsSecret bool
+		wantDisplay  string
+	}{
+		{1, 0, false, "魔化大魔王"},
+		{82, 0, false, "魔五道将军"},
+		{41, 1, true, "神秘层·魔剑"},
+		{42, 1, true, "神秘层·紫霞仙子"},
+		{46, 1, true, "神秘层·金角大王"},
+		{144, 2, true, "神秘层·美猴王100级"},
+		{9999, 0, false, "试炼魔王(9999)"},
+	}
+
+	for _, c := range cases {
+		if got := BeelzebubTrialsBossSecret(c.id); got != c.wantSecret {
+			t.Errorf("boss %d: got secret %d, want %d", c.id, got, c.wantSecret)
+		}
+		if got := BeelzebubTrialsBossIsSecret(c.id); got != c.wantIsSecret {
+			t.Errorf("boss %d: got isSecret %v, want %v", c.id, got, c.wantIsSecret)
+		}
+		if got := BeelzebubTrialsBossDisplayName(c.id); got != c.wantDisplay {
+			t.Errorf("boss %d: got display name %q, want %q", c.id, got, c.wantDisplay)
 		}
 	}
 }

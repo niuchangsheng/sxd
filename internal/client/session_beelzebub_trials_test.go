@@ -181,7 +181,8 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 					[]byte{protocol.BeelzebubTrialsSuccess},
 				))
 			case protocol.ActionIDBeelzebubTrialsGetCanChallengeList:
-				// 初始只返回 3 个普通关卡；清完后服务端解锁 41(30 级) 与 42(60 级) 两个神秘层关卡。
+				// 初始只返回 3 个普通关卡；清完后服务端解锁两个神秘层关卡：
+				// 41 = 魔剑 (30 级)，42 = 紫霞仙子 (60 级)。
 				mu.Lock()
 				completed := len(createdBosses)
 				mu.Unlock()
@@ -196,8 +197,8 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 				bw.WriteInt32(71) // 魔掌门元识 (30 级)
 				bw.WriteInt32(72) // 魔掌门神识 (30 级)
 				if completed >= 3 {
-					bw.WriteInt32(41) // 30 级神秘层关卡
-					bw.WriteInt32(42) // 60 级神秘层关卡
+					bw.WriteInt32(41) // 神秘层·魔剑 (30 级)
+					bw.WriteInt32(42) // 神秘层·紫霞仙子 (60 级)
 				}
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
 					protocol.ActionIDBeelzebubTrialsGetCanChallengeList, bw.Bytes(),

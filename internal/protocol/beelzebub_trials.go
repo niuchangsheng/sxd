@@ -117,6 +117,40 @@ func BeelzebubTrialsBossLevel(bossID int32) int32 {
 	return 0
 }
 
+// beelzebubBossSecrets 魔王试炼神秘层标记映射表 (对齐 BeelzeBubTrialsBossType.Bosses 第 10 列)。
+//
+//	0: 普通关卡
+//	1: 神秘层关卡 (界面归入"神秘层"分组)
+//	2: 神秘层关卡，且显示名称需追加"<等级>级"
+var beelzebubBossSecrets = map[int32]uint8{
+	41: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 137: 1, 159: 1,
+	144: 2, 145: 2, 146: 2, 147: 2, 148: 2, 149: 2, 150: 2, 151: 2, 152: 2,
+}
+
+// BeelzebubTrialsBossSecret 返回 Boss 的神秘层标记 (0=普通，1=神秘层，2=神秘层且名称带等级)。
+func BeelzebubTrialsBossSecret(bossID int32) uint8 {
+	return beelzebubBossSecrets[bossID]
+}
+
+// BeelzebubTrialsBossIsSecret 判断 Boss 是否属于神秘层关卡。
+func BeelzebubTrialsBossIsSecret(bossID int32) bool {
+	return BeelzebubTrialsBossSecret(bossID) != 0
+}
+
+// BeelzebubTrialsBossDisplayName 返回与游戏界面一致的展示名称。
+// 神秘层关卡统一加上"神秘层"前缀；标记为 2 的关卡按客户端逻辑在名称后追加等级。
+func BeelzebubTrialsBossDisplayName(bossID int32) string {
+	name := BeelzebubTrialsBossName(bossID)
+	secret := BeelzebubTrialsBossSecret(bossID)
+	if secret == 0 {
+		return name
+	}
+	if secret == 2 {
+		name = fmt.Sprintf("%s%d级", name, BeelzebubTrialsBossLevel(bossID))
+	}
+	return "神秘层·" + name
+}
+
 // BeelzebubTrialsOpenData 魔王试炼主面板数据。
 type BeelzebubTrialsOpenData struct {
 	InActivity  bool  // 是否处于18:00-19:00双倍声望活动时段
