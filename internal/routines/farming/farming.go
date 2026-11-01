@@ -278,6 +278,120 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 	)
 }
 
+// handleCrossPilgrimage 在官方仙界跨服连接 (Mod 114) 上执行一次取经巡检与启程。
+//
+// 官方客户端流程为：Mod 96 取跨服凭据 → Mod 94 登录跨服节点 → Mod 95 进入仙界城镇
+// → Mod 114 get_take_bible_info → (可选 refresh) → start_take_bible。
+// 返回 true 表示跨服链路已建立并完成处理；返回 false 表示当前环境不支持仙界跨服
+// 连接（凭据缺失或登录失败），调用方应回退到主服传统取经协议。
+func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession) bool {
+	crossCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// 1. 先以短超时申请凭据：单机/测试环境无此模块时应快速回退，不阻塞传统链路。
+	credCtx, credCancel := context.WithTimeout(crossCtx, 2*time.Second)
+	cred, err := session.FetchCrossServerCredentials(credCtx)
+	credCancel()
+	if err != nil {
+		slog.Debug("仙界跨服取经不可用，回退传统取经协议", "role_id", session.RoleID(), "error", err)
+		return false
+	}
+
+	// 2. 建立仙界跨服会话并调用 Mod 114。
+	cross, err := session.OpenCrossServerSessionWithInfo(crossCtx, cred)
+	if err != nil {
+		slog.Warn("仙界跨服会话建立失败，回退传统取经协议", "role_id", session.RoleID(), "error", err)
+		return false
+	}
+	defer cross.Close()
+
+	crossCall := func(pkt *protocol.Packet, expectedAct uint32, d time.Duration) (*protocol.Packet, error) {
+		cCtx, cCancel := context.WithTimeout(crossCtx, d)
+		defer cCancel()
+		return cross.Call(cCtx, pkt, expectedAct)
+	}
+
+	infoResp, err := crossCall(protocol.BuildStTakeBibleCrossGetInfoPacket(), protocol.ActionIDStTakeBibleCrossGetInfo, 3*time.Second)
+	if err != nil {
+		slog.Warn("仙界取经详情无应答", "role_id", session.RoleID(), "error", err)
+		return true
+	}
+	info, err := protocol.ParseStTakeBibleCrossInfoResult(infoResp.Payload)
+	if err != nil {
+		slog.Warn("解析仙界取经详情失败", "role_id", session.RoleID(), "error", err)
+		return true
+	}
+	slog.Info("仙界取经准备详情",
+		"role_id", session.RoleID(),
+		"take_times", info.TakeBibleTimes,
+		"total_times", info.TotalTakeBibleTimes,
+		"refresh_price", info.RefreshPrice,
+		"status", info.TakeBibleStatus,
+		"protection", protocol.StTakeBibleCrossProtectionName(info.CanProtection),
+		"protect_player", info.ProtectPlayer,
+		"protection_options", len(info.ProtectionList),
+		"protect_players", len(info.ProtectPlayerList),
+	)
+
+	// 每日护送上限 (3 次) 已用满时无需再启程。
+	if info.TotalTakeBibleTimes <= 0 || info.TakeBibleTimes >= uint8(info.TotalTakeBibleTimes) {
+		slog.Info("仙界取经今日护送次数已用满，无需启程",
+			"role_id", session.RoleID(),
+			"take_times", info.TakeBibleTimes,
+			"total_times", info.TotalTakeBibleTimes,
+		)
+		return true
+	}
+
+	// 使者非最高品质时尝试刷新一次 (与原 Mod 30 策略保持一致，刷新消耗元宝)。
+	protection := info.CanProtection
+	if protection < protocol.StTakeBibleCrossProtectionTangSeng {
+		refreshResp, rErr := crossCall(protocol.BuildStTakeBibleCrossRefreshPacket(), protocol.ActionIDStTakeBibleCrossRefresh, 2*time.Second)
+		if rErr == nil && refreshResp != nil {
+			msg, newProtection, nextPrice, pErr := protocol.ParseStTakeBibleCrossRefreshResult(refreshResp.Payload)
+			if pErr == nil && msg == protocol.StTakeBibleCrossMsgSuccess {
+				slog.Info("仙界取经使者刷新成功",
+					"role_id", session.RoleID(),
+					"old_protection", protocol.StTakeBibleCrossProtectionName(protection),
+					"new_protection", protocol.StTakeBibleCrossProtectionName(newProtection),
+					"next_price", nextPrice,
+				)
+				protection = newProtection
+			}
+		}
+	}
+
+	startResp, err := crossCall(protocol.BuildStTakeBibleCrossStartPacket(), protocol.ActionIDStTakeBibleCrossStart, 3*time.Second)
+	if err != nil {
+		slog.Warn("仙界取经启程无应答", "role_id", session.RoleID(), "error", err)
+		return true
+	}
+	startMsg, itemID, err := protocol.ParseStTakeBibleCrossStartResult(startResp.Payload)
+	if err != nil {
+		slog.Warn("解析仙界取经启程回包失败", "role_id", session.RoleID(), "error", err)
+		return true
+	}
+
+	switch startMsg {
+	case protocol.StTakeBibleCrossMsgSuccess:
+		slog.Info("仙界西天取经队伍已顺利启程护送",
+			"role_id", session.RoleID(),
+			"protection", protocol.StTakeBibleCrossProtectionName(protection),
+			"item_id", itemID,
+		)
+	case protocol.StTakeBibleCrossMsgTakeBibleStatus:
+		slog.Info("仙界西天取经队伍正在护送途中，无需重复启程", "role_id", session.RoleID())
+	case protocol.StTakeBibleCrossMsgFullTakeBibleTimes:
+		slog.Info("仙界西天取经今日护送次数已用满 (3次)", "role_id", session.RoleID())
+	case protocol.StTakeBibleCrossMsgProtectTime:
+		slog.Info("仙界西天取经当前处于护送保护时间", "role_id", session.RoleID())
+	case protocol.StTakeBibleCrossMsgNotEnoughIngot:
+		slog.Info("仙界西天取经刷新元宝不足", "role_id", session.RoleID())
+	default:
+		slog.Info("仙界西天取经完成巡检", "role_id", session.RoleID(), "status_code", startMsg)
+	}
+	return true
+}
 
 // NewPilgrimageRoutine 构造西天取经护送任务。
 func NewPilgrimageRoutine() scheduler.ActivityRoutine {
@@ -305,33 +419,10 @@ func NewPilgrimageRoutine() scheduler.ActivityRoutine {
 				return session.Call(cCtx, pkt, expectedAct)
 			}
 
-			// 1. 优先尝试现代双轨网关圣域取经协议 (Module 456, Mod_StMobile_Base)
-			stInfoPkt := protocol.BuildStTakeBibleGetInfoPacket(session.LastActionID())
-			if stInfoResp, stErr := callWithTimeout(stInfoPkt, protocol.ActionIDStTakeBibleGetInfo, 2*time.Second); stErr == nil && stInfoResp != nil {
-				slog.Info("成功接入现代双轨西天取经网关 (Mod 456)", "role_id", session.RoleID())
-
-				// 尝试刷新取经使者品质 (非阻塞容错)
-				stRefPkt := protocol.BuildStTakeBibleRefreshPacket(session.LastActionID())
-				_, _ = callWithTimeout(stRefPkt, protocol.ActionIDStTakeBibleRefresh, 1*time.Second)
-
-				// 正式启程开始护送 (Action 6)
-				stStartPkt := protocol.BuildStTakeBibleStartPacket(session.LastActionID())
-				if stStartResp, startErr := callWithTimeout(stStartPkt, protocol.ActionIDStTakeBibleStart, 3*time.Second); startErr == nil && stStartResp != nil {
-					startCode, _ := protocol.ParseStTakeBibleStartResult(stStartResp.Payload)
-					switch startCode {
-					case protocol.StTakeBibleSuccess:
-						slog.Info("西天取经队伍已顺利启程护送", "role_id", session.RoleID())
-					case protocol.StTakeBibleTakingStatus:
-						slog.Info("西天取经队伍正在护送途中，无需重复启程", "role_id", session.RoleID())
-					case protocol.StTakeBibleFullTakeCount:
-						slog.Info("西天取经今日护送次数已用满 (3次)", "role_id", session.RoleID())
-					case protocol.StTakeBibleProtectTime:
-						slog.Info("西天取经当前处于护送保护中/今日已护送完成", "role_id", session.RoleID())
-					default:
-						slog.Info("西天取经完成巡检", "role_id", session.RoleID(), "status_code", startCode)
-					}
-					return nil
-				}
+			// 1. 官方仙界跨服取经 (Module 114, Mod_StTakeBible_Base)
+			// 取经模块只在 Mod 94 登录的仙界跨服连接上生效，主服网关不会响应。
+			if handleCrossPilgrimage(ctx, session) {
+				return nil
 			}
 
 			// 2. 传统 Web 协议兜底回退 (Module 30, Mod_TakeBible_Base)
@@ -590,4 +681,3 @@ func NewRuneRefineRoutine() scheduler.ActivityRoutine {
 		},
 	)
 }
-

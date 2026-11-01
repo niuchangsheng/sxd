@@ -8,47 +8,49 @@ import (
 	"fmt"
 )
 
-// StLoginRequest 代表跨服/网页端登录请求参数 (Mod_StLogin_Base.login, ActionID=0x005E)。
+// StLoginRequest 代表跨服登录请求参数 (Mod_StLogin_Base.login, ActionID=0x005E0000)。
+//
+// 字段顺序与编解码类型严格对齐官方客户端 `View.as` 的调用参数
+// [serverName, playerId, originNickName, time, passCode]，对应官方
+// `com.Protocol.writeArray` 的 [StringUtil, IntUtil, StringUtil, IntUtil, StringUtil]：
+// StringUtil 走 `ByteArray.writeUTF`，即 **2 字节长度前缀** + UTF-8 字节。
 type StLoginRequest struct {
-	// ServerID 区服标识符 (如 "fengwanyx_s813")，按 4 字节前缀存储
-	ServerID string
-	// ClientType 客户端类型 (微端/Web 对应数值 4)
-	ClientType int32
-	// RoleName 游戏角色名称 (如 "梦一场")，按 2 字节前缀存储
-	RoleName string
-	// Time1 动态登录时间戳 (来源于网关 Cookie)
-	Time1 int32
-	// Hash1 动态验签 MD5 散列 (来源于网关 Cookie)
-	Hash1 string
+	// ServerName 跨服目标区服标识符 (Mod_StcLogin_Base.get_login_info 下发的 serverName)，
+	// 按 2 字节长度前缀存储 (官方 StringUtil/writeUTF)。
+	ServerName string
+	// PlayerID 主服角色数字标识 (playerInfo.id)，按 4 字节大端序整型存储。
+	PlayerID int32
+	// OriginNickName 带区服后缀的官方完整角色名 (如 "曹植始.s1")，按 2 字节长度前缀存储。
+	OriginNickName string
+	// Time 跨服登录时间戳 (get_login_info 下发的 time)，按 4 字节大端序整型存储。
+	Time int32
+	// PassCode 跨服登录验签串 (get_login_info 下发的 passCode)，按 2 字节长度前缀存储。
+	PassCode string
 }
 
-// StLoginResult 代表跨服/网页端登录服务器回包结果。
+// StLoginResult 代表跨服登录服务器回包结果 (response: [UByte, Int, Int])。
 type StLoginResult struct {
 	// Result 登录结果状态码 (0=SUCCESS, 1=FAILED)
 	Result uint8
-	// PlayerID 角色在当前区服的数字标识 (如 65536)
+	// PlayerID 角色在跨服节点上的数字标识
 	PlayerID int32
-	// ServerTime 服务器当前 Unix 时间戳
+	// ServerTime 跨服节点当前 Unix 时间戳
 	ServerTime int32
 }
 
 // BuildStLoginPacket 构造跨服登录请求二进制协议封包。
 func BuildStLoginPacket(req StLoginRequest) (*Packet, error) {
-	if req.ClientType == 0 {
-		req.ClientType = 4
-	}
-
 	w := NewWriter()
-	// 1. 写入 ServerID (4 字节长度前缀)
-	w.WriteString32(req.ServerID)
-	// 2. 写入 ClientType (4 字节大端序整型)
-	w.WriteInt32(req.ClientType)
-	// 3. 写入 RoleName (2 字节长度前缀)
-	w.WriteString(req.RoleName)
-	// 4. 写入 Time1 (4 字节大端序整型)
-	w.WriteInt32(req.Time1)
-	// 5. 写入 Hash1 (2 字节长度前缀)
-	w.WriteString(req.Hash1)
+	// 1. 写入 serverName (2 字节长度前缀，官方 StringUtil/writeUTF)
+	w.WriteString(req.ServerName)
+	// 2. 写入 playerId (4 字节大端序整型)
+	w.WriteInt32(req.PlayerID)
+	// 3. 写入 originNickName (2 字节长度前缀)
+	w.WriteString(req.OriginNickName)
+	// 4. 写入 time (4 字节大端序整型)
+	w.WriteInt32(req.Time)
+	// 5. 写入 passCode (2 字节长度前缀)
+	w.WriteString(req.PassCode)
 
 	return NewPacket(ActionIDStLogin, w.Bytes()), nil
 }
@@ -57,37 +59,37 @@ func BuildStLoginPacket(req StLoginRequest) (*Packet, error) {
 func ParseStLoginRequest(payload []byte) (*StLoginRequest, error) {
 	r := NewReader(payload)
 
-	serverID, err := r.ReadString32()
+	serverName, err := r.ReadString()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read server_id: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: failed to read server_name: %v", ErrInvalidPayload, err)
 	}
 
-	clientType, err := r.ReadInt32()
+	playerID, err := r.ReadInt32()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read client_type: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: failed to read player_id: %v", ErrInvalidPayload, err)
 	}
 
-	roleName, err := r.ReadString()
+	originNickName, err := r.ReadString()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read role_name: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: failed to read origin_nick_name: %v", ErrInvalidPayload, err)
 	}
 
 	time1, err := r.ReadInt32()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read time1: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: failed to read time: %v", ErrInvalidPayload, err)
 	}
 
-	hash1, err := r.ReadString()
+	passCode, err := r.ReadString()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read hash1: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: failed to read pass_code: %v", ErrInvalidPayload, err)
 	}
 
 	return &StLoginRequest{
-		ServerID:   serverID,
-		ClientType: clientType,
-		RoleName:   roleName,
-		Time1:      time1,
-		Hash1:      hash1,
+		ServerName:     serverName,
+		PlayerID:       playerID,
+		OriginNickName: originNickName,
+		Time:           time1,
+		PassCode:       passCode,
 	}, nil
 }
 

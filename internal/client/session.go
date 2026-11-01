@@ -57,10 +57,14 @@ type SessionConfig struct {
 	Time int32
 	// Hash 本服验签散列 (Mod_Player_Base 0x0000)
 	Hash string
-	// Time1 跨服登录时间戳 (Mod_StLogin_Base 0x005E)
+	// Time1 跨服登录时间戳 (Mod_StLogin_Base 0x005E 第 4 字段)
 	Time1 int32
-	// Hash1 跨服验签散列 (Mod_StLogin_Base 0x005E)
+	// Hash1 跨服验签串 passCode (Mod_StLogin_Base 0x005E 第 5 字段)
 	Hash1 string
+	// PlayerID 主服角色数字标识 (Mod_StLogin_Base 0x005E 第 2 字段)，跨服会话需显式由主服会话继承
+	PlayerID int32
+	// OriginNickName 带区服后缀的官方完整角色名 (Mod_StLogin_Base 0x005E 第 3 字段，如 "曹植始.s1")
+	OriginNickName string
 
 	// Extra 平台特定的扩展入场凭据 (例如官方 10 字段所需: regdate, id_card, open_time, is_newst 等)
 	Extra map[string]string
@@ -119,9 +123,10 @@ type RoleSession struct {
 	conn    net.Conn
 	writeMu sync.Mutex
 
-	handlers     map[uint32][]func(*protocol.Packet)
-	pendingCalls map[uint32][]chan *protocol.Packet
-	handlerMu    sync.RWMutex
+	handlers       map[uint32][]func(*protocol.Packet)
+	pendingCalls   map[uint32][]chan *protocol.Packet
+	packetObserver func(*protocol.Packet)
+	handlerMu      sync.RWMutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -527,6 +532,14 @@ func (s *RoleSession) RegisterHandler(actionID uint32, handler func(*protocol.Pa
 	s.handlers[actionID] = append(s.handlers[actionID], handler)
 }
 
+// SetPacketObserver 注册全量入站报文观察器，用于探针与故障诊断时记录服务端所有下发动作。
+// 观察器在报文分发给业务挂起调用与注册处理器之前同步执行，回调内请勿阻塞。
+func (s *RoleSession) SetPacketObserver(fn func(*protocol.Packet)) {
+	s.handlerMu.Lock()
+	defer s.handlerMu.Unlock()
+	s.packetObserver = fn
+}
+
 // Call 发送指定请求封包并同步等待特定 ActionID 的对端回包。
 func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respActionID uint32) (*protocol.Packet, error) {
 	ch := make(chan *protocol.Packet, 1)
@@ -582,13 +595,17 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 	if s.cfg.Time1 != 0 && s.cfg.Hash1 != "" && s.cfg.Hash == "" {
 		// 跨服网关凭据
 		loginRespActionID = protocol.ActionIDStLogin
+		originNickName := s.cfg.OriginNickName
+		if originNickName == "" {
+			originNickName = s.OriginNickName()
+		}
 		var err error
 		loginPkt, err = protocol.BuildStLoginPacket(protocol.StLoginRequest{
-			ServerID:   s.cfg.ServerID,
-			ClientType: 4,
-			RoleName:   s.RoleName(),
-			Time1:      s.cfg.Time1,
-			Hash1:      s.cfg.Hash1,
+			ServerName:     s.cfg.ServerID,
+			PlayerID:       s.cfg.PlayerID,
+			OriginNickName: originNickName,
+			Time:           s.cfg.Time1,
+			PassCode:       s.cfg.Hash1,
 		})
 		if err != nil {
 			return fmt.Errorf("client: failed to build st login packet: %w", err)
@@ -1992,6 +2009,7 @@ func (s *RoleSession) readLoop(conn net.Conn, errCh chan<- error) {
 
 func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
 	s.handlerMu.Lock()
+	observer := s.packetObserver
 	if calls, ok := s.pendingCalls[pkt.ActionID]; ok && len(calls) > 0 {
 		ch := calls[0]
 		s.pendingCalls[pkt.ActionID] = calls[1:]
@@ -2007,6 +2025,9 @@ func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
 	}
 	s.handlerMu.Unlock()
 
+	if observer != nil {
+		observer(pkt)
+	}
 	for _, h := range handlers {
 		h(pkt)
 	}

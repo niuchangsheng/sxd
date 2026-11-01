@@ -217,9 +217,33 @@ classDiagram
 - `0x001C000C (28, 12)`：查询竞技场冷却时间 `get_cd_time`。
 - `0x001C000D (28, 13)`：查询今日剩余免费挑战次数 `get_challenge_times`。
 
-### 4.6 Module 94 (0x5E): 跨服网关模块 (`Mod_StLogin_Base`)
-- `0x005E0000 (94, 0)`：向仙界跨服网关发送二次鉴权（参数：`Time1`, `Hash1`）。
-- `0x005E0001 (94, 1)`：进入仙界主城镇。
+### 4.6 Module 94 / 95 / 96: 仙界跨服登录链路 (`Mod_StLogin_Base` / `Mod_StTown_Base` / `Mod_StcLogin_Base`)
+
+官方客户端在进入仙界前会向本服申请一次性跨服凭据，并在独立的第二条 TCP 连接
+（`DataBase.SOCKETSERVERTOWN`）上完成二次登录与进城：
+
+1. 本服连接调用 `Mod_StcLogin_Base.get_login_info`：
+   - `0x00600000 (96, 0)`，请求空载荷。
+   - 回包：`String serverHost, Short port, String serverName, Int time,
+     String passCode, String serverTownName`（如 `9x050.sxdweb.xd.com:8219, s0,
+     super_town_s00`）。`serverTownName` 为城镇场景标识，不是城镇 ID。
+2. 拨号 `serverHost:port` 后调用 `Mod_StLogin_Base.login`：
+   - `0x005E0000 (94, 0)`，请求：`String serverName, Int playerId,
+     String originNickName, Int time, String passCode`。
+   - **五个字段均为官方 `com.Protocol` 标准类型**：`StringUtil` 即
+     `ByteArray.writeUTF`，长度前缀为 **2 字节**；`playerId` 取本服
+     `Mod_Player_Base.login` 回包中的 `playerId`（即 `playerInfo.id`），
+     `originNickName` 为本服 `get_player_info` 下发的原始昵称。
+   - 回包：`UByte result(0=SUCCESS, 1=FAILED), Int playerId, Int serverTime`。
+   - **注意**：旧实现把 `serverName` 写成 4 字节长度前缀会导致服务端整包偏移、
+     静默丢弃、客户端表现为 `context deadline exceeded`，已修正为 2 字节。
+   - 官方 `call()` 在发送 `(94, 0)` 时会清空 `prevAct` 缓冲，因此该请求
+     **不追加** 前序动作号；后续帧才按官方规则追加。
+3. 登录成功后调用 `Mod_StTown_Base.enter_town`：
+   - `0x005F0000 (95, 0)`，请求：`Int townID`（仙界为 41）。
+   - 回包：`UByte result`，**成功码为 `2`**（该模块常量：TRUE=0、FALSE=1、
+     SUCCESS=2、FAILED=3、FULL=4、NOT_ENOUGH_INGOT=5），不能按 0 判定成功。
+   - 成功后服务端会推送 `0x005F0001 notify_enter_town` 场景数据。
 
 ### 4.7 Module 282 / 534: 粗铁淬炼池 (`Mod_RefinePool_Base`)
 - `0x011A0000 (282, 0)`：打开淬炼池面板，请求载荷仅 `prevAct`。回包线格式：
@@ -241,3 +265,41 @@ classDiagram
   共 10 玄铁 / 400 炼器精华，炼器精华总量由 41400 增至 41800。服务端在成功回包中
   首字节仍为 `0x0B`，与旧版反编译的 LACK_OF_INGOT 常量不一致，因此业务侧以是否实际
   产出炼器精华判定成功，不要仅凭首字节判断。
+
+### 4.8 Module 114 (0x72): 西天取经 (`Mod_StTakeBible_Base`)
+
+> 该模块**只在 Mod 94 登录的仙界跨服连接上生效**，本服主网关不会响应。
+
+动作编号按类中声明顺序从 0 递增：
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00720000` | `open_take_bible` | 空 | `UByte` |
+| 1 | `0x00720001` | `close_take_bible` | 空 | `UByte` |
+| 2 | `0x00720002` | `get_take_bible_info` | 空 | 见下 |
+| 7 | `0x00720007` | `buy_protection` | 空 | `UByte, Byte` |
+| 8 | `0x00720008` | `refresh` | 空 | `UByte, UByte, Short, Byte` |
+| 10 | `0x0072000A` | `start_take_bible` | 空 | `UByte, Byte` |
+| 11 | `0x0072000B` | `rob` | `Int, Byte` | 见官方描述 |
+| 14 | `0x0072000E` | `quickly` | 见官方描述 | 见官方描述 |
+| 15 | `0x0072000F` | `get_take_bible_updata_data` | 空 | 见官方描述 |
+
+`get_take_bible_info (2)` 回包线格式：
+
+```
+Short protection_count, protection_count × [
+    UByte protection, Byte take_time, Int award_coin, Short award_fame,
+    Short award_st_exp, Byte npc_level, Short npc_expe ],
+Short protect_player_count, protect_player_count × [
+    Int player_id, String nick_name, Byte remain_protect_times,
+    Byte total_protect_times, Byte protect_status ],
+Byte take_bible_times, Byte total_take_bible_times, Short refresh_price,
+Byte take_bible_status, UByte can_protection, String protect_player,
+Byte bless, Byte buff
+```
+
+- `protection`：1 白龙马、2 沙悟净、3 猪八戒、4 孙悟空、5 唐僧。
+- 常见结果码：`SUCCESS=9`、`TAKE_BIBLE_STATUS=13`、`NOT_ENOUGH_INGOT=16`、
+  `FULL_TAKE_BIBLE_TIMES=18`、`PROTECT_TIME=20`、`FAILED=38`。
+- `get_take_bible_info` / `start_take_bible` 由客户端直接调用，二者均挂载在
+  `DataBase.SOCKETSERVERTOWN`（跨服连接），**无需先调用 `open_take_bible`**。
