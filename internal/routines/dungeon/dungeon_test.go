@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1128,6 +1130,7 @@ func TestDungeonSweep_PipelineExecutionOrder(t *testing.T) {
 
 type mockQuestDungeonRepo struct {
 	quests   map[int]*dictionary.Quest
+	missions map[int]*dictionary.Mission
 	townNPCs map[int][]int
 }
 
@@ -1141,6 +1144,9 @@ func (m *mockQuestDungeonRepo) GetRoleType(id int) (*dictionary.RoleType, error)
 	return nil, dictionary.ErrNotFound
 }
 func (m *mockQuestDungeonRepo) GetMission(id int) (*dictionary.Mission, error) {
+	if mm, ok := m.missions[id]; ok {
+		return mm, nil
+	}
 	return nil, dictionary.ErrNotFound
 }
 func (m *mockQuestDungeonRepo) GetHighestMission(sweepElite bool) (*dictionary.Mission, error) {
@@ -1362,6 +1368,153 @@ func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
 	}
 }
 
+func TestDungeonSweep_EliteQuestCycle_Module4FirstClear(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	sess.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.Level = 63
+	})
+
+	repo := &mockQuestDungeonRepo{
+		quests: map[int]*dictionary.Quest{
+			336: {
+				ID:        336,
+				Type:      4, // 精英任务
+				Lock:      10100,
+				Level:     1,
+				Title:     "精英罗虎王",
+				MissionID: 456,
+				AwardExp:  440000, AwardCoins: 88000,
+			},
+		},
+		missions: map[int]*dictionary.Mission{
+			456: {
+				ID:          456,
+				SectionID:   29,
+				MissionLock: 22046,
+				MapID:       13,
+				Name:        "精英罗虎王",
+				Type:        1, // 精英关卡
+				IsBoss:      true,
+				Monsters:    "1041",
+			},
+		},
+	}
+
+	var events []string
+	var eventsMu sync.Mutex
+	recordEvent := func(evt string) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, evt)
+	}
+
+	var cleared atomic.Bool
+	var completed atomic.Bool
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDQuestList:
+			recordEvent("quest_list")
+			w := protocol.NewWriter()
+			if completed.Load() {
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+				return true
+			}
+			state, cur := int32(1), int32(0)
+			if cleared.Load() {
+				state, cur = 2, 1
+			}
+			w.WriteUint16(1)
+			w.WriteInt32(336)
+			w.WriteInt32(state)
+			w.WriteUint8(0) // 击杀怪物类任务
+			w.WriteUint16(1)
+			w.WriteInt32(1041)
+			w.WriteInt32(cur)
+			w.WriteInt32(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+			return true
+
+		case protocol.ActionIDMissionGetSections:
+			recordEvent("get_sections")
+			w := protocol.NewWriter()
+			w.WriteUint16(0) // 精英关卡不在章节 get_sections 列表中
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionGetSections, w.Bytes()))
+			return true
+
+		case protocol.ActionIDMissionPlotEnter:
+			mid := int32(0)
+			if len(pkt.Payload) >= 4 {
+				mid = int32(binary.BigEndian.Uint32(pkt.Payload[:4]))
+			}
+			recordEvent(fmt.Sprintf("plot_enter:%d", mid))
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionPlotEnter, []byte{protocol.MissionResultSuccess}))
+			return true
+
+		case protocol.ActionIDMissionFightMonster:
+			mt := int32(0)
+			if len(pkt.Payload) >= 4 {
+				mt = int32(binary.BigEndian.Uint32(pkt.Payload[:4]))
+			}
+			recordEvent(fmt.Sprintf("fight_monster:%d", mt))
+			cleared.Store(true)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionFightMonster, []byte{0x00, protocol.MissionResultSuccess}))
+			return true
+
+		case protocol.ActionIDMissionRank:
+			recordEvent("rank_mission")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionRank, []byte{0x00}))
+			return true
+
+		case protocol.ActionIDMissionOpenBox:
+			recordEvent("open_box")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionOpenBox, []byte{0x00}))
+			return true
+
+		case protocol.ActionIDMissionPickupAward:
+			recordEvent("pickup_award")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionPickupAward, []byte{0x00}))
+			return true
+
+		case protocol.ActionIDQuestSubmitComplete:
+			recordEvent("complete_quest")
+			completed.Store(true)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestSubmitComplete, []byte{0x01}))
+			return true
+		}
+		return false
+	})
+
+	cfg := dungeon.SweepConfig{Pipeline: []string{"quest_cycle"}}
+	routine := dungeon.NewDungeonSweepRoutine(repo, cfg)
+	if err := routine.Execute(context.Background(), sess, nil); err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("精英任务推图执行失败: %v", err)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+
+	joined := strings.Join(events, ",")
+	if !strings.Contains(joined, "plot_enter:456") {
+		t.Fatalf("精英任务未进入 Module 4 plot_enter, events=%v", events)
+	}
+	if !strings.Contains(joined, "fight_monster:1041") {
+		t.Fatalf("精英任务未挑战精英关卡怪物编队 1041, events=%v", events)
+	}
+	if !strings.Contains(joined, "complete_quest") {
+		t.Fatalf("精英任务通关后未交付结算, events=%v", events)
+	}
+	for _, evt := range events {
+		if strings.HasPrefix(evt, "practice") {
+			t.Fatalf("精英任务不应走 Module 25 普通关卡扫荡, events=%v", events)
+		}
+	}
+}
+
 func TestSixRealmsRoutine_ExecutionFlow(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
@@ -1381,14 +1534,14 @@ func TestSixRealmsRoutine_ExecutionFlow(t *testing.T) {
 			switch pkt.ActionID {
 			case protocol.ActionIDTowerGetInfo:
 				w := protocol.NewWriter()
-				w.WriteUint8(25)                     // SequenceMax
-				w.WriteUint8(1)                      // Layer: 1 (地狱道)
+				w.WriteUint8(25)                        // SequenceMax
+				w.WriteUint8(1)                         // Layer: 1 (地狱道)
 				w.WriteUint8(uint8(sequenceWar.Load())) // SequenceWar
-				w.WriteUint8(5)                      // BagNum
-				w.WriteUint8(uint8(resetCount.Load())) // ResetNum
-				w.WriteUint16(0)                     // ResetIngot
-				w.WriteUint8(0)                      // HideID
-				w.WriteInt32(20)                     // HighStone
+				w.WriteUint8(5)                         // BagNum
+				w.WriteUint8(uint8(resetCount.Load()))  // ResetNum
+				w.WriteUint16(0)                        // ResetIngot
+				w.WriteUint8(0)                         // HideID
+				w.WriteInt32(20)                        // HighStone
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerGetInfo, w.Bytes()))
 
 			case protocol.ActionIDTowerStartChallenge:
@@ -1765,10 +1918,3 @@ func TestSixRealmsRoutine_PerFloorRetry(t *testing.T) {
 		t.Errorf("expected exactly 2 challenge attempts for failed floor, got %d", total)
 	}
 }
-
-
-
-
-
-
-

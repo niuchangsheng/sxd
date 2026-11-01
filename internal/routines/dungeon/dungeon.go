@@ -1889,11 +1889,19 @@ func advanceQuestMission(
 	if err != nil || targetMission == nil {
 		return false
 	}
-	if q.Type != 1 && q.Type != 2 {
-		slog.Info("任务关卡属于非主线/支线剧情任务（日常需扫荡），剧情推图跳过", "quest_id", q.ID, "title", q.Title, "type", q.Type)
+	// 精英副本任务 (Quests.Type=4) 与主线/支线共用 Module 4 首通状态机，
+	// 但精英关卡不在 get_sections 章节列表内，也不参与 Module 25 普通关卡扫荡。
+	isEliteQuest := q.Type == 4
+	if q.Type != 1 && q.Type != 2 && !isEliteQuest {
+		slog.Info("任务关卡属于非主线/支线/精英任务，剧情推图跳过", "quest_id", q.ID, "title", q.Title, "type", q.Type)
 		return false
 	}
-	if targetMission.Type != 0 {
+	if isEliteQuest {
+		if targetMission.Type != 1 {
+			slog.Info("精英任务关联关卡并非精英副本，剧情推图跳过", "quest_id", q.ID, "title", q.Title, "mission_id", targetMission.ID, "type", targetMission.Type)
+			return false
+		}
+	} else if targetMission.Type != 0 {
 		slog.Info("任务关卡属于非普通主线副本，剧情推图跳过", "quest_id", q.ID, "title", q.Title, "mission_id", targetMission.ID, "type", targetMission.Type)
 		return false
 	}
@@ -1997,7 +2005,15 @@ func advanceQuestMission(
 		// 直接走剧情副本首通挑战，避免每次空等 5 秒超时。
 		practiced := false
 		var pErr error
-		if !targetKnownUncleared {
+		if isEliteQuest {
+			// 精英副本不在 get_sections 章节列表内，Module 25 普通扫荡对其不生效，
+			// 直接走 Module 4 首通状态机 (enter -> fight -> rank -> box -> pickup)。
+			slog.Info("精英副本任务直接进入首通挑战",
+				"role_id", session.RoleID(),
+				"mission_id", targetMission.ID,
+				"name", targetMission.Name,
+			)
+		} else if !targetKnownUncleared {
 			practiced, _, pErr = practiceMission(ctx, session, int32(targetMission.ID), batchCount, ensureStamina, totalCostStamina, totalGainExp, totalGainCoins)
 			if pErr != nil {
 				if errors.Is(pErr, scheduler.ErrStaminaDepleted) || errors.Is(pErr, scheduler.ErrBagFull) {
@@ -2018,9 +2034,10 @@ func advanceQuestMission(
 				return clearedPrereq || lastCount > initialCount
 			}
 
-			// 若 Module 25 扫荡受限（如首通尚未解锁），降级检查前置关卡并走剧情副本手动挑战
+			// 若 Module 25 扫荡受限（如首通尚未解锁），降级检查前置关卡并走剧情副本手动挑战。
+			// 精英关卡与普通章节关卡相互独立，不做同章节前置扫描，直接挑战目标关卡。
 			var prereqMission *dictionary.Mission
-			if targetMission.MapID > 0 {
+			if !isEliteQuest && targetMission.MapID > 0 {
 				secPkt := protocol.BuildMissionGetSectionsPacket(int32(targetMission.MapID), session.LastActionID())
 				secCtx, secCancel := context.WithTimeout(ctx, 5*time.Second)
 				secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
