@@ -7,6 +7,7 @@ const (
 	// 扩展业务模块编号 (Module)
 	ModuleFaction           uint16 = 10  // 帮派/仙盟吉星高照与日常模块 (0x000A)
 	ModuleRollCake          uint16 = 38  // 个人吉星高照摇骰子模块 (0x0026, Mod_RollCake_Base)
+	ModuleLuckyWheel        uint16 = 69  // 帮派转盘模块 (0x0045, Mod_LuckyWheel_Base)
 	ModuleVipAward          uint16 = 42  // VIP与在线礼包模块 (0x002A)
 	ModuleStGodWelfare      uint16 = 52  // 跨服天神赐福与全服福利模块 (0x0034)
 	ModuleWorshipMarsExt    uint16 = 24  // 拜祭先祖/关公模块 (0x0018)
@@ -242,6 +243,20 @@ const (
 	ActionIDRollCakeIsAuto uint32 = 0x00260006
 	// ActionIDRollCakeSetAuto 设置自动逆天改运开关 (Module 38, Action 7 -> 0x00260007)
 	ActionIDRollCakeSetAuto uint32 = 0x00260007
+
+	// ActionIDFactionGodInfo 查询帮派祭神神像信息与上香记录 (Module 10, Action 22 -> 0x000A0016)
+	ActionIDFactionGodInfo uint32 = 0x000A0016
+	// ActionIDFactionIncense 帮派祭神上香 (Module 10, Action 23 -> 0x000A0017)
+	ActionIDFactionIncense uint32 = 0x000A0017
+	// ActionIDFactionGetBlessingCount 查询帮派祭神当前祝福次数 (Module 10, Action 24 -> 0x000A0018)
+	ActionIDFactionGetBlessingCount uint32 = 0x000A0018
+	// ActionIDFactionBlessingCountChange 帮派祭神祝福次数变更通知 (Module 10, Action 25 -> 0x000A0019)
+	ActionIDFactionBlessingCountChange uint32 = 0x000A0019
+
+	// ActionIDLuckyWheelOpen 打开帮派转盘并查询青龙令剩余数量 (Module 69, Action 1 -> 0x00450001)
+	ActionIDLuckyWheelOpen uint32 = 0x00450001
+	// ActionIDLuckyWheelStart 转动一次帮派转盘 (Module 69, Action 2 -> 0x00450002)
+	ActionIDLuckyWheelStart uint32 = 0x00450002
 )
 
 const (
@@ -268,4 +283,36 @@ const (
 	RollCakeCodeNoRecord uint8 = 4
 	// RollCakeCodeHaveRecord 存在未领取的投掷记录
 	RollCakeCodeHaveRecord uint8 = 5
+)
+
+const (
+	// 帮派祭神业务结果码 (对齐 Mod_Faction_Base 常量)
+	// FactionIncenseResultSuccess 上香成功
+	FactionIncenseResultSuccess uint8 = 32
+	// FactionIncenseResultMemberNotExist 无此帮派成员
+	FactionIncenseResultMemberNotExist uint8 = 22
+	// FactionIncenseResultFactionNotExist 帮派不存在
+	FactionIncenseResultFactionNotExist uint8 = 18
+	// FactionIncenseResultOfferingNotExist 香不存在
+	FactionIncenseResultOfferingNotExist uint8 = 33
+	// FactionIncenseResultCountUsed 今日上香次数已用完
+	FactionIncenseResultCountUsed uint8 = 34
+	// FactionIncenseResultInsufficientIngot 元宝不足
+	FactionIncenseResultInsufficientIngot uint8 = 35
+	// FactionIncenseResultInsufficientSkill 阅历不足
+	FactionIncenseResultInsufficientSkill uint8 = 37
+)
+
+const (
+	// 帮派转盘业务结果码 (对齐 Mod_LuckyWheel_Base 常量)
+	// LuckyWheelResultOK 可以转动
+	LuckyWheelResultOK uint8 = 0
+	// LuckyWheelResultNo 当前不可转动
+	LuckyWheelResultNo uint8 = 1
+	// LuckyWheelResultSuccess 转盘抽奖成功
+	LuckyWheelResultSuccess uint8 = 2
+	// LuckyWheelResultNotEnoughNumber 青龙令不足
+	LuckyWheelResultNotEnoughNumber uint8 = 3
+	// LuckyWheelResultFailed 抽奖失败
+	LuckyWheelResultFailed uint8 = 4
 )

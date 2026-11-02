@@ -29,6 +29,8 @@ scheduler:
     beelzebub_trials: true      # 魔王试炼 (自建队伍、招募助战镜像、挑战每日魔王并领道行奖励)
     lucky_star: true            # 吉星高照 (个人摇骰子与免费逆天改运)
     faction_lucky_star: true    # 帮派吉星高照 (帮派成员成绩与排名奖励)
+    faction_blessing: true      # 帮派祭神 (每日免费上香获取祝福/声望/神像灵气)
+    faction_lucky_wheel: true   # 帮派转盘 (消耗青龙令自动抽奖)
     pilgrimage: true            # 取经/护送
     arena: true                 # 竞技场
 
@@ -82,6 +84,11 @@ scheduler:
   # 结缘宝箱配置 (每批最多10个，除了传说其他都开)
   jieyuan_box:
     max_batch_size: 10          # 每批最多开启数量 (上限 10 个)
+
+  # 帮派祭神上香配置
+  faction_blessing:
+    offering_id: 1              # 供品编号 (1 白檀香免费 / 2 苏合香30元宝 / 3 天木香90元宝)
+    allow_cover: false          # 剩余祝福次数高于本次上香收益时是否允许覆盖 (默认 false，避免浪费)
 
   # 天帝宝库自选三档大奖配置
   treasure_house:

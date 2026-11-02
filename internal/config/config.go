@@ -61,6 +61,7 @@ type SchedulerConfig struct {
 	SixRealms       SixRealmsConfig        `yaml:"six_realms"`
 	BeelzebubTrials BeelzebubTrialsConfig  `yaml:"beelzebub_trials"`
 	JieYuanBox      JieYuanBoxConfig       `yaml:"jieyuan_box"`
+	FactionBlessing FactionBlessingConfig  `yaml:"faction_blessing"`
 	TreasureHouse   TreasureHouseConfig    `yaml:"treasure_house"`
 	LuckyStar       LuckyStarConfig        `yaml:"lucky_star"`
 	Expert          map[string]interface{} `yaml:"expert"`
@@ -88,6 +89,14 @@ type BeelzebubTrialsConfig struct {
 type JieYuanBoxConfig struct {
 	// MaxBatchSize 每批最多开启数量 (每批最多10个，默认 10)
 	MaxBatchSize int `yaml:"max_batch_size"`
+}
+
+// FactionBlessingConfig 帮派祭神上香配置
+type FactionBlessingConfig struct {
+	// OfferingID 上香供品编号 (1 白檀香免费 / 2 苏合香30元宝 / 3 天木香90元宝)
+	OfferingID int32 `yaml:"offering_id"`
+	// AllowCover 剩余祝福次数高于本次上香收益时是否仍允许覆盖
+	AllowCover bool `yaml:"allow_cover"`
 }
 
 // LuckyStarConfig 个人吉星高照自动化策略配置

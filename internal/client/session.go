@@ -2041,6 +2041,14 @@ func runMockGameServer(conn net.Conn) {
 	rollCakeRemain := int8(2)
 	rollCakeTodayScore := int32(0)
 
+	// 帮派祭神 mock 状态: 每日 3 次免费上香机会
+	factionIncenseCount := int32(0)
+	factionIncenseTotal := int32(3)
+	factionBlessingCount := int32(0)
+
+	// 帮派转盘 mock 状态: 持有 2 枚青龙令
+	luckyWheelRosefinch := int32(2)
+
 	// 个人吉星高照 mock 状态: 今日剩余 2 次投掷、2 次免费改运
 	luckyStarRemain := int16(2)
 	luckyStarFreeRerolls := int8(2)
@@ -2210,6 +2218,68 @@ func runMockGameServer(conn net.Conn) {
 			w := protocol.NewWriter()
 			w.WriteString("获得5体力,50声望！")
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFateAnswer, w.Bytes()))
+
+		case protocol.ActionIDFactionGodInfo:
+			// 响应帮派祭神神像信息
+			w := protocol.NewWriter()
+			w.WriteInt32(5)    // 神像等级
+			w.WriteInt32(1200) // 当前神像灵气
+			w.WriteInt32(3000) // 升级所需神像灵气
+			w.WriteInt32(factionIncenseCount)
+			w.WriteInt32(factionIncenseTotal)
+			w.WriteInt8(0)   // is_cover
+			w.WriteUint16(0) // 上香记录条数
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFactionGodInfo, w.Bytes()))
+
+		case protocol.ActionIDFactionGetBlessingCount:
+			// 响应帮派祭神当前祝福次数
+			w := protocol.NewWriter()
+			w.WriteInt32(factionBlessingCount)
+			w.WriteInt32(300) // 祝福金币加成
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFactionGetBlessingCount, w.Bytes()))
+
+		case protocol.ActionIDFactionIncense:
+			// 响应帮派祭神上香，按客户端提交的供品编号累加祝福次数
+			offeringID := protocol.FactionOfferingWhiteSandalwood
+			if len(pkt.Payload) >= 4 {
+				offeringID = int32(binary.BigEndian.Uint32(pkt.Payload[:4]))
+			}
+			w := protocol.NewWriter()
+			if factionIncenseCount >= factionIncenseTotal {
+				w.WriteUint8(protocol.FactionIncenseResultCountUsed)
+			} else {
+				factionIncenseCount++
+				if offering, ok := protocol.GetFactionOffering(offeringID); ok {
+					factionBlessingCount = offering.BlessingCount
+				}
+				w.WriteUint8(protocol.FactionIncenseResultSuccess)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFactionIncense, w.Bytes()))
+
+		case protocol.ActionIDLuckyWheelOpen:
+			// 响应帮派转盘状态查询
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.LuckyWheelResultOK)
+			w.WriteInt32(5000) // 今日帮派贡献
+			w.WriteInt32(luckyWheelRosefinch)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDLuckyWheelOpen, w.Bytes()))
+
+		case protocol.ActionIDLuckyWheelStart:
+			// 响应帮派转盘抽奖，扣减一枚青龙令
+			w := protocol.NewWriter()
+			if luckyWheelRosefinch <= 0 {
+				w.WriteUint8(protocol.LuckyWheelResultNotEnoughNumber)
+				w.WriteInt8(0)
+				w.WriteInt32(0)
+				w.WriteInt32(0)
+			} else {
+				luckyWheelRosefinch--
+				w.WriteUint8(protocol.LuckyWheelResultSuccess)
+				w.WriteInt8(2) // 奖励类型: 阅历
+				w.WriteInt32(luckyWheelRosefinch)
+				w.WriteInt32(25000) // 奖励道具/阅历数值
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDLuckyWheelStart, w.Bytes()))
 
 		case protocol.ActionIDFactionRollCakeInfo:
 			// 响应帮派吉星高照战绩面板

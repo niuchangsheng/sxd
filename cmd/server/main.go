@@ -12,8 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"sync"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -314,6 +314,14 @@ func run(ctx context.Context, args []string) error {
 		jBoxCfg.MaxBatchSize = cfg.Scheduler.JieYuanBox.MaxBatchSize
 	}
 	factory.SetJieYuanBoxConfig(jBoxCfg)
+
+	// 帮派祭神上香配置 (默认免费白檀香，不主动覆盖更高祝福)
+	fbCfg := social.DefaultFactionBlessingConfig()
+	if cfg.Scheduler.FactionBlessing.OfferingID > 0 {
+		fbCfg.OfferingID = cfg.Scheduler.FactionBlessing.OfferingID
+	}
+	fbCfg.AllowCover = cfg.Scheduler.FactionBlessing.AllowCover
+	factory.SetFactionBlessingConfig(fbCfg)
 
 	// 天帝宝库自选三档大奖配置
 	thCfg := minigame.TreasureHouseConfig{

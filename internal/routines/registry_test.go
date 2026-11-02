@@ -111,6 +111,8 @@ func TestSubdomains_Instances(t *testing.T) {
 		want string
 	}{
 		{social.NewJieYuanBoxRoutine(), "jieyuan_box"},
+		{social.NewFactionBlessingRoutine(), "faction_blessing"},
+		{social.NewFactionLuckyWheelRoutine(), "faction_lucky_wheel"},
 		{daily.NewGodBlessRoutine(), "god_bless"},
 		{daily.NewOnlineGiftRoutine(), "online_gift"},
 		{daily.NewDailyQuestRoutine(), "daily_quest"},
@@ -134,4 +136,3 @@ func TestSubdomains_Instances(t *testing.T) {
 		}
 	}
 }
-

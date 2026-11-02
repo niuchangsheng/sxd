@@ -53,6 +53,8 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "friendship", Name: "好友结义与送花", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "好友自动送花互动与结义羁绊维护", DefaultOn: false},
 		{ID: "fame_blessing", Name: "仙界尊像膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "仙界膜拜前三名霸主大神与声望祝福获取", DefaultOn: false},
 		{ID: "jieyuan_box", Name: "结缘宝箱开启", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "批量开启结缘宝箱 (除了传说，其他都开)", DefaultOn: false},
+		{ID: "faction_blessing", Name: "帮派祭神", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "每日帮派上香祭神，获取祝福、声望与神像灵气", DefaultOn: false},
+		{ID: "faction_lucky_wheel", Name: "帮派转盘", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "消耗青龙令自动转动帮派转盘直至次数耗尽", DefaultOn: false},
 
 		// 4. Dungeon 领域 (8)
 		{ID: "dungeon", Name: "副本推图与扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/支线任务闭环推图与关卡扫荡", DefaultOn: true},
@@ -99,6 +101,7 @@ type RegistryFactory struct {
 	sixRealmsCfg dungeon.SixRealmsConfig
 	beelzebubCfg dungeon.BeelzebubTrialsConfig
 	jieyuanCfg   social.JieYuanBoxConfig
+	blessingCfg  social.FactionBlessingConfig
 	treasureCfg  minigame.TreasureHouseConfig
 	luckyCfg     minigame.LuckyStarConfig
 }
@@ -114,6 +117,7 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 		sixRealmsCfg: dungeon.DefaultSixRealmsConfig(),
 		beelzebubCfg: dungeon.DefaultBeelzebubTrialsConfig(),
 		jieyuanCfg:   social.DefaultJieYuanBoxConfig(),
+		blessingCfg:  social.DefaultFactionBlessingConfig(),
 		treasureCfg:  minigame.DefaultTreasureHouseConfig(),
 		luckyCfg:     minigame.DefaultLuckyStarConfig(),
 	}
@@ -137,6 +141,11 @@ func (f *RegistryFactory) SetBeelzebubTrialsConfig(cfg dungeon.BeelzebubTrialsCo
 // SetJieYuanBoxConfig 设置结缘宝箱策略配置。
 func (f *RegistryFactory) SetJieYuanBoxConfig(cfg social.JieYuanBoxConfig) {
 	f.jieyuanCfg = cfg
+}
+
+// SetFactionBlessingConfig 设置帮派祭神上香策略配置。
+func (f *RegistryFactory) SetFactionBlessingConfig(cfg social.FactionBlessingConfig) {
+	f.blessingCfg = cfg
 }
 
 // SetTreasureHouseConfig 设置天帝宝库自选大奖与抽奖策略配置。
@@ -224,6 +233,10 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewFameBlessingRoutine()
 	case "jieyuan_box":
 		return social.NewJieYuanBoxRoutine(f.jieyuanCfg)
+	case "faction_blessing":
+		return social.NewFactionBlessingRoutine(f.blessingCfg)
+	case "faction_lucky_wheel":
+		return social.NewFactionLuckyWheelRoutine()
 
 	// 4. Dungeon
 	case "dungeon", "dungeon_sweep":
