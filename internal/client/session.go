@@ -2219,16 +2219,16 @@ func runMockGameServer(conn net.Conn) {
 				},
 				WarReports: []protocol.ArenaWarReport{
 					{
-						WarReportID:      340247349,
-						AttackPlayerID:   65536,
-						AttackPlayerName: "梦一场",
-						DefensePlayerID:  1003,
+						WarReportID:       340247349,
+						AttackPlayerID:    65536,
+						AttackPlayerName:  "梦一场",
+						DefensePlayerID:   1003,
 						DefensePlayerName: "万妖统帅",
-						WinPlayerID:      65536,
-						OldRank:          20,
-						NewRank:          10,
-						Version:          "2026110201",
-						ReportTimer:      1793549704,
+						WinPlayerID:       2, // 与 PlayerGetInfo 回包的 RoleID 一致，模拟本方获胜
+						OldRank:           20,
+						NewRank:           10,
+						Version:           "2026110201",
+						ReportTimer:       1793549704,
 					},
 				},
 			}
@@ -2246,7 +2246,7 @@ func runMockGameServer(conn net.Conn) {
 			_ = protocol.WritePacket(conn, resPkt)
 
 		case protocol.ActionIDArenaChallenge:
-			// 响应竞技场挑战结算: 胜利方为 65536, 战报编号与面板一致
+			// 响应竞技场挑战结算: 本方 (RoleID=2) 获胜, 战报编号与面板一致
 			resPkt, _ := protocol.BuildArenaChallengeResultPacket(protocol.ArenaChallengeResult{
 				Result:      protocol.ArenaResultSuccess,
 				Success:     true,
@@ -2255,7 +2255,7 @@ func runMockGameServer(conn net.Conn) {
 				AwardCoin:   900000,
 				ReportID:    340247349,
 				DeployType:  3,
-				WinPlayerID: 65536,
+				WinPlayerID: 2,
 			})
 			_ = protocol.WritePacket(conn, resPkt)
 

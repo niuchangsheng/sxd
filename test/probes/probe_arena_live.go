@@ -3,7 +3,7 @@
 // 目标协议: 本服竞技场 (查询剩余次数 / 拉取对手列表 / 软柿子挑战)
 // 基准对齐: 对齐原版 pie.exe 竞技场挑战闭环
 // 运行命令: go run -tags=probe test/probes/probe_arena_live.go
-// 预期表现: 登录激活后执行一次 Arena Routine，输出剩余次数、锁定对手并完成 1 次挑战；会消耗 1 次挑战机会
+// 预期表现: 登录激活后执行 Arena Routine，循环挑战直至当日次数用尽；战败会等待 30s 冷却后继续，会消耗全部剩余挑战次数
 package main
 
 import (
@@ -38,7 +38,7 @@ func main() {
 	xdAuth.SetCookie(acc.Cookie)
 	ticketCache.RegisterAuthenticator(xdAuth)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
 	ticket, err := ticketCache.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)
@@ -81,7 +81,7 @@ func main() {
 		"player_id", sess.PlayerID(),
 	)
 
-	execCtx, execCancel := context.WithTimeout(ctx, 45*time.Second)
+	execCtx, execCancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer execCancel()
 
 	routine := pvp.NewArenaRoutine()

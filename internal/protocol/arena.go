@@ -173,8 +173,17 @@ type ArenaChallengeRequest struct {
 	PrevAct uint32
 }
 
-// ArenaResultSuccess 竞技场结算结果码: 挑战被受理 (Mod_SuperSport_Base.SUCCESS)。
-const ArenaResultSuccess uint8 = 0
+// 竞技场挑战结算结果码 (Mod_SuperSport_Base.start_challenge 回包首字段)。
+const (
+	// ArenaResultSuccess 挑战被受理
+	ArenaResultSuccess uint8 = 0
+	// ArenaResultInvalidRank 挑战目标排名无效
+	ArenaResultInvalidRank uint8 = 1
+	// ArenaResultNoTimes 今日挑战次数不足
+	ArenaResultNoTimes uint8 = 2
+	// ArenaResultCoolingDown 挑战冷却中
+	ArenaResultCoolingDown uint8 = 3
+)
 
 // ArenaChallengeResult 代表发起竞技场挑战后的即时战报结算 (ActionID=0x001C0002)。
 //
