@@ -290,10 +290,14 @@ classDiagram
 | 2 | `0x00720002` | `get_take_bible_info` | 空 | 见下 |
 | 7 | `0x00720007` | `buy_protection` | 空 | `UByte, Byte` |
 | 8 | `0x00720008` | `refresh` | 空 | `UByte, UByte, Short, Byte` |
+| 9 | `0x00720009` | `get_player_take_bible` | `Int, Short, Byte, Byte` | 20 字段目标队伍详情 |
 | 10 | `0x0072000A` | `start_take_bible` | 空 | `UByte, Byte` |
-| 11 | `0x0072000B` | `rob` | `Int, Byte` | 见官方描述 |
-| 14 | `0x0072000E` | `quickly` | 见官方描述 | 见官方描述 |
-| 15 | `0x0072000F` | `get_take_bible_updata_data` | 空 | 见官方描述 |
+| 11 | `0x0072000B` | `rob` | `Int player_id, Byte sequence_id` | 见下 |
+| 14 | `0x0072000E` | `quickly` | `Byte` | `UByte` |
+| 15 | `0x0072000F` | `get_take_bible_updata_data` | 空 | `Short can_rob_times, Byte can_take_bible_times` |
+| 16 | `0x00720010` | `get_rob_take_bible_cd_time` | 空 | `Short cd_seconds, Short clear_ingot` |
+| 19 | `0x00720013` | `get_recent_rob_player` | 空 | `[Int player_id]` |
+| 22 | `0x00720016` | `buy_rob_times` | 空 | `UByte msg, Short rob_times` |
 
 `get_take_bible_info (2)` 回包线格式：
 
@@ -321,6 +325,29 @@ Byte bless, Byte buff
   `FULL_TAKE_BIBLE_TIMES=18`、`PROTECT_TIME=20`、`FAILED=38`。
 - `get_take_bible_info` / `start_take_bible` 由客户端直接调用，二者均挂载在
   `DataBase.SOCKETSERVERTOWN`（跨服连接），**无需先调用 `open_take_bible`**。
+
+**取经打劫链路**（官方 `StTakeBibleRoadView`）：
+
+1. `open_take_bible (0)` 回包：
+   - `[ [Int player_id, UByte protection, Int start_time, Int arrival_time,
+     Short distance, Int protect_player_id, Byte sequence_id, Byte is_deeds_so] ]`
+   - 尾部：`Int protect_player_id, Short can_rob_times, Byte can_protect_times,
+     Byte can_take_bible_times, Byte quickly_times, Byte bless, UByte type, Int time,
+     [ [Byte sequence_id, Short remain_recapture_time, String last_rob_nickname,
+     String last_rob_stage_name, String last_rob_server_name, Short rob_role_id] ], Byte buff`
+2. `get_rob_take_bible_cd_time (16)` 为 `Short cd_seconds, Short clear_ingot`；
+   `cd_seconds > 0` 时客户端直接停止打劫，不消耗元宝清冷却。
+3. `get_player_take_bible (9)` 请求 `Int player_id, Short level, Byte type, Byte sequence_id`
+   （`type=1` 表示已开启圣域/仙界城镇），回包 20 字段，其中
+   `Byte is_robbed`、`Byte be_rob_times`、`Byte total_can_rob_times`、`Short protect_time`
+   用于判断目标是否可劫。
+4. `rob (11)` 请求 `Int player_id, Byte sequence_id`。回包前缀：
+   `UByte msg, [Int player_id, String nickname, String stage_name, String server_name],
+   Int rob_coin, Short rob_fame, Short rob_st_exp, Int war_report_id, ...`
+   其后的 `warData` 为完整战报，业务层可忽略。
+5. 每次打劫成功后客户端都会重新查询 `get_rob_take_bible_cd_time`；常见打劫结果码：
+   `SUCCESS=9`、`INVALID_PLAYER_ID=10`、`PROTECT_TIME=20`、`FULL_ROB_TIMES=21`、
+   `HAVE_CD_TIME=22`、`BE_ROB_ALL=23`、`INVALID_SEQUENCE_ID=24`。
 
 ### 4.9 Module 345 (0x0159): 邮箱 (`Mod_Email_Base`)
 

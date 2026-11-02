@@ -19,29 +19,93 @@ const (
 	ActionIDStTakeBibleCrossClose uint32 = 0x00720001
 	// ActionIDStTakeBibleCrossGetInfo 查询取经准备详情 (Module 114, Action 2 -> 0x00720002)
 	ActionIDStTakeBibleCrossGetInfo uint32 = 0x00720002
+	// ActionIDStTakeBibleCrossGetPlayer 查询取经路上指定玩家队伍详情 (Module 114, Action 9 -> 0x00720009)
+	ActionIDStTakeBibleCrossGetPlayer uint32 = 0x00720009
 	// ActionIDStTakeBibleCrossRefresh 刷新取经使者品质 (Module 114, Action 8 -> 0x00720008)
 	ActionIDStTakeBibleCrossRefresh uint32 = 0x00720008
 	// ActionIDStTakeBibleCrossStart 正式启程开始护送 (Module 114, Action 10 -> 0x0072000A)
 	ActionIDStTakeBibleCrossStart uint32 = 0x0072000A
+	// ActionIDStTakeBibleCrossRob 发起取经拦截打劫 (Module 114, Action 11 -> 0x0072000B)
+	ActionIDStTakeBibleCrossRob uint32 = 0x0072000B
 	// ActionIDStTakeBibleCrossUpdateData 拉取护送进度增量数据 (Module 114, Action 15 -> 0x0072000F)
 	ActionIDStTakeBibleCrossUpdateData uint32 = 0x0072000F
+	// ActionIDStTakeBibleCrossGetRobCD 查询打劫冷却与清冷却元宝价格 (Module 114, Action 16 -> 0x00720010)
+	ActionIDStTakeBibleCrossGetRobCD uint32 = 0x00720010
+	// ActionIDStTakeBibleCrossGetRecentRobPlayer 查询最近被劫玩家列表 (Module 114, Action 19 -> 0x00720013)
+	ActionIDStTakeBibleCrossGetRecentRobPlayer uint32 = 0x00720013
+	// ActionIDStTakeBibleCrossBuyRobTimes 购买额外打劫次数 (Module 114, Action 22 -> 0x00720016)
+	ActionIDStTakeBibleCrossBuyRobTimes uint32 = 0x00720016
 )
 
 // Mod_StTakeBible_Base 消息码 (msg 字段)。
 const (
 	// StTakeBibleCrossMsgSuccess 操作成功
 	StTakeBibleCrossMsgSuccess uint8 = 9
+	// StTakeBibleCrossMsgInvalidPlayerID 玩家编号无效
+	StTakeBibleCrossMsgInvalidPlayerID uint8 = 10
+	// StTakeBibleCrossMsgFullProtectTimes 护送好友次数已满
+	StTakeBibleCrossMsgFullProtectTimes uint8 = 11
+	// StTakeBibleCrossMsgNotOnline 目标玩家不在线
+	StTakeBibleCrossMsgNotOnline uint8 = 12
 	// StTakeBibleCrossMsgTakeBibleStatus 当前已处于护送状态
 	StTakeBibleCrossMsgTakeBibleStatus uint8 = 13
+	// StTakeBibleCrossMsgCancelApply 好友已取消护送申请
+	StTakeBibleCrossMsgCancelApply uint8 = 14
+	// StTakeBibleCrossMsgProtectStatus 目标玩家已经在护送中
+	StTakeBibleCrossMsgProtectStatus uint8 = 15
 	// StTakeBibleCrossMsgNotEnoughIngot 元宝不足
 	StTakeBibleCrossMsgNotEnoughIngot uint8 = 16
+	// StTakeBibleCrossMsgRequestVip VIP 等级不足
+	StTakeBibleCrossMsgRequestVip uint8 = 17
 	// StTakeBibleCrossMsgFullTakeBibleTimes 今日护送取经次数已满
 	StTakeBibleCrossMsgFullTakeBibleTimes uint8 = 18
+	// StTakeBibleCrossMsgRerob 已经打劫过该队伍
+	StTakeBibleCrossMsgRerob uint8 = 19
 	// StTakeBibleCrossMsgProtectTime 处于护送保护时间
 	StTakeBibleCrossMsgProtectTime uint8 = 20
+	// StTakeBibleCrossMsgFullRobTimes 今日打劫次数已满
+	StTakeBibleCrossMsgFullRobTimes uint8 = 21
+	// StTakeBibleCrossMsgHaveCDTime 打劫冷却中
+	StTakeBibleCrossMsgHaveCDTime uint8 = 22
+	// StTakeBibleCrossMsgBeRobAll 目标队伍已被抢光
+	StTakeBibleCrossMsgBeRobAll uint8 = 23
+	// StTakeBibleCrossMsgInvalidSequenceID 队伍序列号无效
+	StTakeBibleCrossMsgInvalidSequenceID uint8 = 24
 	// StTakeBibleCrossMsgFailed 操作失败
 	StTakeBibleCrossMsgFailed uint8 = 38
 )
+
+// StTakeBibleCrossRobMsgName 返回打劫结果码的中文描述，便于日志定位。
+func StTakeBibleCrossRobMsgName(msg uint8) string {
+	switch msg {
+	case StTakeBibleCrossMsgSuccess:
+		return "打劫成功"
+	case StTakeBibleCrossMsgInvalidPlayerID:
+		return "玩家编号无效"
+	case StTakeBibleCrossMsgNotOnline:
+		return "目标不在线"
+	case StTakeBibleCrossMsgProtectStatus:
+		return "目标正在护送中"
+	case StTakeBibleCrossMsgRerob:
+		return "已经打劫过该队伍"
+	case StTakeBibleCrossMsgProtectTime:
+		return "目标处于保护时间"
+	case StTakeBibleCrossMsgFullRobTimes:
+		return "今日打劫次数已满"
+	case StTakeBibleCrossMsgHaveCDTime:
+		return "打劫冷却中"
+	case StTakeBibleCrossMsgBeRobAll:
+		return "目标队伍已被抢光"
+	case StTakeBibleCrossMsgInvalidSequenceID:
+		return "队伍序列号无效"
+	case StTakeBibleCrossMsgTakeBibleStatus:
+		return "当前处于护送状态"
+	case StTakeBibleCrossMsgFailed:
+		return "操作失败"
+	default:
+		return "未知结果"
+	}
+}
 
 // 取经使者品质 (protection / canProtection 字段)。
 const (
@@ -135,6 +199,173 @@ type StTakeBibleCrossInfo struct {
 	Buff int8
 }
 
+// StTakeBibleCrossRoadTeam 代表取经路上一支正在护送的队伍。
+//
+// 字段顺序严格对齐官方 AS3 Mod_StTakeBible_Base.open_take_bible 描述符：
+// Int player_id, UByte protection, Int start_time, Int arrival_time,
+// Short distance, Int protect_player_id, Byte sequence_id, Byte is_deeds_so。
+type StTakeBibleCrossRoadTeam struct {
+	// PlayerID 护送发起玩家角色 ID
+	PlayerID int32
+	// Protection 取经使者品质 (1=白龙马 .. 5=唐僧)
+	Protection uint8
+	// StartTime 队伍出发服务器时间戳
+	StartTime int32
+	// ArrivalTime 队伍预计到达服务器时间戳
+	ArrivalTime int32
+	// Distance 当前距离终点的进度值
+	Distance int16
+	// ProtectPlayerID 护送保护人角色 ID (0 表示无保护人)
+	ProtectPlayerID int32
+	// SequenceID 队伍序列号 (1/2，用于同玩家多队伍区分)
+	SequenceID int8
+	// IsDeedsSo 是否为取经功德队伍 (1=是)
+	IsDeedsSo int8
+}
+
+// StTakeBibleCrossLastRob 代表最近一次被劫记录。
+type StTakeBibleCrossLastRob struct {
+	// SequenceID 被劫队伍序列号
+	SequenceID int8
+	// RemainRecaptureTime 剩余可反劫时间 (秒)
+	RemainRecaptureTime int16
+	// LastRobNickname 打劫者原始昵称
+	LastRobNickname string
+	// LastRobStageName 打劫者区服阶段名
+	LastRobStageName string
+	// LastRobServerName 打劫者区服全称
+	LastRobServerName string
+	// RobRoleID 打劫者角色 ID
+	RobRoleID int16
+}
+
+// StTakeBibleCrossRoadInfo 代表取经路况快照 (open_take_bible 回包)。
+type StTakeBibleCrossRoadInfo struct {
+	// Teams 当前正在护送的全部队伍
+	Teams []StTakeBibleCrossRoadTeam
+	// ProtectPlayerID 当前指定的保护好友 ID
+	ProtectPlayerID int32
+	// CanRobTimes 今日剩余打劫次数
+	CanRobTimes int16
+	// CanProtectTimes 今日剩余保护次数
+	CanProtectTimes int8
+	// CanTakeBibleTimes 今日剩余护送次数
+	CanTakeBibleTimes int8
+	// QuicklyTimes 今日剩余加速次数
+	QuicklyTimes int8
+	// Bless 当前鼓舞祝福层数
+	Bless int8
+	// Type 如来活动状态 (6=关闭, 7=可召唤, 8=开启)
+	Type uint8
+	// Time 如来活动相关时间戳
+	Time int32
+	// LastRobs 最近被劫记录列表
+	LastRobs []StTakeBibleCrossLastRob
+	// Buff 刷新使者产生的临时加成层数
+	Buff int8
+}
+
+// StTakeBibleCrossPlayerInfo 代表取经路上目标玩家队伍详情 (get_player_take_bible 回包)。
+type StTakeBibleCrossPlayerInfo struct {
+	// PlayerID 目标玩家角色 ID
+	PlayerID int32
+	// NickName 目标玩家原始昵称
+	NickName string
+	// StageName 目标玩家区服阶段名
+	StageName string
+	// ServerName 目标玩家区服全称
+	ServerName string
+	// Level 目标玩家等级
+	Level int16
+	// BeRobTimes 目标队伍今日已被打劫次数
+	BeRobTimes int8
+	// TotalCanRobTimes 目标队伍今日可被打破次数上限
+	TotalCanRobTimes int8
+	// ProtectNickname 目标队伍保护人昵称
+	ProtectNickname string
+	// RobCoin 打劫成功可获得的铜钱
+	RobCoin int32
+	// RobFame 打劫成功可获得的声望
+	RobFame int16
+	// RobStExp 打劫成功可获得的阅历
+	RobStExp int16
+	// AwardCoin 护送完成可获得铜钱
+	AwardCoin int32
+	// AwardFame 护送完成可获得声望
+	AwardFame int16
+	// AwardStExp 护送完成可获得阅历
+	AwardStExp int16
+	// IsRobbed 当前角色是否已经打劫过该队伍 (1=已打劫)
+	IsRobbed int8
+	// ProtectTime 目标队伍剩余保护时间 (秒)
+	ProtectTime int16
+	// NPCLevel 使者等级
+	NPCLevel int8
+	// RobExpe 使者当前经验
+	RobExpe int16
+	// AwardExpe 使者护送完成可获经验
+	AwardExpe int16
+	// SequenceID 队伍序列号
+	SequenceID int8
+}
+
+// StTakeBibleCrossPlayerRef 代表战报中携带的玩家区服展示信息。
+type StTakeBibleCrossPlayerRef struct {
+	// PlayerID 玩家角色 ID
+	PlayerID int32
+	// NickName 玩家原始昵称
+	NickName string
+	// StageName 玩家区服阶段名
+	StageName string
+	// ServerName 玩家区服全称
+	ServerName string
+}
+
+// StTakeBibleCrossRobResult 代表一次取经打劫的结果 (rob 回包前缀字段)。
+//
+// 回包后续仍包含完整战报数据 (warData)，业务层通常无需解析，
+// 因此这里仅读取到战报编号为止。
+type StTakeBibleCrossRobResult struct {
+	// Msg 结果码 (9=成功)
+	Msg uint8
+	// StageServer 战报关联的玩家区服信息列表 (官方客户端取第 2 条作为被劫队伍)
+	StageServer []StTakeBibleCrossPlayerRef
+	// TargetPlayerID 被劫玩家角色 ID
+	TargetPlayerID int32
+	// TargetNickName 被劫玩家原始昵称
+	TargetNickName string
+	// TargetStageName 被劫玩家区服阶段名
+	TargetStageName string
+	// TargetServerName 被劫玩家区服全称
+	TargetServerName string
+	// RobCoin 本次打劫获得铜钱
+	RobCoin int32
+	// RobFame 本次打劫获得声望
+	RobFame int16
+	// RobStExp 本次打劫获得阅历
+	RobStExp int16
+	// WarReportID 战报编号
+	WarReportID int32
+}
+
+// StTakeBibleCrossRobCD 代表打劫冷却信息 (get_rob_take_bible_cd_time 回包)。
+type StTakeBibleCrossRobCD struct {
+	// CDSeconds 剩余冷却秒数 (0 表示可立即打劫)
+	CDSeconds int16
+	// ClearIngot 清除冷却所需元宝
+	ClearIngot int16
+}
+
+// BuildStTakeBibleCrossOpenPacket 构造打开仙界取经路况面板封包 (0x00720000)。
+func BuildStTakeBibleCrossOpenPacket() *Packet {
+	return NewPacket(ActionIDStTakeBibleCrossOpen, nil)
+}
+
+// BuildStTakeBibleCrossClosePacket 构造关闭仙界取经路况面板封包 (0x00720001)。
+func BuildStTakeBibleCrossClosePacket() *Packet {
+	return NewPacket(ActionIDStTakeBibleCrossClose, nil)
+}
+
 // BuildStTakeBibleCrossGetInfoPacket 构造查询仙界取经详情封包 (0x00720002)。
 func BuildStTakeBibleCrossGetInfoPacket() *Packet {
 	return NewPacket(ActionIDStTakeBibleCrossGetInfo, nil)
@@ -150,6 +381,39 @@ func BuildStTakeBibleCrossStartPacket() *Packet {
 	return NewPacket(ActionIDStTakeBibleCrossStart, nil)
 }
 
+// BuildStTakeBibleCrossGetPlayerPacket 构造查询取经路上指定玩家队伍详情封包 (0x00720009)。
+//
+// 请求线格式对齐官方 AS3 描述符：Int player_id, Short level, Byte type, Byte sequence_id。
+// type 为 1 表示角色已开启圣域/仙界城镇，普通角色传 0。
+func BuildStTakeBibleCrossGetPlayerPacket(playerID int32, level int16, playerType uint8, sequenceID int8) *Packet {
+	w := NewWriter()
+	w.WriteInt32(playerID)
+	w.WriteInt16(level)
+	w.WriteUint8(playerType)
+	w.WriteInt8(sequenceID)
+	return NewPacket(ActionIDStTakeBibleCrossGetPlayer, w.Bytes())
+}
+
+// BuildStTakeBibleCrossRobPacket 构造取经拦截打劫封包 (0x0072000B)。
+//
+// 请求线格式：Int player_id, Byte sequence_id。
+func BuildStTakeBibleCrossRobPacket(playerID int32, sequenceID int8) *Packet {
+	w := NewWriter()
+	w.WriteInt32(playerID)
+	w.WriteInt8(sequenceID)
+	return NewPacket(ActionIDStTakeBibleCrossRob, w.Bytes())
+}
+
+// BuildStTakeBibleCrossGetRobCDPacket 构造查询打劫冷却封包 (0x00720010)。
+func BuildStTakeBibleCrossGetRobCDPacket() *Packet {
+	return NewPacket(ActionIDStTakeBibleCrossGetRobCD, nil)
+}
+
+// BuildStTakeBibleCrossGetRecentRobPlayerPacket 构造查询最近被劫玩家封包 (0x00720013)。
+func BuildStTakeBibleCrossGetRecentRobPlayerPacket() *Packet {
+	return NewPacket(ActionIDStTakeBibleCrossGetRecentRobPlayer, nil)
+}
+
 // ParseStTakeBibleCrossInfoResult 解析仙界取经详情回包。
 //
 // 线格式 (Mod_StTakeBible_Base.get_take_bible_info response):
@@ -159,6 +423,7 @@ func BuildStTakeBibleCrossStartPacket() *Packet {
 //
 // 注意：AS3 描述符将 npcExpe 声明为 Short，但实机仙界节点按 Int (4 字节) 下发，
 // 每个使者条目共 15 字节；此处以实机回包为准。
+//
 //	UByte takeBibleTimes, Byte totalTakeBibleTimes, Short refreshPrice, Byte takeBibleStatus,
 //	UByte canProtection, String protectPlayer, Byte bless, Byte buff
 func ParseStTakeBibleCrossInfoResult(payload []byte) (*StTakeBibleCrossInfo, error) {
@@ -282,4 +547,282 @@ func ParseStTakeBibleCrossRefreshResult(payload []byte) (uint8, uint8, int16, er
 		return msg, protection, 0, fmt.Errorf("%w: failed to read refresh next_price: %v", ErrInvalidPayload, err)
 	}
 	return msg, protection, nextPrice, nil
+}
+
+// ParseStTakeBibleCrossRoadResult 解析仙界取经路况快照回包 (0x00720000)。
+//
+// 线格式 (Mod_StTakeBible_Base.open_take_bible response):
+//
+//	[ [Int playerID, UByte protection, Int startTime, Int arrivalTime, Short distance,
+//	   Int protectPlayerID, Byte sequenceID, Byte isDeedsSo] ],
+//	Int protectPlayerID, Short canRobTimes, Byte canProtectTimes, Byte canTakeBibleTimes,
+//	Byte quicklyTimes, Byte bless, UByte type, Int time,
+//	[ [Byte sequenceID, Short remainRecaptureTime, String lastRobNickname,
+//	   String lastRobStageName, String lastRobServerName, Short robRoleID] ],
+//	Byte buff
+func ParseStTakeBibleCrossRoadResult(payload []byte) (*StTakeBibleCrossRoadInfo, error) {
+	r := NewReader(payload)
+	res := &StTakeBibleCrossRoadInfo{}
+
+	teamCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read road team count: %v", ErrInvalidPayload, err)
+	}
+	res.Teams = make([]StTakeBibleCrossRoadTeam, 0, teamCount)
+	for i := 0; i < int(teamCount); i++ {
+		var t StTakeBibleCrossRoadTeam
+		if t.PlayerID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read road_team[%d].player_id: %v", ErrInvalidPayload, i, err)
+		}
+		if t.Protection, err = r.ReadUint8(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read road_team[%d].protection: %v", ErrInvalidPayload, i, err)
+		}
+		if t.StartTime, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read road_team[%d].start_time: %v", ErrInvalidPayload, i, err)
+		}
+		if t.ArrivalTime, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read road_team[%d].arrival_time: %v", ErrInvalidPayload, i, err)
+		}
+		if t.Distance, err = r.ReadInt16(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read road_team[%d].distance: %v", ErrInvalidPayload, i, err)
+		}
+		if t.ProtectPlayerID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read road_team[%d].protect_player_id: %v", ErrInvalidPayload, i, err)
+		}
+		if t.SequenceID, err = r.ReadInt8(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read road_team[%d].sequence_id: %v", ErrInvalidPayload, i, err)
+		}
+		if t.IsDeedsSo, err = r.ReadInt8(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read road_team[%d].is_deeds_so: %v", ErrInvalidPayload, i, err)
+		}
+		res.Teams = append(res.Teams, t)
+	}
+
+	if res.ProtectPlayerID, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read road protect_player_id: %v", ErrInvalidPayload, err)
+	}
+	if res.CanRobTimes, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read road can_rob_times: %v", ErrInvalidPayload, err)
+	}
+	if res.CanProtectTimes, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read road can_protect_times: %v", ErrInvalidPayload, err)
+	}
+	if res.CanTakeBibleTimes, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read road can_take_bible_times: %v", ErrInvalidPayload, err)
+	}
+	if res.QuicklyTimes, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read road quickly_times: %v", ErrInvalidPayload, err)
+	}
+	if res.Bless, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read road bless: %v", ErrInvalidPayload, err)
+	}
+	if res.Type, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read road type: %v", ErrInvalidPayload, err)
+	}
+	if res.Time, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read road time: %v", ErrInvalidPayload, err)
+	}
+
+	lastRobCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read last rob count: %v", ErrInvalidPayload, err)
+	}
+	res.LastRobs = make([]StTakeBibleCrossLastRob, 0, lastRobCount)
+	for i := 0; i < int(lastRobCount); i++ {
+		var l StTakeBibleCrossLastRob
+		if l.SequenceID, err = r.ReadInt8(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read last_rob[%d].sequence_id: %v", ErrInvalidPayload, i, err)
+		}
+		if l.RemainRecaptureTime, err = r.ReadInt16(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read last_rob[%d].remain_recapture_time: %v", ErrInvalidPayload, i, err)
+		}
+		if l.LastRobNickname, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read last_rob[%d].last_rob_nickname: %v", ErrInvalidPayload, i, err)
+		}
+		if l.LastRobStageName, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read last_rob[%d].last_rob_stage_name: %v", ErrInvalidPayload, i, err)
+		}
+		if l.LastRobServerName, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read last_rob[%d].last_rob_server_name: %v", ErrInvalidPayload, i, err)
+		}
+		if l.RobRoleID, err = r.ReadInt16(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read last_rob[%d].rob_role_id: %v", ErrInvalidPayload, i, err)
+		}
+		res.LastRobs = append(res.LastRobs, l)
+	}
+
+	if res.Buff, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read road buff: %v", ErrInvalidPayload, err)
+	}
+
+	return res, nil
+}
+
+// ParseStTakeBibleCrossPlayerInfoResult 解析仙界取经路上目标队伍详情回包 (0x00720009)。
+func ParseStTakeBibleCrossPlayerInfoResult(payload []byte) (*StTakeBibleCrossPlayerInfo, error) {
+	r := NewReader(payload)
+	res := &StTakeBibleCrossPlayerInfo{}
+
+	var err error
+	if res.PlayerID, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.player_id: %v", ErrInvalidPayload, err)
+	}
+	if res.NickName, err = r.ReadString(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.nick_name: %v", ErrInvalidPayload, err)
+	}
+	if res.StageName, err = r.ReadString(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.stage_name: %v", ErrInvalidPayload, err)
+	}
+	if res.ServerName, err = r.ReadString(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.server_name: %v", ErrInvalidPayload, err)
+	}
+	if res.Level, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.level: %v", ErrInvalidPayload, err)
+	}
+	if res.BeRobTimes, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.be_rob_times: %v", ErrInvalidPayload, err)
+	}
+	if res.TotalCanRobTimes, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.total_can_rob_times: %v", ErrInvalidPayload, err)
+	}
+	if res.ProtectNickname, err = r.ReadString(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.protect_nickname: %v", ErrInvalidPayload, err)
+	}
+	if res.RobCoin, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.rob_coin: %v", ErrInvalidPayload, err)
+	}
+	if res.RobFame, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.rob_fame: %v", ErrInvalidPayload, err)
+	}
+	if res.RobStExp, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.rob_st_exp: %v", ErrInvalidPayload, err)
+	}
+	if res.AwardCoin, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.award_coin: %v", ErrInvalidPayload, err)
+	}
+	if res.AwardFame, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.award_fame: %v", ErrInvalidPayload, err)
+	}
+	if res.AwardStExp, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.award_st_exp: %v", ErrInvalidPayload, err)
+	}
+	if res.IsRobbed, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.is_robbed: %v", ErrInvalidPayload, err)
+	}
+	if res.ProtectTime, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.protect_time: %v", ErrInvalidPayload, err)
+	}
+	if res.NPCLevel, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.npc_level: %v", ErrInvalidPayload, err)
+	}
+	if res.RobExpe, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.rob_expe: %v", ErrInvalidPayload, err)
+	}
+	if res.AwardExpe, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.award_expe: %v", ErrInvalidPayload, err)
+	}
+	if res.SequenceID, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read player_info.sequence_id: %v", ErrInvalidPayload, err)
+	}
+	return res, nil
+}
+
+// ParseStTakeBibleCrossRobResult 解析仙界取经打劫回包 (0x0072000B) 的前缀字段。
+//
+// 回包完整结构在战报编号之后仍包含战报数据，业务侧通常无需消费；
+// 这里只读取结果码、目标信息与奖励，避免解析大段战报造成不必要的耦合。
+func ParseStTakeBibleCrossRobResult(payload []byte) (*StTakeBibleCrossRobResult, error) {
+	r := NewReader(payload)
+	res := &StTakeBibleCrossRobResult{}
+
+	msg, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read rob msg: %v", ErrInvalidPayload, err)
+	}
+	res.Msg = msg
+	// 部分节点在失败时只回传结果码，不再携带战报与奖励字段。
+	if r.Remaining() == 0 {
+		return res, nil
+	}
+
+	refCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read rob stage_server count: %v", ErrInvalidPayload, err)
+	}
+	res.StageServer = make([]StTakeBibleCrossPlayerRef, 0, refCount)
+	for i := 0; i < int(refCount); i++ {
+		var ref StTakeBibleCrossPlayerRef
+		if ref.PlayerID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read rob stage_server[%d].player_id: %v", ErrInvalidPayload, i, err)
+		}
+		if ref.NickName, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read rob stage_server[%d].nick_name: %v", ErrInvalidPayload, i, err)
+		}
+		if ref.StageName, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read rob stage_server[%d].stage_name: %v", ErrInvalidPayload, i, err)
+		}
+		if ref.ServerName, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read rob stage_server[%d].server_name: %v", ErrInvalidPayload, i, err)
+		}
+		res.StageServer = append(res.StageServer, ref)
+	}
+	// 官方客户端以 stageServer[1] 作为被劫队伍展示信息；仅 1 条时降级取首条。
+	if len(res.StageServer) > 1 {
+		ref := res.StageServer[1]
+		res.TargetPlayerID, res.TargetNickName = ref.PlayerID, ref.NickName
+		res.TargetStageName, res.TargetServerName = ref.StageName, ref.ServerName
+	} else if len(res.StageServer) == 1 {
+		ref := res.StageServer[0]
+		res.TargetPlayerID, res.TargetNickName = ref.PlayerID, ref.NickName
+		res.TargetStageName, res.TargetServerName = ref.StageName, ref.ServerName
+	}
+	if res.RobCoin, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read rob coin: %v", ErrInvalidPayload, err)
+	}
+	if res.RobFame, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read rob fame: %v", ErrInvalidPayload, err)
+	}
+	if res.RobStExp, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read rob st_exp: %v", ErrInvalidPayload, err)
+	}
+	if res.WarReportID, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read rob war_report_id: %v", ErrInvalidPayload, err)
+	}
+
+	return res, nil
+}
+
+// ParseStTakeBibleCrossRobCDResult 解析仙界取经打劫冷却回包 (0x00720010)。
+func ParseStTakeBibleCrossRobCDResult(payload []byte) (*StTakeBibleCrossRobCD, error) {
+	r := NewReader(payload)
+	res := &StTakeBibleCrossRobCD{}
+
+	var err error
+	if res.CDSeconds, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read rob cd_seconds: %v", ErrInvalidPayload, err)
+	}
+	if res.ClearIngot, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read rob clear_ingot: %v", ErrInvalidPayload, err)
+	}
+	return res, nil
+}
+
+// ParseStTakeBibleCrossRecentRobResult 解析仙界取经最近被劫玩家列表回包 (0x00720013)。
+//
+// 线格式：Short count, count × Int player_id。
+func ParseStTakeBibleCrossRecentRobResult(payload []byte) ([]int32, error) {
+	r := NewReader(payload)
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read recent_rob count: %v", ErrInvalidPayload, err)
+	}
+	players := make([]int32, 0, count)
+	for i := 0; i < int(count); i++ {
+		playerID, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read recent_rob[%d].player_id: %v", ErrInvalidPayload, i, err)
+		}
+		players = append(players, playerID)
+	}
+	return players, nil
 }

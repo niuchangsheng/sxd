@@ -17,10 +17,16 @@ func TestStTakeBibleCross_ActionIDs(t *testing.T) {
 		want uint32
 	}{
 		{protocol.ActionIDStTakeBibleCrossOpen, 0x00720000},
+		{protocol.ActionIDStTakeBibleCrossClose, 0x00720001},
 		{protocol.ActionIDStTakeBibleCrossGetInfo, 0x00720002},
+		{protocol.ActionIDStTakeBibleCrossGetPlayer, 0x00720009},
 		{protocol.ActionIDStTakeBibleCrossRefresh, 0x00720008},
 		{protocol.ActionIDStTakeBibleCrossStart, 0x0072000A},
+		{protocol.ActionIDStTakeBibleCrossRob, 0x0072000B},
 		{protocol.ActionIDStTakeBibleCrossUpdateData, 0x0072000F},
+		{protocol.ActionIDStTakeBibleCrossGetRobCD, 0x00720010},
+		{protocol.ActionIDStTakeBibleCrossGetRecentRobPlayer, 0x00720013},
+		{protocol.ActionIDStTakeBibleCrossBuyRobTimes, 0x00720016},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
@@ -177,5 +183,215 @@ func TestStTakeBibleCrossProtectionName(t *testing.T) {
 	}
 	if protocol.StTakeBibleCrossProtectionName(0) != "未知使者" {
 		t.Errorf("unexpected name for unknown protection")
+	}
+}
+
+func TestBuildStTakeBibleCrossRobPacket(t *testing.T) {
+	pkt := protocol.BuildStTakeBibleCrossRobPacket(12345, 2)
+	if pkt.ActionID != protocol.ActionIDStTakeBibleCrossRob {
+		t.Fatalf("unexpected action id: 0x%08X", pkt.ActionID)
+	}
+	want := []byte{0x00, 0x00, 0x30, 0x39, 0x02}
+	if got := pkt.Payload; string(got) != string(want) {
+		t.Errorf("unexpected rob payload: got % X want % X", got, want)
+	}
+
+	playerPkt := protocol.BuildStTakeBibleCrossGetPlayerPacket(12345, 180, 1, 2)
+	if playerPkt.ActionID != protocol.ActionIDStTakeBibleCrossGetPlayer {
+		t.Fatalf("unexpected get player action id: 0x%08X", playerPkt.ActionID)
+	}
+	wantPlayer := []byte{0x00, 0x00, 0x30, 0x39, 0x00, 0xb4, 0x01, 0x02}
+	if got := playerPkt.Payload; string(got) != string(wantPlayer) {
+		t.Errorf("unexpected get player payload: got % X want % X", got, wantPlayer)
+	}
+}
+
+func TestParseStTakeBibleCrossRoadResult(t *testing.T) {
+	w := protocol.NewWriter()
+	// 2 支持护送队伍
+	w.WriteUint16(2)
+	w.WriteInt32(1001)
+	w.WriteUint8(protocol.StTakeBibleCrossProtectionTangSeng)
+	w.WriteInt32(1700000000)
+	w.WriteInt32(1700003600)
+	w.WriteInt16(80)
+	w.WriteInt32(2001)
+	w.WriteInt8(1)
+	w.WriteInt8(0)
+	w.WriteInt32(1002)
+	w.WriteUint8(protocol.StTakeBibleCrossProtectionBaiLongMa)
+	w.WriteInt32(1700000100)
+	w.WriteInt32(1700000400)
+	w.WriteInt16(10)
+	w.WriteInt32(0)
+	w.WriteInt8(2)
+	w.WriteInt8(1)
+	// 路况尾部字段
+	w.WriteInt32(2001) // protectPlayerID
+	w.WriteInt16(3)    // canRobTimes
+	w.WriteInt8(2)     // canProtectTimes
+	w.WriteInt8(1)     // canTakeBibleTimes
+	w.WriteInt8(1)     // quicklyTimes
+	w.WriteInt8(4)     // bless
+	w.WriteUint8(8)    // type
+	w.WriteInt32(1700000000)
+	// 1 条被劫记录
+	w.WriteUint16(1)
+	w.WriteInt8(1)
+	w.WriteInt16(120)
+	w.WriteString("劫匪甲")
+	w.WriteString("求败")
+	w.WriteString("fengwanyx_s1")
+	w.WriteInt16(3001)
+	w.WriteInt8(2) // buff
+
+	road, err := protocol.ParseStTakeBibleCrossRoadResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseStTakeBibleCrossRoadResult failed: %v", err)
+	}
+	if len(road.Teams) != 2 {
+		t.Fatalf("unexpected team count: %d", len(road.Teams))
+	}
+	if road.Teams[0].PlayerID != 1001 || road.Teams[0].Protection != protocol.StTakeBibleCrossProtectionTangSeng ||
+		road.Teams[0].ProtectPlayerID != 2001 || road.Teams[0].SequenceID != 1 {
+		t.Errorf("unexpected first team: %+v", road.Teams[0])
+	}
+	if road.Teams[1].PlayerID != 1002 || road.Teams[1].Distance != 10 || road.Teams[1].IsDeedsSo != 1 {
+		t.Errorf("unexpected second team: %+v", road.Teams[1])
+	}
+	if road.CanRobTimes != 3 || road.CanTakeBibleTimes != 1 || road.Type != 8 || road.Buff != 2 {
+		t.Errorf("unexpected road counters: %+v", road)
+	}
+	if len(road.LastRobs) != 1 || road.LastRobs[0].LastRobNickname != "劫匪甲" ||
+		road.LastRobs[0].RemainRecaptureTime != 120 || road.LastRobs[0].RobRoleID != 3001 {
+		t.Errorf("unexpected last rob record: %+v", road.LastRobs)
+	}
+}
+
+func TestParseStTakeBibleCrossPlayerInfoResult(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteInt32(1001)
+	w.WriteString("曹植始")
+	w.WriteString("求败")
+	w.WriteString("fengwanyx_s1")
+	w.WriteInt16(180)
+	w.WriteInt8(1) // beRobTimes
+	w.WriteInt8(3) // totalCanRobTimes
+	w.WriteString("护航者")
+	w.WriteInt32(500000)
+	w.WriteInt16(120)
+	w.WriteInt16(80)
+	w.WriteInt32(2000000)
+	w.WriteInt16(200)
+	w.WriteInt16(100)
+	w.WriteInt8(0)   // isRobbed
+	w.WriteInt16(0)  // protectTime
+	w.WriteInt8(15)  // npcLevel
+	w.WriteInt16(30) // robExpe
+	w.WriteInt16(60) // awardExpe
+	w.WriteInt8(2)   // sequenceID
+
+	info, err := protocol.ParseStTakeBibleCrossPlayerInfoResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseStTakeBibleCrossPlayerInfoResult failed: %v", err)
+	}
+	if info.PlayerID != 1001 || info.NickName != "曹植始" || info.StageName != "求败" ||
+		info.ServerName != "fengwanyx_s1" {
+		t.Errorf("unexpected identity: %+v", info)
+	}
+	if info.Level != 180 || info.BeRobTimes != 1 || info.TotalCanRobTimes != 3 ||
+		info.RobCoin != 500000 || info.RobFame != 120 || info.RobStExp != 80 {
+		t.Errorf("unexpected combat fields: %+v", info)
+	}
+	if info.IsRobbed != 0 || info.ProtectTime != 0 || info.SequenceID != 2 {
+		t.Errorf("unexpected state fields: %+v", info)
+	}
+}
+
+func TestParseStTakeBibleCrossRobResult(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteUint8(protocol.StTakeBibleCrossMsgSuccess)
+	// stageServer 为带 Uint16 计数的列表，官方客户端取第 2 条作为被劫队伍。
+	w.WriteUint16(2)
+	w.WriteInt32(999)
+	w.WriteString("自己")
+	w.WriteString("求败")
+	w.WriteString("fengwanyx_s1")
+	w.WriteInt32(1001)
+	w.WriteString("曹植始")
+	w.WriteString("求败")
+	w.WriteString("fengwanyx_s1")
+	w.WriteInt32(500000)
+	w.WriteInt16(120)
+	w.WriteInt16(80)
+	w.WriteInt32(88001)
+
+	result, err := protocol.ParseStTakeBibleCrossRobResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseStTakeBibleCrossRobResult failed: %v", err)
+	}
+	if len(result.StageServer) != 2 {
+		t.Fatalf("unexpected stage server count: %d", len(result.StageServer))
+	}
+	if result.Msg != protocol.StTakeBibleCrossMsgSuccess || result.TargetPlayerID != 1001 ||
+		result.TargetNickName != "曹植始" || result.RobCoin != 500000 ||
+		result.RobFame != 120 || result.RobStExp != 80 || result.WarReportID != 88001 {
+		t.Errorf("unexpected rob result: %+v", result)
+	}
+
+	// 失败回包可能只含结果码。
+	w2 := protocol.NewWriter()
+	w2.WriteUint8(protocol.StTakeBibleCrossMsgHaveCDTime)
+	result, err = protocol.ParseStTakeBibleCrossRobResult(w2.Bytes())
+	if err != nil {
+		t.Fatalf("ParseStTakeBibleCrossRobResult (msg only) failed: %v", err)
+	}
+	if result.Msg != protocol.StTakeBibleCrossMsgHaveCDTime {
+		t.Errorf("unexpected msg-only rob result: %+v", result)
+	}
+}
+
+func TestParseStTakeBibleCrossRobCDResult(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteInt16(45)
+	w.WriteInt16(20)
+
+	cd, err := protocol.ParseStTakeBibleCrossRobCDResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseStTakeBibleCrossRobCDResult failed: %v", err)
+	}
+	if cd.CDSeconds != 45 || cd.ClearIngot != 20 {
+		t.Errorf("unexpected rob cd: %+v", cd)
+	}
+}
+
+func TestParseStTakeBibleCrossRecentRobResult(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteUint16(2)
+	w.WriteInt32(1001)
+	w.WriteInt32(1002)
+
+	players, err := protocol.ParseStTakeBibleCrossRecentRobResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseStTakeBibleCrossRecentRobResult failed: %v", err)
+	}
+	if len(players) != 2 || players[0] != 1001 || players[1] != 1002 {
+		t.Errorf("unexpected recent rob players: %v", players)
+	}
+}
+
+func TestStTakeBibleCrossRobMsgName(t *testing.T) {
+	cases := map[uint8]string{
+		protocol.StTakeBibleCrossMsgSuccess:           "打劫成功",
+		protocol.StTakeBibleCrossMsgFullRobTimes:      "今日打劫次数已满",
+		protocol.StTakeBibleCrossMsgHaveCDTime:        "打劫冷却中",
+		protocol.StTakeBibleCrossMsgInvalidSequenceID: "队伍序列号无效",
+		protocol.StTakeBibleCrossMsgBeRobAll:          "目标队伍已被抢光",
+		protocol.StTakeBibleCrossMsgRerob:             "已经打劫过该队伍",
+	}
+	for msg, want := range cases {
+		if got := protocol.StTakeBibleCrossRobMsgName(msg); got != want {
+			t.Errorf("msg %d: got %q want %q", msg, got, want)
+		}
 	}
 }
