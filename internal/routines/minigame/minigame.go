@@ -23,9 +23,9 @@ import (
 )
 
 // maxLuckyStarRolls 单次调度的最大投掷轮数，防止服务端异常未扣减次数时死循环。
-const maxLuckyStarRolls = 100
+const maxLuckyStarRolls = 10
 
-// NewLuckyStarRoutine 构造帮派吉星高照扔骰子任务。
+// NewFactionLuckyStarRoutine 构造帮派吉星高照扔骰子任务。
 //
 // 协议对齐 2026 客户端 Mod_Faction_Base:
 //   - Action 45 faction_roll_cake_info 查询战绩与剩余次数
