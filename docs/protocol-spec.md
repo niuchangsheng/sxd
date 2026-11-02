@@ -392,3 +392,54 @@ Int, String, String, String, Int, UByte, UByte,
 「邮箱一键收取」由 `one_key_get_award (6)` 完成；官方客户端在邮箱面板打开后
 触发，因此机器人侧先调用 `get_email_info (0)` 建立 `PrevAct` 链，再以
 `0x01590000` 作为 `prevAct` 发送 `0x01590006`。
+
+### 4.10 Module 214 (0x00D6): 仙界竞技场 (`Mod_StArena_Base`)
+
+协议描述符采自官方客户端 `Main.swf` 的 `com.protocols.Mod_StArena_Base`。
+该模块仅在 Mod 94 登录的仙界跨服连接（`DataBase.SOCKETSERVERTOWN`）上可用，
+主服网关不会响应；因此自动化任务需先完成 Mod 96 → 94 → 95 的三段式跨服登录。
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00D60000` | `open_st_arena` | 空 | 面板状态，见下 |
+| 1 | `0x00D60001` | `refresh_player_list` | 空 | `UByte result, [challengeList], Int reduceRefreshTime` |
+| 2 | `0x00D60002` | `challenge` | `Int stPlayerID, Int integral` | `UByte result, warResult, ...` |
+| 4 | `0x00D60004` | `close_st_arena` | 空 | 空 |
+| 5 | `0x00D60005` | `exploit_shop_item_list` | 空 | `[UByte good_id, Short good_count]` |
+| 6 | `0x00D60006` | `buy_exploit_shop_item` | `UByte good_id, Short count` | `UByte result` |
+| 10 | `0x00D6000A` | `get_player_war_report` | `Int reportID` | 完整战报 |
+| 11 | `0x00D6000B` | `get_race_list` | 空 | 杯赛对阵与下注信息 |
+| 12 | `0x00D6000C` | `get_player_race_step_bet` | 空 | `[ [UByte step, Int playerID, String nick, Byte result] ]` |
+| 13 | `0x00D6000D` | `bet_player_race_step_bet` | `UByte step, [Int playerID]` | `UByte result` |
+| 14 | `0x00D6000E` | `bet_top_player` | `Int playerID` | `UByte result` |
+| 15 | `0x00D6000F` | `get_race_step` | 空 | `UByte step, [UByte, Int] timeList, Int cupRaceTimeStep` |
+| 16 | `0x00D60010` | `get_war_result_list` | `Int idA, Int idB, UByte mod` | 战斗记录 |
+| 17 | `0x00D60011` | `get_race_standings` | 空 | 杯赛排名 |
+| 18 | `0x00D60012` | `st_arena_cup_winner` | 空 | `String stage, String server, String winner` |
+| 19 | `0x00D60013` | `have_st_arena_cup_race_report` | 空 | `Byte` |
+
+`open_st_arena (0)` 回包线格式：
+
+```
+Int32 integral, Int16 reduceChallengeCount, Int32 awardFeats,
+Int32 awardGetTime, Int32 reduceRefreshTime,
+Uint16 challengeCount, challengeCount × [
+    Int32 stPlayerID, Int32 integral, Int32 roleID, Int16 level ],
+Uint16 reportCount, reportCount × [
+    Int32 reportID, UByte isRead, Int32 attackID, String attackName,
+    Int32 defenseID, String defenseName, Int32 winID, Int32 integral,
+    String version, Int32 time, UByte isBack ],
+Uint16 rankCount, rankCount × [
+    Int32 stPlayerID, String nickName, String stageName,
+    String serverName, Int32 integral, Int32 feats ]
+```
+
+- `reduceChallengeCount` 为本次操作后的**剩余挑战次数**；
+  `reduceRefreshTime` 为剩余**刷新对手次数**（并非冷却秒数）。
+- 对手记录不下发战力，自动化以 `level` 为主、`integral` 为辅选择最弱目标。
+- `challenge (2)` 的两个请求字段均取自当前 `challengeList` 记录，用于服务端校验
+  目标是否仍在列表内；只读取回包首字节 `result` 即可判断是否结算成功，
+  随后重新调用 `open_st_arena` 获取最新积分、剩余次数与战报。
+- 结果码：`SUCCESS=13`、`CD_TIME=14`、`NOT_ENOUGH_CHALLENGE_TIMES=15`、
+  `NOT_IN_LIST=16`、`FAIL=17`。跨服自动化遇到 CD_TIME/次数不足时直接结束本轮，
+  不主动消耗元宝清冷却或购买次数。

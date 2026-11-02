@@ -213,3 +213,230 @@ func TestArenaCooldownDuration(t *testing.T) {
 		t.Errorf("超长冷却应截断为 %v, 实际 %v", arenaCooldownMaxWait, d)
 	}
 }
+
+// TestSelectStArenaOpponent 验证仙界竞技场软柿子算法：等级优先，其次积分，最后玩家 ID。
+func TestSelectStArenaOpponent(t *testing.T) {
+	if _, ok := SelectStArenaOpponent(nil); ok {
+		t.Fatal("空对手列表应返回 false")
+	}
+	opponents := []protocol.StArenaOpponent{
+		{StPlayerID: 30, Level: 80, Integral: 1000},
+		{StPlayerID: 20, Level: 60, Integral: 1500},
+		{StPlayerID: 10, Level: 60, Integral: 1200},
+		{StPlayerID: 40, Level: 60, Integral: 1200}, // 与 10 同等级同积分，玩家 ID 更大
+	}
+	got, ok := SelectStArenaOpponent(opponents)
+	if !ok {
+		t.Fatal("期望选出对手")
+	}
+	if got.StPlayerID != 10 || got.Level != 60 || got.Integral != 1200 {
+		t.Errorf("软柿子算法选择错误: %+v", got)
+	}
+}
+
+// TestCelestialArenaRoutine_ConsumesAllChallenges 验证仙界竞技场会建立跨服连接，
+// 循环消耗全部挑战次数，并在每场后重新打开面板确认状态。
+func TestCelestialArenaRoutine_ConsumesAllChallenges(t *testing.T) {
+	const (
+		playerID        int32 = 65536
+		initialTimes    int16 = 3
+		mainServerAddr        = "main-st-arena"
+		crossServerAddr       = "cross-st-arena:9000"
+	)
+
+	mainServer, mainClient := net.Pipe()
+	crossServer, crossClient := net.Pipe()
+	defer mainServer.Close()
+	defer crossServer.Close()
+
+	var challengeCalls atomic.Int32
+
+	// ---- 主服：完成四步初始化并下发 Mod 96 跨服凭据 ----
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(mainServer)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerLogin:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerLogin, []byte{
+					0x00, 0x00, 0x00, 0x00, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x00, 0x10, 0x85, 0x01,
+				}))
+			case protocol.ActionIDPlayerInitStep1:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerInitStep1,
+					[]byte{0x00, 0x00, 0x13, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x13, 0x0f, 0x00, 0x00, 0x13, 0x12}))
+			case protocol.ActionIDPlayerInitStep2:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00}))
+			case protocol.ActionIDPlayerInitStep3:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerInitStep3, make([]byte, 8)))
+			case protocol.ActionIDPlayerGetInfo:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerGetInfo, []byte{
+					0x00, 0x09, 0xe6, 0xa2, 0xa6, 0xe4, 0xb8, 0x80, 0xe5, 0x9c, 0xba,
+					0x00, 0x00, 0x01, 0x2c,
+					0x00, 0x00, 0x9a, 0x37,
+					0x00, 0x00, 0x00, 0x08, 0x6f, 0x93, 0xac, 0xf8,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0a, 0xd1,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0f, 0x99,
+					0x00, 0x00, 0x01, 0x2c,
+				}))
+			case protocol.ActionIDStcLoginGetInfo:
+				w := protocol.NewWriter()
+				w.WriteString("cross-st-arena")
+				w.WriteUint16(9000)
+				w.WriteString("s703")
+				w.WriteInt32(1793549704)
+				w.WriteString("mock_pass_code")
+				w.WriteString("XianJie")
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDStcLoginGetInfo, w.Bytes()))
+			case protocol.ActionHeartbeat:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+			}
+		}
+	}()
+
+	// ---- 仙界跨服节点：Mod 94 登录 / Mod 95 进城 / Mod 214 竞技场 ----
+	remain := initialTimes
+	integral := int32(1000)
+	reportID := int32(0)
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(crossServer)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDStLogin:
+				w := protocol.NewWriter()
+				w.WriteUint8(0)
+				w.WriteInt32(playerID)
+				w.WriteInt32(1793549704)
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStLogin, w.Bytes()))
+
+			case protocol.ActionIDStTownEnter:
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStTownEnter, []byte{protocol.StTownResultSuccess}))
+
+			case protocol.ActionIDStArenaOpen:
+				w := protocol.NewWriter()
+				w.WriteInt32(integral) // integral
+				w.WriteInt16(remain)   // reduce_challenge_count
+				w.WriteInt32(0)        // award_feats
+				w.WriteInt32(0)        // award_get_time
+				w.WriteInt32(1)        // reduce_refresh_time
+				w.WriteUint16(2)       // challengeList
+				w.WriteInt32(7001)
+				w.WriteInt32(1200)
+				w.WriteInt32(101)
+				w.WriteInt16(60)
+				w.WriteInt32(7002)
+				w.WriteInt32(1800)
+				w.WriteInt32(102)
+				w.WriteInt16(90)
+				// reportList: 仅保存最近一场
+				if reportID > 0 {
+					w.WriteUint16(1)
+					w.WriteInt32(reportID)
+					w.WriteUint8(0)
+					w.WriteInt32(playerID)
+					w.WriteString("测试角色")
+					w.WriteInt32(7001)
+					w.WriteString("对手")
+					w.WriteInt32(playerID)
+					w.WriteInt32(25)
+					w.WriteString("v1")
+					w.WriteInt32(int32(time.Now().Unix()))
+					w.WriteUint8(0)
+				} else {
+					w.WriteUint16(0)
+				}
+				w.WriteUint16(0) // integralRankList
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStArenaOpen, w.Bytes()))
+
+			case protocol.ActionIDStArenaChallenge:
+				req, pErr := protocol.ParseStArenaChallengeRequest(pkt.Payload)
+				if pErr != nil {
+					return
+				}
+				if req.StPlayerID != 7001 && req.StPlayerID != 7002 {
+					t.Errorf("挑战目标不在对手列表: %+v", req)
+					return
+				}
+				challengeCalls.Add(1)
+				remain--
+				integral += 25
+				reportID = challengeCalls.Load()
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStArenaChallenge,
+					[]byte{protocol.StArenaResultSuccess}))
+
+			case protocol.ActionIDStArenaRefreshPlayerList:
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.StArenaResultSuccess)
+				w.WriteUint16(2)
+				w.WriteInt32(7001)
+				w.WriteInt32(1200)
+				w.WriteInt32(101)
+				w.WriteInt16(60)
+				w.WriteInt32(7002)
+				w.WriteInt32(1800)
+				w.WriteInt32(102)
+				w.WriteInt16(90)
+				w.WriteInt32(1)
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStArenaRefreshPlayerList, w.Bytes()))
+
+			case protocol.ActionHeartbeat:
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_st_arena",
+		RoleName:   "仙界竞技场测试",
+		ServerAddr: mainServerAddr,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr == mainServerAddr {
+				return mainClient, nil
+			}
+			if addr == crossServerAddr {
+				return crossClient, nil
+			}
+			return nil, &net.AddrError{Err: "unexpected address", Addr: addr}
+		},
+	})
+	session.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.PlayerID = playerID
+		ps.OriginNickName = "测试角色.s703"
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("会话未进入激活态: %s", session.State())
+	}
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer execCancel()
+	if err := NewCelestialArenaRoutine().Execute(execCtx, session, nil); err != nil {
+		t.Fatalf("仙界竞技场例程执行失败: %v", err)
+	}
+	if got := challengeCalls.Load(); got != int32(initialTimes) {
+		t.Errorf("期望发起 %d 次挑战直至次数用尽, 实际 %d 次", initialTimes, got)
+	}
+	if remain != 0 {
+		t.Errorf("期望挑战次数归零, 实际 %d", remain)
+	}
+	if integral != 1000+25*int32(initialTimes) {
+		t.Errorf("期望积分按胜场累计, 实际 %d", integral)
+	}
+
+	session.Close()
+	mainClient.Close()
+	crossClient.Close()
+}

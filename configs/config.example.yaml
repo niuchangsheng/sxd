@@ -33,7 +33,8 @@ scheduler:
     faction_lucky_wheel: true   # 帮派转盘 (消耗青龙令自动抽奖)
     travel_event: true          # 仙旅奇缘 (世界地图每日事件，按收益权重自动抉择分支)
     pilgrimage: true            # 取经/护送/打劫
-    arena: true                 # 竞技场
+    arena: true                 # 本服竞技场
+    celestial_arena: true       # 仙界竞技场 (跨服积分赛自动挑战，不消耗元宝)
 
     # 18项抓包与日常核心功能
     online_gift: true           # 1. 领取奖励 (在线礼包等)

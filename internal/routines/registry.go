@@ -69,7 +69,7 @@ func GetAllDefinitions() []RoutineDefinition {
 
 		// 5. PVP 领域 (6)
 		{ID: "arena", Name: "本服竞技场", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "本服竞技场自动寻找适宜对手挑战与排名领奖", DefaultOn: false},
-		{ID: "celestial_arena", Name: "仙界竞技场", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "仙界竞技场自动连胜挑战与赛事竞猜下注", DefaultOn: false},
+		{ID: "celestial_arena", Name: "仙界竞技场", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "仙界竞技场积分赛自动挑战与最弱对手筛选", DefaultOn: false},
 		{ID: "gods_and_demons", Name: "神魔大战阵营", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "神魔大战阵营对抗定时参战", DefaultOn: false},
 		{ID: "caravan_hijack", Name: "阵营劫镖拦截", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "阵营商队巡查截击与声望抢夺", DefaultOn: false},
 		{ID: "world_boss", Name: "世界Boss争夺", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "擎天木/赤炎兽Boss定时准点参战与伤害鼓舞", DefaultOn: false},
