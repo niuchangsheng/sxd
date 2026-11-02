@@ -285,6 +285,7 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 					)
 					return nil
 				}
+				cooldownRetries = 0
 
 				// 战报胜负位: winPlayerID 等于本方 PlayerID 即为胜利
 				win := chRes.IsWin(playerID)
