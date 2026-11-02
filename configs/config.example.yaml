@@ -32,10 +32,10 @@ scheduler:
     faction_blessing: true      # 帮派祭神 (每日免费上香获取祝福/声望/神像灵气)
     faction_lucky_wheel: true   # 帮派转盘 (消耗青龙令自动抽奖)
     travel_event: true          # 仙旅奇缘 (世界地图每日事件，按收益权重自动抉择分支)
-    pilgrimage: true            # 取经/护送
+    pilgrimage: true            # 取经/护送/打劫
     arena: true                 # 竞技场
 
-    # 16项抓包与日常核心功能
+    # 18项抓包与日常核心功能
     online_gift: true           # 1. 领取奖励 (在线礼包等)
     jieyuan_box: true           # 2. 结缘宝箱 (除了传说，其他都开)
     daily_quest: true           # 3. 领取日活跃奖励
@@ -52,6 +52,8 @@ scheduler:
     wufa_field: true            # 14. 悟法领域
     master_practice: true       # 15. 宗师修行
     treasure_house: true        # 16. 天帝宝库
+    find_immortal: true         # 17. 喜从天降 (画龙鱼，只走免费流程)
+    five_blessings: true        # 18. 五福临门 (每日免费祈福，只走免费流程)
 
   # 副本与推图自动化策略配置 (包含推图与扫荡两大核心功能)
   dungeon:
@@ -103,3 +105,7 @@ scheduler:
   # 个人吉星高照自动化策略配置 (仅使用免费逆天改运次数，永不消耗元宝)
   lucky_star:
     max_rerolls_per_roll: 9     # 每次投掷最大逆天改运次数 (客户端上限 9)
+
+  # 喜从天降与五福临门均无策略参数，也不会消耗元宝：
+  # - 喜从天降：查询龙鱼令数量后串行召唤并领奖，直到龙鱼令耗尽；
+  # - 五福临门：只使用每日免费祈福次数并立即领奖。

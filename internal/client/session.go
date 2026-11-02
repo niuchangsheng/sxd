@@ -2034,6 +2034,25 @@ func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
 }
 
 // runMockGameServer 为离线调试、沙箱环境与单元测试提供轻量级虚拟游戏协议服务端。
+// writeFindImmortalAwardMock 写入一份随品阶增长的龙鱼奖励 mock 数据。
+func writeFindImmortalAwardMock(w *protocol.Writer, state int8) {
+	w.WriteInt16(int16(100 + int(state)*20))  // fame
+	w.WriteInt32(int32(500 + int(state)*100)) // skill
+	w.WriteInt16(int16(10 + int(state)*5))    // cultivation
+	w.WriteInt16(int16(5 + int(state)*2))     // state_point
+	w.WriteInt16(1)                           // yu_pai
+}
+
+// writeFiveBlessingsAwardsMock 写入一张固定的五福奖励卡 mock 数据。
+func writeFiveBlessingsAwardsMock(w *protocol.Writer) {
+	w.WriteUint16(1)
+	w.WriteInt8(1)    // image_id
+	w.WriteInt32(100) // skill
+	w.WriteInt16(50)  // xian_ling
+	w.WriteInt16(5)   // star_soul
+	w.WriteInt16(1)   // jewel_scrap
+}
+
 func runMockGameServer(conn net.Conn) {
 	defer conn.Close()
 
@@ -2060,6 +2079,15 @@ func runMockGameServer(conn net.Conn) {
 	luckyStarPending := false
 	luckyStarDice := []int8{1, 2, 3, 4, 4, 4}
 	luckyStarType := int8(3)
+
+	// 喜从天降 mock 状态: 持有 2 枚龙鱼令、1 次五福祈福机会
+	findImmortalTokens := int16(2)
+	findImmortalState := int8(0)
+	findImmortalCultivation := int32(1000)
+	findImmortalTotalCount := int32(5)
+	findBlessNumber := int16(1)
+	findBlessStage := int8(0)
+	findBlessTotalCount := int8(0)
 
 	for {
 		pkt, err := protocol.ReadPacket(conn)
@@ -2334,6 +2362,127 @@ func runMockGameServer(conn net.Conn) {
 			w.WriteInt8(6).WriteInt8(6).WriteInt8(6)
 			w.WriteInt8(rollCakeRemain)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFactionRollCake, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalGetXunXianLing:
+			// 响应喜从天降龙鱼令数量
+			w := protocol.NewWriter()
+			w.WriteInt16(findImmortalTokens)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalGetXunXianLing, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalExchangeXianLing:
+			// 响应声望兑换龙鱼令: 读取 int32 兑换数量并成功入账
+			if req, err := protocol.NewReader(pkt.Payload).ReadInt32(); err == nil && req > 0 {
+				findImmortalTokens += int16(req)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalExchangeXianLing, []byte{protocol.FindImmortalResultSuccess}))
+
+		case protocol.ActionIDFindImmortalOpen:
+			// 响应喜从天降面板
+			w := protocol.NewWriter()
+			w.WriteInt16(findImmortalTokens) // can_buy_number
+			writeFindImmortalAwardMock(w, findImmortalState)
+			w.WriteInt8(findImmortalState)
+			w.WriteInt8(1) // god_id
+			w.WriteInt32(findImmortalCultivation)
+			w.WriteInt32(findImmortalTotalCount)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalOpen, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalStart:
+			// 响应召唤龙鱼: 消耗一枚龙鱼令
+			result := protocol.FindImmortalResultSuccess
+			if findImmortalTokens > 0 {
+				findImmortalTokens--
+				findImmortalState = 0
+			} else {
+				result = protocol.FindImmortalResultHaveNotNumber
+			}
+			w := protocol.NewWriter()
+			w.WriteUint8(result)
+			writeFindImmortalAwardMock(w, findImmortalState)
+			w.WriteInt8(findImmortalState)
+			w.WriteInt8(1) // god_id
+			w.WriteInt16(findImmortalTokens)
+			w.WriteInt32(findImmortalTotalCount)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalStart, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalGoad:
+			// 响应吹龙鱼: 品阶 +1，最高 5 阶
+			if findImmortalState < 5 {
+				findImmortalState++
+			}
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.FindImmortalResultSuccess)
+			writeFindImmortalAwardMock(w, findImmortalState)
+			w.WriteInt8(findImmortalState)
+			w.WriteInt8(1) // god_id
+			w.WriteInt32(findImmortalTotalCount)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalGoad, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalPickupAward:
+			// 响应收取龙鱼奖励: 累计仙令增加并重置品阶
+			findImmortalCultivation += 100
+			findImmortalTotalCount++
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.FindImmortalResultSuccess)
+			writeFindImmortalAwardMock(w, findImmortalState)
+			w.WriteInt32(findImmortalCultivation)
+			findImmortalState = 0
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalPickupAward, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalIsFiveBlessingsOpen:
+			// 响应五福祈福活动已开启
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalIsFiveBlessingsOpen, []byte{protocol.FindImmortalResultYes}))
+
+		case protocol.ActionIDFindImmortalOpenFiveBlessings:
+			// 响应五福祈福面板
+			w := protocol.NewWriter()
+			w.WriteInt16(findBlessNumber)
+			w.WriteInt8(findBlessStage)
+			w.WriteUint16(0) // 暂无待领取奖励
+			w.WriteInt8(findBlessTotalCount)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalOpenFiveBlessings, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalStartBless:
+			// 响应开始五福祈福: 消耗一次次数并翻出一张奖励卡
+			result := protocol.FindImmortalResultSuccess
+			if findBlessNumber > 0 {
+				findBlessNumber--
+				findBlessStage = 1
+				findBlessTotalCount++
+			} else {
+				result = protocol.FindImmortalResultNotEnoughNumber
+			}
+			w := protocol.NewWriter()
+			w.WriteUint8(result)
+			w.WriteInt8(findBlessStage)
+			writeFiveBlessingsAwardsMock(w)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalStartBless, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalContinueBless:
+			// 响应继续五福祈福: 阶段 +1
+			if findBlessStage < 5 {
+				findBlessStage++
+			}
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.FindImmortalResultSuccess)
+			w.WriteInt8(findBlessStage)
+			writeFiveBlessingsAwardsMock(w)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalContinueBless, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalEndBless:
+			// 响应结束祈福并领取奖励
+			findBlessStage = 0
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.FindImmortalResultSuccess)
+			w.WriteUint16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalEndBless, w.Bytes()))
+
+		case protocol.ActionIDFindImmortalChangeLucky:
+			// 响应一键变金
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.FindImmortalResultSuccess)
+			w.WriteUint16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalChangeLucky, w.Bytes()))
 
 		case protocol.ActionIDRollCakeGetState:
 			// 响应个人吉星高照未领取记录

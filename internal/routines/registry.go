@@ -40,7 +40,7 @@ func GetAllDefinitions() []RoutineDefinition {
 
 		// 2. Farming 领域 (6)
 		{ID: "herb_garden", Name: "药园种植巡检", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动药园播种、施肥、除草与成熟采摘", DefaultOn: true},
-		{ID: "pilgrimage", Name: "西天取经护送", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "西天取经召唤唐僧/白龙马并协助好友护送拦截", DefaultOn: false},
+		{ID: "pilgrimage", Name: "西天取经护送", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "自动刷新使者启程护送，并打劫取经路上其他玩家队伍", DefaultOn: false},
 		{ID: "crystal_mine", Name: "仙界矿山开采", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动仙界矿石开采与防抢夺守护", DefaultOn: false},
 		{ID: "spirit_pool", Name: "异兽与淬炼池", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "异兽自动喂养与灵宝淬炼池提炼", DefaultOn: false},
 		{ID: "gourd_realm", Name: "壶中界炼丹合成", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "壶中界灵气转化、丹药炼制与材料融合", DefaultOn: false},
@@ -90,6 +90,8 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "wufa_field", Name: "悟法领域感悟", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "悟法领域属性加成与秘籍感悟抽卡", DefaultOn: false},
 		{ID: "master_practice", Name: "宗师修行试炼", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "宗师修行心法挑战与境界突破", DefaultOn: false},
 		{ID: "treasure_house", Name: "天帝宝库自选", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "天帝宝库自选大奖与钥匙抽奖开启", DefaultOn: false},
+		{ID: "find_immortal", Name: "喜从天降画龙鱼", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "喜从天降免费龙鱼令召唤与奖励领取 (不消耗元宝)", DefaultOn: false},
+		{ID: "five_blessings", Name: "五福临门", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "五福临门每日免费祈福与奖励领取 (不消耗元宝)", DefaultOn: false},
 	}
 }
 
@@ -305,6 +307,10 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 			cfg.DictRepo = f.dictRepo
 		}
 		return minigame.NewTreasureHouseRoutine(cfg)
+	case "find_immortal":
+		return minigame.NewFindImmortalRoutine()
+	case "five_blessings":
+		return minigame.NewFiveBlessingsRoutine()
 
 	default:
 		return nil

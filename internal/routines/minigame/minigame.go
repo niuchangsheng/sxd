@@ -1,4 +1,4 @@
-// Package minigame 提供吉星高照、仙旅奇缘答题、刮刮卡、钓鱼等益智趣味活动。
+// Package minigame 提供吉星高照、仙旅奇缘答题、喜从天降、刮刮卡、钓鱼等益智趣味活动。
 //
 // @author Ateng
 // @since 2026-10-08
@@ -1039,4 +1039,389 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			return nil
 		},
 	)
+}
+
+// --------------------------------------------------------------------------------
+// 喜从天降 / 五福临门 (Mod_FindImmortal_Base, Module 68)
+// --------------------------------------------------------------------------------
+
+// NewFindImmortalRoutine 构造喜从天降画龙鱼任务 (只走免费流程，不消耗元宝)。
+//
+// 协议对齐 2026 客户端 Mod_FindImmortal_Base:
+//   - Action 1 open_find_immortal 查询面板
+//   - Action 2 start_find_immortal 召唤龙鱼 (消耗龙鱼令)
+//   - Action 4 pickup_award 收取龙鱼奖励
+//   - Action 5 get_xun_xian_ling_number 查询龙鱼令
+//
+// 流程固定为：查询龙鱼令数量 -> 串行召唤并领取 -> 直到龙鱼令耗尽。
+// 不调用 goad (吹龙鱼) 与 exchange_xian_ling (声望兑换)，因此不会消耗任何资源。
+func NewFindImmortalRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"find_immortal",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行益智任务: 喜从天降画龙鱼 (免费流程)", "role_id", session.RoleID())
+
+			executeFindImmortalFish(ctx, session, jitter)
+			return nil
+		},
+	)
+}
+
+// executeFindImmortalFish 执行龙鱼召唤与免费奖励领取闭环。
+func executeFindImmortalFish(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) {
+	prevAct := session.LastActionID()
+
+	// 1. 查询面板，优先处理上次未收取的龙鱼 (Mod 68, Act 1)
+	panelPkt := protocol.BuildFindImmortalOpenPacket(prevAct)
+	pCtx, pCancel := context.WithTimeout(ctx, 3*time.Second)
+	pResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDFindImmortalOpen)
+	pCancel()
+	if pErr != nil || pResp == nil {
+		slog.Warn("查询喜从天降面板未收到回包", "role_id", session.RoleID(), "err", pErr)
+		return
+	}
+	panel, err := protocol.ParseFindImmortalPanelResult(pResp.Payload)
+	if err != nil {
+		slog.Warn("解析喜从天降面板回包失败", "role_id", session.RoleID(), "err", err)
+		return
+	}
+	prevAct = protocol.ActionIDFindImmortalOpen
+
+	// 2. 查询龙鱼令数量 (Mod 68, Act 5)。
+	// 查询失败时不再回退使用面板 can_buy_number，避免把“可购买次数”误判为免费龙鱼令而触发消费。
+	tokens, ok := queryFindImmortalTokens(ctx, session, prevAct)
+	if ok {
+		prevAct = protocol.ActionIDFindImmortalGetXunXianLing
+	} else {
+		tokens = 0
+		slog.Warn("喜从天降龙鱼令查询失败，本轮回跳过召唤新龙鱼", "role_id", session.RoleID())
+	}
+
+	slog.Info("喜从天降当前面板",
+		"role_id", session.RoleID(),
+		"can_buy_number", panel.CanBuyNumber,
+		"state", panel.State,
+		"god_id", panel.GodID,
+		"total_count", panel.TotalCount,
+		"xun_xian_ling", tokens,
+	)
+
+	// 优先收掉上次遗留的龙鱼；只领取当前奖励，不吹龙鱼。
+	if panel.State > 0 {
+		pickupFindImmortal(ctx, session, &prevAct)
+	}
+	if tokens <= 0 {
+		slog.Info("喜从天降龙鱼令不足，跳过召唤新龙鱼", "role_id", session.RoleID())
+		return
+	}
+
+	// 3. 串行召唤并直接领取龙鱼奖励，直到龙鱼令耗尽 (Mod 68, Act 2 + Act 4)
+	initialTokens := tokens
+	rounds := 0
+	for tokens > 0 {
+		if err := ctx.Err(); err != nil {
+			slog.Info("喜从天降任务已取消，提前退出", "role_id", session.RoleID(), "err", err)
+			return
+		}
+		if jitter != nil {
+			_ = jitter.Wait(ctx)
+		}
+
+		beforeTokens := tokens
+		startPkt := protocol.BuildFindImmortalStartPacket(prevAct)
+		sCtx, sCancel := context.WithTimeout(ctx, 3*time.Second)
+		sResp, sErr := session.Call(sCtx, startPkt, protocol.ActionIDFindImmortalStart)
+		sCancel()
+		if sErr != nil || sResp == nil {
+			slog.Warn("喜从天降召唤龙鱼未收到回包", "role_id", session.RoleID(), "err", sErr)
+			return
+		}
+		start, err := protocol.ParseFindImmortalStartResult(sResp.Payload)
+		if err != nil {
+			slog.Warn("解析喜从天降召唤龙鱼回包失败", "role_id", session.RoleID(), "err", err)
+			return
+		}
+		prevAct = protocol.ActionIDFindImmortalStart
+		if start.Result != protocol.FindImmortalResultSuccess {
+			logFindImmortalResult("召唤龙鱼", session.RoleID(), start.Result)
+			break
+		}
+
+		slog.Info("喜从天降召唤龙鱼成功",
+			"role_id", session.RoleID(),
+			"state", start.State,
+			"god_id", start.GodID,
+			"remain_number", start.RemainNumber,
+			"total_count", start.TotalCount,
+		)
+		if start.RemainNumber >= beforeTokens {
+			slog.Warn("喜从天降龙鱼令未按预期递减，熔断退出",
+				"role_id", session.RoleID(),
+				"before_xun_xian_ling", beforeTokens,
+				"after_xun_xian_ling", start.RemainNumber,
+			)
+			tokens = start.RemainNumber
+			break
+		}
+		tokens = start.RemainNumber
+		rounds++
+
+		pickupFindImmortal(ctx, session, &prevAct)
+	}
+
+	slog.Info("喜从天降画龙鱼流程完成",
+		"role_id", session.RoleID(),
+		"initial_xun_xian_ling", initialTokens,
+		"rounds", rounds,
+		"remain_xun_xian_ling", tokens,
+	)
+}
+
+// pickupFindImmortal 收取当前龙鱼奖励 (Mod 68, Act 4)，不调用 any 元宝消耗接口。
+func pickupFindImmortal(ctx context.Context, session *client.RoleSession, prevAct *uint32) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	pickupPkt := protocol.BuildFindImmortalPickupAwardPacket(*prevAct)
+	kCtx, kCancel := context.WithTimeout(ctx, 3*time.Second)
+	kResp, kErr := session.Call(kCtx, pickupPkt, protocol.ActionIDFindImmortalPickupAward)
+	kCancel()
+	*prevAct = protocol.ActionIDFindImmortalPickupAward
+	if kErr != nil || kResp == nil {
+		slog.Warn("喜从天降收取龙鱼奖励未收到回包", "role_id", session.RoleID(), "err", kErr)
+		return
+	}
+	pickup, err := protocol.ParseFindImmortalPickupResult(kResp.Payload)
+	if err != nil {
+		slog.Warn("解析喜从天降收取龙鱼奖励回包失败", "role_id", session.RoleID(), "err", err)
+		return
+	}
+	if pickup.Result != protocol.FindImmortalResultSuccess {
+		logFindImmortalResult("收取龙鱼奖励", session.RoleID(), pickup.Result)
+		return
+	}
+	slog.Info("喜从天降收取龙鱼奖励成功",
+		"role_id", session.RoleID(),
+		"award_fame", pickup.Award.Fame,
+		"award_skill", pickup.Award.Skill,
+		"award_cultivation", pickup.Award.Cultivation,
+		"award_state_point", pickup.Award.StatePoint,
+		"award_yu_pai", pickup.Award.YuPai,
+		"cultivation", pickup.Cultivation,
+	)
+}
+
+// queryFindImmortalTokens 查询龙鱼令数量 (Mod 68, Act 5)。
+func queryFindImmortalTokens(ctx context.Context, session *client.RoleSession, prevAct uint32) (int16, bool) {
+	pkt := protocol.BuildFindImmortalGetXunXianLingPacket(prevAct)
+	qCtx, qCancel := context.WithTimeout(ctx, 2*time.Second)
+	resp, err := session.Call(qCtx, pkt, protocol.ActionIDFindImmortalGetXunXianLing)
+	qCancel()
+	if err != nil || resp == nil {
+		slog.Warn("查询喜从天降龙鱼令数量未收到回包", "role_id", session.RoleID(), "err", err)
+		return 0, false
+	}
+	tokens, err := protocol.ParseFindImmortalXunXianLingResult(resp.Payload)
+	if err != nil {
+		slog.Warn("解析喜从天降龙鱼令数量回包失败", "role_id", session.RoleID(), "err", err)
+		return 0, false
+	}
+	return tokens, true
+}
+
+// NewFiveBlessingsRoutine 构造独立的「五福临门」免费祈福任务。
+//
+// 五福临门 (客户端 FindImmortal2) 与喜从天降共用 Module 68，但属于两个独立活动。
+// 本任务硬编码只使用每日免费祈福次数：start_bless -> end_bless，
+// 不调用 continue_bless (继续翻牌) 与 five_blessings_change_lucky (一键变金)，
+// 因此不会消耗任何元宝。
+func NewFiveBlessingsRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"five_blessings",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行益智任务: 五福临门免费祈福", "role_id", session.RoleID())
+
+			executeFiveBlessings(ctx, session, jitter)
+			return nil
+		},
+	)
+}
+
+// executeFiveBlessings 执行五福临门免费次数与既有奖励领取闭环。
+func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) {
+	prevAct := session.LastActionID()
+
+	// 1. 检查五福临门是否开启 (Mod 68, Act 14)
+	flagPkt := protocol.BuildFindImmortalIsFiveBlessingsOpenPacket(prevAct)
+	fCtx, fCancel := context.WithTimeout(ctx, 2*time.Second)
+	fResp, fErr := session.Call(fCtx, flagPkt, protocol.ActionIDFindImmortalIsFiveBlessingsOpen)
+	fCancel()
+	if fErr != nil || fResp == nil {
+		slog.Debug("查询五福临门开启状态未收到回包", "role_id", session.RoleID(), "err", fErr)
+		return
+	}
+	open, err := protocol.ParseFiveBlessingsOpenFlagResult(fResp.Payload)
+	if err != nil {
+		slog.Warn("解析五福临门开启状态回包失败", "role_id", session.RoleID(), "err", err)
+		return
+	}
+	if !open {
+		slog.Debug("五福临门活动未开启", "role_id", session.RoleID())
+		return
+	}
+	prevAct = protocol.ActionIDFindImmortalIsFiveBlessingsOpen
+
+	// 2. 查询祈福面板 (Mod 68, Act 10)
+	infoPkt := protocol.BuildFindImmortalOpenFiveBlessingsPacket(prevAct)
+	iCtx, iCancel := context.WithTimeout(ctx, 3*time.Second)
+	iResp, iErr := session.Call(iCtx, infoPkt, protocol.ActionIDFindImmortalOpenFiveBlessings)
+	iCancel()
+	if iErr != nil || iResp == nil {
+		slog.Warn("查询五福临门面板未收到回包", "role_id", session.RoleID(), "err", iErr)
+		return
+	}
+	info, err := protocol.ParseFiveBlessingsInfoResult(iResp.Payload)
+	if err != nil {
+		slog.Warn("解析五福临门面板回包失败", "role_id", session.RoleID(), "err", err)
+		return
+	}
+	prevAct = protocol.ActionIDFindImmortalOpenFiveBlessings
+	slog.Info("五福临门当前面板",
+		"role_id", session.RoleID(),
+		"bless_number", info.BlessNumber,
+		"stage", info.Stage,
+		"pending_awards", len(info.Awards),
+		"total_count", info.TotalCount,
+	)
+
+	// 先领取上次遗留的祈福奖励。
+	if len(info.Awards) > 0 {
+		endFiveBlessings(ctx, session, prevAct, "领取遗留祈福奖励")
+		prevAct = protocol.ActionIDFindImmortalEndBless
+	}
+	if info.BlessNumber <= 0 {
+		slog.Info("五福临门祈福次数已用尽", "role_id", session.RoleID())
+		return
+	}
+
+	// 3. 逐次开始祈福并立即领取 (Mod 68, Act 11 + Act 13)
+	rounds := 0
+	for info.BlessNumber > 0 {
+		if err := ctx.Err(); err != nil {
+			slog.Info("五福临门任务已取消，提前退出", "role_id", session.RoleID(), "err", err)
+			return
+		}
+		if jitter != nil {
+			_ = jitter.Wait(ctx)
+		}
+
+		startPkt := protocol.BuildFindImmortalStartBlessPacket(prevAct)
+		sCtx, sCancel := context.WithTimeout(ctx, 3*time.Second)
+		sResp, sErr := session.Call(sCtx, startPkt, protocol.ActionIDFindImmortalStartBless)
+		sCancel()
+		prevAct = protocol.ActionIDFindImmortalStartBless
+		if sErr != nil || sResp == nil {
+			slog.Warn("五福临门开始祈福请求未收到回包", "role_id", session.RoleID(), "err", sErr)
+			return
+		}
+		start, err := protocol.ParseFiveBlessingsActionResult(sResp.Payload)
+		if err != nil {
+			slog.Warn("解析五福临门开始祈福回包失败", "role_id", session.RoleID(), "err", err)
+			return
+		}
+		if start.Result != protocol.FindImmortalResultSuccess {
+			if start.Result == protocol.FindImmortalResultAlreadyStart {
+				// 服务端仍有一次未结算的祈福，先结束并领取，交由下一轮调度继续。
+				endFiveBlessings(ctx, session, prevAct, "结算未完成祈福")
+			} else {
+				logFindImmortalResult("开始五福临门祈福", session.RoleID(), start.Result)
+			}
+			return
+		}
+		info.BlessNumber--
+		rounds++
+
+		endFiveBlessings(ctx, session, prevAct, "领取五福临门奖励")
+		prevAct = protocol.ActionIDFindImmortalEndBless
+
+		if info.BlessNumber > 0 && jitter != nil {
+			_ = jitter.Wait(ctx)
+		}
+	}
+
+	slog.Info("五福临门流程完成", "role_id", session.RoleID(), "rounds", rounds, "remain_bless_number", info.BlessNumber)
+}
+
+// endFiveBlessings 结束当前祈福并领取奖励 (Mod 68, Act 13)。
+func endFiveBlessings(ctx context.Context, session *client.RoleSession, prevAct uint32, scene string) {
+	endPkt := protocol.BuildFindImmortalEndBlessPacket(prevAct)
+	eCtx, eCancel := context.WithTimeout(ctx, 3*time.Second)
+	eResp, eErr := session.Call(eCtx, endPkt, protocol.ActionIDFindImmortalEndBless)
+	eCancel()
+	if eErr != nil || eResp == nil {
+		slog.Warn("五福临门结束祈福请求未收到回包", "role_id", session.RoleID(), "scene", scene, "err", eErr)
+		return
+	}
+	end, err := protocol.ParseFiveBlessingsEndResult(eResp.Payload)
+	if err != nil {
+		slog.Warn("解析五福临门结束祈福回包失败", "role_id", session.RoleID(), "scene", scene, "err", err)
+		return
+	}
+	if end.Result != protocol.FindImmortalResultSuccess {
+		logFindImmortalResult(scene, session.RoleID(), end.Result)
+		return
+	}
+	slog.Info("五福临门奖励领取成功",
+		"role_id", session.RoleID(),
+		"scene", scene,
+		"award_count", len(end.Awards),
+	)
+}
+
+// logFindImmortalResult 输出喜从天降/五福临门业务失败码的中文语义。
+func logFindImmortalResult(scene string, roleID string, result uint8) {
+	switch result {
+	case protocol.FindImmortalResultNotEnoughCoin:
+		slog.Info("喜从天降铜钱不足", "role_id", roleID, "scene", scene, "result", result)
+	case protocol.FindImmortalResultHaveNotNumber:
+		slog.Info("喜从天降龙鱼不足", "role_id", roleID, "scene", scene, "result", result)
+	case protocol.FindImmortalResultGoading:
+		slog.Info("喜从天降正在吹龙鱼", "role_id", roleID, "scene", scene, "result", result)
+	case protocol.FindImmortalResultNotEnoughIngot:
+		slog.Info("喜从天降元宝不足", "role_id", roleID, "scene", scene, "result", result)
+	case protocol.FindImmortalResultFailed:
+		slog.Info("喜从天降吹龙鱼失败", "role_id", roleID, "scene", scene, "result", result)
+	case protocol.FindImmortalResultHaveNotFind:
+		slog.Info("喜从天降还未寻找到仙迹", "role_id", roleID, "scene", scene, "result", result)
+	case protocol.FindImmortalResultNoEnoughFame:
+		slog.Info("喜从天降声望不足", "role_id", roleID, "scene", scene, "result", result)
+	case protocol.FindImmortalResultNotEnoughNumber:
+		slog.Info("五福临门祈福次数不足", "role_id", roleID, "scene", scene, "result", result)
+	case protocol.FindImmortalResultAlreadyStart:
+		slog.Info("五福临门已经开始祈福", "role_id", roleID, "scene", scene, "result", result)
+	case protocol.FindImmortalResultNotStart:
+		slog.Info("五福临门尚未开始祈福", "role_id", roleID, "scene", scene, "result", result)
+	default:
+		slog.Warn("喜从天降/五福临门操作被服务端拒绝", "role_id", roleID, "scene", scene, "result", result)
+	}
 }

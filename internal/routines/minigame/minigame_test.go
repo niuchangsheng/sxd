@@ -205,3 +205,77 @@ func TestTreasureHouse_InteractiveSelection(t *testing.T) {
 		}
 	})
 }
+
+func TestFindImmortalRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_find_immortal",
+		RoleName:   "测试喜从天降角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	t.Run("画龙鱼免费闭环", func(t *testing.T) {
+		routine := NewFindImmortalRoutine()
+		if routine.Name() != "find_immortal" {
+			t.Fatalf("任务名称不匹配: %s", routine.Name())
+		}
+		if dr, ok := routine.(scheduler.DetailedRoutine); ok {
+			if dr.Domain() != "minigame" {
+				t.Fatalf("领域不匹配: %s", dr.Domain())
+			}
+		}
+		if err := routine.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("喜从天降画龙鱼执行失败: %v", err)
+		}
+		if got := session.LastActionID(); got != protocol.ActionIDFindImmortalPickupAward {
+			t.Errorf("期望最后动作为收取龙鱼奖励 0x%08X, 实际 0x%08X", protocol.ActionIDFindImmortalPickupAward, got)
+		}
+	})
+
+	t.Run("空会话防御", func(t *testing.T) {
+		routine := NewFindImmortalRoutine()
+		if err := routine.Execute(context.Background(), nil, nil); err != client.ErrNotConnected {
+			t.Errorf("期望 ErrNotConnected, 实际: %v", err)
+		}
+	})
+}
+
+func TestFiveBlessingsRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_five_blessings",
+		RoleName:   "测试五福临门角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	routine := NewFiveBlessingsRoutine()
+	if routine.Name() != "five_blessings" {
+		t.Fatalf("任务名称不匹配: %s", routine.Name())
+	}
+	if dr, ok := routine.(scheduler.DetailedRoutine); ok {
+		if dr.Domain() != "minigame" {
+			t.Fatalf("领域不匹配: %s", dr.Domain())
+		}
+	}
+
+	if err := routine.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("五福临门免费祈福执行失败: %v", err)
+	}
+	if got := session.LastActionID(); got != protocol.ActionIDFindImmortalEndBless {
+		t.Errorf("期望最后动作为结束祈福领奖 0x%08X, 实际 0x%08X", protocol.ActionIDFindImmortalEndBless, got)
+	}
+
+	if err := routine.Execute(context.Background(), nil, nil); err != client.ErrNotConnected {
+		t.Errorf("空会话期望 ErrNotConnected, 实际: %v", err)
+	}
+}

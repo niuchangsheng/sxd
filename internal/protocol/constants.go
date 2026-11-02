@@ -17,6 +17,7 @@ const (
 	ModuleTower           uint16 = 32  // 六道轮回塔模块 (Mod_Tower_Base)
 	ModuleSealSoul        uint16 = 34  // 封灵与灵件模块 (Mod_SealSoul_Base)
 	ModuleHeroMission     uint16 = 35  // 英雄副本模块 (Mod_HeroMission_Base)
+	ModuleFindImmortal    uint16 = 68  // 喜从天降画龙鱼与五福祈福模块 (Mod_FindImmortal_Base)
 	ModuleStLogin         uint16 = 94  // 跨服/网页登录模块 (Mod_StLogin_Base)
 	ModuleNewPractice     uint16 = 584 // 新版城镇练功打坐模块 (Mod_NewPractice_Base)
 )
@@ -314,4 +315,47 @@ const (
 	TownPracticeStateOn       uint8 = 35 // ON_PRACTICE: 城镇中正在打坐练功
 	TownPracticeStateOff      uint8 = 36 // OFF_PRACTICE: 未在打坐状态
 	TownPracticeStateFinished uint8 = 37 // FINISHED_PRACTICE: 练功已完成结算
+)
+
+// 喜从天降 (Mod_FindImmortal_Base, Module 68) 协议编号与业务结果码。
+const (
+	// ActionIDFindImmortalOpen 查询喜从天降面板 (Module 68, Action 1 -> 0x00440001, open_find_immortal)
+	ActionIDFindImmortalOpen uint32 = 0x00440001
+	// ActionIDFindImmortalStart 召唤/购买龙鱼 (Module 68, Action 2 -> 0x00440002, start_find_immortal)
+	ActionIDFindImmortalStart uint32 = 0x00440002
+	// ActionIDFindImmortalGoad 吹龙鱼提升品阶 (Module 68, Action 3 -> 0x00440003, goad)
+	ActionIDFindImmortalGoad uint32 = 0x00440003
+	// ActionIDFindImmortalPickupAward 收取龙鱼奖励 (Module 68, Action 4 -> 0x00440004, pickup_award)
+	ActionIDFindImmortalPickupAward uint32 = 0x00440004
+	// ActionIDFindImmortalGetXunXianLing 查询龙鱼令数量 (Module 68, Action 5 -> 0x00440005, get_xun_xian_ling_number)
+	ActionIDFindImmortalGetXunXianLing uint32 = 0x00440005
+	// ActionIDFindImmortalExchangeXianLing 消耗声望兑换龙鱼令 (Module 68, Action 6 -> 0x00440006, exchange_xian_ling)
+	ActionIDFindImmortalExchangeXianLing uint32 = 0x00440006
+	// ActionIDFindImmortalOpenFiveBlessings 查询五福祈福面板 (Module 68, Action 10 -> 0x0044000A, open_five_blessings)
+	ActionIDFindImmortalOpenFiveBlessings uint32 = 0x0044000A
+	// ActionIDFindImmortalStartBless 开始一次五福祈福 (Module 68, Action 11 -> 0x0044000B, start_bless)
+	ActionIDFindImmortalStartBless uint32 = 0x0044000B
+	// ActionIDFindImmortalContinueBless 继续翻牌/提升祈福品阶 (Module 68, Action 12 -> 0x0044000C, continue_bless)
+	ActionIDFindImmortalContinueBless uint32 = 0x0044000C
+	// ActionIDFindImmortalEndBless 结束祈福并领取奖励 (Module 68, Action 13 -> 0x0044000D, end_bless)
+	ActionIDFindImmortalEndBless uint32 = 0x0044000D
+	// ActionIDFindImmortalIsFiveBlessingsOpen 查询五福祈福活动是否开启 (Module 68, Action 14 -> 0x0044000E, is_five_blessings_open)
+	ActionIDFindImmortalIsFiveBlessingsOpen uint32 = 0x0044000E
+	// ActionIDFindImmortalChangeLucky 一键将所有祈福奖励变为金色品质 (Module 68, Action 15 -> 0x0044000F, five_blessings_change_lucky)
+	ActionIDFindImmortalChangeLucky uint32 = 0x0044000F
+
+	// 喜从天降业务结果码 (Mod_FindImmortal_Base 类常量)
+	FindImmortalResultSuccess         uint8 = 0  // SUCCESS: 操作成功
+	FindImmortalResultNotEnoughCoin   uint8 = 1  // NOT_ENOUGH_COIN: 铜钱不足
+	FindImmortalResultHaveNotNumber   uint8 = 2  // HAVE_NOT_NUMBER: 龙鱼不足
+	FindImmortalResultGoading         uint8 = 3  // GOADING: 正在吹龙鱼
+	FindImmortalResultNotEnoughIngot  uint8 = 4  // NOT_ENOUGH_INGOT: 元宝不足
+	FindImmortalResultFailed          uint8 = 5  // FAILED: 吹龙鱼失败
+	FindImmortalResultHaveNotFind     uint8 = 6  // HAVE_NOT_FIND: 还未寻找到仙迹
+	FindImmortalResultNoEnoughFame    uint8 = 7  // NO_ENOUGTH_FAME: 声望不足
+	FindImmortalResultNotEnoughNumber uint8 = 8  // NOT_ENOUGH_NUMBER: 祈福次数不足
+	FindImmortalResultAlreadyStart    uint8 = 9  // ALREADY_START: 已经开始祈福
+	FindImmortalResultNotStart        uint8 = 10 // NOT_START: 未开始祈福
+	FindImmortalResultYes             uint8 = 11 // YES: 活动已开启
+	FindImmortalResultNo              uint8 = 12 // NO: 活动未开启
 )

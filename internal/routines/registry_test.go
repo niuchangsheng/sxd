@@ -128,6 +128,8 @@ func TestSubdomains_Instances(t *testing.T) {
 		{minigame.NewWuFaRoutine(), "wufa_field"},
 		{minigame.NewMasterPracticeRoutine(), "master_practice"},
 		{minigame.NewTreasureHouseRoutine(), "treasure_house"},
+		{minigame.NewFindImmortalRoutine(), "find_immortal"},
+		{minigame.NewFiveBlessingsRoutine(), "five_blessings"},
 	}
 
 	for _, tc := range checks {
