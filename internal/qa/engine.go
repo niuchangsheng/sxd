@@ -24,7 +24,7 @@ import (
 type Engine interface {
 	// Match 执行三级漏斗智能问答检索，返回答案、置信度以及是否命中。
 	Match(question string) (answer string, confidence float64, found bool)
-	// MatchFate 根据仙履奇缘故事文本检索题库，并基于收益权重决策最优分支选项 (1 或 2)。
+	// MatchFate 根据仙旅奇缘故事文本检索题库，并基于收益权重决策最优分支选项 (1 或 2)。
 	MatchFate(story string) (bestBranch int, entry *FateEntry, found bool)
 	// Size 返回当前引擎加载的题库去重条数。
 	Size() int
@@ -303,7 +303,7 @@ func (e *memoryEngine) loadFateEntries(entries []FateEntry) {
 	}
 }
 
-// MatchFate 根据仙履奇缘故事文本检索题库，并基于收益权重决策最优分支选项 (1 或 2)。
+// MatchFate 根据仙旅奇缘故事文本检索题库，并基于收益权重决策最优分支选项 (1 或 2)。
 func (e *memoryEngine) MatchFate(story string) (int, *FateEntry, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

@@ -1,4 +1,4 @@
-// Package minigame 提供吉星高照、仙履奇缘答题、刮刮卡、钓鱼等益智趣味活动。
+// Package minigame 提供吉星高照、仙旅奇缘答题、刮刮卡、钓鱼等益智趣味活动。
 //
 // @author Ateng
 // @since 2026-10-11
@@ -21,7 +21,7 @@ import (
 func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 	session := client.NewRoleSession(client.SessionConfig{
 		RoleID:     "role_test_minigame",
-		RoleName:   "测试仙履角色",
+		RoleName:   "测试仙旅角色",
 		ServerAddr: "mock",
 	})
 	if err := session.Start(context.Background()); err != nil {
@@ -36,9 +36,9 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 		t.Fatalf("加载 QA 引擎失败: %v", err)
 	}
 
-	t.Run("仙履奇缘全链路答题闭环", func(t *testing.T) {
-		routine := NewImmortalFantasyRoutine(qaEngine)
-		if routine.Name() != "immortal_fantasy" {
+	t.Run("仙旅奇缘全链路事件抉择闭环", func(t *testing.T) {
+		routine := NewTravelEventRoutine(qaEngine)
+		if routine.Name() != "travel_event" {
 			t.Fatalf("任务名称不匹配: %s", routine.Name())
 		}
 		if dr, ok := routine.(scheduler.DetailedRoutine); ok {
@@ -49,7 +49,11 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 
 		err := routine.Execute(context.Background(), session, nil)
 		if err != nil {
-			t.Fatalf("仙履奇缘例程执行失败: %v", err)
+			t.Fatalf("仙旅奇缘例程执行失败: %v", err)
+		}
+		// Mock 每日 3 次，执行后最后一次动作必须是答案提交
+		if got := session.LastActionID(); got != protocol.ActionIDFateAnswer {
+			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDFateAnswer, got)
 		}
 	})
 
@@ -89,7 +93,7 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 	})
 
 	t.Run("空会话防御", func(t *testing.T) {
-		routine := NewImmortalFantasyRoutine(qaEngine)
+		routine := NewTravelEventRoutine(qaEngine)
 		if err := routine.Execute(context.Background(), nil, nil); err != client.ErrNotConnected {
 			t.Errorf("期望 ErrNotConnected, 实际: %v", err)
 		}

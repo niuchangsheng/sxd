@@ -5,16 +5,19 @@
 package qa
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
 
-// FateEntry 代表仙履奇缘中单条题目的故事与分支收益数据。
+// FateEntry 代表仙旅奇缘中单条题目的故事与分支收益数据。
 type FateEntry struct {
 	Title string `json:"title"`
 	Q1    string `json:"q1"`
@@ -26,7 +29,7 @@ type FateEntry struct {
 }
 
 // ScoreFateReward 计算收益文本的加权分值。
-// 严格对齐原版 01.ini [仙履奇缘] 优先级规则：体力 > 声望 > 阅历 > 铜钱。
+// 严格对齐原版 01.ini [仙旅奇缘] 优先级规则：体力 > 声望 > 阅历 > 铜钱。
 func ScoreFateReward(reward string) int {
 	score := 0
 	if strings.Contains(reward, "体力") {
@@ -59,31 +62,34 @@ func DecideBestBranch(entry *FateEntry) (int, string) {
 	return 2, fmt.Sprintf("分支2收益更优 (选项2: %s [分值:%d] > 选项1: %s [分值:%d])", entry.P2, score2, entry.P1, score1)
 }
 
-// ParseAnswersJSON 从字节流中解析 GBK/UTF-8 编码的仙履奇缘 JSON 数组。
+// ParseAnswersJSON 从字节流中解析 GBK/UTF-8 编码的仙旅奇缘 JSON 数组。
 func ParseAnswersJSON(rawBytes []byte) ([]FateEntry, error) {
-	// 尝试 GBK 转码
-	reader := transform.NewReader(strings.NewReader(string(rawBytes)), simplifiedchinese.GBK.NewDecoder())
-	var decoded []byte
-	buf := make([]byte, len(rawBytes)*2)
-	n, err := reader.Read(buf)
-	if err == nil {
-		decoded = buf[:n]
-	} else {
-		decoded = rawBytes
+	var entries []FateEntry
+
+	// 1. 优先按 UTF-8 直接解析，避免 GBK 解码器误伤已是 UTF-8 的题库。
+	if utf8.Valid(rawBytes) {
+		if err := json.Unmarshal(rawBytes, &entries); err == nil {
+			return entries, nil
+		}
 	}
 
-	var entries []FateEntry
-	if err := json.Unmarshal(decoded, &entries); err != nil {
-		// 若 GBK 失败尝试直接用原始字节解析 (兼容 UTF-8)
-		if uErr := json.Unmarshal(rawBytes, &entries); uErr != nil {
-			return nil, fmt.Errorf("qa: failed to unmarshal answers.txt: %v", err)
+	// 2. GBK 题库需完整流式转码，单次 Read 可能返回 io.ErrShortBuffer 导致整包退化为乱码。
+	decoded, err := io.ReadAll(transform.NewReader(bytes.NewReader(rawBytes), simplifiedchinese.GBK.NewDecoder()))
+	if err == nil {
+		if uErr := json.Unmarshal(decoded, &entries); uErr == nil {
+			return entries, nil
 		}
+	}
+
+	// 3. 最后回退原始字节，兼容编码标记异常的 UTF-8 题库。
+	if err := json.Unmarshal(rawBytes, &entries); err != nil {
+		return nil, fmt.Errorf("qa: failed to unmarshal answers.txt: %v", err)
 	}
 
 	return entries, nil
 }
 
-// LoadAnswersFile 从物理文件加载仙履奇缘题库。
+// LoadAnswersFile 从物理文件加载仙旅奇缘题库。
 func LoadAnswersFile(path string) ([]FateEntry, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

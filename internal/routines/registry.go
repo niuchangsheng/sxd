@@ -78,7 +78,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		// 6. Minigame 领域 (7)
 		{ID: "lucky_star", Name: "吉星高照", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "个人吉星高照摇骰子、免费逆天改运与奖励领取", DefaultOn: false},
 		{ID: "faction_lucky_star", Name: "帮派吉星高照", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "帮派吉星高照扔骰子与高分奖励获取", DefaultOn: false},
-		{ID: "immortal_fantasy", Name: "仙履奇缘智能答题", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "连接万条题库自动毫秒级精准答题", DefaultOn: false},
+		{ID: "travel_event", Name: "仙旅奇缘事件抉择", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动拉取仙旅奇缘事件并依据题库收益权重选择最优分支", DefaultOn: false},
 		{ID: "imperial_exam", Name: "金榜题名会试", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "金榜题名乡试会试殿试自动化智能答题", DefaultOn: false},
 		{ID: "partner_guess", Name: "伙伴猜猜看", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "伙伴特征自动比对竞猜", DefaultOn: false},
 		{ID: "fishing", Name: "自动钓鱼命格", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动水域钓鱼与猎命命格吞噬融合", DefaultOn: false},
@@ -277,8 +277,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewLuckyStarRoutine(f.luckyCfg)
 	case "faction_lucky_star":
 		return minigame.NewFactionLuckyStarRoutine()
-	case "immortal_fantasy":
-		return minigame.NewImmortalFantasyRoutine(f.qaEngine)
+	case "travel_event", "immortal_fantasy":
+		return minigame.NewTravelEventRoutine(f.qaEngine)
 	case "imperial_exam":
 		return minigame.NewImperialExamRoutine(f.qaEngine)
 	case "partner_guess":

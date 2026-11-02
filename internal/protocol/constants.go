@@ -11,7 +11,7 @@ const (
 	ModuleItem            uint16 = 2   // 物品背包模块 (Mod_Item_Base)
 	ModuleMission         uint16 = 4   // 关卡任务模块 (Mod_Mission_Base)
 	ModuleFarm            uint16 = 13  // 药园农场模块 (Mod_Farm_Base)
-	ModuleFate            uint16 = 21  // 仙履奇缘模块 (Mod_Fate_Base)
+	ModuleFate            uint16 = 21  // 仙旅奇缘模块 (Mod_Fate_Base)
 	ModuleMissionPractice uint16 = 25  // 副本挂机扫荡模块 (Mod_MissionPractice_Base)
 	ModuleArena           uint16 = 28  // 竞技场模块 (Mod_Arena_Base)
 	ModuleTower           uint16 = 32  // 六道轮回塔模块 (Mod_Tower_Base)
@@ -114,11 +114,11 @@ const (
 	// ActionIDFarmHarvest 药园收获作物 (Module 13, Action 25 -> 0x000D0019)
 	ActionIDFarmHarvest uint32 = 0x000D0019
 
-	// ActionIDFateGetInfo 查询仙履奇缘状态 (Module 21, Action 0 -> 0x00150000)
+	// ActionIDFateGetInfo 查询仙旅奇缘状态 (Module 21, Action 0 -> 0x00150000)
 	ActionIDFateGetInfo uint32 = 0x00150000
-	// ActionIDFateGetQuestion 获取仙履奇缘题目与选项 (Module 21, Action 1 -> 0x00150001)
+	// ActionIDFateGetQuestion 获取仙旅奇缘题目与选项 (Module 21, Action 1 -> 0x00150001)
 	ActionIDFateGetQuestion uint32 = 0x00150001
-	// ActionIDFateAnswer 仙履奇缘回答提交选项 (Module 21, Action 2 -> 0x00150002)
+	// ActionIDFateAnswer 仙旅奇缘回答提交选项 (Module 21, Action 2 -> 0x00150002)
 	ActionIDFateAnswer uint32 = 0x00150002
 
 	// ActionIDArenaOpenPanel 打开本服竞技场面板 (Module 28, Action 0 -> 0x001C0000)

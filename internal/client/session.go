@@ -2041,6 +2041,10 @@ func runMockGameServer(conn net.Conn) {
 	rollCakeRemain := int8(2)
 	rollCakeTodayScore := int32(0)
 
+	// 仙旅奇缘 mock 状态: 每日 3 次，已参与 0 次
+	fateJoinCount := int32(0)
+	fateTotalCount := int32(3)
+
 	// 帮派祭神 mock 状态: 每日 3 次免费上香机会
 	factionIncenseCount := int32(0)
 	factionIncenseTotal := int32(3)
@@ -2194,30 +2198,43 @@ func runMockGameServer(conn net.Conn) {
 			_ = protocol.WritePacket(conn, resPkt)
 
 		case protocol.ActionIDFateGetInfo:
-			// 响应仙履奇缘状态查询 (剩余 1 次)
+			// 响应仙旅奇缘状态查询
 			resPkt := protocol.BuildFateGetInfoResultPacket(protocol.FateGetInfoResult{
-				RemainingTimes: 1,
-				MaxTimes:       3,
+				JoinCount:  fateJoinCount,
+				TotalCount: fateTotalCount,
 			})
 			_ = protocol.WritePacket(conn, resPkt)
 
 		case protocol.ActionIDFateGetQuestion:
-			// 响应仙履奇缘故事题目 (对齐 answers.txt 真实故事)
+			// 响应仙旅奇缘事件题目 (对齐 answers.txt 真实故事)
 			resPkt := protocol.BuildFateQuestionResultPacket(protocol.FateQuestionResult{
-				QuestionID: 46,
-				Story:      "灵木玉神树，千年产一次凝神汁...",
+				EventID: 26,
+				Story:   "此地出现女娲大神造人剩下的七彩神土，传闻使用神土可创造第三种人类。",
+				Msg:     protocol.FateResultSuccess,
 				Options: []protocol.FateOption{
-					{ChoiceID: 1, Key: "A", Text: "除掉守护灵兽，夺取凝神汁。"},
-					{ChoiceID: 2, Key: "B", Text: "灵兽过于强大，遗憾的放弃。"},
+					{AnswerID: 7, Sign: "A", Text: "创造第三人类，自诩为第三人类始祖。"},
+					{AnswerID: 8, Sign: "B", Text: "遵守天地法则，封印神土，以免人间大乱。"},
 				},
 			})
 			_ = protocol.WritePacket(conn, resPkt)
 
 		case protocol.ActionIDFateAnswer:
-			// 响应仙履奇缘答题结算
-			w := protocol.NewWriter()
-			w.WriteString("获得5体力,50声望！")
-			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFateAnswer, w.Bytes()))
+			// 响应仙旅奇缘答题结算
+			if fateJoinCount < fateTotalCount {
+				fateJoinCount++
+			}
+			resPkt := protocol.BuildFateAnswerResultPacket(protocol.FateAnswerResult{
+				Message: "你获得50声望,30阅历！",
+				Awards: []protocol.FateAward{
+					{Type: protocol.FateAwardFame, Value: 50},
+					{Type: protocol.FateAwardSkill, Value: 30},
+				},
+				Info: protocol.FateGetInfoResult{
+					JoinCount:  fateJoinCount,
+					TotalCount: fateTotalCount,
+				},
+			})
+			_ = protocol.WritePacket(conn, resPkt)
 
 		case protocol.ActionIDFactionGodInfo:
 			// 响应帮派祭神神像信息

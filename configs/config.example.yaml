@@ -31,6 +31,7 @@ scheduler:
     faction_lucky_star: true    # 帮派吉星高照 (帮派成员成绩与排名奖励)
     faction_blessing: true      # 帮派祭神 (每日免费上香获取祝福/声望/神像灵气)
     faction_lucky_wheel: true   # 帮派转盘 (消耗青龙令自动抽奖)
+    travel_event: true          # 仙旅奇缘 (世界地图每日事件，按收益权重自动抉择分支)
     pilgrimage: true            # 取经/护送
     arena: true                 # 竞技场
 

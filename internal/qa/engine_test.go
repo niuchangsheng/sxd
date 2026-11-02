@@ -87,26 +87,31 @@ func TestEngine_Matching(t *testing.T) {
 		}
 	})
 
-	t.Run("仙履奇缘收益权重决策", func(t *testing.T) {
-		// 寻找题目：优先选择体力产出分支
-		story := "灵木玉神树，千年产一次凝神汁"
+	t.Run("仙旅奇缘 GBK 题库加载与精确命中", func(t *testing.T) {
+		// answers.txt 为 GBK 编码 JSON，必须完整转码后命中；否则题库会退化为乱码。
+		story := "此地出现女娲大神造人剩下的七彩神土，传闻使用神土可创造第三种人类。"
 		branch, entry, found := engine.MatchFate(story)
-		if !found {
-			// 若由于 GBK 导致未命中，也可以由单独构造的条目验证决策算法
-			entry = &qa.FateEntry{
-				Title: "灵木玉神树，千年产一次凝神汁",
-				Q1:    "除掉守护灵兽，夺取凝神汁。",
-				Q2:    "灵兽过于强大，遗憾的放弃。",
-				P1:    "50声望,50阅历",
-				P2:    "5体力",
-			}
-			branch, _ = qa.DecideBestBranch(entry)
+		if !found || entry == nil {
+			t.Fatalf("仙旅奇缘题库未命中线上真实故事: %s", story)
 		}
-		if entry != nil {
-			// P2 包含 5体力 (权重 10000)，P1 包含 50声望,50阅历 (权重 1100)，应决策分支 2
-			if branch != 2 {
-				t.Errorf("期望依据体力优先选择分支 2, 实际分支: %d", branch)
-			}
+		if entry.P1 != "50声望,30阅历" || entry.P2 != "10阅历" {
+			t.Errorf("题库条目收益数据异常: p1=%q p2=%q", entry.P1, entry.P2)
+		}
+		// P1 (声望 1000 + 阅历 100) 优于 P2 (阅历 100)，应选择分支 1。
+		if branch != 1 {
+			t.Errorf("期望分支 1, 实际分支: %d", branch)
+		}
+	})
+
+	t.Run("仙旅奇缘体力优先收益权重决策", func(t *testing.T) {
+		// P2 包含 5体力 (权重 10000)，P1 仅 10声望 (权重 1000)，应优先选择体力分支 2。
+		story := "传闻此处出现了一妖艳女子，吸引了众多散仙与她饮酒作乐，夜夜笙歌。"
+		branch, entry, found := engine.MatchFate(story)
+		if !found || entry == nil {
+			t.Fatalf("仙旅奇缘题库未命中线上真实故事: %s", story)
+		}
+		if branch != 2 {
+			t.Errorf("期望依据体力优先选择分支 2, 实际分支: %d", branch)
 		}
 	})
 }

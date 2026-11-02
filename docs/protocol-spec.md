@@ -176,10 +176,21 @@ classDiagram
 - `0x000D0018 (13, 24)`：种植指定作物（参数：土地编号 `SoilID`、种子编号 `SeedID`、伙伴编号 `RoleID`）。
 - `0x000D0019 (13, 25)`：收获成熟作物（参数：土地编号 `SoilID`）。
 
-### 4.3 Module 21 (0x15): 仙履奇缘答题 (`Mod_Fate_Base`)
-- `0x00150000 (21, 0)`：查询仙履奇缘剩余奇遇次数与冷却状态。
-- `0x00150001 (21, 1)`：触发随机奇遇，服务端下发题目文本与 2 个选项。
-- `0x00150002 (21, 2)`：提交选择答案（参数：题目 ID、所选选项 `OptionIndex` 1 或 2）。
+### 4.3 Module 21 (0x15): 仙旅奇缘事件 (`Mod_TravelEvent_Base`)
+> 官方微端类名为 `Mod_TravelEvent_Base`（旧文档误记为 `Mod_Fate_Base`）；社区攻略常写作「仙履奇缘」，游戏内正式名称为「仙旅奇缘」。
+- `0x00150000 (21, 0)` `get_activity_info`：查询今日活动进度。
+  回包线格式：`Int32 joinCount, Int32 totalCount, Int32 cdTimer, Int32 cdIngot`。
+  线上服务端可能在末尾追加扩展字段，官方客户端仅读取前 4 个 Int32。
+- `0x00150001 (21, 1)` `get_event_and_answer`：拉取当前随机事件。
+  回包线格式：`Int32 eventId, String event, Uint16 optionCount,
+  optionCount × (Int32 answerId, String answerSign, String eventAnswer), UByte msg`。
+  业务结果码：`0` 冷却中、`1` 次数已达上限、`2` 成功、`8` 元宝不足。
+- `0x00150002 (21, 2)` `answer_travel_event`：提交分支答案。
+  请求线格式：`Int32 eventId, Int32 answerId`，**严格 8 字节**；追加 PrevAct 会被服务端静默丢弃。
+  回包线格式：`String message, Uint16 awardCount, awardCount × (UByte type, Int32 value),
+  Int32 joinCount, Int32 totalCount, Int32 cdTimer, Int32 cdIngot`。
+  奖励类型：`3` 铜钱、`4` 经验、`5` 声望、`6` 体力、`7` 阅历（值可为负数，例如扣除铜钱）。
+- `0x00150003 (21, 3)` `cancel_cd`：消耗元宝消除事件冷却，回包 `UByte msg`。当前自动化不主动消耗元宝，仅记录冷却时间。
 
 ### 4.4 Module 25 (0x19): 关卡推图与扫荡 (`Mod_MissionPractice_Base`)
 - `0x00190000 (25, 0)`：获取关卡扫荡当前状态与挂机队列。
