@@ -5,6 +5,7 @@ package protocol
 
 const (
 	// 扩展业务模块编号 (Module)
+	ModuleFaction           uint16 = 10  // 帮派/仙盟吉星高照与日常模块 (0x000A)
 	ModuleVipAward          uint16 = 42  // VIP与在线礼包模块 (0x002A)
 	ModuleStGodWelfare      uint16 = 52  // 跨服天神赐福与全服福利模块 (0x0034)
 	ModuleWorshipMarsExt    uint16 = 24  // 拜祭先祖/关公模块 (0x0018)
@@ -218,4 +219,21 @@ const (
 	ActionIDTreasureHouseRefresh uint32 = 0x02520001
 	// ActionIDTreasureHouseDraw 开启天帝宝库抽奖 (Module 594, Action 6 -> 0x02520006)
 	ActionIDTreasureHouseDraw uint32 = 0x02520006
+
+	// ActionIDFactionRollCakeRemainTimes 查询帮派吉星高照今日剩余投掷次数 (Module 10, Action 44 -> 0x000A002C)
+	ActionIDFactionRollCakeRemainTimes uint32 = 0x000A002C
+	// ActionIDFactionRollCakeInfo 查询帮派吉星高照战绩与帮派成员积分 (Module 10, Action 45 -> 0x000A002D)
+	ActionIDFactionRollCakeInfo uint32 = 0x000A002D
+	// ActionIDFactionRollCake 投掷一次吉星高照骰子 (Module 10, Action 46 -> 0x000A002E)
+	ActionIDFactionRollCake uint32 = 0x000A002E
+)
+
+const (
+	// 帮派吉星高照投掷结果码 (对齐 Mod_Faction_Base 常量)
+	// RollCakeResultSuccess 投掷成功
+	RollCakeResultSuccess uint8 = 32
+	// RollCakeResultAwarding 正在结算吉星高照排名奖励
+	RollCakeResultAwarding uint8 = 13
+	// RollCakeResultNoTimes 今日投掷次数已用完
+	RollCakeResultNoTimes uint8 = 72
 )

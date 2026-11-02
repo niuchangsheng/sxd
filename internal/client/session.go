@@ -2036,6 +2036,11 @@ func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
 // runMockGameServer 为离线调试、沙箱环境与单元测试提供轻量级虚拟游戏协议服务端。
 func runMockGameServer(conn net.Conn) {
 	defer conn.Close()
+
+	// 帮派吉星高照 mock 状态: 今日剩余 2 次投掷机会
+	rollCakeRemain := int8(2)
+	rollCakeTodayScore := int32(0)
+
 	for {
 		pkt, err := protocol.ReadPacket(conn)
 		if err != nil {
@@ -2197,6 +2202,41 @@ func runMockGameServer(conn net.Conn) {
 			w := protocol.NewWriter()
 			w.WriteString("获得5体力,50声望！")
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFateAnswer, w.Bytes()))
+
+		case protocol.ActionIDFactionRollCakeInfo:
+			// 响应帮派吉星高照战绩面板
+			w := protocol.NewWriter()
+			w.WriteInt32(980) // 本周最佳成绩
+			w.WriteInt32(rollCakeTodayScore)
+			w.WriteInt8(rollCakeRemain)
+			w.WriteInt32(5000) // 帮派累计成绩
+			w.WriteUint16(1)   // 成员条数
+			w.WriteInt32(2)    // 成员角色编号 (与登录回包 RoleID 一致)
+			w.WriteString("梦一场")
+			w.WriteInt32(980)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFactionRollCakeInfo, w.Bytes()))
+
+		case protocol.ActionIDFactionRollCakeRemainTimes:
+			// 响应吉星高照剩余投掷次数
+			w := protocol.NewWriter()
+			w.WriteInt8(rollCakeRemain)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFactionRollCakeRemainTimes, w.Bytes()))
+
+		case protocol.ActionIDFactionRollCake:
+			// 响应摇骰结算: 6+6+6 豹子，扣减一次投掷机会
+			if rollCakeRemain > 0 {
+				rollCakeRemain--
+			}
+			rollCakeTodayScore += 66
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.RollCakeResultSuccess)
+			w.WriteInt8(3) // 奖励类型
+			w.WriteInt32(66)
+			w.WriteInt32(rollCakeTodayScore)
+			w.WriteUint16(3) // 骰子数量
+			w.WriteInt8(6).WriteInt8(6).WriteInt8(6)
+			w.WriteInt8(rollCakeRemain)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFactionRollCake, w.Bytes()))
 
 		case protocol.ActionIDArenaGetTimes:
 			// 响应竞技场剩余挑战次数 (10 次)

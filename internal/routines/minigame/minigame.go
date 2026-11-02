@@ -22,7 +22,15 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
+// maxLuckyStarRolls 单次调度的最大投掷轮数，防止服务端异常未扣减次数时死循环。
+const maxLuckyStarRolls = 100
+
 // NewLuckyStarRoutine 构造帮派吉星高照扔骰子任务。
+//
+// 协议对齐 2026 客户端 Mod_Faction_Base:
+//   - Action 45 faction_roll_cake_info 查询战绩与剩余次数
+//   - Action 44 faction_roll_cake_remain_times 查询剩余次数 (信息查询失败时兜底)
+//   - Action 46 roll_cake 投掷骰子
 func NewLuckyStarRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"lucky_star",
@@ -31,7 +39,134 @@ func NewLuckyStarRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行益智任务: 帮派吉星高照摇骰子")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行益智任务: 帮派吉星高照摇骰子", "role_id", session.RoleID())
+
+			// 1. 查询吉星高照战绩与剩余投掷次数 (Mod 10, Act 45)
+			infoPkt := protocol.BuildFactionRollCakeInfoPacket(protocol.ActionIDTownEnter)
+			infoCtx, infoCancel := context.WithTimeout(ctx, 3*time.Second)
+			infoResp, infoErr := session.Call(infoCtx, infoPkt, protocol.ActionIDFactionRollCakeInfo)
+			infoCancel()
+
+			var remain int8
+			needRemainFallback := true
+			if infoErr == nil && infoResp != nil {
+				info, err := protocol.ParseFactionRollCakeInfoResult(infoResp.Payload)
+				if err != nil {
+					slog.Warn("解析吉星高照战绩回包失败，尝试仅查询剩余次数", "role_id", session.RoleID(), "err", err)
+				} else {
+					needRemainFallback = false
+					remain = info.RemainTimes
+					slog.Info("吉星高照当前战绩",
+						"role_id", session.RoleID(),
+						"week_best_score", info.WeekBestScore,
+						"today_best_score", info.TodayBestScore,
+						"remain_times", info.RemainTimes,
+						"faction_score", info.FactionScore,
+						"member_count", len(info.Members),
+					)
+				}
+			} else {
+				slog.Warn("查询吉星高照战绩失败，尝试仅查询剩余次数", "role_id", session.RoleID(), "err", infoErr)
+			}
+
+			// 2. 战绩查询或解析失败时兜底查询剩余次数 (Mod 10, Act 44)
+			if needRemainFallback {
+				remainPkt := protocol.BuildFactionRollCakeRemainTimesPacket(protocol.ActionIDTownEnter)
+				rCtx, rCancel := context.WithTimeout(ctx, 3*time.Second)
+				remainResp, err := session.Call(rCtx, remainPkt, protocol.ActionIDFactionRollCakeRemainTimes)
+				rCancel()
+				if err != nil || remainResp == nil {
+					slog.Warn("查询吉星高照剩余次数失败", "role_id", session.RoleID(), "err", err)
+					return nil
+				}
+				parsed, err := protocol.ParseFactionRollCakeRemainTimesResult(remainResp.Payload)
+				if err != nil {
+					slog.Warn("解析吉星高照剩余次数回包失败", "role_id", session.RoleID(), "err", err)
+					return nil
+				}
+				remain = parsed
+			}
+
+			if remain <= 0 {
+				slog.Info("今日吉星高照投掷次数已用尽", "role_id", session.RoleID())
+				return nil
+			}
+
+			// 3. 循环投掷直至次数用尽 (Mod 10, Act 46)
+			prevAct := protocol.ActionIDFactionRollCakeInfo
+			if needRemainFallback {
+				prevAct = protocol.ActionIDFactionRollCakeRemainTimes
+			}
+			rolls := 0
+			for remain > 0 && rolls < maxLuckyStarRolls {
+				if err := ctx.Err(); err != nil {
+					slog.Info("吉星高照投掷已取消，提前退出", "role_id", session.RoleID(), "err", err)
+					return nil
+				}
+
+				rollPkt := protocol.BuildFactionRollCakePacket(prevAct)
+				rollCtx, rollCancel := context.WithTimeout(ctx, 3*time.Second)
+				rollResp, err := session.Call(rollCtx, rollPkt, protocol.ActionIDFactionRollCake)
+				rollCancel()
+				if err != nil || rollResp == nil {
+					slog.Warn("吉星高照投掷未收到回包", "role_id", session.RoleID(), "err", err)
+					return nil
+				}
+
+				res, err := protocol.ParseFactionRollCakeResult(rollResp.Payload)
+				if err != nil {
+					slog.Warn("解析吉星高照投掷回包失败", "role_id", session.RoleID(), "err", err)
+					return nil
+				}
+
+				if res.Msg != protocol.RollCakeResultSuccess {
+					switch res.Msg {
+					case protocol.RollCakeResultNoTimes:
+						slog.Info("今日吉星高照投掷次数已用尽", "role_id", session.RoleID())
+					case protocol.RollCakeResultAwarding:
+						slog.Info("吉星高照正在结算排名奖励，稍后再试", "role_id", session.RoleID())
+					default:
+						slog.Warn("吉星高照投掷被服务端拒绝", "role_id", session.RoleID(), "result", res.Msg)
+					}
+					break
+				}
+
+				rolls++
+				slog.Info("吉星高照投掷成功",
+					"role_id", session.RoleID(),
+					"roll", rolls,
+					"reward_type", res.Type,
+					"score", res.Score,
+					"today_score", res.TodayScore,
+					"dice", res.Dice,
+					"remain_times", res.RemainTimes,
+				)
+
+				// 熔断保护: 服务端未扣减次数时立即退出，避免死循环。
+				if res.RemainTimes >= remain {
+					slog.Warn("吉星高照投掷次数未扣减，熔断退出",
+						"role_id", session.RoleID(),
+						"before_times", remain,
+						"after_times", res.RemainTimes,
+					)
+					remain = 0
+					break
+				}
+				remain = res.RemainTimes
+				prevAct = protocol.ActionIDFactionRollCake
+
+				if remain > 0 && jitter != nil {
+					_ = jitter.Wait(ctx)
+				}
+			}
+
+			slog.Info("吉星高照摇骰子完成", "role_id", session.RoleID(), "rolls", rolls, "remain_times", remain)
 			return nil
 		},
 	)
@@ -820,4 +955,3 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 		},
 	)
 }
-

@@ -65,6 +65,10 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 		if err := r3.Execute(context.Background(), session, nil); err != nil {
 			t.Fatalf("吉星高照执行失败: %v", err)
 		}
+		// Mock 服务端提供 2 次投掷机会，执行后最后一次动作必须是摇骰结算
+		if got := session.LastActionID(); got != protocol.ActionIDFactionRollCake {
+			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDFactionRollCake, got)
+		}
 	})
 
 	t.Run("空会话防御", func(t *testing.T) {
