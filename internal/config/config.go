@@ -59,6 +59,7 @@ type SchedulerConfig struct {
 	Routines        map[string]bool        `yaml:"routines"`
 	Dungeon         DungeonConfig          `yaml:"dungeon"`
 	SixRealms       SixRealmsConfig        `yaml:"six_realms"`
+	Pilgrimage      PilgrimageConfig       `yaml:"pilgrimage"`
 	BeelzebubTrials BeelzebubTrialsConfig  `yaml:"beelzebub_trials"`
 	JieYuanBox      JieYuanBoxConfig       `yaml:"jieyuan_box"`
 	FactionBlessing FactionBlessingConfig  `yaml:"faction_blessing"`
@@ -103,6 +104,16 @@ type FactionBlessingConfig struct {
 type LuckyStarConfig struct {
 	// MaxRerollsPerRoll 每次投掷最多逆天改运次数 (默认 9)
 	MaxRerollsPerRoll int `yaml:"max_rerolls_per_roll"`
+}
+
+// PilgrimageConfig 西天取经护送与打劫策略配置。
+type PilgrimageConfig struct {
+	// AutoRob 是否在取经巡检后自动打劫其他玩家队伍 (默认 true)
+	AutoRob *bool `yaml:"auto_rob"`
+	// MaxRobAttempts 单轮最多尝试打劫次数 (1-4，默认 4)
+	MaxRobAttempts int `yaml:"max_rob_attempts"`
+	// MaxProbeTargets 单轮最多探测的目标队伍数量 (1-50，默认 8)
+	MaxProbeTargets int `yaml:"max_probe_targets"`
 }
 
 // TreasureAwardConfig 天帝宝库自选大奖条目
@@ -329,6 +340,24 @@ func Load(path string) (*Config, error) {
 	// AutoReplenishStamina 默认为 true
 	if !cfg.Scheduler.Dungeon.AutoReplenishStamina {
 		cfg.Scheduler.Dungeon.AutoReplenishStamina = true
+	}
+
+	// Pilgrimage 默认开启自动打劫；仅使用免费次数，不会消耗元宝。
+	if cfg.Scheduler.Pilgrimage.AutoRob == nil {
+		autoRob := true
+		cfg.Scheduler.Pilgrimage.AutoRob = &autoRob
+	}
+	if cfg.Scheduler.Pilgrimage.MaxRobAttempts <= 0 {
+		cfg.Scheduler.Pilgrimage.MaxRobAttempts = 4
+	}
+	if cfg.Scheduler.Pilgrimage.MaxRobAttempts > 4 {
+		cfg.Scheduler.Pilgrimage.MaxRobAttempts = 4
+	}
+	if cfg.Scheduler.Pilgrimage.MaxProbeTargets <= 0 {
+		cfg.Scheduler.Pilgrimage.MaxProbeTargets = 8
+	}
+	if cfg.Scheduler.Pilgrimage.MaxProbeTargets > 50 {
+		cfg.Scheduler.Pilgrimage.MaxProbeTargets = 50
 	}
 
 	// BeelzebubTrials 默认等级门槛 0 (由服务端资格检查自动决定)

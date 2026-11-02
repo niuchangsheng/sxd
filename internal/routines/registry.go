@@ -97,15 +97,16 @@ func GetAllDefinitions() []RoutineDefinition {
 
 // RegistryFactory 构建并注册所有玩法的统一工厂。
 type RegistryFactory struct {
-	qaEngine     qa.Engine
-	dictRepo     dictionary.Repository
-	dungeonCfg   dungeon.SweepConfig
-	sixRealmsCfg dungeon.SixRealmsConfig
-	beelzebubCfg dungeon.BeelzebubTrialsConfig
-	jieyuanCfg   social.JieYuanBoxConfig
-	blessingCfg  social.FactionBlessingConfig
-	treasureCfg  minigame.TreasureHouseConfig
-	luckyCfg     minigame.LuckyStarConfig
+	qaEngine      qa.Engine
+	dictRepo      dictionary.Repository
+	dungeonCfg    dungeon.SweepConfig
+	sixRealmsCfg  dungeon.SixRealmsConfig
+	beelzebubCfg  dungeon.BeelzebubTrialsConfig
+	jieyuanCfg    social.JieYuanBoxConfig
+	blessingCfg   social.FactionBlessingConfig
+	treasureCfg   minigame.TreasureHouseConfig
+	luckyCfg      minigame.LuckyStarConfig
+	pilgrimageCfg farming.PilgrimageConfig
 }
 
 // NewRegistryFactory 创建注册工厂实例。
@@ -113,15 +114,16 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 	cfg := dungeon.DefaultSweepConfig()
 	cfg.PreferPracticeQuickly = true
 	return &RegistryFactory{
-		qaEngine:     qaEngine,
-		dictRepo:     dictRepo,
-		dungeonCfg:   cfg,
-		sixRealmsCfg: dungeon.DefaultSixRealmsConfig(),
-		beelzebubCfg: dungeon.DefaultBeelzebubTrialsConfig(),
-		jieyuanCfg:   social.DefaultJieYuanBoxConfig(),
-		blessingCfg:  social.DefaultFactionBlessingConfig(),
-		treasureCfg:  minigame.DefaultTreasureHouseConfig(),
-		luckyCfg:     minigame.DefaultLuckyStarConfig(),
+		qaEngine:      qaEngine,
+		dictRepo:      dictRepo,
+		dungeonCfg:    cfg,
+		sixRealmsCfg:  dungeon.DefaultSixRealmsConfig(),
+		beelzebubCfg:  dungeon.DefaultBeelzebubTrialsConfig(),
+		jieyuanCfg:    social.DefaultJieYuanBoxConfig(),
+		blessingCfg:   social.DefaultFactionBlessingConfig(),
+		treasureCfg:   minigame.DefaultTreasureHouseConfig(),
+		luckyCfg:      minigame.DefaultLuckyStarConfig(),
+		pilgrimageCfg: farming.DefaultPilgrimageConfig(),
 	}
 }
 
@@ -161,6 +163,11 @@ func (f *RegistryFactory) SetTreasureHouseConfig(cfg minigame.TreasureHouseConfi
 // SetLuckyStarConfig 设置个人吉星高照自动化策略配置。
 func (f *RegistryFactory) SetLuckyStarConfig(cfg minigame.LuckyStarConfig) {
 	f.luckyCfg = cfg
+}
+
+// SetPilgrimageConfig 设置西天取经护送与打劫策略配置。
+func (f *RegistryFactory) SetPilgrimageConfig(cfg farming.PilgrimageConfig) {
+	f.pilgrimageCfg = cfg
 }
 
 // RegisterAll 根据配置开关，向角色调度器装配全量活动玩法。
@@ -212,7 +219,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "herb_garden":
 		return farming.NewHerbGardenRoutine()
 	case "pilgrimage":
-		return farming.NewPilgrimageRoutine()
+		return farming.NewPilgrimageRoutine(f.pilgrimageCfg)
 	case "crystal_mine":
 		return farming.NewCrystalMineRoutine()
 	case "spirit_pool":

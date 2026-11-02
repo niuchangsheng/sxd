@@ -24,6 +24,7 @@ import (
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/routines"
 	"sxd-pie-ng/internal/routines/dungeon"
+	"sxd-pie-ng/internal/routines/farming"
 	"sxd-pie-ng/internal/routines/minigame"
 	"sxd-pie-ng/internal/routines/social"
 	"sxd-pie-ng/internal/scheduler"
@@ -361,6 +362,19 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	factory.SetSixRealmsConfig(srCfg)
+
+	// 西天取经护送与打劫策略配置 (默认自动打劫，仅使用免费次数)
+	pCfg := farming.DefaultPilgrimageConfig()
+	if cfg.Scheduler.Pilgrimage.AutoRob != nil {
+		pCfg.AutoRob = *cfg.Scheduler.Pilgrimage.AutoRob
+	}
+	if cfg.Scheduler.Pilgrimage.MaxRobAttempts > 0 {
+		pCfg.MaxRobAttempts = cfg.Scheduler.Pilgrimage.MaxRobAttempts
+	}
+	if cfg.Scheduler.Pilgrimage.MaxProbeTargets > 0 {
+		pCfg.MaxProbeTargets = cfg.Scheduler.Pilgrimage.MaxProbeTargets
+	}
+	factory.SetPilgrimageConfig(pCfg)
 
 	routineMgr := &routineManager{
 		enabledMap: make(map[string]bool),

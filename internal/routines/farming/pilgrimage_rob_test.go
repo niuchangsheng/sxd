@@ -147,7 +147,7 @@ func TestCrossPilgrimageRob_SuccessThenCooldown(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, crossCall)
+	crossPilgrimageRob(context.Background(), session, crossCall, DefaultPilgrimageConfig())
 
 	if openCalls != 1 || cdCalls != 2 || playerCalls != 1 || robCalls != 1 || closeCalls != 1 {
 		t.Fatalf("unexpected call counts: open=%d cd=%d player=%d rob=%d close=%d",
@@ -181,7 +181,7 @@ func TestCrossPilgrimageRob_SkipsWhenCoolingDown(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, crossCall)
+	crossPilgrimageRob(context.Background(), session, crossCall, DefaultPilgrimageConfig())
 
 	if playerCalls != 0 || robCalls != 0 {
 		t.Errorf("expected no player probe/rob while cooling down, got player=%d rob=%d", playerCalls, robCalls)
@@ -222,7 +222,7 @@ func TestCrossPilgrimageRob_SkipsRobbedAndExhaustedTargets(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, crossCall)
+	crossPilgrimageRob(context.Background(), session, crossCall, DefaultPilgrimageConfig())
 
 	if playerCalls != 3 {
 		t.Errorf("expected 3 probes, got %d", playerCalls)

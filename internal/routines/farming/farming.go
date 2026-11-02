@@ -287,9 +287,47 @@ const (
 	crossTakeBibleRobMaxProbes = 8
 	// crossTakeBibleRobMaxAttempts 单轮打劫最多尝试次数 (与游戏每日上限保持一致)。
 	crossTakeBibleRobMaxAttempts = 4
+	// crossTakeBibleRobProbeHardLimit 探测数量硬上限，防止异常配置造成大量请求。
+	crossTakeBibleRobProbeHardLimit = 50
 	// crossTakeBibleRobInterval 连续打劫之间的拟人化间隔。
 	crossTakeBibleRobInterval = 500 * time.Millisecond
 )
+
+// PilgrimageConfig 西天取经护送与打劫自动化策略配置。
+type PilgrimageConfig struct {
+	// AutoRob 是否在启程护送后自动打劫取经路上其他玩家队伍。
+	AutoRob bool
+	// MaxRobAttempts 单轮最多尝试打劫次数 (上限 4)。
+	MaxRobAttempts int
+	// MaxProbeTargets 单轮最多探测的目标队伍数量 (上限 50)。
+	MaxProbeTargets int
+}
+
+// DefaultPilgrimageConfig 返回默认取经策略：自动打劫、最多尝试 4 次、探测 8 支队伍。
+func DefaultPilgrimageConfig() PilgrimageConfig {
+	return PilgrimageConfig{
+		AutoRob:         true,
+		MaxRobAttempts:  crossTakeBibleRobMaxAttempts,
+		MaxProbeTargets: crossTakeBibleRobMaxProbes,
+	}
+}
+
+// normalizePilgrimageConfig 将取经策略参数收敛到安全范围。
+func normalizePilgrimageConfig(cfg PilgrimageConfig) PilgrimageConfig {
+	if cfg.MaxRobAttempts <= 0 {
+		cfg.MaxRobAttempts = crossTakeBibleRobMaxAttempts
+	}
+	if cfg.MaxRobAttempts > crossTakeBibleRobMaxAttempts {
+		cfg.MaxRobAttempts = crossTakeBibleRobMaxAttempts
+	}
+	if cfg.MaxProbeTargets <= 0 {
+		cfg.MaxProbeTargets = crossTakeBibleRobMaxProbes
+	}
+	if cfg.MaxProbeTargets > crossTakeBibleRobProbeHardLimit {
+		cfg.MaxProbeTargets = crossTakeBibleRobProbeHardLimit
+	}
+	return cfg
+}
 
 // handleCrossPilgrimage 在官方仙界跨服连接 (Mod 114) 上执行一次取经巡检、启程与打劫。
 //
@@ -298,7 +336,8 @@ const (
 // → open_take_bible → get_rob_take_bible_cd_time → rob。
 // 返回 true 表示跨服链路已建立并完成处理；返回 false 表示当前环境不支持仙界跨服
 // 连接（凭据缺失或登录失败），调用方应回退到主服传统取经协议。
-func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession) bool {
+func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg PilgrimageConfig) bool {
+	cfg = normalizePilgrimageConfig(cfg)
 	// 一次巡检最多包含护送、刷新、路况查询、目标探测与多次打劫，放宽整体超时。
 	crossCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -327,7 +366,11 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession) boo
 	}
 
 	crossPilgrimageEscort(ctx, session, crossCall)
-	crossPilgrimageRob(ctx, session, crossCall)
+	if cfg.AutoRob {
+		crossPilgrimageRob(ctx, session, crossCall, cfg)
+	} else {
+		slog.Debug("仙界取经自动打劫已关闭，仅执行护送巡检", "role_id", session.RoleID())
+	}
 	return true
 }
 
@@ -418,9 +461,10 @@ func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, cro
 //
 // 官方客户端流程：open_take_bible 取得路况队伍列表 → get_rob_take_bible_cd_time
 // 确认冷却 → get_player_take_bible 校验目标是否可劫 → rob(player_id, sequence_id)。
-// 单次调度最多探测 8 支队伍、尝试 4 次，成功一次后重新查询冷却，冷却中立即收手。
+// 单次调度的探测与尝试上限由 PilgrimageConfig 控制 (默认 8 支/4 次)，
+// 成功一次后重新查询冷却，冷却中立即收手。
 // 本流程仅使用免费次数，不消耗元宝清冷却或购买额外打劫次数。
-func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossCall crossTakeBibleCallFunc) {
+func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossCall crossTakeBibleCallFunc, cfg PilgrimageConfig) {
 	openResp, err := crossCall(protocol.BuildStTakeBibleCrossOpenPacket(), protocol.ActionIDStTakeBibleCrossOpen, 3*time.Second)
 	if err != nil {
 		slog.Warn("仙界取经路况查询无应答", "role_id", session.RoleID(), "error", err)
@@ -482,8 +526,8 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 		return candidates[i].PlayerID < candidates[j].PlayerID
 	})
 	probeCount := len(candidates)
-	if probeCount > crossTakeBibleRobMaxProbes {
-		probeCount = crossTakeBibleRobMaxProbes
+	if probeCount > cfg.MaxProbeTargets {
+		probeCount = cfg.MaxProbeTargets
 	}
 
 	type robTarget struct {
@@ -525,8 +569,8 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 	})
 
 	attempts := int(road.CanRobTimes)
-	if attempts > crossTakeBibleRobMaxAttempts {
-		attempts = crossTakeBibleRobMaxAttempts
+	if attempts > cfg.MaxRobAttempts {
+		attempts = cfg.MaxRobAttempts
 	}
 	if attempts > len(targets) {
 		attempts = len(targets)
@@ -638,8 +682,13 @@ func crossTakeBibleRobCD(session *client.RoleSession, crossCall crossTakeBibleCa
 	return cd, true
 }
 
-// NewPilgrimageRoutine 构造西天取经护送任务。
-func NewPilgrimageRoutine() scheduler.ActivityRoutine {
+// NewPilgrimageRoutine 构造西天取经护送与打劫任务。
+// 可传入 PilgrimageConfig 覆盖默认策略；不传时使用 DefaultPilgrimageConfig。
+func NewPilgrimageRoutine(configs ...PilgrimageConfig) scheduler.ActivityRoutine {
+	cfg := DefaultPilgrimageConfig()
+	if len(configs) > 0 {
+		cfg = normalizePilgrimageConfig(configs[0])
+	}
 	return scheduler.NewBaseRoutine(
 		"pilgrimage",
 		"farming",
@@ -666,7 +715,7 @@ func NewPilgrimageRoutine() scheduler.ActivityRoutine {
 
 			// 1. 官方仙界跨服取经 (Module 114, Mod_StTakeBible_Base)
 			// 取经模块只在 Mod 94 登录的仙界跨服连接上生效，主服网关不会响应。
-			if handleCrossPilgrimage(ctx, session) {
+			if handleCrossPilgrimage(ctx, session, cfg) {
 				return nil
 			}
 

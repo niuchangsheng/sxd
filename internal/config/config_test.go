@@ -155,3 +155,50 @@ func TestConfig_InvalidFile(t *testing.T) {
 		t.Error("expected error for non-existent file")
 	}
 }
+
+func TestConfig_PilgrimageDefaultsAndOverride(t *testing.T) {
+	minimalYaml := `
+server:
+  port: 9090
+`
+	tmpFile := filepath.Join(t.TempDir(), "pilgrimage_default.yaml")
+	if err := os.WriteFile(tmpFile, []byte(minimalYaml), 0644); err != nil {
+		t.Fatalf("write tmpFile failed: %v", err)
+	}
+	cfg, err := config.Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load minimal config failed: %v", err)
+	}
+	if cfg.Scheduler.Pilgrimage.AutoRob == nil || !*cfg.Scheduler.Pilgrimage.AutoRob {
+		t.Errorf("expected pilgrimage.auto_rob default true")
+	}
+	if cfg.Scheduler.Pilgrimage.MaxRobAttempts != 4 || cfg.Scheduler.Pilgrimage.MaxProbeTargets != 8 {
+		t.Errorf("unexpected pilgrimage defaults: attempts=%d probes=%d",
+			cfg.Scheduler.Pilgrimage.MaxRobAttempts, cfg.Scheduler.Pilgrimage.MaxProbeTargets)
+	}
+
+	overrideYaml := `
+server:
+  port: 9090
+scheduler:
+  pilgrimage:
+    auto_rob: false
+    max_rob_attempts: 2
+    max_probe_targets: 5
+`
+	overrideFile := filepath.Join(t.TempDir(), "pilgrimage_override.yaml")
+	if err := os.WriteFile(overrideFile, []byte(overrideYaml), 0644); err != nil {
+		t.Fatalf("write overrideFile failed: %v", err)
+	}
+	cfg, err = config.Load(overrideFile)
+	if err != nil {
+		t.Fatalf("Load override config failed: %v", err)
+	}
+	if cfg.Scheduler.Pilgrimage.AutoRob == nil || *cfg.Scheduler.Pilgrimage.AutoRob {
+		t.Errorf("expected pilgrimage.auto_rob override false")
+	}
+	if cfg.Scheduler.Pilgrimage.MaxRobAttempts != 2 || cfg.Scheduler.Pilgrimage.MaxProbeTargets != 5 {
+		t.Errorf("unexpected pilgrimage override: attempts=%d probes=%d",
+			cfg.Scheduler.Pilgrimage.MaxRobAttempts, cfg.Scheduler.Pilgrimage.MaxProbeTargets)
+	}
+}
