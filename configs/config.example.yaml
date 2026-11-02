@@ -27,7 +27,8 @@ scheduler:
     six_realms: true            # 六道轮回爬塔与灵件处理 (每日免费重置/自动爬塔/蓝装自动出售)
     town_practice: true         # 城镇打坐练功 (上线自动结算并领取离线经验)
     beelzebub_trials: true      # 魔王试炼 (自建队伍、招募助战镜像、挑战每日魔王并领道行奖励)
-    lucky_star: true            # 吉星高照
+    lucky_star: true            # 吉星高照 (个人摇骰子与免费逆天改运)
+    faction_lucky_star: true    # 帮派吉星高照 (帮派成员成绩与排名奖励)
     pilgrimage: true            # 取经/护送
     arena: true                 # 竞技场
 
@@ -90,3 +91,7 @@ scheduler:
     tier2_item_id: 25           # 二档自选大奖道具ID (默认 25)
     tier3_item_id: 42           # 三档自选大奖道具ID (默认 42)
     max_draw_times: 10          # 单次最大连续抽奖轮数 (钥匙耗尽自动退出)
+
+  # 个人吉星高照自动化策略配置 (仅使用免费逆天改运次数，永不消耗元宝)
+  lucky_star:
+    max_rerolls_per_roll: 9     # 每次投掷最大逆天改运次数 (客户端上限 9)

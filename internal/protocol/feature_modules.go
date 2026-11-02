@@ -6,6 +6,7 @@ package protocol
 const (
 	// 扩展业务模块编号 (Module)
 	ModuleFaction           uint16 = 10  // 帮派/仙盟吉星高照与日常模块 (0x000A)
+	ModuleRollCake          uint16 = 38  // 个人吉星高照摇骰子模块 (0x0026, Mod_RollCake_Base)
 	ModuleVipAward          uint16 = 42  // VIP与在线礼包模块 (0x002A)
 	ModuleStGodWelfare      uint16 = 52  // 跨服天神赐福与全服福利模块 (0x0034)
 	ModuleWorshipMarsExt    uint16 = 24  // 拜祭先祖/关公模块 (0x0018)
@@ -226,6 +227,21 @@ const (
 	ActionIDFactionRollCakeInfo uint32 = 0x000A002D
 	// ActionIDFactionRollCake 投掷一次吉星高照骰子 (Module 10, Action 46 -> 0x000A002E)
 	ActionIDFactionRollCake uint32 = 0x000A002E
+
+	// ActionIDRollCakeRoll 个人吉星高照投掷一次骰子 (Module 38, Action 0 -> 0x00260000)
+	ActionIDRollCakeRoll uint32 = 0x00260000
+	// ActionIDRollCakeGetCount 查询个人吉星高照剩余次数与免费改运次数 (Module 38, Action 2 -> 0x00260002)
+	ActionIDRollCakeGetCount uint32 = 0x00260002
+	// ActionIDRollCakeReroll 个人吉星高照逆天改运 (Module 38, Action 3 -> 0x00260003)
+	ActionIDRollCakeReroll uint32 = 0x00260003
+	// ActionIDRollCakeGetAward 领取个人吉星高照本次投掷奖励 (Module 38, Action 4 -> 0x00260004)
+	ActionIDRollCakeGetAward uint32 = 0x00260004
+	// ActionIDRollCakeGetState 查询个人吉星高照未领取的投掷记录 (Module 38, Action 5 -> 0x00260005)
+	ActionIDRollCakeGetState uint32 = 0x00260005
+	// ActionIDRollCakeIsAuto 查询自动逆天改运开关 (Module 38, Action 6 -> 0x00260006)
+	ActionIDRollCakeIsAuto uint32 = 0x00260006
+	// ActionIDRollCakeSetAuto 设置自动逆天改运开关 (Module 38, Action 7 -> 0x00260007)
+	ActionIDRollCakeSetAuto uint32 = 0x00260007
 )
 
 const (
@@ -236,4 +252,20 @@ const (
 	RollCakeResultAwarding uint8 = 13
 	// RollCakeResultNoTimes 今日投掷次数已用完
 	RollCakeResultNoTimes uint8 = 72
+)
+
+const (
+	// 个人吉星高照业务结果码 (对齐 Mod_RollCake_Base 常量)
+	// RollCakeCodeSuccess 操作成功
+	RollCakeCodeSuccess uint8 = 0
+	// RollCakeCodeFailure 操作失败
+	RollCakeCodeFailure uint8 = 1
+	// RollCakeCodeNotEnoughIngot 元宝不足
+	RollCakeCodeNotEnoughIngot uint8 = 2
+	// RollCakeCodeNoRerollTimes 今日改运次数已用完
+	RollCakeCodeNoRerollTimes uint8 = 3
+	// RollCakeCodeNoRecord 没有未领取的投掷记录
+	RollCakeCodeNoRecord uint8 = 4
+	// RollCakeCodeHaveRecord 存在未领取的投掷记录
+	RollCakeCodeHaveRecord uint8 = 5
 )

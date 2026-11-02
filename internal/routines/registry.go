@@ -74,7 +74,8 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "cross_server_ladder", Name: "跨服天梯排位", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "跨服天梯自动匹配竞技与段位宝箱领用", DefaultOn: false},
 
 		// 6. Minigame 领域 (7)
-		{ID: "lucky_star", Name: "帮派吉星高照", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "帮派吉星高照扔骰子与高分奖励获取", DefaultOn: false},
+		{ID: "lucky_star", Name: "吉星高照", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "个人吉星高照摇骰子、免费逆天改运与奖励领取", DefaultOn: false},
+		{ID: "faction_lucky_star", Name: "帮派吉星高照", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "帮派吉星高照扔骰子与高分奖励获取", DefaultOn: false},
 		{ID: "immortal_fantasy", Name: "仙履奇缘智能答题", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "连接万条题库自动毫秒级精准答题", DefaultOn: false},
 		{ID: "imperial_exam", Name: "金榜题名会试", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "金榜题名乡试会试殿试自动化智能答题", DefaultOn: false},
 		{ID: "partner_guess", Name: "伙伴猜猜看", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "伙伴特征自动比对竞猜", DefaultOn: false},
@@ -99,6 +100,7 @@ type RegistryFactory struct {
 	beelzebubCfg dungeon.BeelzebubTrialsConfig
 	jieyuanCfg   social.JieYuanBoxConfig
 	treasureCfg  minigame.TreasureHouseConfig
+	luckyCfg     minigame.LuckyStarConfig
 }
 
 // NewRegistryFactory 创建注册工厂实例。
@@ -113,6 +115,7 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 		beelzebubCfg: dungeon.DefaultBeelzebubTrialsConfig(),
 		jieyuanCfg:   social.DefaultJieYuanBoxConfig(),
 		treasureCfg:  minigame.DefaultTreasureHouseConfig(),
+		luckyCfg:     minigame.DefaultLuckyStarConfig(),
 	}
 }
 
@@ -142,6 +145,11 @@ func (f *RegistryFactory) SetTreasureHouseConfig(cfg minigame.TreasureHouseConfi
 		cfg.DictRepo = f.dictRepo
 	}
 	f.treasureCfg = cfg
+}
+
+// SetLuckyStarConfig 设置个人吉星高照自动化策略配置。
+func (f *RegistryFactory) SetLuckyStarConfig(cfg minigame.LuckyStarConfig) {
+	f.luckyCfg = cfg
 }
 
 // RegisterAll 根据配置开关，向角色调度器装配全量活动玩法。
@@ -253,7 +261,9 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 
 	// 6. Minigame
 	case "lucky_star":
-		return minigame.NewLuckyStarRoutine()
+		return minigame.NewLuckyStarRoutine(f.luckyCfg)
+	case "faction_lucky_star":
+		return minigame.NewFactionLuckyStarRoutine()
 	case "immortal_fantasy":
 		return minigame.NewImmortalFantasyRoutine(f.qaEngine)
 	case "imperial_exam":

@@ -324,6 +324,13 @@ func run(ctx context.Context, args []string) error {
 	}
 	factory.SetTreasureHouseConfig(thCfg)
 
+	// 个人吉星高照策略配置 (仅使用免费逆天改运次数，永不消耗元宝)
+	lsCfg := minigame.DefaultLuckyStarConfig()
+	if cfg.Scheduler.LuckyStar.MaxRerollsPerRoll > 0 {
+		lsCfg.MaxRerollsPerRoll = cfg.Scheduler.LuckyStar.MaxRerollsPerRoll
+	}
+	factory.SetLuckyStarConfig(lsCfg)
+
 	// 魔王试炼自动化策略配置
 	btCfg := dungeon.DefaultBeelzebubTrialsConfig()
 	if cfg.Scheduler.BeelzebubTrials.PreferBossID > 0 {

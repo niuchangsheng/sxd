@@ -62,6 +62,7 @@ type SchedulerConfig struct {
 	BeelzebubTrials BeelzebubTrialsConfig  `yaml:"beelzebub_trials"`
 	JieYuanBox      JieYuanBoxConfig       `yaml:"jieyuan_box"`
 	TreasureHouse   TreasureHouseConfig    `yaml:"treasure_house"`
+	LuckyStar       LuckyStarConfig        `yaml:"lucky_star"`
 	Expert          map[string]interface{} `yaml:"expert"`
 }
 
@@ -87,6 +88,12 @@ type BeelzebubTrialsConfig struct {
 type JieYuanBoxConfig struct {
 	// MaxBatchSize 每批最多开启数量 (每批最多10个，默认 10)
 	MaxBatchSize int `yaml:"max_batch_size"`
+}
+
+// LuckyStarConfig 个人吉星高照自动化策略配置
+type LuckyStarConfig struct {
+	// MaxRerollsPerRoll 每次投掷最多逆天改运次数 (默认 9)
+	MaxRerollsPerRoll int `yaml:"max_rerolls_per_roll"`
 }
 
 // TreasureAwardConfig 天帝宝库自选大奖条目

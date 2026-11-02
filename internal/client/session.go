@@ -2041,6 +2041,14 @@ func runMockGameServer(conn net.Conn) {
 	rollCakeRemain := int8(2)
 	rollCakeTodayScore := int32(0)
 
+	// 个人吉星高照 mock 状态: 今日剩余 2 次投掷、2 次免费改运
+	luckyStarRemain := int16(2)
+	luckyStarFreeRerolls := int8(2)
+	luckyStarRollCount := int32(0)
+	luckyStarPending := false
+	luckyStarDice := []int8{1, 2, 3, 4, 4, 4}
+	luckyStarType := int8(3)
+
 	for {
 		pkt, err := protocol.ReadPacket(conn)
 		if err != nil {
@@ -2237,6 +2245,96 @@ func runMockGameServer(conn net.Conn) {
 			w.WriteInt8(6).WriteInt8(6).WriteInt8(6)
 			w.WriteInt8(rollCakeRemain)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFactionRollCake, w.Bytes()))
+
+		case protocol.ActionIDRollCakeGetState:
+			// 响应个人吉星高照未领取记录
+			w := protocol.NewWriter()
+			if luckyStarPending {
+				w.WriteUint8(protocol.RollCakeCodeHaveRecord)
+			} else {
+				w.WriteUint8(protocol.RollCakeCodeNoRecord)
+			}
+			w.WriteInt8(luckyStarType)
+			w.WriteInt32(10) // 逆天改运所需元宝
+			for _, num := range luckyStarDice {
+				w.WriteInt8(num)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDRollCakeGetState, w.Bytes()))
+
+		case protocol.ActionIDRollCakeGetCount:
+			// 响应个人吉星高照剩余次数与免费改运次数
+			w := protocol.NewWriter()
+			w.WriteInt16(luckyStarRemain)
+			w.WriteInt8(luckyStarFreeRerolls)
+			w.WriteInt8(5) // 今日可购买改运次数
+			w.WriteInt32(luckyStarRollCount)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDRollCakeGetCount, w.Bytes()))
+
+		case protocol.ActionIDRollCakeRoll:
+			// 响应个人吉星高照投掷: 消耗一次次数并产生未领取记录
+			w := protocol.NewWriter()
+			if luckyStarRemain > 0 {
+				luckyStarRemain--
+				luckyStarRollCount++
+				luckyStarPending = true
+				luckyStarDice = []int8{1, 2, 3, 4, 4, 4}
+				luckyStarType = 3
+				w.WriteUint8(protocol.RollCakeCodeSuccess)
+			} else {
+				w.WriteUint8(protocol.RollCakeCodeFailure)
+			}
+			w.WriteInt8(luckyStarType)
+			w.WriteInt32(10) // 逆天改运所需元宝
+			for _, num := range luckyStarDice {
+				w.WriteInt8(num)
+			}
+			w.WriteInt32(luckyStarRollCount)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDRollCakeRoll, w.Bytes()))
+
+		case protocol.ActionIDRollCakeReroll:
+			// 响应个人吉星高照逆天改运: 优先消耗免费次数，改运后六吉
+			w := protocol.NewWriter()
+			if !luckyStarPending {
+				w.WriteUint8(protocol.RollCakeCodeNoRecord)
+			} else if luckyStarFreeRerolls > 0 {
+				luckyStarFreeRerolls--
+				luckyStarDice = []int8{4, 4, 4, 4, 4, 4}
+				luckyStarType = 11
+				w.WriteUint8(protocol.RollCakeCodeSuccess)
+			} else {
+				w.WriteUint8(protocol.RollCakeCodeNoRerollTimes)
+			}
+			w.WriteInt8(luckyStarType)
+			w.WriteInt8(luckyStarFreeRerolls)
+			w.WriteInt32(20) // 下次逆天改运所需元宝
+			for _, num := range luckyStarDice {
+				w.WriteInt8(num)
+			}
+			w.WriteInt32(luckyStarRollCount)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDRollCakeReroll, w.Bytes()))
+
+		case protocol.ActionIDRollCakeGetAward:
+			// 响应个人吉星高照领取奖励
+			w := protocol.NewWriter()
+			if luckyStarPending {
+				luckyStarPending = false
+				w.WriteUint8(protocol.RollCakeCodeSuccess)
+			} else {
+				w.WriteUint8(protocol.RollCakeCodeNoRecord)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDRollCakeGetAward, w.Bytes()))
+
+		case protocol.ActionIDRollCakeIsAuto:
+			// 响应自动逆天改运开关 (默认开启)
+			w := protocol.NewWriter()
+			w.WriteInt8(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDRollCakeIsAuto, w.Bytes()))
+
+		case protocol.ActionIDRollCakeSetAuto:
+			// 响应设置自动逆天改运开关
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.RollCakeCodeSuccess)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDRollCakeSetAuto, w.Bytes()))
 
 		case protocol.ActionIDArenaGetTimes:
 			// 响应竞技场剩余挑战次数 (10 次)

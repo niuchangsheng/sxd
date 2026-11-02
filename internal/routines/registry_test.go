@@ -90,6 +90,11 @@ func TestSubdomains_Instances(t *testing.T) {
 		t.Errorf("lucky_star name mismatch: %s", m.Name())
 	}
 
+	fm := minigame.NewFactionLuckyStarRoutine()
+	if fm.Name() != "faction_lucky_star" {
+		t.Errorf("faction_lucky_star name mismatch: %s", fm.Name())
+	}
+
 	gr := farming.NewGourdRealmRoutine(nil)
 	if gr.Name() != "gourd_realm" {
 		t.Errorf("gourd_realm name mismatch: %s", gr.Name())

@@ -31,9 +31,11 @@ const maxLuckyStarRolls = 100
 //   - Action 45 faction_roll_cake_info 查询战绩与剩余次数
 //   - Action 44 faction_roll_cake_remain_times 查询剩余次数 (信息查询失败时兜底)
 //   - Action 46 roll_cake 投掷骰子
-func NewLuckyStarRoutine() scheduler.ActivityRoutine {
+//
+// 个人吉星高照见 NewLuckyStarRoutine (Mod_RollCake_Base, module 38)。
+func NewFactionLuckyStarRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
-		"lucky_star",
+		"faction_lucky_star",
 		"minigame",
 		scheduler.ScheduleCron,
 		scheduler.PriorityNormal,

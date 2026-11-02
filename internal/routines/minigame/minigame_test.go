@@ -60,10 +60,27 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 		}
 	})
 
-	t.Run("帮派吉星高照摇骰子", func(t *testing.T) {
+	t.Run("个人吉星高照摇骰子与领奖", func(t *testing.T) {
 		r3 := NewLuckyStarRoutine()
+		if r3.Name() != "lucky_star" {
+			t.Fatalf("个人吉星高照任务名称不匹配: %s", r3.Name())
+		}
 		if err := r3.Execute(context.Background(), session, nil); err != nil {
-			t.Fatalf("吉星高照执行失败: %v", err)
+			t.Fatalf("个人吉星高照执行失败: %v", err)
+		}
+		// Mock 服务端提供 2 次投掷机会；每次领奖后都会刷新剩余次数，最后动作应为次数查询
+		if got := session.LastActionID(); got != protocol.ActionIDRollCakeGetCount {
+			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDRollCakeGetCount, got)
+		}
+	})
+
+	t.Run("帮派吉星高照摇骰子", func(t *testing.T) {
+		r4 := NewFactionLuckyStarRoutine()
+		if r4.Name() != "faction_lucky_star" {
+			t.Fatalf("帮派吉星高照任务名称不匹配: %s", r4.Name())
+		}
+		if err := r4.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("帮派吉星高照执行失败: %v", err)
 		}
 		// Mock 服务端提供 2 次投掷机会，执行后最后一次动作必须是摇骰结算
 		if got := session.LastActionID(); got != protocol.ActionIDFactionRollCake {
