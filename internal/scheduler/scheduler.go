@@ -120,6 +120,9 @@ func (s *RoleScheduler) Stop() {
 func (s *RoleScheduler) runLoop() {
 	defer s.wg.Done()
 
+	// idleLogged 保证每轮任务批次结束后只输出一次待机日志，避免静默轮询被误判为卡死。
+	idleLogged := false
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -129,6 +132,12 @@ func (s *RoleScheduler) runLoop() {
 
 		item := s.pickNextReadyItem()
 		if item == nil {
+			if !idleLogged {
+				idleLogged = true
+				slog.Info("本轮任务已全部执行完毕，进入待机等待下一次定点唤醒",
+					"role_id", s.roleID,
+				)
+			}
 			// 当前无就绪任务，轻度休眠后继续探查
 			select {
 			case <-s.ctx.Done():
@@ -137,6 +146,7 @@ func (s *RoleScheduler) runLoop() {
 				continue
 			}
 		}
+		idleLogged = false
 
 		// 零假动作铁律：会话未处于 StateActive 激活态时严禁触发业务 Routine
 		if s.session != nil && s.session.State() != client.StateActive {
