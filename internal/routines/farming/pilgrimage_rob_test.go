@@ -191,6 +191,74 @@ func TestCrossPilgrimageRob_SkipsWhenCoolingDown(t *testing.T) {
 	}
 }
 
+func TestCrossPilgrimageRob_FailedRobEntersCooldown(t *testing.T) {
+	session := newRobTestSession(1000, 180)
+
+	var cdCalls, playerCalls, robCalls, closeCalls int
+	cdValues := []int16{0, 45}
+	crossCall := func(pkt *protocol.Packet, expectedAct uint32, _ time.Duration) (*protocol.Packet, error) {
+		switch expectedAct {
+		case protocol.ActionIDStTakeBibleCrossOpen:
+			return protocol.NewPacket(expectedAct, buildRoadPayload([]protocol.StTakeBibleCrossRoadTeam{
+				{PlayerID: 1001, Protection: protocol.StTakeBibleCrossProtectionTangSeng, SequenceID: 1},
+				{PlayerID: 1002, Protection: protocol.StTakeBibleCrossProtectionShaWuJing, SequenceID: 1},
+			}, 4)), nil
+		case protocol.ActionIDStTakeBibleCrossGetRobCD:
+			seconds := int16(0)
+			if len(cdValues) > 0 {
+				seconds = cdValues[0]
+				cdValues = cdValues[1:]
+			}
+			cdCalls++
+			return protocol.NewPacket(expectedAct, buildRobCDPayload(seconds, 10)), nil
+		case protocol.ActionIDStTakeBibleCrossGetPlayer:
+			info := protocol.StTakeBibleCrossPlayerInfo{
+				PlayerID:         1001,
+				NickName:         "已打过",
+				SequenceID:       1,
+				RobCoin:          5000,
+				TotalCanRobTimes: 3,
+				RobFame:          20,
+				RobStExp:         10,
+			}
+			if playerCalls == 1 {
+				info.PlayerID = 1002
+				info.NickName = "次选目标"
+				info.RobCoin = 1000
+			}
+			playerCalls++
+			return protocol.NewPacket(expectedAct, buildPlayerInfoPayload(info)), nil
+		case protocol.ActionIDStTakeBibleCrossRob:
+			robCalls++
+			// 首次打劫失败（重复打劫），服务端同样会进入冷却。
+			return protocol.NewPacket(expectedAct, buildRobResultPayload(protocol.StTakeBibleCrossRobResult{
+				Msg:            protocol.StTakeBibleCrossMsgRerob,
+				TargetPlayerID: 1001,
+				TargetNickName: "已打过",
+			})), nil
+		case protocol.ActionIDStTakeBibleCrossClose:
+			closeCalls++
+			return protocol.NewPacket(expectedAct, nil), nil
+		}
+		return nil, context.DeadlineExceeded
+	}
+
+	crossPilgrimageRob(context.Background(), session, crossCall, DefaultPilgrimageConfig())
+
+	if robCalls != 1 {
+		t.Errorf("expected to stop after failed rob cooldown, got %d rob calls", robCalls)
+	}
+	if cdCalls != 2 {
+		t.Errorf("expected cooldown checked before and after failed rob, got %d calls", cdCalls)
+	}
+	if playerCalls != 2 {
+		t.Errorf("expected 2 target probes before robbing, got %d", playerCalls)
+	}
+	if closeCalls != 1 {
+		t.Errorf("expected road panel closed once, got %d", closeCalls)
+	}
+}
+
 func TestCrossPilgrimageRob_SkipsRobbedAndExhaustedTargets(t *testing.T) {
 	session := newRobTestSession(1000, 180)
 

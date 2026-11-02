@@ -608,45 +608,49 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 			break
 		}
 		result, pErr := protocol.ParseStTakeBibleCrossRobResult(robResp.Payload)
-		if pErr != nil {
+		switch {
+		case pErr != nil:
 			slog.Warn("解析仙界取经打劫回包失败", "role_id", session.RoleID(), "target_player_id", target.team.PlayerID, "error", pErr)
-			continue
-		}
-		if result.Msg != protocol.StTakeBibleCrossMsgSuccess {
+		case result.Msg == protocol.StTakeBibleCrossMsgSuccess:
+			robbed++
+			totalCoin += int64(result.RobCoin)
+			totalFame += int64(result.RobFame)
+			totalStExp += int64(result.RobStExp)
+			session.AddRewards(int64(result.RobStExp), int64(result.RobCoin))
+			slog.Info("仙界取经打劫成功",
+				"role_id", session.RoleID(),
+				"target_player_id", result.TargetPlayerID,
+				"target_nickname", result.TargetNickName,
+				"rob_coin", result.RobCoin,
+				"rob_fame", result.RobFame,
+				"rob_st_exp", result.RobStExp,
+				"war_report_id", result.WarReportID,
+			)
+		default:
 			slog.Info("仙界取经打劫未成功",
 				"role_id", session.RoleID(),
 				"target_player_id", target.team.PlayerID,
 				"msg", result.Msg,
 				"reason", protocol.StTakeBibleCrossRobMsgName(result.Msg),
 			)
-			if result.Msg == protocol.StTakeBibleCrossMsgFullRobTimes ||
-				result.Msg == protocol.StTakeBibleCrossMsgHaveCDTime {
-				break
-			}
-			continue
 		}
 
-		robbed++
-		totalCoin += int64(result.RobCoin)
-		totalFame += int64(result.RobFame)
-		totalStExp += int64(result.RobStExp)
-		session.AddRewards(int64(result.RobStExp), int64(result.RobCoin))
-		slog.Info("仙界取经打劫成功",
-			"role_id", session.RoleID(),
-			"target_player_id", result.TargetPlayerID,
-			"target_nickname", result.TargetNickName,
-			"rob_coin", result.RobCoin,
-			"rob_fame", result.RobFame,
-			"rob_st_exp", result.RobStExp,
-			"war_report_id", result.WarReportID,
-		)
-
-		// 官方客户端每次打劫后都会重新查询冷却；进入冷却则停止本轮打劫。
+		// 官方客户端在 rob 回包后无论成功还是失败都会重新查询冷却。
+		// 打劫失败同样可能触发冷却，必须立即收手，避免继续发送无效请求。
 		cd, ok = crossTakeBibleRobCD(session, crossCall)
-		if !ok || cd.CDSeconds > 0 {
-			if ok {
-				slog.Info("仙界取经打劫进入冷却，结束本轮打劫", "role_id", session.RoleID(), "cooldown_sec", cd.CDSeconds)
-			}
+		if !ok {
+			break
+		}
+		if cd.CDSeconds > 0 {
+			slog.Info("仙界取经打劫进入冷却，结束本轮打劫", "role_id", session.RoleID(), "cooldown_sec", cd.CDSeconds)
+			break
+		}
+		if pErr != nil {
+			// 回包无法解析时保守结束本轮，避免在打劫状态未知时继续操作。
+			break
+		}
+		if result.Msg == protocol.StTakeBibleCrossMsgFullRobTimes ||
+			result.Msg == protocol.StTakeBibleCrossMsgHaveCDTime {
 			break
 		}
 		if i+1 < attempts {
