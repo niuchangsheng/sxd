@@ -256,6 +256,10 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			if ctx.Err() != nil || session.State() == client.StateClosed {
+				slog.Info("会话已关闭，跳过本次副本 Routine", "role_id", session.RoleID())
+				return nil
+			}
 
 			// 2. 检查背包容量
 			state := session.GetPlayerState()
@@ -344,6 +348,12 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						clearedMissions,
 					)
 				}
+			}
+
+			// 停机/断线后不再进入后续扫荡流水线，避免继续产生无意义的协议告警。
+			if ctx.Err() != nil || session.State() == client.StateClosed {
+				slog.Info("会话已关闭，跳过后续扫荡流水线", "role_id", session.RoleID())
+				return nil
 			}
 
 			// =========================================================================
@@ -1282,8 +1292,18 @@ func executeQuestCycle(
 		return
 	}
 
+	// 停机或断线导致的同步失败不再降级扫描 NPC，直接静默退出。
+	if errSessionTerminated(ctx, syncErr) {
+		slog.Info("会话已关闭，终止任务闭环驱动", "role_id", session.RoleID())
+		return
+	}
+
 	// 兼容离线单测 Mock Server (未实现 0x00030009 town_quest_show 时的 NPC 扫描降级路径)
 	for cycle := 1; cycle <= maxCycles; cycle++ {
+		if ctx.Err() != nil || session.State() == client.StateClosed {
+			slog.Info("会话已关闭，终止任务闭环驱动", "role_id", session.RoleID())
+			return
+		}
 		if session.GetStamina() < powerPerSweep && !ensureStamina() {
 			slog.Info("推图体力耗尽且无可用补充道具，退出任务循环", "stamina", session.GetStamina())
 			break
@@ -1354,6 +1374,10 @@ func executeQuestCycle(
 			npcCancel()
 
 			if npcErr != nil || npcResp == nil {
+				if errSessionTerminated(ctx, npcErr) {
+					slog.Info("会话已关闭，终止 NPC 任务扫描", "role_id", session.RoleID())
+					return
+				}
 				continue
 			}
 
@@ -1528,6 +1552,64 @@ func questStateName(state int32) string {
 	}
 }
 
+// errSessionTerminated 判断错误是否由停机取消或会话关闭引起。
+// 用于优雅停机时静默退出推图循环，避免把撤站过程中的必然失败记录成业务告警。
+func errSessionTerminated(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	return errors.Is(err, client.ErrSessionClosed) || errors.Is(err, context.Canceled)
+}
+
+// acceptQuestWithRecovery 接取任务，并在回包超时丢失时复核服务端任务列表，避免网关偶发丢包把
+// 本可接取的任务误判为失败、进而跳过整轮接取并阻塞调度周期。
+// 返回 (是否接取成功, 服务端结果码, 最后一次通信错误)。
+func acceptQuestWithRecovery(ctx context.Context, session *client.RoleSession, questID int32) (bool, uint8, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		accPkt, _ := protocol.BuildAcceptQuestPacket(protocol.AcceptQuestRequest{
+			QuestID: questID,
+			PrevAct: session.LastActionID(),
+		})
+		accCtx, accCancel := context.WithTimeout(ctx, 3*time.Second)
+		accResp, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
+		accCancel()
+
+		// Mod_Quest_Base.SUCCEED == 5 (兼容单测 0 / 1)
+		if accErr == nil && accResp != nil &&
+			(len(accResp.Payload) == 0 || accResp.Payload[0] == 5 || accResp.Payload[0] == 1 || accResp.Payload[0] == 0) {
+			return true, 0, nil
+		}
+		// 服务端已明确回包拒绝（如背包已满、任务已存在），无需重试。
+		if accResp != nil && len(accResp.Payload) > 0 {
+			return false, accResp.Payload[0], nil
+		}
+
+		lastErr = accErr
+		if errSessionTerminated(ctx, accErr) {
+			return false, 0, lastErr
+		}
+
+		// 未收到任何回包：网关可能丢包或连接半开。先复核服务端任务状态，
+		// 覆盖「服务端已处理成功、仅回包丢失」的情况。
+		if items, syncErr := session.SyncQuests(ctx); syncErr == nil {
+			for _, it := range items {
+				if it.QuestID == questID && (it.State == 1 || it.State == 2) {
+					slog.Info("接取任务回包超时，但服务端任务列表已确认接取生效",
+						"role_id", session.RoleID(), "quest_id", questID, "state", it.State)
+					return true, 0, nil
+				}
+			}
+		}
+
+		if attempt == 1 {
+			slog.Warn("接取任务未收到回包，复核未生效后重试一次",
+				"role_id", session.RoleID(), "quest_id", questID, "err", accErr)
+		}
+	}
+	return false, 0, lastErr
+}
+
 // executeAuthoritativeQuestCycle 基于真实网关 Mod 3 (Mod_Quest_Base) 与 Mod 4 (Mod_Mission_Base) 驱动全自动主支线推图闭环。
 // QuestType 状态定义 (对齐 2026 客户端 Main.swf):
 //   - 0 (Acceptable): 可接取任务 -> 调用 0x00030003 (accept_quest)
@@ -1550,10 +1632,18 @@ func executeAuthoritativeQuestCycle(
 	items := initialItems
 
 	for cycle := 1; cycle <= maxCycles; cycle++ {
+		if ctx.Err() != nil || session.State() == client.StateClosed {
+			slog.Info("会话已关闭，终止任务推图循环", "role_id", session.RoleID(), "cycle", cycle)
+			return
+		}
 		if cycle > 1 {
 			var err error
 			items, err = session.SyncQuests(ctx)
 			if err != nil {
+				if errSessionTerminated(ctx, err) {
+					slog.Info("会话已关闭，终止任务推图循环", "role_id", session.RoleID(), "cycle", cycle)
+					return
+				}
 				slog.Warn("同步服务端任务列表异常，终止本轮任务推图", "role_id", session.RoleID(), "err", err)
 				break
 			}
@@ -1605,6 +1695,10 @@ func executeAuthoritativeQuestCycle(
 			if q != nil && q.Title != "" {
 				title = q.Title
 			}
+			if ctx.Err() != nil || session.State() == client.StateClosed {
+				slog.Info("会话已关闭，终止任务交付循环", "role_id", session.RoleID())
+				return
+			}
 			slog.Info("正在交付已达成任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 
 			ok, packFull := submitCompleteQuest(ctx, session, it.QuestID)
@@ -1650,6 +1744,10 @@ func executeAuthoritativeQuestCycle(
 			if activeCount >= 5 {
 				break
 			}
+			if ctx.Err() != nil || session.State() == client.StateClosed {
+				slog.Info("会话已关闭，终止任务接取循环", "role_id", session.RoleID())
+				return
+			}
 			if it.State != 0 {
 				continue
 			}
@@ -1670,32 +1768,24 @@ func executeAuthoritativeQuestCycle(
 			}
 			slog.Info("发现可接取任务，正在接受", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 
-			accPkt, _ := protocol.BuildAcceptQuestPacket(protocol.AcceptQuestRequest{
-				QuestID: it.QuestID,
-				PrevAct: session.LastActionID(),
-			})
-			accCtx, accCancel := context.WithTimeout(ctx, 3*time.Second)
-			accResp, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
-			accCancel()
-
-			// Mod_Quest_Base.SUCCEED == 5 (兼容单测 0 / 1)
-			if accErr == nil && accResp != nil && (len(accResp.Payload) == 0 || accResp.Payload[0] == 5 || accResp.Payload[0] == 1 || accResp.Payload[0] == 0) {
+			accepted, resCode, accErr := acceptQuestWithRecovery(ctx, session, it.QuestID)
+			if accepted {
 				slog.Info("成功接受任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 				acceptedAny = true
 				progressMade = true
 				activeCount++
 				time.Sleep(80 * time.Millisecond)
 			} else {
-				var resCode uint8
-				if accResp != nil && len(accResp.Payload) > 0 {
-					resCode = accResp.Payload[0]
+				if errSessionTerminated(ctx, accErr) {
+					slog.Info("会话已关闭，终止任务接取循环", "role_id", session.RoleID(), "quest_id", it.QuestID)
+					return
 				}
 				if resCode == 7 || resCode == 17 {
 					slog.Warn("背包已满，无法接受新任务，退出推图循环", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 					return
 				}
 				slog.Warn("接受任务未成功", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title, "result", resCode, "err", accErr)
-				// 一旦接取任务超时或失败（如已达上限或服务端无响应），停止尝试后续任务，防止连续超时阻塞调度器
+				// 一旦接取任务重试后仍超时或失败（如已达上限或服务端无响应），停止尝试后续任务，防止连续超时阻塞调度器
 				break
 			}
 		}
@@ -1760,6 +1850,10 @@ func executeAuthoritativeQuestCycle(
 		})
 
 		for _, it := range inProgress {
+			if ctx.Err() != nil || session.State() == client.StateClosed {
+				slog.Info("会话已关闭，终止任务推进循环", "role_id", session.RoleID())
+				return
+			}
 			q, err := dictRepo.GetQuest(int(it.QuestID))
 			if err != nil || q == nil {
 				continue
@@ -1810,6 +1904,9 @@ func executeAuthoritativeQuestCycle(
 				progressMade = true
 				// 任一任务完成或取得实质推进后立即跳出重排，确保新解锁的主线任务优先接取并执行
 				break
+			} else if ctx.Err() != nil || session.State() == client.StateClosed {
+				slog.Info("会话已关闭，终止任务推进循环", "role_id", session.RoleID(), "mission_id", mid)
+				return
 			} else {
 				slog.Info("任务关卡暂未通关或卡战力/等级，记录跳过", "role_id", session.RoleID(), "mission_id", mid, "quest_id", q.ID)
 				failedMissions[mid] = true
@@ -1928,6 +2025,9 @@ func advanceQuestMission(
 	clearedPrereq := false
 
 	for step := 0; step < maxStageSteps; step++ {
+		if ctx.Err() != nil || session.State() == client.StateClosed {
+			return clearedPrereq || lastCount > initialCount
+		}
 		if session.GetStamina() < 5 && !ensureStamina() {
 			return clearedPrereq || lastCount > initialCount
 		}
@@ -1965,6 +2065,9 @@ func advanceQuestMission(
 			secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 			secCancel()
 			if secErr != nil {
+				if errSessionTerminated(ctx, secErr) {
+					return clearedPrereq || lastCount > initialCount
+				}
 				slog.Warn("激活章节关卡列表上下文失败", "role_id", session.RoleID(), "map_id", mapID, "err", secErr)
 			} else if secResp != nil {
 				if sections, pErr := protocol.ParseMissionGetSectionsResponse(secResp.Payload); pErr == nil {
@@ -2042,6 +2145,9 @@ func advanceQuestMission(
 				secCtx, secCancel := context.WithTimeout(ctx, 5*time.Second)
 				secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 				secCancel()
+				if errSessionTerminated(ctx, secErr) {
+					return clearedPrereq || lastCount > initialCount
+				}
 
 				if secErr == nil && secResp != nil {
 					if sections, pErr := protocol.ParseMissionGetSectionsResponse(secResp.Payload); pErr == nil {
@@ -2276,6 +2382,9 @@ func challengeStoryMission(
 	if m == nil {
 		return false
 	}
+	if ctx.Err() != nil || session.State() == client.StateClosed {
+		return false
+	}
 
 	playerLevel := session.GetPlayerState().Level
 	requiredLevel := missionRequiredLevel(m.MissionLock)
@@ -2320,6 +2429,9 @@ func challengeStoryMission(
 		secCtx, secCancel := context.WithTimeout(ctx, 5*time.Second)
 		_, _ = session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 		secCancel()
+		if ctx.Err() != nil || session.State() == client.StateClosed {
+			return false
+		}
 	}
 
 	// 1. 进入副本 (Mod 4, Act 1: enter_mission, 前置对齐 ActionIDMissionGetSections)
@@ -2341,6 +2453,9 @@ func challengeStoryMission(
 	enterCancel()
 
 	if enterErr != nil || enterResp == nil || len(enterResp.Payload) == 0 {
+		if errSessionTerminated(ctx, enterErr) {
+			return false
+		}
 		slog.Warn("进入剧情副本未收到有效响应",
 			"role_id", session.RoleID(),
 			"mission_id", m.ID,
@@ -2441,6 +2556,9 @@ func challengeStoryMission(
 		fightCancel()
 
 		if fightErr != nil || fightResp == nil || len(fightResp.Payload) == 0 {
+			if errSessionTerminated(ctx, fightErr) {
+				return anyWaveSuccess
+			}
 			if anyWaveSuccess {
 				slog.Info("剧情副本已击败当前可用波次怪物，返回城镇同步进度", "role_id", session.RoleID(), "mission_id", m.ID, "monster_team_id", mtID)
 				resetTownScene(session)

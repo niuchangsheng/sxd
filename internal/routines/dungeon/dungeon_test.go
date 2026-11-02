@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -563,8 +564,8 @@ func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
 		case protocol.ActionHeroMissionList:
 			// 响应包含 2 个英雄副本的列表
 			w := protocol.NewWriter()
-			w.WriteUint32(0) // 保留头
-			w.WriteUint8(2)  // 总可扫荡次数 2
+			w.WriteUint32(0)  // 保留头
+			w.WriteUint8(2)   // 总可扫荡次数 2
 			w.WriteUint32(10) // 消耗体力
 			w.WriteUint16(0)  // 倒计时
 			w.WriteUint16(2)  // 条数 2
@@ -1249,11 +1250,11 @@ func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
 			// 回复 NPC 48 的任务列表
 			w := protocol.NewWriter()
 			if questOffered.Load() {
-				w.WriteUint16(1)          // 1 个任务
-				w.WriteInt32(145)         // Quest 145
-				w.WriteUint8(1)           // 1=可接取
+				w.WriteUint16(1)  // 1 个任务
+				w.WriteInt32(145) // Quest 145
+				w.WriteUint8(1)   // 1=可接取
 			} else {
-				w.WriteUint16(0)          // 无更多任务
+				w.WriteUint16(0) // 无更多任务
 			}
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestGetNPCQuests, w.Bytes()))
 			return true
@@ -1916,5 +1917,267 @@ func TestSixRealmsRoutine_PerFloorRetry(t *testing.T) {
 
 	if total := attempts.Load(); total != 2 {
 		t.Errorf("expected exactly 2 challenge attempts for failed floor, got %d", total)
+	}
+}
+
+// TestDungeonSweep_QuestAcceptLostResponseRecovery 验证接取任务回包丢失（网关偶发超时）时的自愈能力:
+// 1. 服务端实际已受理 accept_quest，但第一个回包被网关丢弃 ->
+// 2. 客户端复核 town_quest_show 发现任务已进入 Accepted(1) ->
+// 3. 继续推进剧情副本并交付，而不是误判失败后跳过整轮接取。
+func TestDungeonSweep_QuestAcceptLostResponseRecovery(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	sess.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.Level = 63
+	})
+
+	repo := &mockQuestDungeonRepo{
+		quests: map[int]*dictionary.Quest{
+			336: {
+				ID:        336,
+				Type:      4,
+				Lock:      10100,
+				Level:     1,
+				Title:     "精英罗虎王",
+				MissionID: 456,
+				AwardExp:  440000, AwardCoins: 88000,
+			},
+		},
+		missions: map[int]*dictionary.Mission{
+			456: {
+				ID:          456,
+				SectionID:   29,
+				MissionLock: 22046,
+				MapID:       13,
+				Name:        "精英罗虎王",
+				Type:        1,
+				IsBoss:      true,
+				Monsters:    "1041",
+			},
+		},
+	}
+
+	var events []string
+	var eventsMu sync.Mutex
+	recordEvent := func(evt string) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, evt)
+	}
+
+	var accepted, cleared, completed, acceptDropDone atomic.Bool
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDQuestList:
+			recordEvent("quest_list")
+			w := protocol.NewWriter()
+			if completed.Load() {
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+				return true
+			}
+			state, cur := int32(0), int32(0)
+			if accepted.Load() {
+				state, cur = 1, 0
+			}
+			if cleared.Load() {
+				state, cur = 2, 1
+			}
+			w.WriteUint16(1)
+			w.WriteInt32(336)
+			w.WriteInt32(state)
+			w.WriteUint8(0)
+			w.WriteUint16(1)
+			w.WriteInt32(1041)
+			w.WriteInt32(cur)
+			w.WriteInt32(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+			return true
+
+		case protocol.ActionIDQuestAccept:
+			recordEvent("accept_quest")
+			accepted.Store(true)
+			// 首个接取回包模拟网关丢包：服务端已受理但不回包。
+			if !acceptDropDone.Swap(true) {
+				return true
+			}
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x05}))
+			return true
+
+		case protocol.ActionIDMissionGetSections:
+			recordEvent("get_sections")
+			w := protocol.NewWriter()
+			w.WriteUint16(0)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionGetSections, w.Bytes()))
+			return true
+
+		case protocol.ActionIDMissionPlotEnter:
+			mid := int32(0)
+			if len(pkt.Payload) >= 4 {
+				mid = int32(binary.BigEndian.Uint32(pkt.Payload[:4]))
+			}
+			recordEvent(fmt.Sprintf("plot_enter:%d", mid))
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionPlotEnter, []byte{protocol.MissionResultSuccess}))
+			return true
+
+		case protocol.ActionIDMissionFightMonster:
+			mt := int32(0)
+			if len(pkt.Payload) >= 4 {
+				mt = int32(binary.BigEndian.Uint32(pkt.Payload[:4]))
+			}
+			recordEvent(fmt.Sprintf("fight_monster:%d", mt))
+			cleared.Store(true)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionFightMonster, []byte{0x00, protocol.MissionResultSuccess}))
+			return true
+
+		case protocol.ActionIDMissionRank:
+			recordEvent("rank_mission")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionRank, []byte{0x00}))
+			return true
+
+		case protocol.ActionIDMissionOpenBox:
+			recordEvent("open_box")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionOpenBox, []byte{0x00}))
+			return true
+
+		case protocol.ActionIDMissionPickupAward:
+			recordEvent("pickup_award")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionPickupAward, []byte{0x00}))
+			return true
+
+		case protocol.ActionIDQuestSubmitComplete:
+			recordEvent("complete_quest")
+			completed.Store(true)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestSubmitComplete, []byte{0x01}))
+			return true
+		}
+		return false
+	})
+
+	cfg := dungeon.SweepConfig{Pipeline: []string{"quest_cycle"}}
+	routine := dungeon.NewDungeonSweepRoutine(repo, cfg)
+	if err := routine.Execute(context.Background(), sess, nil); err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("接取回包丢失后的任务推图执行失败: %v", err)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+
+	joined := strings.Join(events, ",")
+	if !strings.Contains(joined, "accept_quest") {
+		t.Fatalf("未发送 accept_quest, events=%v", events)
+	}
+	if !strings.Contains(joined, "plot_enter:456") {
+		t.Fatalf("接取回包丢失后未继续推进剧情副本, events=%v", events)
+	}
+	if !strings.Contains(joined, "fight_monster:1041") {
+		t.Fatalf("接取回包丢失后未挑战关卡怪物, events=%v", events)
+	}
+	if !strings.Contains(joined, "complete_quest") {
+		t.Fatalf("接取回包丢失后未继续交付任务, events=%v", events)
+	}
+}
+
+// lockedLogBuffer 提供带锁的日志捕获缓冲，避免 Mock 服务端协程与测试主协程并发写入产生数据竞争。
+type lockedLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestDungeonSweep_GracefulShutdownStopsQuestCycle 验证停机（上下文取消/会话关闭）时推图循环立即静默退出:
+// 不应继续进入后续关卡、也不应把撤站导致的通信失败记录成业务告警。
+func TestDungeonSweep_GracefulShutdownStopsQuestCycle(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	sess.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.Level = 63
+	})
+
+	repo := &mockQuestDungeonRepo{
+		quests: map[int]*dictionary.Quest{
+			336: {
+				ID:        336,
+				Type:      4,
+				Lock:      10100,
+				Level:     1,
+				Title:     "精英罗虎王",
+				MissionID: 456,
+				AwardExp:  440000, AwardCoins: 88000,
+			},
+		},
+		missions: map[int]*dictionary.Mission{
+			456: {
+				ID:          456,
+				SectionID:   29,
+				MissionLock: 22046,
+				MapID:       13,
+				Name:        "精英罗虎王",
+				Type:        1,
+				IsBoss:      true,
+				Monsters:    "1041",
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var cancelOnce sync.Once
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDQuestList:
+			w := protocol.NewWriter()
+			w.WriteUint16(1)
+			w.WriteInt32(336)
+			w.WriteInt32(1) // 已接取进行中
+			w.WriteUint8(0)
+			w.WriteUint16(1)
+			w.WriteInt32(1041)
+			w.WriteInt32(0)
+			w.WriteInt32(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+			return true
+		case protocol.ActionIDMissionGetSections:
+			// 模拟停机：客户端上下文被取消，服务端不再回包。
+			cancelOnce.Do(cancel)
+			return true
+		}
+		return false
+	})
+
+	var logs lockedLogBuffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevLogger)
+
+	routine := dungeon.NewDungeonSweepRoutine(repo, dungeon.SweepConfig{Pipeline: []string{"quest_cycle"}})
+	start := time.Now()
+	if err := routine.Execute(ctx, sess, nil); err != nil {
+		t.Fatalf("停机时推图 Routine 不应返回错误: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("停机后推图 Routine 未及时退出, 耗时 %v", elapsed)
+	}
+
+	logText := logs.String()
+	for _, banned := range []string{"进入剧情副本未收到有效响应", "激活章节关卡列表上下文失败"} {
+		if strings.Contains(logText, banned) {
+			t.Fatalf("停机期间不应产生业务告警 %q, 日志: %s", banned, logText)
+		}
 	}
 }
