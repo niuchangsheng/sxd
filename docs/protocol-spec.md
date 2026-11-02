@@ -321,3 +321,47 @@ Byte bless, Byte buff
   `FULL_TAKE_BIBLE_TIMES=18`、`PROTECT_TIME=20`、`FAILED=38`。
 - `get_take_bible_info` / `start_take_bible` 由客户端直接调用，二者均挂载在
   `DataBase.SOCKETSERVERTOWN`（跨服连接），**无需先调用 `open_take_bible`**。
+
+### 4.9 Module 345 (0x0159): 邮箱 (`Mod_Email_Base`)
+
+协议描述符采自官方客户端 `Main.swf` 的 `com.protocols.Mod_Email_Base`，
+主服 `DataBase.netCall` 会在请求末尾自动追加 4 字节 `PrevAct`，因此空请求
+的实际线格式为 `Uint32 prevAct`。
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x01590000` | `get_email_info` | `prevAct` | 邮件面板与列表，见下 |
+| 1 | `0x01590001` | `read_email` | `Int mailID, prevAct` | `UByte result, Int ?` |
+| 2 | `0x01590002` | `get_attachment_award` | `Int mailID, prevAct` | `UByte result` |
+| 3 | `0x01590003` | `delete_email` | `UByte type, Int mailID, prevAct` | `UByte result` |
+| 4 | `0x01590004` | `notify_new_email` | `prevAct` | `UByte` (服务端推送) |
+| 5 | `0x01590005` | `is_have_new_email` | `prevAct` | `UByte state` (1=未读) |
+| 6 | `0x01590006` | `one_key_get_award` | `prevAct` | `UByte result` |
+
+`get_email_info (0)` 回包线格式（AS3 描述符）：
+
+```
+Int, String, String, String, Int, UByte, UByte,
+[Int, Long], UByte, Long, UByte, Byte, Int
+```
+
+其中 `[Int, Long]` 为带 `Uint16 count` 前缀的附件列表记录。
+
+业务结果码（`Mod_Email_Base` 静态常量）：
+
+| 常量 | 值 | 含义 |
+| :--- | :---: | :--- |
+| `SUCCESS` | 8 | 收取成功 |
+| `ID_ERROR` | 9 | 邮件编号无效 |
+| `NOT_THIS_PLAYER` | 10 | 邮件不属于当前角色 |
+| `FAILURE` | 11 | 通用失败 |
+| `HAD_GET` | 12 | 附件已领取 |
+| `ITEM_PACKAGE_FULL` | 13 | 物品背包已满 |
+| `FATE_PACKAGE_FULL` | 14 | 命格背包已满 |
+| `LINK_FATE_PACK_FULL` | 15 | 命格链接背包已满 |
+| `DRAGONBALL_PACK_FULL` | 16 | 龙珠背包已满 |
+| `NO_AWARD` | 22 | 没有可领取的附件 |
+
+「邮箱一键收取」由 `one_key_get_award (6)` 完成；官方客户端在邮箱面板打开后
+触发，因此机器人侧先调用 `get_email_info (0)` 建立 `PrevAct` 链，再以
+`0x01590000` 作为 `prevAct` 发送 `0x01590006`。

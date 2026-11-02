@@ -2187,15 +2187,17 @@ func runMockGameServer(conn net.Conn) {
 			})
 			_ = protocol.WritePacket(conn, resPkt)
 
-		case protocol.ActionIDMailCollect:
-			// 响应一键收取邮件附件
-			resPkt := protocol.BuildMailCollectResultPacket(protocol.MailCollectResult{
-				Success:        true,
-				CollectedCount: 2,
-				RewardCoins:    20000,
-				Message:        "成功提取 2 封邮件附件！",
-			})
-			_ = protocol.WritePacket(conn, resPkt)
+		case protocol.ActionIDEmailGetInfo:
+			// 响应邮箱面板查询 (Mod 345, Act 0)，业务侧仅用于建立 prevAct 链。
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDEmailGetInfo, []byte{0}))
+
+		case protocol.ActionIDEmailIsHaveNew:
+			// 响应存在未读/新邮件 (Mod 345, Act 5)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDEmailIsHaveNew, []byte{protocol.EmailStateUnread}))
+
+		case protocol.ActionIDEmailOneKeyGetAward:
+			// 响应邮箱附件一键收取成功 (Mod 345, Act 6)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDEmailOneKeyGetAward, []byte{protocol.EmailResultSuccess}))
 
 		case protocol.ActionIDFateGetInfo:
 			// 响应仙旅奇缘状态查询

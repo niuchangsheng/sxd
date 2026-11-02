@@ -11,11 +11,6 @@ import (
 const (
 	// ActionIDDailySignIn 每日签到与福利领取协议号 (Module 0, Action 73 -> 0x00000049)
 	ActionIDDailySignIn uint32 = 0x00000049
-
-	// ActionIDMailGetList 查询邮件列表协议号 (Module 18, Action 0 -> 0x00120000)
-	ActionIDMailGetList uint32 = 0x00120000
-	// ActionIDMailCollect 一键收取所有邮件附件协议号 (Module 18, Action 1 -> 0x00120001)
-	ActionIDMailCollect uint32 = 0x00120001
 )
 
 // DailySignInRequest 代表查询或提交签到请求参数。
@@ -107,83 +102,5 @@ func ParseDailySignInResult(payload []byte) (*DailySignInResult, error) {
 		RewardCoins:   coins,
 		RewardIngots:  ingots,
 		Message:       msg,
-	}, nil
-}
-
-// MailCollectRequest 代表一键领取邮件附件请求。
-type MailCollectRequest struct {
-	// PrevAct 前序动作号
-	PrevAct uint32
-}
-
-// MailCollectResult 代表一键领取邮件附件回包。
-type MailCollectResult struct {
-	// Success 是否成功领取
-	Success bool
-	// CollectedCount 成功提取附件的邮件数量
-	CollectedCount int32
-	// RewardCoins 累计领取的铜钱
-	RewardCoins int64
-	// Message 结算文字提示
-	Message string
-}
-
-// BuildMailCollectPacket 构造一键领取邮件附件封包。
-func BuildMailCollectPacket(req MailCollectRequest) *Packet {
-	w := NewWriter()
-	prevAct := req.PrevAct
-	if prevAct == 0 {
-		prevAct = ActionIDMailGetList
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMailCollect, w.Bytes())
-}
-
-// ParseMailCollectRequest 从载荷中反序列化邮件提取请求。
-func ParseMailCollectRequest(payload []byte) (*MailCollectRequest, error) {
-	if len(payload) < 4 {
-		return &MailCollectRequest{PrevAct: ActionIDMailGetList}, nil
-	}
-	r := NewReader(payload)
-	prevAct, err := r.ReadUint32()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read prev_act: %v", ErrInvalidPayload, err)
-	}
-	return &MailCollectRequest{PrevAct: prevAct}, nil
-}
-
-// BuildMailCollectResultPacket 构造一键提取邮件响应封包。
-func BuildMailCollectResultPacket(res MailCollectResult) *Packet {
-	w := NewWriter()
-	var flag uint8
-	if res.Success {
-		flag = 1
-	}
-	w.WriteUint8(flag)
-	w.WriteInt32(res.CollectedCount)
-	w.WriteInt64(res.RewardCoins)
-	w.WriteString(res.Message)
-	return NewPacket(ActionIDMailCollect, w.Bytes())
-}
-
-// ParseMailCollectResult 从载荷中反序列化邮件提取回包。
-func ParseMailCollectResult(payload []byte) (*MailCollectResult, error) {
-	if len(payload) == 0 {
-		return &MailCollectResult{Success: true, Message: "领取完成"}, nil
-	}
-	r := NewReader(payload)
-	flag, err := r.ReadUint8()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read flag: %v", ErrInvalidPayload, err)
-	}
-	count, _ := r.ReadInt32()
-	coins, _ := r.ReadInt64()
-	msg, _ := r.ReadString()
-
-	return &MailCollectResult{
-		Success:        flag == 1,
-		CollectedCount: count,
-		RewardCoins:    coins,
-		Message:        msg,
 	}, nil
 }

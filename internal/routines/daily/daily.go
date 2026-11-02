@@ -119,7 +119,14 @@ func NewDailyQuestRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewMailCollectRoutine 构造自动领取邮件附件任务。
+// NewMailCollectRoutine 构造邮箱附件一键收取任务。
+//
+// 协议依据官方客户端 Main.swf 的 Mod_Email_Base (Module 345)：
+//   - get_email_info:    Action 0，打开邮箱面板并同步邮件列表
+//   - one_key_get_award: Action 6，一键领取全部带附件邮件
+//
+// 主服请求末尾由客户端框架自动追加 4 字节 PrevAct，因此空请求线格式为
+// uint32 PrevAct。先打开邮箱面板再一键收取，以对齐官方客户端的 prevAct 链。
 func NewMailCollectRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"mail_collect",
@@ -135,7 +142,7 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 			// 1. 前置卫语句：背包空余检查 (防爆仓)
 			state := session.GetPlayerState()
 			if state.BagCapacity <= 0 {
-				slog.Warn("背包容量不足，暂不收取邮件附件", "role_id", session.RoleID())
+				slog.Warn("背包容量不足，暂不收取邮箱附件", "role_id", session.RoleID())
 				return scheduler.ErrBagFull
 			}
 
@@ -144,38 +151,71 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			slog.Info("正在执行日常任务: 邮件附件一键收取", "role_id", session.RoleID())
+			slog.Info("正在执行日常任务: 邮箱附件一键收取", "role_id", session.RoleID())
 
-			// 3. 发送一键提取邮件附件请求
-			reqPkt := protocol.BuildMailCollectPacket(protocol.MailCollectRequest{
-				PrevAct: protocol.ActionIDMailGetList,
-			})
-
-			callCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-			respPkt, err := session.Call(callCtx, reqPkt, protocol.ActionIDMailCollect)
-			cancel()
-
-			// 4. 解析收取结果 (兼容异步通知网关)
-			if err == nil && respPkt != nil {
-				res, pErr := protocol.ParseMailCollectResult(respPkt.Payload)
-				if pErr == nil && res.Success {
-					slog.Info("邮件附件收取完成",
-						"role_id", session.RoleID(),
-						"collected_count", res.CollectedCount,
-						"reward_coins", res.RewardCoins,
-						"message", res.Message,
-					)
-
-					if res.RewardCoins > 0 {
-						session.UpdatePlayerState(func(ps *client.PlayerState) {
-							ps.Coins += res.RewardCoins
-						})
-					}
-					return nil
-				}
+			// 3. 打开邮箱面板并同步邮件列表 (Mod 345, Act 0)
+			prevAct := protocol.ActionIDTownEnter
+			infoPkt := protocol.BuildEmailGetInfoPacket(prevAct)
+			infoCtx, infoCancel := context.WithTimeout(ctx, 3*time.Second)
+			infoResp, infoErr := session.Call(infoCtx, infoPkt, protocol.ActionIDEmailGetInfo)
+			infoCancel()
+			if infoErr != nil || infoResp == nil {
+				slog.Warn("邮箱面板同步失败，继续尝试一键收取", "role_id", session.RoleID(), "err", infoErr)
+			} else {
+				prevAct = protocol.ActionIDEmailGetInfo
+				slog.Info("邮箱面板已同步", "role_id", session.RoleID())
 			}
 
-			slog.Info("邮件附件一键收取指令已发送", "role_id", session.RoleID())
+			// 4. 一键领取全部邮件附件 (Mod 345, Act 6)
+			collectPkt := protocol.BuildEmailOneKeyGetAwardPacket(prevAct)
+			callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			respPkt, err := session.Call(callCtx, collectPkt, protocol.ActionIDEmailOneKeyGetAward)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("邮箱一键收取请求失败: %w", err)
+			}
+			if respPkt == nil {
+				return fmt.Errorf("邮箱一键收取未收到回包")
+			}
+
+			// 5. 解析业务结果码并按语义熔断
+			result, err := protocol.ParseEmailOneKeyGetAwardResult(respPkt.Payload)
+			if err != nil {
+				return fmt.Errorf("解析邮箱一键收取回包失败: %w", err)
+			}
+
+			resultText := protocol.EmailResultText(result)
+			switch result {
+			case protocol.EmailResultSuccess:
+				slog.Info("邮箱附件一键收取完成",
+					"role_id", session.RoleID(),
+					"result", result,
+					"result_text", resultText,
+				)
+			case protocol.EmailResultNoAward, protocol.EmailResultHadGet:
+				slog.Info("邮箱暂无可收取附件",
+					"role_id", session.RoleID(),
+					"result", result,
+					"result_text", resultText,
+				)
+			case protocol.EmailResultItemPackFull,
+				protocol.EmailResultFatePackFull,
+				protocol.EmailResultLinkFatePackFull,
+				protocol.EmailResultDragonballPackFull:
+				slog.Warn("邮箱附件收取失败: 背包已满",
+					"role_id", session.RoleID(),
+					"result", result,
+					"result_text", resultText,
+				)
+				return scheduler.ErrBagFull
+			default:
+				// 业务确定性失败 (失败/编号无效/非本角色) 不重试，等待下一调度窗口。
+				slog.Warn("邮箱附件收取被服务端拒绝",
+					"role_id", session.RoleID(),
+					"result", result,
+					"result_text", resultText,
+				)
+			}
 			return nil
 		},
 	)
@@ -329,4 +369,3 @@ func NewVIPWelfareRoutine() scheduler.ActivityRoutine {
 		},
 	)
 }
-
