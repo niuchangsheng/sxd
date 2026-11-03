@@ -193,10 +193,12 @@ const (
 	// ActionIDHuanshouInvadeSettle 幻兽入侵战斗结算 (Module 696, Action 4 -> 0x02B80004)
 	ActionIDHuanshouInvadeSettle uint32 = 0x02B80004
 
-	// ActionIDWuFaFieldInfo 查询悟法领域属性 (Module 658, Action 1 -> 0x02920001)
-	ActionIDWuFaFieldInfo uint32 = 0x02920001
-	// ActionIDWuFaDrawCard 悟法领域感悟抽卡 (Module 658, Action 0 -> 0x02920000)
-	ActionIDWuFaDrawCard uint32 = 0x02920000
+	// ActionIDWuFaFieldInfo 查询悟法领域面板 (Module 658, Action 0 -> 0x02920000)
+	// 官方 Mod_WuFaField_Base.panel_info: request=[]，response 无 result_code。
+	ActionIDWuFaFieldInfo uint32 = 0x02920000
+	// ActionIDWuFaDrawCard 悟法领域感悟抽卡 (Module 658, Action 1 -> 0x02920001)
+	// 官方 Mod_WuFaField_Base.draw: request=[Int field_type, UByte draw_type]。
+	ActionIDWuFaDrawCard uint32 = 0x02920001
 
 	// ActionIDMasterPracticePanel 查询宗师修行面板与境界 (Module 665, Action 1 -> 0x02990001)
 	ActionIDMasterPracticePanel uint32 = 0x02990001

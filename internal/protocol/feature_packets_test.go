@@ -122,10 +122,20 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDHuanshouInvadeSettle, pHuanNode.ActionID)
 	}
 
-	// 14. 悟法领域 (Module 658, Action 0)
-	pWuFa := protocol.BuildWuFaDrawCardPacket(0)
+	// 14. 悟法领域 (Module 658, Action 0 panel_info / Action 1 draw)
+	pWuFaInfo := protocol.BuildWuFaFieldInfoPacket(0)
+	if pWuFaInfo.ActionID != protocol.ActionIDWuFaFieldInfo {
+		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDWuFaFieldInfo, pWuFaInfo.ActionID)
+	}
+	if len(pWuFaInfo.Payload) != 4 {
+		t.Errorf("悟法面板请求应仅含 PrevAct (4 字节), 实际 %d 字节", len(pWuFaInfo.Payload))
+	}
+	pWuFa := protocol.BuildWuFaDrawCardPacket(2, protocol.WuFaDrawOne, 0)
 	if pWuFa.ActionID != protocol.ActionIDWuFaDrawCard {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDWuFaDrawCard, pWuFa.ActionID)
+	}
+	if len(pWuFa.Payload) != 9 {
+		t.Errorf("悟法抽卡请求应为 Int field_type + UByte draw_type + PrevAct (9 字节), 实际 %d 字节", len(pWuFa.Payload))
 	}
 
 	// 15. 宗师修行 (Module 665, Action 5)

@@ -2836,6 +2836,66 @@ func runMockGameServer(conn net.Conn) {
 
 		case protocol.ActionIDBeelzebubTrialsGetMoralAward:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetMoralAward, []byte{protocol.BeelzebubTrialsSuccess}))
+
+		case protocol.ActionIDWuFaFieldInfo:
+			// 悟法领域面板: 2 个秘馆；秘馆 1 有 1 次免费单抽，秘馆 2 有 1 次免费十连。
+			w := protocol.NewWriter()
+			w.WriteUint16(2)
+			// 秘馆 1
+			w.WriteInt32(1) // field_type
+			w.WriteInt32(0) // today_count
+			w.WriteInt32(0) // total_count
+			w.WriteInt32(0) // curr_count_id
+			w.WriteInt32(1) // left_free_one_count
+			w.WriteInt32(0) // left_free_ten_count
+			w.WriteInt32(0) // wish_gongfa
+			w.WriteInt32(0) // wish_gongfa_prob
+			w.WriteInt32(0) // left_total_ten_count
+			// 秘馆 2
+			w.WriteInt32(2)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			w.WriteInt32(1) // left_free_ten_count
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			// 资源列表
+			w.WriteUint16(1)
+			w.WriteInt32(8364)
+			w.WriteInt32(10)
+			w.WriteInt32(0)
+			// 公共字段 11 个 Int + is_skip
+			w.WriteInt32(0) // gift_start_time
+			w.WriteInt32(0) // gift_end_time
+			w.WriteInt32(0) // have_privilege
+			w.WriteInt32(0) // book_store_is_open
+			w.WriteInt32(1) // ru_men_field_active
+			w.WriteInt32(0) // psychic_tbld_level
+			w.WriteInt32(0) // psychic_res_num
+			w.WriteInt32(0) // is_lucky_day
+			w.WriteInt32(2) // rest_times
+			w.WriteInt32(0) // discount_num
+			w.WriteInt32(0) // indexTime
+			w.WriteInt8(1)  // is_skip
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDWuFaFieldInfo, w.Bytes()))
+
+		case protocol.ActionIDWuFaDrawCard:
+			// 悟法感悟抽卡成功，返回 1 项奖励与剩余次数。
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.WuFaResultSuccess)
+			w.WriteUint16(1)
+			w.WriteInt32(8364) // item_id
+			w.WriteInt32(1)    // item_num
+			w.WriteInt32(0)    // change_item_id
+			w.WriteInt32(0)    // change_item_num
+			w.WriteInt32(0)    // is_synthesize
+			w.WriteInt32(0)    // is_up_level
+			w.WriteInt32(0)    // psychic_add_item_num
+			w.WriteInt32(0)    // lucky_item_num
+			w.WriteInt32(1)    // rest_times
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDWuFaDrawCard, w.Bytes()))
 		}
 	}
 }

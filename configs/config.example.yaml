@@ -63,7 +63,7 @@ scheduler:
     lingdao_practice: true      # 11. 灵道初解
     huanshou_invade: true       # 12. 山海幻兽
     herb_garden: true           # 13. 药园种植
-    wufa_field: true            # 14. 悟法领域
+    wufa_field: true            # 14. 悟法领域 (按面板免费次数抽卡，不消耗元宝)
     master_practice: true       # 15. 宗师修行
     treasure_house: true        # 16. 天帝宝库
     find_immortal: true         # 17. 喜从天降 (画龙鱼，只走免费流程)

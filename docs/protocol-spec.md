@@ -456,3 +456,62 @@ Uint16 rankCount, rankCount × [
 - 结果码：`SUCCESS=13`、`CD_TIME=14`、`NOT_ENOUGH_CHALLENGE_TIMES=15`、
   `NOT_IN_LIST=16`、`FAIL=17`。跨服自动化遇到 CD_TIME/次数不足时直接结束本轮，
   不主动消耗元宝清冷却或购买次数。
+
+### 4.11 Module 658 (0x0292): 悟法领域 (`Mod_WuFaField_Base`)
+
+协议描述符采自官方客户端 `Main.swf` 的 `com.protocols.Mod_WuFaField_Base`
+与 `com.datas.WuFaFieldData`。该模块的 Action 0/1 与灵道初解共用 Module 658：
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x02920000` | `panel_info` | 空 | 面板数据，**无 result_code** |
+| 1 | `0x02920001` | `draw` | `Int field_type, UByte draw_type` | `UByte result, [award], Int rest_times` |
+
+`panel_info` 回包线格式：
+
+```
+Uint16 fieldCount, fieldCount × [
+    Int32 field_type, Int32 today_count, Int32 total_count,
+    Int32 curr_count_id, Int32 left_free_one_count,
+    Int32 left_free_ten_count, Int32 wish_gongfa,
+    Int32 wish_gongfa_prob, Int32 left_total_ten_count ],
+Uint16 itemCount, itemCount × [
+    Int32 item_id, Int32 item_num, Int32 exception_num ],
+Int32 gift_start_time, Int32 gift_end_time, Int32 have_privilege,
+Int32 book_store_is_open, Int32 ru_men_field_active,
+Int32 psychic_tbld_level, Int32 psychic_res_num, Int32 is_lucky_day,
+Int32 rest_times, Int32 discount_num, Int32 indexTime, Byte is_skip
+```
+
+`draw` 回包中每个 `award` 为 8 个 Int32：
+
+```
+Int32 item_id, Int32 item_num, Int32 change_item_id, Int32 change_item_num,
+Int32 is_synthesize, Int32 is_up_level, Int32 psychic_add_item_num,
+Int32 lucky_item_num
+```
+
+`draw_type`：`DRAW_ONE=0`、`DRAW_TEN=1`。自动化仅使用
+`left_free_one_count` / `left_free_ten_count` 提供的免费次数，不消耗元宝或感悟道具。
+
+结果码（`Mod_WuFaField_Base` 静态常量）：
+
+| 常量 | 值 | 含义 |
+| :--- | :---: | :--- |
+| `SUCCESS` | 2 | 抽卡成功 |
+| `FAILED` | 3 | 通用失败 |
+| `NOT_ENOUGH_INGOT` | 4 | 元宝不足 |
+| `FUNCTION_NO_OPEN` | 5 | 功能未开启 |
+| `NOT_ENOUGH_RESOURSE` | 6 | 资源不足（官方拼写） |
+| `COUNT_LIMIT` | 7 | 次数已达上限 |
+| `NOT_ENOUGH_COUNT` | 8 | 剩余次数不足 |
+| `OVER_GET` | 9 | 已领取 |
+| `ITEM_PACK_FULL` | 10 | 物品背包已满 |
+| `NOT_ENOUGH_RESOURCE` | 11 | 资源不足 |
+| `WEEK_NUM_LIMT` | 12 | 周次数已达上限 |
+| `NOT_ENOUGH_RECHARGE_INGOT` | 13 | 充值元宝不足 |
+| `IS_BUY` | 14 | 已购买 |
+| `IS_HAVE` | 15 | 已拥有 |
+| `FULL_GRADE` | 16 | 已满级 |
+| `FIELD_TYPE_ERROR` | 17 | 秘馆类型错误 |
+| `NO_ENOUGTH_DRAW_TIMES` | 18 | 感悟次数不足 |

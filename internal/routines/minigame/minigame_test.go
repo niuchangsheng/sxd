@@ -92,6 +92,20 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 		}
 	})
 
+	t.Run("悟法领域面板解析与免费感悟", func(t *testing.T) {
+		r := NewWuFaRoutine()
+		if r.Name() != "wufa_field" {
+			t.Fatalf("任务名称不匹配: %s", r.Name())
+		}
+		if err := r.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("悟法领域执行失败: %v", err)
+		}
+		// Mock 面板中秘馆 2 有免费十连，应优先执行十连抽卡。
+		if got := session.LastActionID(); got != protocol.ActionIDWuFaDrawCard {
+			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDWuFaDrawCard, got)
+		}
+	})
+
 	t.Run("空会话防御", func(t *testing.T) {
 		routine := NewTravelEventRoutine(qaEngine)
 		if err := routine.Execute(context.Background(), nil, nil); err != client.ErrNotConnected {
@@ -277,5 +291,82 @@ func TestFiveBlessingsRoutine_Execute(t *testing.T) {
 
 	if err := routine.Execute(context.Background(), nil, nil); err != client.ErrNotConnected {
 		t.Errorf("空会话期望 ErrNotConnected, 实际: %v", err)
+	}
+}
+
+func TestSelectWuFaFreeDraw(t *testing.T) {
+	panel := &protocol.WuFaPanel{
+		Fields: []protocol.WuFaFieldState{
+			{FieldType: 1, LeftFreeOneCount: 2},
+			{FieldType: 2, LeftFreeTenCount: 1},
+			{FieldType: 3, LeftFreeTenCount: 1},
+		},
+	}
+	fieldType, drawType, ok := selectWuFaFreeDraw(panel)
+	if !ok || fieldType != 3 || drawType != protocol.WuFaDrawTen {
+		t.Fatalf("应优先选择免费十连且同次数取高 field_type, 实际 field=%d draw=%d ok=%v", fieldType, drawType, ok)
+	}
+
+	panel = &protocol.WuFaPanel{
+		Fields: []protocol.WuFaFieldState{
+			{FieldType: 1, LeftFreeOneCount: 2},
+			{FieldType: 2, LeftFreeOneCount: 1},
+		},
+	}
+	fieldType, drawType, ok = selectWuFaFreeDraw(panel)
+	if !ok || fieldType != 1 || drawType != protocol.WuFaDrawOne {
+		t.Fatalf("无免费十连时应选择免费单抽, 实际 field=%d draw=%d ok=%v", fieldType, drawType, ok)
+	}
+
+	panel = &protocol.WuFaPanel{
+		Fields: []protocol.WuFaFieldState{{FieldType: 1}},
+	}
+	if _, _, ok := selectWuFaFreeDraw(panel); ok {
+		t.Fatal("无免费次数时不应选择抽卡")
+	}
+	if _, _, ok := selectWuFaFreeDraw(nil); ok {
+		t.Fatal("nil 面板不应选择抽卡")
+	}
+}
+
+func TestClassifyWuFaDrawResult(t *testing.T) {
+	cases := []struct {
+		code uint8
+		want error
+	}{
+		{protocol.WuFaResultSuccess, nil},
+		{protocol.WuFaResultOverGet, nil},
+		{protocol.WuFaResultIsBuy, nil},
+		{protocol.WuFaResultIsHave, nil},
+		{protocol.WuFaResultFullGrade, nil},
+		{protocol.WuFaResultCountLimit, scheduler.ErrAttemptsExhausted},
+		{protocol.WuFaResultNotEnoughCount, scheduler.ErrAttemptsExhausted},
+		{protocol.WuFaResultWeekNumLimit, scheduler.ErrAttemptsExhausted},
+		{protocol.WuFaResultNoEnoughDrawTimes, scheduler.ErrAttemptsExhausted},
+		{protocol.WuFaResultItemPackFull, scheduler.ErrBagFull},
+		{protocol.WuFaResultNotEnoughIngot, scheduler.ErrConditionNotMet},
+		{protocol.WuFaResultNotEnoughResourse, scheduler.ErrConditionNotMet},
+		{protocol.WuFaResultNotEnoughResource, scheduler.ErrConditionNotMet},
+		{protocol.WuFaResultNotEnoughRecharge, scheduler.ErrConditionNotMet},
+		{protocol.WuFaResultFunctionNotOpen, scheduler.ErrConditionNotMet},
+	}
+	for _, tc := range cases {
+		got := classifyWuFaDrawResult(tc.code)
+		if tc.want == nil {
+			if got != nil {
+				t.Errorf("结果码 %d 应返回 nil, 实际 %v", tc.code, got)
+			}
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("结果码 %d 期望 %v, 实际 %v", tc.code, tc.want, got)
+		}
+	}
+
+	if err := classifyWuFaDrawResult(protocol.WuFaResultFieldTypeError); err == nil {
+		t.Error("秘馆类型错误应返回错误")
+	}
+	if err := classifyWuFaDrawResult(200); err == nil {
+		t.Error("未知结果码应返回错误")
 	}
 }

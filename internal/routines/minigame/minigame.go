@@ -618,6 +618,13 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 }
 
 // NewWuFaRoutine 构造悟法领域感悟抽卡与技能配置任务 (Feature 14: 悟法领域)。
+//
+// 协议对齐原版 Main.swf Mod_WuFaField_Base:
+//   - Action 0 panel_info 查询秘馆、资源与免费次数
+//   - Action 1 draw 感悟抽卡，请求 [Int field_type, UByte draw_type]
+//
+// 仅使用剩余免费次数，不主动消耗元宝或感悟道具备用次数；
+// 服务端返回的业务失败码全部解析并按语义熔断。
 func NewWuFaRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"wufa_field",
@@ -634,24 +641,157 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行益智任务: 悟法领域技能感悟与领悟", "role_id", session.RoleID())
 
-			// 1. 查询领域属性 (Mod 658, Act 1)
-			infoPkt := protocol.BuildWuFaFieldInfoPacket(2, protocol.ActionIDTownEnter)
+			// 1. 查询悟法领域面板 (Mod 658, Act 0)。
+			// 官方面板回包没有 result_code，只能通过结构完整性校验判断是否可信。
+			infoPkt := protocol.BuildWuFaFieldInfoPacket(protocol.ActionIDTownEnter)
 			iCtx, iCancel := context.WithTimeout(ctx, 2*time.Second)
-			_, _ = session.Call(iCtx, infoPkt, protocol.ActionIDWuFaFieldInfo)
+			infoResp, err := session.Call(iCtx, infoPkt, protocol.ActionIDWuFaFieldInfo)
 			iCancel()
-
-			// 2. 悟法感悟抽卡 (Mod 658, Act 0)
-			drawPkt := protocol.BuildWuFaDrawCardPacket(protocol.ActionIDWuFaFieldInfo)
-			dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
-			resp, err := session.Call(dCtx, drawPkt, protocol.ActionIDWuFaDrawCard)
-			dCancel()
-
-			if err == nil && resp != nil {
-				slog.Info("悟法领域技能感悟成功", "role_id", session.RoleID())
+			if err != nil || infoResp == nil {
+				slog.Warn("查询悟法领域面板未收到回包", "role_id", session.RoleID(), "err", err)
+				return nil
 			}
+
+			panel, err := protocol.ParseWuFaPanel(infoResp.Payload)
+			if err != nil {
+				slog.Warn("解析悟法领域面板回包失败",
+					"role_id", session.RoleID(),
+					"err", err,
+					"payload_hex", fmt.Sprintf("%x", infoResp.Payload),
+				)
+				return fmt.Errorf("解析悟法领域面板回包失败: %w", err)
+			}
+
+			fieldType, drawType, ok := selectWuFaFreeDraw(panel)
+			if !ok {
+				slog.Info("悟法领域当前无免费感悟次数，跳过本次抽卡",
+					"role_id", session.RoleID(),
+					"rest_times", panel.RestTimes,
+				)
+				return nil
+			}
+
+			// 2. 感悟抽卡 (Mod 658, Act 1)，仅使用免费次数。
+			drawPkt := protocol.BuildWuFaDrawCardPacket(fieldType, drawType, protocol.ActionIDWuFaFieldInfo)
+			dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
+			drawResp, err := session.Call(dCtx, drawPkt, protocol.ActionIDWuFaDrawCard)
+			dCancel()
+			if err != nil || drawResp == nil {
+				slog.Warn("悟法领域感悟抽卡未收到回包",
+					"role_id", session.RoleID(),
+					"field_type", fieldType,
+					"draw_type", drawType,
+					"err", err,
+				)
+				return nil
+			}
+
+			result, err := protocol.ParseWuFaDrawResult(drawResp.Payload)
+			if err != nil {
+				slog.Warn("解析悟法感悟抽卡回包失败",
+					"role_id", session.RoleID(),
+					"err", err,
+					"payload_hex", fmt.Sprintf("%x", drawResp.Payload),
+				)
+				return fmt.Errorf("解析悟法感悟抽卡回包失败: %w", err)
+			}
+
+			if result.Result != protocol.WuFaResultSuccess {
+				err = classifyWuFaDrawResult(result.Result)
+				if err == nil {
+					slog.Info("悟法领域感悟抽卡无需执行",
+						"role_id", session.RoleID(),
+						"field_type", fieldType,
+						"draw_type", drawType,
+						"result", result.Result,
+						"result_text", protocol.WuFaResultText(result.Result),
+						"rest_times", result.RestTimes,
+					)
+					return nil
+				}
+				slog.Warn("悟法领域感悟抽卡返回业务失败",
+					"role_id", session.RoleID(),
+					"field_type", fieldType,
+					"draw_type", drawType,
+					"result", result.Result,
+					"result_text", protocol.WuFaResultText(result.Result),
+					"rest_times", result.RestTimes,
+				)
+				return err
+			}
+
+			slog.Info("悟法领域技能感悟成功",
+				"role_id", session.RoleID(),
+				"field_type", fieldType,
+				"draw_type", drawType,
+				"award_count", len(result.Awards),
+				"rest_times", result.RestTimes,
+			)
 			return nil
 		},
 	)
+}
+
+// selectWuFaFreeDraw 从面板中挑选免费次数最多的秘馆与抽卡类型。
+//
+// 优先使用免费十连，其次免费单抽；同等次数下选择更高 field_type 的秘馆。
+// 无任何免费次数时返回 ok=false，由调用方跳过抽卡，避免消耗元宝或感悟道具。
+func selectWuFaFreeDraw(panel *protocol.WuFaPanel) (fieldType int32, drawType uint8, ok bool) {
+	if panel == nil {
+		return 0, 0, false
+	}
+
+	bestTenField, bestTenCount := int32(0), int32(0)
+	bestOneField, bestOneCount := int32(0), int32(0)
+	for _, field := range panel.Fields {
+		if field.LeftFreeTenCount > 0 &&
+			(field.LeftFreeTenCount > bestTenCount || (field.LeftFreeTenCount == bestTenCount && field.FieldType > bestTenField)) {
+			bestTenField, bestTenCount = field.FieldType, field.LeftFreeTenCount
+		}
+		if field.LeftFreeOneCount > 0 &&
+			(field.LeftFreeOneCount > bestOneCount || (field.LeftFreeOneCount == bestOneCount && field.FieldType > bestOneField)) {
+			bestOneField, bestOneCount = field.FieldType, field.LeftFreeOneCount
+		}
+	}
+
+	if bestTenCount > 0 {
+		return bestTenField, protocol.WuFaDrawTen, true
+	}
+	if bestOneCount > 0 {
+		return bestOneField, protocol.WuFaDrawOne, true
+	}
+	return 0, 0, false
+}
+
+// classifyWuFaDrawResult 将官方悟法结果码映射为调度器可识别的业务语义。
+//
+// 成功与幂等状态（已领取/已拥有/已满级）返回 nil；
+// 次数类失败触发次日熔断，背包满触发短冷却，其余条件不满足触发条件熔断，
+// 未知或协议错误返回普通错误以终止本轮，避免盲目重发。
+func classifyWuFaDrawResult(code uint8) error {
+	switch code {
+	case protocol.WuFaResultSuccess,
+		protocol.WuFaResultOverGet,
+		protocol.WuFaResultIsBuy,
+		protocol.WuFaResultIsHave,
+		protocol.WuFaResultFullGrade:
+		return nil
+	case protocol.WuFaResultCountLimit,
+		protocol.WuFaResultNotEnoughCount,
+		protocol.WuFaResultWeekNumLimit,
+		protocol.WuFaResultNoEnoughDrawTimes:
+		return scheduler.ErrAttemptsExhausted
+	case protocol.WuFaResultItemPackFull:
+		return scheduler.ErrBagFull
+	case protocol.WuFaResultNotEnoughIngot,
+		protocol.WuFaResultNotEnoughResourse,
+		protocol.WuFaResultNotEnoughResource,
+		protocol.WuFaResultNotEnoughRecharge,
+		protocol.WuFaResultFunctionNotOpen:
+		return scheduler.ErrConditionNotMet
+	default:
+		return fmt.Errorf("悟法领域感悟失败: result=%d (%s)", code, protocol.WuFaResultText(code))
+	}
 }
 
 // NewMasterPracticeRoutine 构造宗师修行挑战与突破任务 (Feature 15: 宗师修行)。

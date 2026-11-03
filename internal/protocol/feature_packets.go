@@ -556,11 +556,12 @@ func BuildHuanshouInvadeSweepPacket(prevAct uint32) *Packet {
 // 14. 悟法领域
 // --------------------------------------------------------------------------------
 
-// BuildWuFaFieldInfoPacket 构造查询悟法领域属性封包 (Module 658, Action 1)。
-func BuildWuFaFieldInfoPacket(fieldID int32, prevAct uint32) *Packet {
+// BuildWuFaFieldInfoPacket 构造查询悟法领域面板封包 (Module 658, Action 0)。
+//
+// 对齐官方 Mod_WuFaField_Base.panel_info：request 为空，仅携带 PrevAct。
+// 响应体由 ParseWuFaPanel 解析；官方协议中该回包没有 result_code。
+func BuildWuFaFieldInfoPacket(prevAct uint32) *Packet {
 	w := NewWriter()
-	w.WriteInt32(fieldID)
-	w.WriteUint8(0)
 	if prevAct == 0 {
 		prevAct = ActionIDTownEnter
 	}
@@ -568,9 +569,14 @@ func BuildWuFaFieldInfoPacket(fieldID int32, prevAct uint32) *Packet {
 	return NewPacket(ActionIDWuFaFieldInfo, w.Bytes())
 }
 
-// BuildWuFaDrawCardPacket 构造悟法抽卡感悟封包 (Module 658, Action 0)。
-func BuildWuFaDrawCardPacket(prevAct uint32) *Packet {
+// BuildWuFaDrawCardPacket 构造悟法领域感悟抽卡封包 (Module 658, Action 1)。
+//
+// 对齐官方 Mod_WuFaField_Base.draw：request=[Int field_type, UByte draw_type]，
+// draw_type 取 WuFaDrawOne (0) 或 WuFaDrawTen (1)。
+func BuildWuFaDrawCardPacket(fieldType int32, drawType uint8, prevAct uint32) *Packet {
 	w := NewWriter()
+	w.WriteInt32(fieldType)
+	w.WriteUint8(drawType)
 	if prevAct == 0 {
 		prevAct = ActionIDWuFaFieldInfo
 	}
