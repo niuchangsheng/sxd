@@ -1902,7 +1902,9 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 	if s.cfg.MaxReconnectAttempts > 0 && s.reconnectAttempts >= s.cfg.MaxReconnectAttempts {
 		slog.Error("超过最大重连尝试次数，会话终止",
 			"role_id", s.cfg.RoleID,
+			"server_addr", s.cfg.ServerAddr,
 			"attempts", s.reconnectAttempts,
+			"error", err,
 		)
 		s.setState(StateClosed)
 		return false
@@ -2097,6 +2099,11 @@ func runMockGameServer(conn net.Conn) {
 
 	// 喜从天降 mock 状态: 持有 2 枚龙鱼令、1 次五福祈福机会
 	findImmortalTokens := int16(2)
+	// 对齐线上抓包: start 回包的 remain_number 是“剩余吹鱼次数”(随鱼随机),
+	// 与龙鱼令数量无关，因此固定返回 3，防止再次把它误当龙鱼令余量。
+	findImmortalGoadRemain := int16(3)
+	// 初始存在一条上一轮遗留的未领取龙鱼，用于覆盖召唤回包 GOADING 的恢复分支。
+	findImmortalPending := true
 	findImmortalState := int8(0)
 	findImmortalCultivation := int32(1000)
 	findImmortalTotalCount := int32(5)
@@ -2403,10 +2410,13 @@ func runMockGameServer(conn net.Conn) {
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalOpen, w.Bytes()))
 
 		case protocol.ActionIDFindImmortalStart:
-			// 响应召唤龙鱼: 消耗一枚龙鱼令
+			// 响应召唤龙鱼: 存在未领取龙鱼时返回 GOADING，否则消耗一枚龙鱼令
 			result := protocol.FindImmortalResultSuccess
-			if findImmortalTokens > 0 {
+			if findImmortalPending {
+				result = protocol.FindImmortalResultGoading
+			} else if findImmortalTokens > 0 {
 				findImmortalTokens--
+				findImmortalPending = true
 				findImmortalState = 0
 			} else {
 				result = protocol.FindImmortalResultHaveNotNumber
@@ -2416,7 +2426,7 @@ func runMockGameServer(conn net.Conn) {
 			writeFindImmortalAwardMock(w, findImmortalState)
 			w.WriteInt8(findImmortalState)
 			w.WriteInt8(1) // god_id
-			w.WriteInt16(findImmortalTokens)
+			w.WriteInt16(findImmortalGoadRemain)
 			w.WriteInt32(findImmortalTotalCount)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalStart, w.Bytes()))
 
@@ -2434,7 +2444,8 @@ func runMockGameServer(conn net.Conn) {
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalGoad, w.Bytes()))
 
 		case protocol.ActionIDFindImmortalPickupAward:
-			// 响应收取龙鱼奖励: 累计仙令增加并重置品阶
+			// 响应收取龙鱼奖励: 累计仙令增加、清空待领取龙鱼并重置品阶
+			findImmortalPending = false
 			findImmortalCultivation += 100
 			findImmortalTotalCount++
 			w := protocol.NewWriter()

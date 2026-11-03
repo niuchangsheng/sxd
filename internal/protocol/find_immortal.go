@@ -16,6 +16,10 @@
 //
 // 客户端 DataBase.netCall 会在请求参数末尾追加前序 Module/Action 四字节，
 // 因此所有空参数请求的载荷均为 4 字节前序协议号。
+//
+// 线上抓包 (2026-11-03) 确认服务端会在上述声明布局之后额外追加 12 字节扩展
+// 字段 (panel 36 vs 24、start 33 vs 21、pickup 29 vs 17)，累计仙令等面板字段
+// 位于该扩展字段内。本解析器只消费客户端声明的前缀，扩展字段暂不解析。
 package protocol
 
 import "fmt"
@@ -44,7 +48,8 @@ type FindImmortalPanel struct {
 	State int8
 	// GodID 当前龙鱼形象编号
 	GodID int8
-	// Cultivation 累计仙令
+	// Cultivation 累计仙令。注意: 线上抓包显示该偏移读到的并非累计仙令，
+	// 真实值位于回包末尾 12 字节扩展字段内，当前字段仅供诊断，不可作为业务依据。
 	Cultivation int32
 	// TotalCount 累计领取次数
 	TotalCount int32
@@ -60,7 +65,8 @@ type FindImmortalStartResult struct {
 	State int8
 	// GodID 新龙鱼形象编号
 	GodID int8
-	// RemainNumber 剩余龙鱼令数量
+	// RemainNumber 剩余吹鱼次数 (随龙鱼随机)，并非龙鱼令余量。
+	// 龙鱼令余量必须通过 Action 5 get_xun_xian_ling_number 查询。
 	RemainNumber int16
 	// TotalCount 累计领取次数
 	TotalCount int32
@@ -86,7 +92,8 @@ type FindImmortalPickupResult struct {
 	Result uint8
 	// Award 本次收取的奖励
 	Award FindImmortalAward
-	// Cultivation 收取后的累计仙令
+	// Cultivation 本次收取获得的仙令 (线上抓包与累计仙令的增量一致)。
+	// 累计仙令位于回包末尾 12 字节扩展字段中，当前解析器未消费该扩展字段。
 	Cultivation int32
 }
 

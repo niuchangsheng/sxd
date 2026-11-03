@@ -243,6 +243,8 @@ func TestFindImmortalRoutine_Execute(t *testing.T) {
 				t.Fatalf("领域不匹配: %s", dr.Domain())
 			}
 		}
+		// mock 初始存在一条遗留龙鱼: 首次召唤返回 GOADING，例程必须先收取清空
+		// 再重试召唤；若 GOADING 恢复分支缺失，最后动作会停留在召唤而非收奖。
 		if err := routine.Execute(context.Background(), session, nil); err != nil {
 			t.Fatalf("喜从天降画龙鱼执行失败: %v", err)
 		}
@@ -257,6 +259,34 @@ func TestFindImmortalRoutine_Execute(t *testing.T) {
 			t.Errorf("期望 ErrNotConnected, 实际: %v", err)
 		}
 	})
+}
+
+func TestResolveFindImmortalRemain(t *testing.T) {
+	cases := []struct {
+		name        string
+		before      int16
+		refreshed   int16
+		refreshedOK bool
+		wantTokens  int16
+		wantMore    bool
+	}{
+		{name: "回查确认递减", before: 4, refreshed: 3, refreshedOK: true, wantTokens: 3, wantMore: true},
+		{name: "回查确认归零", before: 1, refreshed: 0, refreshedOK: true, wantTokens: 0, wantMore: true},
+		{name: "回查余量未变化", before: 2, refreshed: 2, refreshedOK: true, wantTokens: 2, wantMore: false},
+		{name: "回查余量反而增加", before: 2, refreshed: 4, refreshedOK: true, wantTokens: 4, wantMore: false},
+		{name: "回查失败", before: 2, refreshed: 0, refreshedOK: false, wantTokens: 2, wantMore: false},
+		{name: "回查返回负值", before: 2, refreshed: -1, refreshedOK: true, wantTokens: 2, wantMore: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotTokens, gotMore := resolveFindImmortalRemain(tc.before, tc.refreshed, tc.refreshedOK)
+			if gotTokens != tc.wantTokens || gotMore != tc.wantMore {
+				t.Errorf("resolveFindImmortalRemain() = (%d, %v), want (%d, %v)",
+					gotTokens, gotMore, tc.wantTokens, tc.wantMore)
+			}
+		})
+	}
 }
 
 func TestFiveBlessingsRoutine_Execute(t *testing.T) {

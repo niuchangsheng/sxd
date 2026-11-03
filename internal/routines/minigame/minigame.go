@@ -1265,10 +1265,11 @@ func executeFindImmortalFish(ctx context.Context, session *client.RoleSession, j
 		return
 	}
 
-	// 3. 串行召唤并直接领取龙鱼奖励，直到龙鱼令耗尽 (Mod 68, Act 2 + Act 4)
+	// 3. 串行召唤并直接领取龙鱼奖励，直到龙鱼令耗尽 (Mod 68, Act 2 + Act 4)。
+	// 每枚龙鱼令至多支撑一次召唤，用初始数量做硬上限，防止异常回包导致死循环。
 	initialTokens := tokens
 	rounds := 0
-	for tokens > 0 {
+	for tokens > 0 && rounds < int(initialTokens) {
 		if err := ctx.Err(); err != nil {
 			slog.Info("喜从天降任务已取消，提前退出", "role_id", session.RoleID(), "err", err)
 			return
@@ -1278,20 +1279,26 @@ func executeFindImmortalFish(ctx context.Context, session *client.RoleSession, j
 		}
 
 		beforeTokens := tokens
-		startPkt := protocol.BuildFindImmortalStartPacket(prevAct)
-		sCtx, sCancel := context.WithTimeout(ctx, 3*time.Second)
-		sResp, sErr := session.Call(sCtx, startPkt, protocol.ActionIDFindImmortalStart)
-		sCancel()
-		if sErr != nil || sResp == nil {
-			slog.Warn("喜从天降召唤龙鱼未收到回包", "role_id", session.RoleID(), "err", sErr)
-			return
-		}
-		start, err := protocol.ParseFindImmortalStartResult(sResp.Payload)
-		if err != nil {
-			slog.Warn("解析喜从天降召唤龙鱼回包失败", "role_id", session.RoleID(), "err", err)
+		start, sErr := summonFindImmortalFish(ctx, session, prevAct)
+		if sErr != nil {
+			slog.Warn("喜从天降召唤龙鱼未收到回包或解析失败", "role_id", session.RoleID(), "err", sErr)
 			return
 		}
 		prevAct = protocol.ActionIDFindImmortalStart
+
+		// GOADING 表示服务端仍存在未领取的龙鱼 (例如上一轮熔断遗留)，
+		// 先收取清空后再重试一次召唤。
+		if start.Result == protocol.FindImmortalResultGoading {
+			slog.Warn("喜从天降存在未领取的龙鱼，先收取清空后重试召唤", "role_id", session.RoleID())
+			pickupFindImmortal(ctx, session, &prevAct)
+			start, sErr = summonFindImmortalFish(ctx, session, prevAct)
+			if sErr != nil {
+				slog.Warn("喜从天降清空遗留龙鱼后重试召唤失败", "role_id", session.RoleID(), "err", sErr)
+				return
+			}
+			prevAct = protocol.ActionIDFindImmortalStart
+		}
+
 		if start.Result != protocol.FindImmortalResultSuccess {
 			logFindImmortalResult("召唤龙鱼", session.RoleID(), start.Result)
 			break
@@ -1304,19 +1311,32 @@ func executeFindImmortalFish(ctx context.Context, session *client.RoleSession, j
 			"remain_number", start.RemainNumber,
 			"total_count", start.TotalCount,
 		)
-		if start.RemainNumber >= beforeTokens {
-			slog.Warn("喜从天降龙鱼令未按预期递减，熔断退出",
+
+		// 线上抓包确认 start 回包中的 remain_number 是“剩余吹鱼次数”(随鱼随机，
+		// 12:57 回包为 4 而同轮 Act 5 查询为 0)，与龙鱼令余量无关，不能作为
+		// 循环依据；每轮召唤成功后统一回查 Act 5 取得权威余量。
+		refreshed, refreshOK := queryFindImmortalTokens(ctx, session, prevAct)
+		if refreshOK {
+			prevAct = protocol.ActionIDFindImmortalGetXunXianLing
+		}
+		nextTokens, progressed := resolveFindImmortalRemain(beforeTokens, refreshed, refreshOK)
+		if !progressed {
+			slog.Warn("喜从天降召唤后龙鱼令未按预期递减，熔断退出",
 				"role_id", session.RoleID(),
 				"before_xun_xian_ling", beforeTokens,
-				"after_xun_xian_ling", start.RemainNumber,
+				"queried_xun_xian_ling", refreshed,
+				"query_ok", refreshOK,
 			)
-			tokens = start.RemainNumber
-			break
 		}
-		tokens = start.RemainNumber
+
+		// 已成功召唤的龙鱼必须领取，避免回包异常时把龙鱼遗留在面板上。
+		pickupFindImmortal(ctx, session, &prevAct)
 		rounds++
 
-		pickupFindImmortal(ctx, session, &prevAct)
+		tokens = nextTokens
+		if !progressed {
+			break
+		}
 	}
 
 	slog.Info("喜从天降画龙鱼流程完成",
@@ -1325,6 +1345,26 @@ func executeFindImmortalFish(ctx context.Context, session *client.RoleSession, j
 		"rounds", rounds,
 		"remain_xun_xian_ling", tokens,
 	)
+}
+
+// summonFindImmortalFish 发送一次召唤龙鱼请求 (Mod 68, Act 2) 并解析业务结果码。
+func summonFindImmortalFish(ctx context.Context, session *client.RoleSession, prevAct uint32) (*protocol.FindImmortalStartResult, error) {
+	pkt := protocol.BuildFindImmortalStartPacket(prevAct)
+	sCtx, sCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer sCancel()
+
+	resp, err := session.Call(sCtx, pkt, protocol.ActionIDFindImmortalStart)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("召唤龙鱼未收到回包")
+	}
+	start, parseErr := protocol.ParseFindImmortalStartResult(resp.Payload)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	return start, nil
 }
 
 // pickupFindImmortal 收取当前龙鱼奖励 (Mod 68, Act 4)，不调用 any 元宝消耗接口。
@@ -1359,6 +1399,19 @@ func pickupFindImmortal(ctx context.Context, session *client.RoleSession, prevAc
 		"award_yu_pai", pickup.Award.YuPai,
 		"cultivation", pickup.Cultivation,
 	)
+}
+
+// resolveFindImmortalRemain 依据召唤后的龙鱼令回查结果裁决本轮是否继续召唤。
+//
+// start_find_immortal 回包中的 remain_number 属于“剩余吹鱼次数”一类随鱼随机
+// 的值，与龙鱼令余量无关 (线上抓包: 召唤前查询 1，召唤后回包 3，同轮回查 0)，
+// 因此必须使用 get_xun_xian_ling_number 的权威回查结果。回查失败或余量未递减
+// 时返回召唤前数量并停止继续召唤，交由调用方熔断退出。
+func resolveFindImmortalRemain(before, refreshed int16, refreshedOK bool) (int16, bool) {
+	if !refreshedOK || refreshed < 0 {
+		return before, false
+	}
+	return refreshed, refreshed < before
 }
 
 // queryFindImmortalTokens 查询龙鱼令数量 (Mod 68, Act 5)。
