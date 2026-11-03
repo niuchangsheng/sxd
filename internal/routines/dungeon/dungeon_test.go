@@ -1936,13 +1936,15 @@ func TestDungeonSweep_QuestAcceptLostResponseRecovery(t *testing.T) {
 	repo := &mockQuestDungeonRepo{
 		quests: map[int]*dictionary.Quest{
 			336: {
-				ID:        336,
-				Type:      4,
-				Lock:      10100,
-				Level:     1,
-				Title:     "精英罗虎王",
-				MissionID: 456,
-				AwardExp:  440000, AwardCoins: 88000,
+				ID:         336,
+				Type:       4,
+				Lock:       10100,
+				Level:      1,
+				Title:      "精英罗虎王",
+				BeginNPCID: 53,
+				EndNPCID:   53,
+				MissionID:  456,
+				AwardExp:   440000, AwardCoins: 88000,
 			},
 		},
 		missions: map[int]*dictionary.Mission{
@@ -1995,6 +1997,19 @@ func TestDungeonSweep_QuestAcceptLostResponseRecovery(t *testing.T) {
 			w.WriteInt32(cur)
 			w.WriteInt32(1)
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+			return true
+
+		case protocol.ActionIDQuestGetNPCQuests:
+			recordEvent("get_npc_quests")
+			w := protocol.NewWriter()
+			w.WriteUint16(1)
+			w.WriteInt32(336)
+			if accepted.Load() {
+				w.WriteUint8(1) // 1=已接取
+			} else {
+				w.WriteUint8(0) // 0=可接取
+			}
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestGetNPCQuests, w.Bytes()))
 			return true
 
 		case protocol.ActionIDQuestAccept:
@@ -2070,6 +2085,20 @@ func TestDungeonSweep_QuestAcceptLostResponseRecovery(t *testing.T) {
 	if !strings.Contains(joined, "accept_quest") {
 		t.Fatalf("未发送 accept_quest, events=%v", events)
 	}
+	// 官方 NPCDialogView 流程要求接取前先以 npc_info_by_npcid 打开 NPC 对话，
+	// 否则 2026 网关会因缺少 PrevAct 前置链静默丢弃 accept_quest。
+	npcIdx, acceptIdx := -1, -1
+	for i, evt := range events {
+		if evt == "get_npc_quests" && npcIdx == -1 {
+			npcIdx = i
+		}
+		if evt == "accept_quest" && acceptIdx == -1 {
+			acceptIdx = i
+		}
+	}
+	if npcIdx == -1 || acceptIdx == -1 || npcIdx > acceptIdx {
+		t.Fatalf("accept_quest 前未先打开 NPC 对话, events=%v", events)
+	}
 	if !strings.Contains(joined, "plot_enter:456") {
 		t.Fatalf("接取回包丢失后未继续推进剧情副本, events=%v", events)
 	}
@@ -2078,6 +2107,19 @@ func TestDungeonSweep_QuestAcceptLostResponseRecovery(t *testing.T) {
 	}
 	if !strings.Contains(joined, "complete_quest") {
 		t.Fatalf("接取回包丢失后未继续交付任务, events=%v", events)
+	}
+	// 交付前同样必须先打开 NPC 对话，建立 complete_quest 的 PrevAct 前置链。
+	dialogIdx, completeIdx := -1, -1
+	for i, evt := range events {
+		if evt == "get_npc_quests" {
+			dialogIdx = i
+		}
+		if evt == "complete_quest" && completeIdx == -1 {
+			completeIdx = i
+		}
+	}
+	if dialogIdx == -1 || completeIdx == -1 || dialogIdx > completeIdx {
+		t.Fatalf("complete_quest 前未先打开 NPC 对话, events=%v", events)
 	}
 }
 

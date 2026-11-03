@@ -1561,12 +1561,80 @@ func errSessionTerminated(ctx context.Context, err error) bool {
 	return errors.Is(err, client.ErrSessionClosed) || errors.Is(err, context.Canceled)
 }
 
-// acceptQuestWithRecovery 接取任务，并在回包超时丢失时复核服务端任务列表，避免网关偶发丢包把
-// 本可接取的任务误判为失败、进而跳过整轮接取并阻塞调度周期。
+// questBeginNPCID / questEndNPCID 安全读取任务字典中的 NPC 编号，供 Mod 3 对话前置链使用。
+func questBeginNPCID(q *dictionary.Quest) int32 {
+	if q == nil {
+		return 0
+	}
+	return int32(q.BeginNPCID)
+}
+
+func questEndNPCID(q *dictionary.Quest) int32 {
+	if q == nil {
+		return 0
+	}
+	return int32(q.EndNPCID)
+}
+
+// queryNPCQuestState 按官方客户端 NPCDialogView.npc_info_by_npcid 流程打开指定 NPC 的对话，
+// 返回目标任务在该 NPC 处的状态 (0=可接取, 1=已接取, 2=可交付)。任务不在列表中时返回 nil。
+func queryNPCQuestState(ctx context.Context, session *client.RoleSession, npcID, questID int32) (*int32, error) {
+	npcPkt, _ := protocol.BuildGetNPCQuestsPacket(protocol.GetNPCQuestsRequest{
+		NPCID:   npcID,
+		PrevAct: session.LastActionID(),
+	})
+	npcCtx, npcCancel := context.WithTimeout(ctx, 3*time.Second)
+	npcResp, npcErr := session.Call(npcCtx, npcPkt, protocol.ActionIDQuestGetNPCQuests)
+	npcCancel()
+	if npcErr != nil {
+		return nil, npcErr
+	}
+	if npcResp == nil {
+		return nil, errors.New("dungeon: empty npc quest response")
+	}
+	items, pErr := protocol.ParseNPCQuestsResponse(npcResp.Payload)
+	if pErr != nil {
+		return nil, pErr
+	}
+	for _, it := range items {
+		if it.QuestID == questID {
+			state := int32(it.State)
+			return &state, nil
+		}
+	}
+	return nil, nil
+}
+
+// acceptQuestWithRecovery 按官方客户端 NPCDialogView 的对话前置流程接取任务：
+// 先以 npc_info_by_npcid (Module 3, Action 1) 打开 NPC 对话，再发送 accept_quest
+// (Module 3, Action 3)。2026 网关按 PrevAct 原子链校验业务时序，若 accept_quest 直接
+// 紧接 town_quest_show 发送，会因缺少 NPC 对话前置被静默丢弃 (无任何回包)。
+// 回包超时后再复核服务端任务列表，覆盖「服务端已受理、仅回包丢失」的情况。
 // 返回 (是否接取成功, 服务端结果码, 最后一次通信错误)。
-func acceptQuestWithRecovery(ctx context.Context, session *client.RoleSession, questID int32) (bool, uint8, error) {
+func acceptQuestWithRecovery(ctx context.Context, session *client.RoleSession, questID, beginNPCID int32) (bool, uint8, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 2; attempt++ {
+		// 0. 打开 NPC 对话并复核任务状态，建立服务端要求的 PrevAct 前置链。
+		if beginNPCID > 0 {
+			npcState, npcErr := queryNPCQuestState(ctx, session, beginNPCID, questID)
+			if npcErr != nil {
+				if errSessionTerminated(ctx, npcErr) {
+					return false, 0, npcErr
+				}
+				// NPC 对话查询失败不直接阻断接取: 保留旧路径，交由服务端裁决。
+				slog.Warn("打开 NPC 任务对话失败，仍尝试直接接取",
+					"role_id", session.RoleID(), "quest_id", questID, "npc_id", beginNPCID, "err", npcErr)
+			} else if npcState != nil {
+				// QuestType.Accepted(1) / Completed(2): 服务端已受理，幂等返回成功。
+				if *npcState == 1 || *npcState == 2 {
+					slog.Info("NPC 对话已确认任务处于已接取状态，跳过重复接取",
+						"role_id", session.RoleID(), "quest_id", questID,
+						"npc_id", beginNPCID, "state", *npcState)
+					return true, 0, nil
+				}
+			}
+		}
+
 		accPkt, _ := protocol.BuildAcceptQuestPacket(protocol.AcceptQuestRequest{
 			QuestID: questID,
 			PrevAct: session.LastActionID(),
@@ -1701,7 +1769,7 @@ func executeAuthoritativeQuestCycle(
 			}
 			slog.Info("正在交付已达成任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 
-			ok, packFull := submitCompleteQuest(ctx, session, it.QuestID)
+			ok, packFull := submitCompleteQuest(ctx, session, it.QuestID, questEndNPCID(q))
 			if packFull {
 				slog.Warn("背包已满，无法交付任务领取奖励，退出推图循环", "role_id", session.RoleID(), "quest_id", it.QuestID)
 				return
@@ -1768,7 +1836,9 @@ func executeAuthoritativeQuestCycle(
 			}
 			slog.Info("发现可接取任务，正在接受", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 
-			accepted, resCode, accErr := acceptQuestWithRecovery(ctx, session, it.QuestID)
+			// 按官方 NPCDialogView 流程，接取前需先以 BeginNPCId 打开 NPC 对话，
+			// 建立服务端 PrevAct 原子链所需的 npc_info_by_npcid 前置动作。
+			accepted, resCode, accErr := acceptQuestWithRecovery(ctx, session, it.QuestID, questBeginNPCID(q))
 			if accepted {
 				slog.Info("成功接受任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 				acceptedAny = true
@@ -1802,7 +1872,7 @@ func executeAuthoritativeQuestCycle(
 					if q != nil && q.Title != "" {
 						title = q.Title
 					}
-					if ok, _ := submitCompleteQuest(ctx, session, it.QuestID); ok {
+					if ok, _ := submitCompleteQuest(ctx, session, it.QuestID, questEndNPCID(q)); ok {
 						session.RemoveQuest(uint32(it.QuestID))
 						if q != nil {
 							session.AddRewards(q.AwardExp, q.AwardCoins)
@@ -1867,7 +1937,7 @@ func executeAuthoritativeQuestCycle(
 				_, _ = session.Call(finCtx, finPkt, protocol.ActionIDQuestFinish)
 				finCancel()
 
-				ok, packFull := submitCompleteQuest(ctx, session, it.QuestID)
+				ok, packFull := submitCompleteQuest(ctx, session, it.QuestID, questEndNPCID(q))
 				if packFull {
 					slog.Warn("背包已满，无法交付对话任务", "role_id", session.RoleID(), "quest_id", q.ID)
 					return
@@ -1922,11 +1992,24 @@ func executeAuthoritativeQuestCycle(
 }
 
 // submitCompleteQuest 向服务端发送完成并交付任务请求 (Mod 3, Act 5: complete_quest)。
+// 交付前先按官方 NPCDialogView 流程以 EndNPCId 打开 NPC 对话 (npc_info_by_npcid)，
+// 建立服务端 PrevAct 原子链所需的对话前置；缺失时网关会静默丢弃 complete_quest。
 // 依据客户端 NPCDialogView.onComplete (Method 6441) 字节码约定：
 //   - completedState > 0 (如 1, 3, 5): 交付成功 (completeQuestCallback)
 //   - completedState == 0 (且为 16B 完整回包): 背包已满 (NPCDialogViewLang.PackFull)
 //   - completedState == -1 (0xFF): 任务物品不足或未达成 (NPCDialogViewLang.QuestItem)
-func submitCompleteQuest(ctx context.Context, session *client.RoleSession, questID int32) (succeeded bool, packFull bool) {
+func submitCompleteQuest(ctx context.Context, session *client.RoleSession, questID, endNPCID int32) (succeeded bool, packFull bool) {
+	// 0. 打开 NPC 交付对话，建立 PrevAct 前置链。
+	if endNPCID > 0 {
+		if _, npcErr := queryNPCQuestState(ctx, session, endNPCID, questID); npcErr != nil {
+			if errSessionTerminated(ctx, npcErr) {
+				return false, false
+			}
+			slog.Warn("打开 NPC 交付对话失败，仍尝试直接交付",
+				"role_id", session.RoleID(), "quest_id", questID, "npc_id", endNPCID, "err", npcErr)
+		}
+	}
+
 	// 1. 发送 complete_quest (0x00030005) 真正交付任务并领取奖励
 	subPkt := protocol.BuildSubmitCompleteQuestPacket(questID, session.LastActionID())
 	subCtx, subCancel := context.WithTimeout(ctx, 3*time.Second)
@@ -2204,7 +2287,7 @@ func advanceQuestMission(
 				}
 			}
 			if questState == 2 {
-				ok, _ := submitCompleteQuest(ctx, session, int32(q.ID))
+				ok, _ := submitCompleteQuest(ctx, session, int32(q.ID), questEndNPCID(q))
 				if ok {
 					session.RemoveQuest(uint32(q.ID))
 					session.AddRewards(q.AwardExp, q.AwardCoins)
