@@ -2142,6 +2142,10 @@ func advanceQuestMission(
 			mapID = int32(targetMission.SectionID)
 		}
 		targetKnownUncleared := false
+		// targetInSections 记录目标关卡是否出现在 get_sections 章节列表中。
+		// 未出现说明该关卡尚未解锁 (或章节列表拉取失败)，此时 Module 25 扫荡会被网关静默丢弃，
+		// 必须直接走剧情副本，避免每次空等 5 秒。
+		targetInSections := false
 		if mapID > 0 {
 			secPkt := protocol.BuildMissionGetSectionsPacket(mapID, session.LastActionID())
 			secCtx, secCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -2167,6 +2171,7 @@ func advanceQuestMission(
 						if int(sec.MissionID) == targetMission.ID {
 							targetStatus = sec.Status
 							targetFound = true
+							targetInSections = true
 							targetKnownUncleared = sec.Status == 0
 						}
 					}
@@ -2199,7 +2204,7 @@ func advanceQuestMission(
 				"mission_id", targetMission.ID,
 				"name", targetMission.Name,
 			)
-		} else if !targetKnownUncleared {
+		} else if !targetKnownUncleared && targetInSections {
 			practiced, _, pErr = practiceMission(ctx, session, int32(targetMission.ID), batchCount, ensureStamina, totalCostStamina, totalGainExp, totalGainCoins)
 			if pErr != nil {
 				if errors.Is(pErr, scheduler.ErrStaminaDepleted) || errors.Is(pErr, scheduler.ErrBagFull) {
@@ -2207,10 +2212,15 @@ func advanceQuestMission(
 				}
 			}
 		} else {
-			slog.Info("关卡尚未首通，跳过 Module 25 扫荡直接进入剧情副本",
+			reason := "关卡尚未首通"
+			if !targetInSections {
+				reason = "关卡不在已开放章节列表中 (未解锁或列表拉取失败)"
+			}
+			slog.Info("跳过 Module 25 扫荡直接进入剧情副本",
 				"role_id", session.RoleID(),
 				"mission_id", targetMission.ID,
 				"name", targetMission.Name,
+				"reason", reason,
 			)
 		}
 
@@ -2675,19 +2685,45 @@ func challengeStoryMission(
 	}
 
 	// 3. 结算星级评价 (Mod 4, Act 3: rank_mission)
+	// 回包解析铁律: 结算三步必须持有回包并校验非空。任一步超时都说明服务端仍停留在副本态，
+	// 此时继续发起后续 Mod 4/25 请求会被网关静默丢弃，必须立即中止并交由外层重试。
 	rankCtx, rankCancel := context.WithTimeout(ctx, 3*time.Second)
-	_, _ = session.Call(rankCtx, protocol.BuildMissionRankPacket(protocol.ActionIDMissionFightMonster), protocol.ActionIDMissionRank)
+	rankResp, rankErr := session.Call(rankCtx, protocol.BuildMissionRankPacket(protocol.ActionIDMissionFightMonster), protocol.ActionIDMissionRank)
 	rankCancel()
+	if rankErr != nil || rankResp == nil {
+		if errSessionTerminated(ctx, rankErr) {
+			return false
+		}
+		slog.Warn("副本星级结算未收到有效响应", "role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name, "err", rankErr)
+		resetTownScene(session)
+		return false
+	}
 
 	// 4. 开启通关宝箱 (Mod 4, Act 4: open_box)
 	boxCtx, boxCancel := context.WithTimeout(ctx, 3*time.Second)
-	_, _ = session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(protocol.ActionIDMissionRank), protocol.ActionIDMissionOpenBox)
+	boxResp, boxErr := session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(protocol.ActionIDMissionRank), protocol.ActionIDMissionOpenBox)
 	boxCancel()
+	if boxErr != nil || boxResp == nil {
+		if errSessionTerminated(ctx, boxErr) {
+			return false
+		}
+		slog.Warn("副本通关宝箱开启未收到有效响应", "role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name, "err", boxErr)
+		resetTownScene(session)
+		return false
+	}
 
 	// 5. 拾取宝箱奖励 (Mod 4, Act 5: pickup_award)
 	pickCtx, pickCancel := context.WithTimeout(ctx, 3*time.Second)
-	_, _ = session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
+	pickResp, pickErr := session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
 	pickCancel()
+	if pickErr != nil || pickResp == nil {
+		if errSessionTerminated(ctx, pickErr) {
+			return false
+		}
+		slog.Warn("副本结算奖励拾取未收到有效响应", "role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name, "err", pickErr)
+		resetTownScene(session)
+		return false
+	}
 
 	// 通关完成，返回城镇场景
 	resetTownScene(session)

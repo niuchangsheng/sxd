@@ -1762,9 +1762,10 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 	err := protocol.WritePacket(s.conn, p)
 	if err == nil && p != nil {
 		s.lastSendTime.Store(time.Now().UnixNano())
-		if p.ActionID != s.cfg.HeartbeatActionID {
-			s.lastActionID.Store(p.ActionID)
-		}
+		// 心跳同样会推进服务端 PrevAct 原子链：实测心跳之后紧接的 Mod 4 get_sections
+		// 若仍携带心跳之前的旧 PrevAct 会被网关静默丢弃。官方客户端同样按“最后发送的动作”
+		// 计算 PrevAct，因此这里不能把心跳排除在 lastActionID 之外。
+		s.lastActionID.Store(p.ActionID)
 		slog.Debug("发送网关请求", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", p.ActionID, p.ActionID>>16, p.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(p.Payload))
 	}
 	return err
@@ -1785,9 +1786,7 @@ func (s *RoleSession) SendCompressed(p *protocol.Packet) error {
 	err := protocol.WriteCompressedPacket(s.conn, p)
 	if err == nil && p != nil {
 		s.lastSendTime.Store(time.Now().UnixNano())
-		if p.ActionID != s.cfg.HeartbeatActionID {
-			s.lastActionID.Store(p.ActionID)
-		}
+		s.lastActionID.Store(p.ActionID)
 	}
 	return err
 }
@@ -1809,9 +1808,7 @@ func (s *RoleSession) SendRaw(data []byte) error {
 		s.lastSendTime.Store(time.Now().UnixNano())
 		if len(data) >= 8 {
 			actID := binary.BigEndian.Uint32(data[4:8])
-			if actID != s.cfg.HeartbeatActionID {
-				s.lastActionID.Store(actID)
-			}
+			s.lastActionID.Store(actID)
 		}
 	}
 	return err

@@ -1516,6 +1516,149 @@ func TestDungeonSweep_EliteQuestCycle_Module4FirstClear(t *testing.T) {
 	}
 }
 
+// TestDungeonSweep_UnlistedMission_SkipsModule25 验证目标关卡不在 get_sections 章节列表时，
+// 不得再发起必然被网关静默丢弃的 Module 25 扫荡，而应直接走 Module 4 剧情副本首通。
+func TestDungeonSweep_UnlistedMission_SkipsModule25(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	sess.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.Level = 67
+	})
+
+	repo := &mockQuestDungeonRepo{
+		quests: map[int]*dictionary.Quest{
+			257: {
+				ID:         257,
+				Type:       1,
+				Lock:       0,
+				Level:      1,
+				Title:      "羽族仙子",
+				MissionID:  364,
+				AwardExp:   5000,
+				AwardCoins: 20000,
+			},
+		},
+		missions: map[int]*dictionary.Mission{
+			364: {
+				ID:          364,
+				SectionID:   31,
+				MissionLock: 24025,
+				MapID:       13,
+				Name:        "扶桑神树(3)",
+				Type:        0,
+				Monsters:    "1007",
+			},
+		},
+	}
+
+	var events []string
+	var eventsMu sync.Mutex
+	recordEvent := func(evt string) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, evt)
+	}
+
+	var cleared atomic.Bool
+	var completed atomic.Bool
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDQuestList:
+			w := protocol.NewWriter()
+			if completed.Load() {
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+				return true
+			}
+			state := int32(1)
+			if cleared.Load() {
+				state = 2
+			}
+			w.WriteUint16(1)
+			w.WriteInt32(257)
+			w.WriteInt32(state)
+			w.WriteUint8(4) // NeedType NOONE: 仅需通关关联关卡
+			w.WriteUint16(0)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+			return true
+
+		case protocol.ActionIDMissionGetSections:
+			recordEvent("get_sections")
+			w := protocol.NewWriter()
+			w.WriteUint16(0) // 目标关卡尚未解锁，不在章节列表中
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionGetSections, w.Bytes()))
+			return true
+
+		case protocol.ActionIDPracticeStart, protocol.ActionIDPracticeGetStatus:
+			recordEvent("practice_start")
+			return true
+
+		case protocol.ActionIDMissionPlotEnter:
+			mid := int32(0)
+			if len(pkt.Payload) >= 4 {
+				mid = int32(binary.BigEndian.Uint32(pkt.Payload[:4]))
+			}
+			recordEvent(fmt.Sprintf("plot_enter:%d", mid))
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionPlotEnter, []byte{protocol.MissionResultSuccess}))
+			return true
+
+		case protocol.ActionIDMissionFightMonster:
+			mt := int32(0)
+			if len(pkt.Payload) >= 4 {
+				mt = int32(binary.BigEndian.Uint32(pkt.Payload[:4]))
+			}
+			recordEvent(fmt.Sprintf("fight_monster:%d", mt))
+			cleared.Store(true)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionFightMonster, []byte{0x00, protocol.MissionResultSuccess}))
+			return true
+
+		case protocol.ActionIDMissionRank:
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionRank, []byte{0x00}))
+			return true
+		case protocol.ActionIDMissionOpenBox:
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionOpenBox, []byte{0x00}))
+			return true
+		case protocol.ActionIDMissionPickupAward:
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDMissionPickupAward, []byte{0x00}))
+			return true
+		case protocol.ActionIDQuestSubmitComplete:
+			recordEvent("complete_quest")
+			completed.Store(true)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestSubmitComplete, []byte{0x01}))
+			return true
+		}
+		return false
+	})
+
+	cfg := dungeon.SweepConfig{Pipeline: []string{"quest_cycle"}}
+	routine := dungeon.NewDungeonSweepRoutine(repo, cfg)
+	if err := routine.Execute(context.Background(), sess, nil); err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("推图执行失败: %v", err)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+
+	joined := strings.Join(events, ",")
+	if !strings.Contains(joined, "plot_enter:364") {
+		t.Fatalf("未解锁关卡应直接走剧情副本 plot_enter, events=%v", events)
+	}
+	if !strings.Contains(joined, "fight_monster:1007") {
+		t.Fatalf("未解锁关卡应直接挑战怪物编队, events=%v", events)
+	}
+	for _, evt := range events {
+		if evt == "practice_start" {
+			t.Fatalf("目标关卡不在章节列表时不应发起 Module 25 扫荡, events=%v", events)
+		}
+	}
+}
+
 func TestSixRealmsRoutine_ExecutionFlow(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
