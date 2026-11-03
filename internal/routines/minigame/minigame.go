@@ -672,7 +672,7 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 2. 感悟抽卡 (Mod 658, Act 1)，仅使用免费次数。
-			drawPkt := protocol.BuildWuFaDrawCardPacket(fieldType, drawType, protocol.ActionIDWuFaFieldInfo)
+			drawPkt := protocol.BuildWuFaDrawCardPacket(fieldType, drawType)
 			dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
 			drawResp, err := session.Call(dCtx, drawPkt, protocol.ActionIDWuFaDrawCard)
 			dCancel()

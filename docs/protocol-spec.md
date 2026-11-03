@@ -474,6 +474,11 @@ Uint16 rankCount, rankCount × [
 | 0 | `0x02920000` | `panel_info` | 空 | 面板数据，**无 result_code** |
 | 1 | `0x02920001` | `draw` | `Int field_type, UByte draw_type` | `UByte result, [award], Int rest_times` |
 
+> **实采陷阱（2026-11-03 线上验证）**：`draw` 处理器对请求做严格长度校验，
+> 末尾追加 4 字节 `PrevAct`（`0000000100` + `02920000`，共 9 字节）会被服务端
+> 静默丢弃且无任何回包；同一字段/类型去掉 `PrevAct`（严格 5 字节）后立即返回
+> 结果码 `2`。`panel_info` 则接受 `PrevAct`。自动化侧 `draw` 请求必须固定 5 字节。
+
 `panel_info` 回包线格式：
 
 ```

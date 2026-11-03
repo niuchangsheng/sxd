@@ -3,6 +3,7 @@ package protocol_test
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/hex"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
@@ -130,12 +131,13 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 	if len(pWuFaInfo.Payload) != 4 {
 		t.Errorf("悟法面板请求应仅含 PrevAct (4 字节), 实际 %d 字节", len(pWuFaInfo.Payload))
 	}
-	pWuFa := protocol.BuildWuFaDrawCardPacket(2, protocol.WuFaDrawOne, 0)
+	pWuFa := protocol.BuildWuFaDrawCardPacket(2, protocol.WuFaDrawOne)
 	if pWuFa.ActionID != protocol.ActionIDWuFaDrawCard {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDWuFaDrawCard, pWuFa.ActionID)
 	}
-	if len(pWuFa.Payload) != 9 {
-		t.Errorf("悟法抽卡请求应为 Int field_type + UByte draw_type + PrevAct (9 字节), 实际 %d 字节", len(pWuFa.Payload))
+	// 线上实采: draw 处理器会静默丢弃带 PrevAct 的载荷, 请求必须严格为 5 字节。
+	if got := hex.EncodeToString(pWuFa.Payload); got != "0000000200" {
+		t.Errorf("悟法抽卡请求应为 Int field_type + UByte draw_type (0000000200), 实际 %s", got)
 	}
 
 	// 15. 宗师修行 (Module 665, Action 5)

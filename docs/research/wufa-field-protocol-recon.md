@@ -42,3 +42,16 @@
 
 Module 658 的 Action 0 与灵道初解状态查询共用 ActionID，但请求/回包结构不同，
 自动化侧必须按当前业务上下文解释回包，禁止仅凭 ActionID 判定归属。
+
+## 线上实采修正（2026-11-03）
+
+`draw (0x02920001)` 的线上处理器对请求做严格长度校验：
+
+- 按官方客户端习惯在 `Int field_type + UByte draw_type` 后追加 4 字节 `PrevAct`
+  （例如 `0000000100` + `02920000`，共 9 字节）时，服务端**静默丢弃、无任何回包**，
+  自动化表现为 `context deadline exceeded`；
+- 同一 `field_type=1, draw_type=0` 去掉 `PrevAct`（严格 5 字节 `0000000100`）后
+  立即回包 `02 0001 000020aa 0000000f ... 00000000`，首字节 `2` 即 `SUCCESS`；
+- `panel_info (0x02920000)` 则正常接受 `PrevAct`（请求 4 字节）。
+
+因此 `BuildWuFaDrawCardPacket` 固定输出 5 字节，禁止再拼接前序动作号。

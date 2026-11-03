@@ -573,14 +573,14 @@ func BuildWuFaFieldInfoPacket(prevAct uint32) *Packet {
 //
 // 对齐官方 Mod_WuFaField_Base.draw：request=[Int field_type, UByte draw_type]，
 // draw_type 取 WuFaDrawOne (0) 或 WuFaDrawTen (1)。
-func BuildWuFaDrawCardPacket(fieldType int32, drawType uint8, prevAct uint32) *Packet {
+//
+// 线上实采 (2026-11-03): draw 处理器对载荷做严格长度校验，末尾追加 4 字节 PrevAct
+// 会被服务端静默丢弃且无任何回包；去掉 PrevAct 后同一载荷立即返回结果码 2。
+// 因此本请求固定为 5 字节，禁止再拼 prevAct。
+func BuildWuFaDrawCardPacket(fieldType int32, drawType uint8) *Packet {
 	w := NewWriter()
 	w.WriteInt32(fieldType)
 	w.WriteUint8(drawType)
-	if prevAct == 0 {
-		prevAct = ActionIDWuFaFieldInfo
-	}
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDWuFaDrawCard, w.Bytes())
 }
 
