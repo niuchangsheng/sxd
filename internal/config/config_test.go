@@ -149,6 +149,62 @@ func TestConfig_LoadConfigYamlIfExists(t *testing.T) {
 	}
 }
 
+func TestConfig_LogDefaultsAndOverride(t *testing.T) {
+	minimalYaml := `
+server:
+  port: 9090
+`
+	tmpFile := filepath.Join(t.TempDir(), "log_default.yaml")
+	if err := os.WriteFile(tmpFile, []byte(minimalYaml), 0644); err != nil {
+		t.Fatalf("write tmpFile failed: %v", err)
+	}
+	cfg, err := config.Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load minimal config failed: %v", err)
+	}
+	if !cfg.Log.IsEnabled() {
+		t.Errorf("expected log.enabled default true")
+	}
+	if cfg.Log.Dir != "logs" || cfg.Log.File != "sxd.log" || cfg.Log.Level != "info" {
+		t.Errorf("unexpected log defaults: %+v", cfg.Log)
+	}
+	if cfg.Log.MaxSizeMB != 10 || cfg.Log.RotateInterval != "24h" {
+		t.Errorf("unexpected log rotation defaults: %+v", cfg.Log)
+	}
+
+	overrideYaml := `
+server:
+  port: 9090
+log:
+  enabled: false
+  dir: /tmp/sxd-logs
+  file: role.log
+  level: warn
+  format: json
+  max_size_mb: 5
+  rotate_interval: 1h
+  max_backups: 3
+  max_age_days: 7
+`
+	overrideFile := filepath.Join(t.TempDir(), "log_override.yaml")
+	if err := os.WriteFile(overrideFile, []byte(overrideYaml), 0644); err != nil {
+		t.Fatalf("write overrideFile failed: %v", err)
+	}
+	cfg, err = config.Load(overrideFile)
+	if err != nil {
+		t.Fatalf("Load override config failed: %v", err)
+	}
+	if cfg.Log.IsEnabled() {
+		t.Errorf("expected log.enabled override false")
+	}
+	if cfg.Log.Dir != "/tmp/sxd-logs" || cfg.Log.File != "role.log" || cfg.Log.Level != "warn" || cfg.Log.Format != "json" {
+		t.Errorf("unexpected log overrides: %+v", cfg.Log)
+	}
+	if cfg.Log.MaxSizeMB != 5 || cfg.Log.RotateInterval != "1h" || cfg.Log.MaxBackups != 3 || cfg.Log.MaxAgeDays != 7 {
+		t.Errorf("unexpected log rotation overrides: %+v", cfg.Log)
+	}
+}
+
 func TestConfig_InvalidFile(t *testing.T) {
 	_, err := config.Load("non_existent_file.yaml")
 	if err == nil {

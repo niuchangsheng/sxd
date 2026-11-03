@@ -5,6 +5,18 @@ server:
   port: 8080
   host: "127.0.0.1"
 
+# 本地文件日志配置 (按大小与时间双维度自动轮转，默认保存 INFO 及以上级别日志)
+log:
+  enabled: true                 # 是否启用本地文件日志 (默认 true)
+  dir: "logs"                   # 日志存放目录
+  file: "sxd.log"               # 当前活动日志文件名
+  level: "info"                 # 写入文件的最低级别: debug / info / warn / error
+  format: "text"                # 输出格式: text / json
+  max_size_mb: 10               # 单文件大小上限 (MB)，超过后立即轮转
+  rotate_interval: "24h"        # 时间轮转周期，如 24h / 1h；设置为 "0" 关闭时间轮转
+  max_backups: 10               # 最多保留的历史日志文件数量 (0 表示不限制)
+  max_age_days: 30              # 历史日志最长保留天数 (0 表示不限制)
+
 accounts:
   - platform: "xindong"
     username: "YOUR_PLATFORM_USERNAME"

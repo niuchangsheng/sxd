@@ -20,6 +20,7 @@ import (
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/config"
 	"sxd-pie-ng/internal/dictionary"
+	"sxd-pie-ng/internal/logging"
 	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/routines"
@@ -244,7 +245,45 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	// 2. 初始化数据字典仓储与智能题库问答引擎
+	// 2. 挂载本地文件日志 (按大小与时间双维度轮转，默认仅记录 INFO 及以上级别)
+	if cfg.Log.IsEnabled() {
+		fileLevel := logging.ParseLevel(cfg.Log.Level)
+		if *debugFlag {
+			fileLevel = slog.LevelDebug
+		}
+		rotateInterval, rotErr := time.ParseDuration(cfg.Log.RotateInterval)
+		if rotErr != nil {
+			slog.Warn("日志轮转周期配置无效，已回退为关闭时间轮转", "value", cfg.Log.RotateInterval, "error", rotErr)
+			rotateInterval = 0
+		}
+
+		fileHandler, logCloser, fErr := logging.NewFileHandler(logging.Config{
+			Dir:            cfg.Log.Dir,
+			FileName:       cfg.Log.File,
+			Level:          fileLevel,
+			MaxSizeBytes:   int64(cfg.Log.MaxSizeMB) * 1024 * 1024,
+			RotateInterval: rotateInterval,
+			MaxBackups:     cfg.Log.MaxBackups,
+			MaxAge:         time.Duration(cfg.Log.MaxAgeDays) * 24 * time.Hour,
+			JSON:           strings.EqualFold(cfg.Log.Format, "json"),
+		})
+		if fErr != nil {
+			slog.Warn("本地文件日志初始化失败，将继续仅输出到控制台", "error", fErr)
+		} else {
+			multiH.handlers = append(multiH.handlers, fileHandler)
+			slog.SetDefault(slog.New(multiH))
+			defer logCloser.Close()
+			slog.Info("已启用本地文件日志",
+				"dir", cfg.Log.Dir,
+				"file", cfg.Log.File,
+				"level", fileLevel.String(),
+				"max_size_mb", cfg.Log.MaxSizeMB,
+				"rotate_interval", cfg.Log.RotateInterval,
+			)
+		}
+	}
+
+	// 3. 初始化数据字典仓储与智能题库问答引擎
 	dictRepo, err := dictionary.NewRepository("")
 	if err != nil {
 		slog.Warn("未检测到本地游戏数据字典，部分元数据查询将降级", "error", err)
@@ -393,7 +432,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	// 3. 初始化角色会话与多角色调度器
+	// 4. 初始化角色会话与多角色调度器
 	mgr := &sessionManager{}
 	dispatcher := scheduler.NewDispatcher()
 
@@ -544,7 +583,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}()
 
-	// 4. 启动 Web 控制台服务并注入玩法管理提供器
+	// 5. 启动 Web 控制台服务并注入玩法管理提供器
 	webServer := web.NewServer(cfg.Server.Host, cfg.Server.Port, mgr, logBuf, Version)
 	webServer.SetRoutineProvider(routineMgr)
 	if err := webServer.Start(ctx); err != nil {

@@ -17,8 +17,52 @@ import (
 // Config 全局顶层配置结构体
 type Config struct {
 	Server    ServerConfig    `yaml:"server"`
+	Log       LogConfig       `yaml:"log"`
 	Accounts  []AccountConfig `yaml:"accounts"`
 	Scheduler SchedulerConfig `yaml:"scheduler"`
+}
+
+// LogConfig 本地文件日志配置
+type LogConfig struct {
+	// Enabled 是否启用本地文件日志 (默认 true)
+	Enabled *bool `yaml:"enabled"`
+	// Dir 日志存放目录 (默认 logs)
+	Dir string `yaml:"dir"`
+	// File 当前活动日志文件名 (默认 sxd.log)
+	File string `yaml:"file"`
+	// Level 写入文件的最低日志级别: debug/info/warn/error (默认 info)
+	Level string `yaml:"level"`
+	// Format 输出格式: text/json (默认 text)
+	Format string `yaml:"format"`
+	// MaxSizeMB 单文件大小上限 (MB，默认 10)
+	MaxSizeMB int `yaml:"max_size_mb"`
+	// RotateInterval 时间轮转周期，如 24h/1h；设置为 "0" 可关闭时间轮转 (默认 24h)
+	RotateInterval string `yaml:"rotate_interval"`
+	// MaxBackups 最多保留的历史日志文件数量 (0 表示不限制，默认 10)
+	MaxBackups int `yaml:"max_backups"`
+	// MaxAgeDays 历史日志最长保留天数 (0 表示不限制，默认 30)
+	MaxAgeDays int `yaml:"max_age_days"`
+}
+
+// IsEnabled 报告是否启用本地文件日志。
+func (c LogConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// DefaultLogConfig 返回本地文件日志的默认配置。
+func DefaultLogConfig() LogConfig {
+	enabled := true
+	return LogConfig{
+		Enabled:        &enabled,
+		Dir:            "logs",
+		File:           "sxd.log",
+		Level:          "info",
+		Format:         "text",
+		MaxSizeMB:      10,
+		RotateInterval: "24h",
+		MaxBackups:     10,
+		MaxAgeDays:     30,
+	}
 }
 
 // ServerConfig Web 控制台服务配置
@@ -251,7 +295,8 @@ func Load(path string) (*Config, error) {
 
 	expanded := expandEnv(string(data))
 
-	var cfg Config
+	// 预先填充日志默认值，使配置文件中缺省字段保持默认、显式零值仍可生效。
+	cfg := Config{Log: DefaultLogConfig()}
 	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return nil, fmt.Errorf("config: failed to parse YAML: %w", err)
 	}
