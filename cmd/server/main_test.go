@@ -42,10 +42,17 @@ func TestRun_FullBootstrapAndGracefulShutdown(t *testing.T) {
 	freePort := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 
+	logDir := t.TempDir()
 	testYaml := fmt.Sprintf(`
 server:
   host: "127.0.0.1"
   port: %d
+
+log:
+  enabled: true
+  dir: %q
+  file: "sxd.log"
+  rotate_interval: "0"
 
 accounts:
   - platform: "test_plat"
@@ -60,7 +67,7 @@ scheduler:
   jitter:
     min_seconds: 0.1
     max_seconds: 0.2
-`, freePort)
+`, freePort, logDir)
 	tmpConfig := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(tmpConfig, []byte(testYaml), 0644); err != nil {
 		t.Fatalf("write tmpConfig failed: %v", err)
@@ -77,6 +84,14 @@ scheduler:
 	err = run(ctx, []string{"-config", tmpConfig})
 	if err != nil {
 		t.Fatalf("run bootstrap failed: %v", err)
+	}
+
+	logData, err := os.ReadFile(filepath.Join(logDir, "sxd.log"))
+	if err != nil {
+		t.Fatalf("expected local log file to be created: %v", err)
+	}
+	if !strings.Contains(string(logData), "已启用本地文件日志") || !strings.Contains(string(logData), "神仙道助手已安全退出") {
+		t.Errorf("unexpected log file content: %s", logData)
 	}
 }
 
