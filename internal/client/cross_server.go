@@ -7,12 +7,19 @@ package client
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"time"
 
 	"sxd-pie-ng/internal/protocol"
 )
+
+// crossServerMaxReconnectAttempts 仙界跨服会话的最大建连尝试次数。
+//
+// 跨服节点偶发 DNS/网络抖动时不应直接放弃整轮玩法；凭据在登录成功前未消耗，
+// 允许一次短间隔重拨即可覆盖绝大多数瞬时失败。认证被拒等业务失败仍会快速终止。
+const crossServerMaxReconnectAttempts = 2
 
 // FetchCrossServerCredentials 通过主服会话申请仙界跨服节点登录凭据 (Mod 96 Act 0)。
 //
@@ -68,7 +75,7 @@ func (s *RoleSession) OpenCrossServerSessionWithInfo(ctx context.Context, cred *
 	cfg.Token = "" // 跨服登录不使用平台票据
 	cfg.PlayerID = s.PlayerID()
 	cfg.OriginNickName = s.OriginNickName()
-	cfg.MaxReconnectAttempts = 1
+	cfg.MaxReconnectAttempts = crossServerMaxReconnectAttempts
 	cfg.RefreshCredentials = nil
 
 	originNickName := cfg.OriginNickName
@@ -116,6 +123,13 @@ func (s *RoleSession) OpenCrossServerSessionWithInfo(ctx context.Context, cred *
 		}
 		return nil
 	}
+
+	slog.Info("正在建立仙界跨服会话",
+		"role_id", s.cfg.RoleID,
+		"cross_role_id", cfg.RoleID,
+		"addr", cfg.ServerAddr,
+		"server_id", cred.ServerName,
+	)
 
 	cross := NewRoleSession(cfg)
 	if err := cross.Start(ctx); err != nil {

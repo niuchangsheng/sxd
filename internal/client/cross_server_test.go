@@ -6,7 +6,9 @@ package client_test
 
 import (
 	"context"
+	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -102,6 +104,76 @@ func TestOpenCrossServerSessionWithInfo(t *testing.T) {
 	}
 	if gotTownID != protocol.TownIDXianJie {
 		t.Errorf("expected town id 41, got %d", gotTownID)
+	}
+
+	dialConn.Close()
+	<-done
+}
+
+func TestOpenCrossServerSessionWithInfo_RetriesTransientDialFailure(t *testing.T) {
+	serverConn, dialConn := net.Pipe()
+	defer serverConn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDStLogin:
+				w := protocol.NewWriter()
+				w.WriteUint8(0)
+				w.WriteInt32(65536)
+				w.WriteInt32(1793549704)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDStLogin, w.Bytes()))
+			case protocol.ActionIDStTownEnter:
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDStTownEnter, []byte{protocol.StTownResultSuccess}))
+			}
+		}
+	}()
+
+	var dialCalls atomic.Int32
+	main := client.NewRoleSession(client.SessionConfig{
+		RoleID:            "s1-role",
+		RoleName:          "曹植始",
+		ServerAddr:        "main-gateway",
+		ReconnectInterval: 10 * time.Millisecond,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if dialCalls.Add(1) == 1 {
+				return nil, errors.New("transient dial failure")
+			}
+			return dialConn, nil
+		},
+	})
+	main.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.PlayerID = 65536
+		ps.OriginNickName = "曹植始.s1"
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	cred := &protocol.StCrossServerInfo{
+		Host:       "9x703.sxdweb.xd.com",
+		Port:       8480,
+		ServerName: "s703",
+		Time:       1793549704,
+		PassCode:   "mock_pass_code",
+	}
+	cross, err := main.OpenCrossServerSessionWithInfo(ctx, cred)
+	if err != nil {
+		t.Fatalf("首次拨号瞬时失败后应重试成功, got error: %v", err)
+	}
+	defer cross.Close()
+
+	if got := dialCalls.Load(); got != 2 {
+		t.Errorf("期望拨号 2 次 (1 次失败 + 1 次重试), 实际 %d 次", got)
+	}
+	if cross.State() != client.StateActive {
+		t.Errorf("expected cross session active, got %s", cross.State())
 	}
 
 	dialConn.Close()
