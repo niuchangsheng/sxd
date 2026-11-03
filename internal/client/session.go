@@ -108,6 +108,11 @@ type PlayerState struct {
 	MaxExperience  int64             `json:"max_experience"`
 	PlayerID       int32             `json:"player_id"`
 	OriginNickName string            `json:"origin_nick_name"`
+	// OnlineGiftTime 下一次在线礼包可领取的绝对 Unix 时间戳。
+	// 服务端 prop 81 下发的是剩余秒数, 收到时按客户端同款逻辑换算为 now+value。
+	OnlineGiftTime int64 `json:"online_gift_time"`
+	// IsGetOnlineGift 在线礼包状态 (update_player_data prop 82): -2 未同步 / -1 无礼包 / 0 倒计时中 / 1 可领取。
+	IsGetOnlineGift int `json:"is_get_online_gift"`
 }
 
 // RoleSession 代表与游戏服务器建立的长连接角色会话。
@@ -181,13 +186,14 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		handlers:       make(map[uint32][]func(*protocol.Packet)),
 		pendingCalls:   make(map[uint32][]chan *protocol.Packet),
 		playerState: PlayerState{
-			Level:       300,
-			Stamina:     201,
-			MaxStamina:  300,
-			Coins:       36226117234,
-			Ingots:      39409,
-			BagCapacity: 20,
-			Quests:      make(map[uint32]uint32),
+			Level:           300,
+			Stamina:         201,
+			MaxStamina:      300,
+			Coins:           36226117234,
+			Ingots:          39409,
+			BagCapacity:     20,
+			Quests:          make(map[uint32]uint32),
+			IsGetOnlineGift: -2, // 与客户端 PlayerData 初值一致: 尚未收到 update_player_data
 		},
 	}
 
@@ -455,6 +461,15 @@ func (s *RoleSession) applyPlayerUpdateData(payload []byte) {
 		case protocol.PlayerPropPackEmptyNum2026:
 			if u.Value >= 0 && u.Value <= 100_000 {
 				s.playerState.BagCapacity = int(u.Value)
+			}
+		case protocol.PlayerPropOnlineGiftTime:
+			if u.Value >= 0 {
+				// 客户端 PlayerData 语义: onlineGiftTime = 剩余秒数 + 当前时间
+				s.playerState.OnlineGiftTime = time.Now().Unix() + u.Value
+			}
+		case protocol.PlayerPropIsGetOnlineGift:
+			if u.Value >= -1 && u.Value <= 1 {
+				s.playerState.IsGetOnlineGift = int(u.Value)
 			}
 		}
 	}

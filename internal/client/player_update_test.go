@@ -78,6 +78,66 @@ func TestRoleSession_PlayerUpdateData_ModernBatch(t *testing.T) {
 	}
 }
 
+// TestRoleSession_PlayerUpdateData_OnlineGiftState 验证在线礼包状态属性 81/82 的同步:
+// prop 81 为剩余秒数 (换算为绝对时间戳), prop 82 为 -1/0/1 状态。
+func TestRoleSession_PlayerUpdateData_OnlineGiftState(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-online-gift-state",
+		RoleName:   "在线礼包状态角色",
+		ServerAddr: "mock",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return c1, nil
+		},
+		Authenticator: func(s *client.RoleSession) error {
+			return nil
+		},
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	defer session.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("期望会话激活, 实际 %s", session.State())
+	}
+
+	if got := session.GetPlayerState().IsGetOnlineGift; got != -2 {
+		t.Fatalf("初始 IsGetOnlineGift 期望 -2, 实际 %d", got)
+	}
+
+	// 2026 网关批量布局: count=2, prop81=300 (剩余秒数), prop82=1 (可领取)
+	payload, err := hex.DecodeString("000251000000000000012c520000000000000001")
+	if err != nil {
+		t.Fatalf("解码在线礼包属性样本失败: %v", err)
+	}
+	before := time.Now().Unix()
+	if err := protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerUpdateData, payload)); err != nil {
+		t.Fatalf("写入属性包失败: %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	updated := session.GetPlayerState()
+	for updated.IsGetOnlineGift != 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		updated = session.GetPlayerState()
+	}
+
+	if updated.IsGetOnlineGift != 1 {
+		t.Errorf("IsGetOnlineGift 期望 1, 实际 %d", updated.IsGetOnlineGift)
+	}
+	if updated.OnlineGiftTime < before+295 || updated.OnlineGiftTime > before+305 {
+		t.Errorf("OnlineGiftTime 期望约 %d, 实际 %d", before+300, updated.OnlineGiftTime)
+	}
+}
+
 // TestRoleSession_PlayerUpdateData_ClampsGarbage 验证旧版布局中的越界数值不会污染等级与体力。
 func TestRoleSession_PlayerUpdateData_ClampsGarbage(t *testing.T) {
 	c1, c2 := net.Pipe()

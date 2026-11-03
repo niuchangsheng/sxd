@@ -11,13 +11,13 @@ import (
 func TestFeaturePackets_JieYuanBoxRule(t *testing.T) {
 	// 验证核心规则: “除了传说，其他都开”
 	rawBoxes := []protocol.JieYuanBoxItem{
-		{ItemID: protocol.ItemJieYuanBoxCommon, Count: 10},     // 3937
-		{ItemID: protocol.ItemJieYuanBoxAdvanced, Count: 5},    // 3938
-		{ItemID: protocol.ItemJieYuanBoxFree, Count: 2},        // 3939
-		{ItemID: protocol.ItemJieYuanBoxRare, Count: 8},        // 3940
-		{ItemID: protocol.ItemJieYuanBoxSupreme, Count: 3},     // 3941
-		{ItemID: protocol.ItemJieYuanBoxLegendary, Count: 99},  // 3942 传说 (必须剔除)
-		{ItemID: protocol.ItemJieYuanBoxCommon, Count: 0},      // 0 个应剔除
+		{ItemID: protocol.ItemJieYuanBoxCommon, Count: 10},    // 3937
+		{ItemID: protocol.ItemJieYuanBoxAdvanced, Count: 5},   // 3938
+		{ItemID: protocol.ItemJieYuanBoxFree, Count: 2},       // 3939
+		{ItemID: protocol.ItemJieYuanBoxRare, Count: 8},       // 3940
+		{ItemID: protocol.ItemJieYuanBoxSupreme, Count: 3},    // 3941
+		{ItemID: protocol.ItemJieYuanBoxLegendary, Count: 99}, // 3942 传说 (必须剔除)
+		{ItemID: protocol.ItemJieYuanBoxCommon, Count: 0},     // 0 个应剔除
 	}
 
 	filtered := protocol.FilterOpenableJieYuanBoxes(rawBoxes)
@@ -209,7 +209,7 @@ func TestOnlineGift_ParseCurrentResult(t *testing.T) {
 }
 
 func TestOnlineGift_ParseClaimResult(t *testing.T) {
-	// 成功回包: result=84, 1 项奖励, next_time_stamp=1700000600
+	// 成功回包: result=97 (ACTION_SUCCESS), 1 项奖励, next_time_stamp=1700000600
 	w := protocol.NewWriter()
 	w.WriteUint8(protocol.PlayerActionSuccess)
 	w.WriteUint16(1)
@@ -232,7 +232,7 @@ func TestOnlineGift_ParseClaimResult(t *testing.T) {
 		t.Errorf("next_time_stamp 期望 1700000600, 实际 %d", claim.NextTimeStamp)
 	}
 
-	// 实机 s0 回包: 64 0000 00000000 -> result=100, 空列表, next_time_stamp=0
+	// 实机 s0/s1 回包: 64 0000 00000000 -> result=100 (ACTION_FAILED), 空列表, next_time_stamp=0
 	live, err := protocol.ParseOnlineGiftClaimResult([]byte{0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 	if err != nil {
 		t.Fatalf("解析实机回包失败: %v", err)

@@ -6,6 +6,7 @@ package daily
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"time"
@@ -227,9 +228,13 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 //   - get_player_current_online_gift -> Module 0, Action 31 (0x0000001F), 请求体为空
 //   - player_get_online_gift         -> Module 0, Action 30 (0x0000001E), 请求体为空
 //
-// 服务端按在线时长滚动发放礼包，客户端由服务器下发的 isGetOnlineGift / onlineGiftTime
-// 决定「立即领取」按钮是否出现；机器人侧以固定周期轮询查询并尝试领取。
-// 领取结果码: 84 成功, 87 未到时间, 88 背包已满。
+// 状态机对齐官方客户端 ActivitiesView.onlineGiftActivity:
+//   - update_player_data prop 82 (GET_ONLINE_GIFT): -1 无礼包 / 0 倒计时 / 1 可领取;
+//   - update_player_data prop 81 (ONLINE_GIFT): 剩余秒数, 客户端换算为绝对时间戳;
+//   - 客户端在 -1 时移除活动, 仅在 0/1 时展示「立即领取」。
+//
+// 领取结果码对齐 Mod_Player_Base: 97 ACTION_SUCCESS, 98 ALREADY_GET,
+// 100 ACTION_FAILED (时间未到), 101 PACK_FULL。
 func NewOnlineGiftRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"online_gift",
@@ -249,7 +254,23 @@ func NewOnlineGiftRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行日常任务: 在线成长礼包领取", "role_id", session.RoleID())
 
-			// 1. 查询当前礼包状态 (仅用于诊断与日志, 不阻断领取)
+			// 1. 读取服务端下发的在线礼包状态 (update_player_data prop 82)。
+			// 客户端 ActivitiesView.onlineGiftActivity: -1 时直接移除活动, 不查询也不领取。
+			st := session.GetPlayerState()
+			switch st.IsGetOnlineGift {
+			case -1:
+				slog.Info("在线礼包当前不可领取: 活动未开放或无可领礼包",
+					"role_id", session.RoleID(),
+				)
+				return nil
+			case -2:
+				slog.Warn("在线礼包状态尚未同步, 跳过本轮",
+					"role_id", session.RoleID(),
+				)
+				return nil
+			}
+
+			// 2. 查询下一份礼包预览 (诊断与日志)
 			qCtx, qCancel := context.WithTimeout(ctx, 3*time.Second)
 			qResp, qErr := session.Call(qCtx, protocol.BuildOnlineGiftCurrentPacket(), protocol.ActionIDPlayerGetCurrentOnlineGift)
 			qCancel()
@@ -268,7 +289,20 @@ func NewOnlineGiftRoutine() scheduler.ActivityRoutine {
 				}
 			}
 
-			// 2. 发起领取 (原版客户端点击「立即领取」的协议路径)
+			// 3. 倒计时未结束时客户端不会点击「立即领取」, 此处同样跳过。
+			// prop 81 已按客户端语义换算为绝对时间戳。
+			if st.IsGetOnlineGift == 0 {
+				remaining := st.OnlineGiftTime - time.Now().Unix()
+				if remaining > 0 {
+					slog.Info("在线礼包倒计时中",
+						"role_id", session.RoleID(),
+						"remaining_seconds", remaining,
+					)
+					return nil
+				}
+			}
+
+			// 4. 发起领取
 			cCtx, cCancel := context.WithTimeout(ctx, 5*time.Second)
 			resp, err := session.Call(cCtx, protocol.BuildOnlineGiftClaimPacket(), protocol.ActionIDPlayerGetOnlineGift)
 			cCancel()
@@ -288,6 +322,11 @@ func NewOnlineGiftRoutine() scheduler.ActivityRoutine {
 					"gifts", claim.Gifts,
 					"next_time_stamp", claim.NextTimeStamp,
 				)
+			case protocol.PlayerAlreadyGet:
+				slog.Info("在线礼包已领取过",
+					"role_id", session.RoleID(),
+					"next_time_stamp", claim.NextTimeStamp,
+				)
 			case protocol.PlayerActionFailed:
 				slog.Info("在线礼包尚未到领取时间",
 					"role_id", session.RoleID(),
@@ -302,10 +341,11 @@ func NewOnlineGiftRoutine() scheduler.ActivityRoutine {
 				)
 				return scheduler.ErrBagFull
 			default:
-				slog.Info("在线礼包领取返回未识别状态",
+				slog.Warn("在线礼包领取返回未知状态",
 					"role_id", session.RoleID(),
 					"result", claim.Result,
 					"next_time_stamp", claim.NextTimeStamp,
+					"payload", hex.EncodeToString(resp.Payload),
 				)
 			}
 			return nil

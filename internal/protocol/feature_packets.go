@@ -24,7 +24,7 @@ type OnlineGiftItem struct {
 
 // OnlineGiftCurrent 表示在线成长礼包当前状态。
 type OnlineGiftCurrent struct {
-	TimeStamp int32            // 当前礼包的计时基准时间戳 (0 表示暂无待领取礼包)
+	TimeStamp int32            // 0 表示暂无待领取礼包; 非 0 时客户端展示下一份礼包预览
 	Gifts     []OnlineGiftItem // 待领取奖励列表
 }
 
@@ -55,9 +55,9 @@ func ParseOnlineGiftCurrentResult(payload []byte) (*OnlineGiftCurrent, error) {
 
 // OnlineGiftClaimResult 表示领取在线成长礼包回包。
 type OnlineGiftClaimResult struct {
-	Result        uint8            // 业务结果码: 84 成功 / 87 时间未到 / 88 背包已满
+	Result        uint8            // 业务结果码: 97 成功 / 98 已领取 / 100 时间未到 / 101 背包已满
 	Gifts         []OnlineGiftItem // 本次领取到的奖励列表
-	NextTimeStamp int32            // 下一次礼包可领取的时间戳 (0 表示无后续礼包)
+	NextTimeStamp int32            // 距离下一次礼包可领取的剩余秒数 (0 表示无后续礼包)
 }
 
 // BuildOnlineGiftClaimPacket 构造领取在线成长礼包封包 (Module 0, Action 30)。

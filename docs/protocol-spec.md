@@ -166,7 +166,7 @@ classDiagram
 - `0x00000000 (0, 0)`：角色主服握手登录（携带 Username, Token, ServerID）。
 - `0x00000002 (0, 2)`：查询角色基础信息（铜钱、元宝、体力、阅历、等级）。
 - `0x00000003 (0, 3)`：服务端主动推送角色数据变更（体力增长、数值更新）。
-- `0x0000001E (0, 30)`：领取在线成长礼包，请求体为空；响应 `uint8 result` + `uint16 count` + `count × (int32 type, int32 item_id, int32 value)` + `int32 next_time_stamp`。结果码：`84` 成功、`87` 领取时间未到、`88` 背包已满。
+- `0x0000001E (0, 30)`：领取在线成长礼包，请求体为空；响应 `uint8 result` + `uint16 count` + `count × (int32 type, int32 item_id, int32 value)` + `int32 next_time_stamp`。结果码对齐官方客户端 `Mod_Player_Base`：`97` ACTION_SUCCESS、`98` ALREADY_GET、`100` ACTION_FAILED（领取时间未到）、`101` PACK_FULL。领取前需先读取 `update_player_data` 属性 `81`（ONLINE_GIFT，剩余秒数）与 `82`（GET_ONLINE_GIFT，`-1` 无礼包 / `0` 倒计时 / `1` 可领取）。
 - `0x0000001F (0, 31)`：查询在线成长礼包当前状态，请求体为空；响应 `int32 time_stamp` + `uint16 count` + `count × (int32 type, int32 item_id, int32 value)`。
 - `0x00000048 (0, 72)`：角色初次进场同步城镇数据步 1。
 - `0x00000063 (0, 99)`：角色初次进场同步城镇数据步 2。

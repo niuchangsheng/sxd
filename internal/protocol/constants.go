@@ -54,10 +54,15 @@ const (
 )
 
 const (
-	// 玩家模块业务结果码 (Mod_Player_Base 类常量)
-	PlayerActionSuccess uint8 = 84 // ACTION_SUCCESS 操作成功
-	PlayerActionFailed  uint8 = 87 // ACTION_FAILED 操作失败 (在线礼包: 领取时间未到)
-	PlayerPackFull      uint8 = 88 // PACK_FULL 背包格子不足
+	// 玩家模块业务结果码 (对齐官方客户端 Main.swf com.protocols.Mod_Player_Base)
+	PlayerActionSuccess uint8 = 97  // ACTION_SUCCESS 操作成功
+	PlayerAlreadyGet    uint8 = 98  // ALREADY_GET 已领取
+	PlayerActionFailed  uint8 = 100 // ACTION_FAILED 操作失败 (在线礼包: 领取时间未到)
+	PlayerPackFull      uint8 = 101 // PACK_FULL 背包格子不足
+
+	// 在线礼包状态属性 (update_player_data 原始属性 ID, 实机 s1 观测)
+	PlayerPropOnlineGiftTime  uint8 = 81 // ONLINE_GIFT: 距离下一次可领取的剩余秒数
+	PlayerPropIsGetOnlineGift uint8 = 82 // GET_ONLINE_GIFT: -1 无礼包 / 0 倒计时中 / 1 可领取
 )
 
 const (
