@@ -377,11 +377,16 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 }
 
 // 仙界竞技场自动化常量。
-const (
+var (
 	// stArenaCallTimeout 单次 Mod 214 协议调用超时。
-	stArenaCallTimeout = 3 * time.Second
-	// stArenaChallengeTimeout 发起挑战后等待完整战报结算的超时 (战报体积较大)。
-	stArenaChallengeTimeout = 5 * time.Second
+	// 面板含 50 条排行榜记录，跨服链路较慢时 3s 会偏紧。
+	stArenaCallTimeout = 8 * time.Second
+	// stArenaChallengeTimeout 发起挑战后等待完整战报结算的超时。
+	// challenge 回包携带完整战斗回放 (实机约 13KB)，跨服节点拥塞时留足预算。
+	stArenaChallengeTimeout = 15 * time.Second
+)
+
+const (
 	// stArenaMaxBattles 单轮调度的最大挑战场次，防止服务端异常导致死循环。
 	stArenaMaxBattles = 30
 	// stArenaMaxStaleRetries 目标已不在列表时的最大重拉次数。
@@ -520,64 +525,97 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 			return
 		}
 
+		beforeIntegral := panel.Integral
+		var settled *protocol.StArenaPanel
+
 		resp, err := call(challengePkt, protocol.ActionIDStArenaChallenge, stArenaChallengeTimeout)
 		if err != nil || resp == nil {
-			slog.Warn("仙界竞技场挑战无结算回包", "role_id", session.RoleID(), "target_player_id", target.StPlayerID, "error", err)
-			return
-		}
-		result, err := protocol.ParseStArenaChallengeResult(resp.Payload)
-		if err != nil {
-			slog.Warn("解析仙界竞技场挑战结果失败", "role_id", session.RoleID(), "error", err)
-			return
-		}
-
-		if !result.Success() {
-			switch result.Result {
-			case protocol.StArenaResultNotInList:
-				// 目标列表已在服务端刷新，重新拉取面板并重试有限次数。
-				staleRetries++
-				if staleRetries > stArenaMaxStaleRetries {
-					slog.Info("仙界竞技场目标持续不在列表，结束本轮挑战",
-						"role_id", session.RoleID(), "result", result.Result, "retries", staleRetries)
-					return
-				}
-				panel, err = loadStArenaPanel(call)
-				if err != nil {
-					slog.Warn("重新拉取仙界竞技场面板失败", "role_id", session.RoleID(), "error", err)
-					return
-				}
-				if len(panel.ChallengeList) == 0 && panel.ReduceRefreshTime > 0 {
-					panel, err = refreshStArenaOpponents(call, panel)
-					if err != nil {
-						slog.Warn("刷新仙界竞技场对手列表失败", "role_id", session.RoleID(), "error", err)
-						return
-					}
-				}
-				continue
-			case protocol.StArenaResultCDTime:
-				slog.Info("仙界竞技场挑战冷却中，结束本轮挑战",
-					"role_id", session.RoleID(), "target_player_id", target.StPlayerID)
-				return
-			case protocol.StArenaResultNotEnoughChallengeTimes:
-				slog.Info("仙界竞技场挑战次数不足，结束本轮挑战", "role_id", session.RoleID())
-				return
-			default:
-				slog.Info("仙界竞技场挑战被服务端拒绝，结束本轮挑战",
+			// 回包超时/丢失不代表挑战未被受理：challenge 回包携带完整战斗回放，
+			// 跨服拥塞或战报体积过大时，服务端可能已完成战斗但回包未在预算内到达。
+			// 重新拉取面板核对挑战次数，已扣次则按已结算继续，避免重复挑战同一目标。
+			reconciled, rErr := loadStArenaPanel(call)
+			if rErr != nil {
+				slog.Warn("仙界竞技场挑战无结算回包且复核面板失败",
 					"role_id", session.RoleID(),
 					"target_player_id", target.StPlayerID,
-					"result", result.Result,
+					"error", err,
+					"reconcile_error", rErr,
 				)
 				return
+			}
+			if reconciled.ReduceChallengeCount >= remaining {
+				slog.Warn("仙界竞技场挑战无结算回包", "role_id", session.RoleID(), "target_player_id", target.StPlayerID, "error", err)
+				return
+			}
+			slog.Warn("仙界竞技场挑战回包超时但服务端已扣次，按已结算继续",
+				"role_id", session.RoleID(),
+				"target_player_id", target.StPlayerID,
+				"before_times", remaining,
+				"after_times", reconciled.ReduceChallengeCount,
+				"error", err,
+			)
+			settled = reconciled
+		} else {
+			result, pErr := protocol.ParseStArenaChallengeResult(resp.Payload)
+			if pErr != nil {
+				slog.Warn("解析仙界竞技场挑战结果失败", "role_id", session.RoleID(), "error", pErr)
+				return
+			}
+			if !result.Success() {
+				switch result.Result {
+				case protocol.StArenaResultNotInList:
+					// 目标列表已在服务端刷新，重新拉取面板并重试有限次数。
+					staleRetries++
+					if staleRetries > stArenaMaxStaleRetries {
+						slog.Info("仙界竞技场目标持续不在列表，结束本轮挑战",
+							"role_id", session.RoleID(), "result", result.Result, "retries", staleRetries)
+						return
+					}
+					panel, err = loadStArenaPanel(call)
+					if err != nil {
+						slog.Warn("重新拉取仙界竞技场面板失败", "role_id", session.RoleID(), "error", err)
+						return
+					}
+					if len(panel.ChallengeList) == 0 && panel.ReduceRefreshTime > 0 {
+						panel, err = refreshStArenaOpponents(call, panel)
+						if err != nil {
+							slog.Warn("刷新仙界竞技场对手列表失败", "role_id", session.RoleID(), "error", err)
+							return
+						}
+					}
+					continue
+				case protocol.StArenaResultCDTime:
+					slog.Info("仙界竞技场挑战冷却中，结束本轮挑战",
+						"role_id", session.RoleID(), "target_player_id", target.StPlayerID)
+					return
+				case protocol.StArenaResultFuncEnd:
+					slog.Info("仙界竞技场不在积分赛阶段或功能已关闭，结束本轮挑战",
+						"role_id", session.RoleID(), "result", result.Result)
+					return
+				case protocol.StArenaResultNotEnoughChallengeTimes:
+					slog.Info("仙界竞技场挑战次数不足，结束本轮挑战", "role_id", session.RoleID())
+					return
+				default:
+					slog.Info("仙界竞技场挑战被服务端拒绝，结束本轮挑战",
+						"role_id", session.RoleID(),
+						"target_player_id", target.StPlayerID,
+						"result", result.Result,
+					)
+					return
+				}
 			}
 		}
 		staleRetries = 0
 
 		// 5. 重新打开面板，读取最新积分、剩余次数，并根据战报判定胜负。
-		beforeIntegral := panel.Integral
-		refreshed, err := loadStArenaPanel(call)
-		if err != nil {
-			slog.Warn("仙界竞技场结算后刷新面板失败", "role_id", session.RoleID(), "error", err)
-			return
+		refreshed := settled
+		if refreshed == nil {
+			var rErr error
+			refreshed, rErr = loadStArenaPanel(call)
+			if rErr != nil {
+				slog.Warn("仙界竞技场结算后刷新面板失败", "role_id", session.RoleID(), "error", rErr)
+				return
+			}
 		}
 		if report := findStArenaReport(refreshed.ReportList, playerID, target.StPlayerID); report != nil {
 			slog.Info("仙界竞技场战斗结算",

@@ -30,29 +30,34 @@ const (
 )
 
 // 仙界竞技场操作结果码 (Mod_StArena_Base)。
+//
+// 数值严格对齐官方 com.protocols.Mod_StArena_Base 的常量定义；
+// 13 之后的码位是连续自增的，漏掉 FUNC_END 会让后续所有失败语义整体错位。
 const (
 	// StArenaResultSuccess 操作成功
 	StArenaResultSuccess uint8 = 13
 	// StArenaResultCDTime 挑战冷却中
 	StArenaResultCDTime uint8 = 14
-	// StArenaResultNotEnoughChallengeTimes 挑战次数不足
-	StArenaResultNotEnoughChallengeTimes uint8 = 15
-	// StArenaResultNotInList 挑战目标不在当前列表
-	StArenaResultNotInList uint8 = 16
+	// StArenaResultFuncEnd 功能已结束 (非积分赛阶段或活动关闭)
+	StArenaResultFuncEnd uint8 = 15
 	// StArenaResultFail 操作失败
-	StArenaResultFail uint8 = 17
+	StArenaResultFail uint8 = 16
+	// StArenaResultNotEnoughChallengeTimes 挑战次数不足
+	StArenaResultNotEnoughChallengeTimes uint8 = 17
+	// StArenaResultNotInList 挑战目标不在当前列表
+	StArenaResultNotInList uint8 = 18
 	// StArenaResultItemNotExist 兑换物品不存在
-	StArenaResultItemNotExist uint8 = 18
+	StArenaResultItemNotExist uint8 = 19
 	// StArenaResultNotEnoughExploit 荣誉不足
-	StArenaResultNotEnoughExploit uint8 = 19
+	StArenaResultNotEnoughExploit uint8 = 20
 	// StArenaResultNotEnoughNum 数量不足
-	StArenaResultNotEnoughNum uint8 = 20
+	StArenaResultNotEnoughNum uint8 = 21
 	// StArenaResultNotEnoughFun 功能未开启
-	StArenaResultNotEnoughFun uint8 = 21
+	StArenaResultNotEnoughFun uint8 = 22
 	// StArenaResultPackFull 背包已满
-	StArenaResultPackFull uint8 = 22
+	StArenaResultPackFull uint8 = 23
 	// StArenaResultRebet 重复下注
-	StArenaResultRebet uint8 = 23
+	StArenaResultRebet uint8 = 24
 )
 
 // 仙界竞技场赛程阶段 (Mod_StArena_Base)。
@@ -164,11 +169,14 @@ type StArenaRankEntry struct {
 // 线格式 (逆向 Mod_StArena_Base.open_st_arena 描述符):
 //
 //	Int32 integral, Int16 reduce_challenge_count, Int32 award_feats,
-//	Int32 award_get_time, Int32 reserved, Int32 reduce_refresh_time,
-//	[challengeList], [reportList], [integralRankList], 14B trailer (忽略)
+//	Int32 award_get_time, Int32 reduce_refresh_time, Int32 proficiency,
+//	[challengeList], [reportList], [integralRankList],
+//	[Int32,Int32,Int32] dec_score_notify, Int32 week_fight_times,
+//	Int32 need_fight_times, Int32 now_dec_score (尾部自动流程不需要，忽略)
 //
 // reduce_challenge_count 为本次操作后剩余挑战次数；
-// reduce_refresh_time 为剩余可刷新对手次数。
+// reduce_refresh_time 为剩余可刷新对手次数；
+// proficiency 为竞技场熟练度 (客户端自动跳过战斗用)，与刷新次数无关。
 type StArenaPanel struct {
 	// Integral 本方当前积分
 	Integral int32
@@ -180,6 +188,8 @@ type StArenaPanel struct {
 	AwardGetTime int32
 	// ReduceRefreshTime 剩余刷新对手次数
 	ReduceRefreshTime int32
+	// Proficiency 竞技场熟练度 (用于客户端自动跳过战斗，非刷新次数)
+	Proficiency int32
 	// ChallengeList 当前可挑战对手列表
 	ChallengeList []StArenaOpponent
 	// ReportList 历史战报列表
@@ -204,7 +214,7 @@ type StArenaRefreshResult struct {
 
 // StArenaChallengeRequest 代表发起仙界竞技场挑战请求 (challenge)。
 //
-// 线格式: Int32 st_player_id, Int32 integral。
+// 线格式: Int32 st_player_id, Int32 integral（严格 8 字节，不追加 PrevAct）。
 // 两个字段均取自 open_st_arena 下发的 challengeList 记录，用于服务端校验目标仍在列表内。
 type StArenaChallengeRequest struct {
 	// StPlayerID 挑战目标跨服玩家 ID
@@ -233,6 +243,9 @@ func (r StArenaChallengeResult) Success() bool {
 // 官方 DataBase.netCall 在 SOCKETSERVERTOWN 连接上会自动追加 4 字节
 // 前序 Module+Action；Go 会话层通过 HasPrevAct 标记在发送时用最近一次业务
 // ActionID 覆盖末尾 4 字节，因此这里仅需预留 4 字节占位。
+//
+// 仅 open_st_arena / refresh_player_list 使用该形式；challenge 要求严格 8 字节，
+// 见 BuildStArenaChallengePacket。
 func newStArenaPrevActPacket(actionID uint32, payload []byte) *Packet {
 	body := make([]byte, len(payload)+4)
 	copy(body, payload)
@@ -250,11 +263,15 @@ func BuildStArenaRefreshPlayerListPacket() *Packet {
 }
 
 // BuildStArenaChallengePacket 构造发起仙界竞技场挑战请求封包 (0x00D60002)。
+//
+// 与 open/refresh 不同，challenge 请求线格式必须是严格 8 字节
+// (Int32 st_player_id, Int32 integral)，追加 4 字节 PrevAct 会被服务端
+// 静默丢弃且无任何回包 (实机表现为 context deadline exceeded，且次数不扣减)。
 func BuildStArenaChallengePacket(req StArenaChallengeRequest) (*Packet, error) {
 	w := NewWriter()
 	w.WriteInt32(req.StPlayerID)
 	w.WriteInt32(req.Integral)
-	return newStArenaPrevActPacket(ActionIDStArenaChallenge, w.Bytes()), nil
+	return &Packet{ActionID: ActionIDStArenaChallenge, Payload: w.Bytes()}, nil
 }
 
 // ParseStArenaChallengeRequest 从载荷反序列化发起挑战请求。
@@ -297,13 +314,13 @@ func ParseStArenaPanelResult(payload []byte) (*StArenaPanel, error) {
 	if res.AwardGetTime, err = r.ReadInt32(); err != nil {
 		return nil, fmt.Errorf("%w: failed to read award_get_time: %v", ErrInvalidPayload, err)
 	}
-	// 官方 2026-11 回包在 award_get_time 后固定多下发 4 字节（实测恒为 0），
-	// 旧布局漏读该字段会导致后续 challengeList/reportList/rankList 整体偏移。
-	if _, err = r.ReadInt32(); err != nil {
-		return nil, fmt.Errorf("%w: failed to read award_reserved: %v", ErrInvalidPayload, err)
-	}
 	if res.ReduceRefreshTime, err = r.ReadInt32(); err != nil {
 		return nil, fmt.Errorf("%w: failed to read reduce_refresh_time: %v", ErrInvalidPayload, err)
+	}
+	// 官方描述符在 reduce_refresh_time 后还有 proficiency；旧布局漏读该字段
+	// 会导致后续 challengeList/reportList/rankList 整体偏移 4 字节。
+	if res.Proficiency, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read proficiency: %v", ErrInvalidPayload, err)
 	}
 	if res.ChallengeList, err = readStArenaOpponents(r); err != nil {
 		return nil, err

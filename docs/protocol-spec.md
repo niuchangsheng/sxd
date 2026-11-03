@@ -435,7 +435,7 @@ Int, String, String, String, Int, UByte, UByte,
 
 ```
 Int32 integral, Int16 reduceChallengeCount, Int32 awardFeats,
-Int32 awardGetTime, Int32 awardReserved, Int32 reduceRefreshTime,
+Int32 awardGetTime, Int32 reduceRefreshTime, Int32 proficiency,
 Uint16 challengeCount, challengeCount × [
     Int32 stPlayerID, Int32 integral, Int32 roleID, Int16 level ],
 Uint16 reportCount, reportCount × [
@@ -445,13 +445,15 @@ Uint16 reportCount, reportCount × [
 Uint16 rankCount, rankCount × [
     Int32 stPlayerID, String nickName, String stageName,
     String serverName, Int32 integral, Int32 feats ],
-14B trailer
+[Int32,Int32,Int32] decScoreNotify, Int32 weekFightTimes,
+Int32 needFightTimes, Int32 nowDecScore
 ```
 
-- `awardReserved` 是官方 2026-11 实机回包在 `awardGetTime` 后固定多下发的 4 字节
-  （实测恒为 0）。旧布局漏读该字段会让后续三个列表整体偏移 4 字节，
+- `awardGetTime` 之后依次是 `reduceRefreshTime` 与 `proficiency`。旧布局把前者误当作
+  保留字段、把后者当作刷新次数，漏读 `proficiency` 会让后续三个列表整体偏移 4 字节，
   典型症状为 `failed to read st arena rank server_name: unexpected EOF`。
-- 排行榜之后还有 14 字节尾随字段（实测 `Int32 0, Int32 0, Int16, Int32`），
+- `proficiency` 是客户端自动跳过战斗用的竞技场熟练度，**不是**刷新次数。
+- 排行榜之后的 `decScoreNotify (Uint16 count + Int32×3)` 与三个 Int32 尾部字段
   自动化不需要，解析器读完成员列表后即返回，不强制消费尾部。
 
 - `reduceChallengeCount` 为本次操作后的**剩余挑战次数**；
@@ -460,9 +462,17 @@ Uint16 rankCount, rankCount × [
 - `challenge (2)` 的两个请求字段均取自当前 `challengeList` 记录，用于服务端校验
   目标是否仍在列表内；只读取回包首字节 `result` 即可判断是否结算成功，
   随后重新调用 `open_st_arena` 获取最新积分、剩余次数与战报。
-- 结果码：`SUCCESS=13`、`CD_TIME=14`、`NOT_ENOUGH_CHALLENGE_TIMES=15`、
-  `NOT_IN_LIST=16`、`FAIL=17`。跨服自动化遇到 CD_TIME/次数不足时直接结束本轮，
-  不主动消耗元宝清冷却或购买次数。
+- `challenge` 请求线格式必须**严格 8 字节**（`Int32 stPlayerID, Int32 integral`），
+  **不得追加 PrevAct 尾部**。实机验证追加 4 字节后服务端静默丢弃、无任何回包
+  （表现为 `context deadline exceeded` 且挑战次数不扣减）；`open_st_arena` /
+  `refresh_player_list` 的空请求仍带 4 字节 PrevAct。
+- `challenge` 成功回包携带完整战斗回放，体积远大于其它跨服报文；回包超时并不代表
+  战斗未被受理，自动化会重新拉取 `open_st_arena` 核对挑战次数后再决定是否继续。
+- 结果码（严格对齐 AS3 `Mod_StArena_Base`）：`SUCCESS=13`、`CD_TIME=14`、
+  `FUNC_END=15`、`FAIL=16`、`NOT_ENOUGH_CHALLENGE_TIMES=17`、`NOT_IN_LIST=18`、
+  `ITEM_NOT_EXIST=19`、`NOT_ENOUGH_EXPLOIT=20`、`NOT_ENOUGH_NUM=21`、
+  `NOT_ENOUGH_FUN=22`、`PACK_FULL=23`、`REBET=24`。跨服自动化遇到
+  CD_TIME/FUNC_END/次数不足时直接结束本轮，不主动消耗元宝清冷却或购买次数。
 
 ### 4.11 Module 658 (0x0292): 悟法领域 (`Mod_WuFaField_Base`)
 

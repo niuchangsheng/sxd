@@ -16,8 +16,8 @@ func buildStArenaPanelPayload() []byte {
 	w.WriteInt16(4)
 	w.WriteInt32(120)
 	w.WriteInt32(1762000000)
-	w.WriteInt32(0) // award_reserved: 官方回包固定多出的 4 字节
-	w.WriteInt32(2)
+	w.WriteInt32(2) // reduce_refresh_time
+	w.WriteInt32(7) // proficiency
 
 	w.WriteUint16(2)
 	w.WriteInt32(7001)
@@ -60,8 +60,9 @@ func TestParseStArenaPanelResult(t *testing.T) {
 	if panel.Integral != 1888 || panel.ReduceChallengeCount != 4 {
 		t.Errorf("面板基础字段不匹配: %+v", panel)
 	}
-	if panel.AwardFeats != 120 || panel.AwardGetTime != 1762000000 || panel.ReduceRefreshTime != 2 {
-		t.Errorf("面板奖励/刷新字段不匹配: %+v", panel)
+	if panel.AwardFeats != 120 || panel.AwardGetTime != 1762000000 ||
+		panel.ReduceRefreshTime != 2 || panel.Proficiency != 7 {
+		t.Errorf("面板奖励/刷新/熟练度字段不匹配: %+v", panel)
 	}
 	if len(panel.ChallengeList) != 2 {
 		t.Fatalf("对手数量不匹配: %d", len(panel.ChallengeList))
@@ -129,11 +130,12 @@ func TestBuildAndParseStArenaChallenge(t *testing.T) {
 	if pkt.ActionID != protocol.ActionIDStArenaChallenge {
 		t.Errorf("挑战 ActionID 不匹配: 0x%08X", pkt.ActionID)
 	}
-	if len(pkt.Payload) != 12 {
-		t.Errorf("挑战载荷应为 8 字节请求 + 4 字节 PrevAct 占位, 实际 %d", len(pkt.Payload))
+	// 服务端对 challenge 要求严格 8 字节；多出的 PrevAct 尾字节会被静默丢弃。
+	if len(pkt.Payload) != 8 {
+		t.Errorf("挑战载荷应为严格 8 字节, 实际 %d", len(pkt.Payload))
 	}
-	if !pkt.HasPrevAct {
-		t.Error("跨服挑战封包应标记 HasPrevAct")
+	if pkt.HasPrevAct {
+		t.Error("挑战封包不得追加 PrevAct 尾部")
 	}
 	req, err := protocol.ParseStArenaChallengeRequest(pkt.Payload)
 	if err != nil {
@@ -154,6 +156,35 @@ func TestParseStArenaChallengeResult(t *testing.T) {
 	}
 	if _, err := protocol.ParseStArenaChallengeResult(nil); err == nil {
 		t.Fatal("空载荷应返回解析错误")
+	}
+}
+
+// TestStArenaResultCodes 锁定官方 Mod_StArena_Base 的结果码数值。
+//
+// 13 之后的码位连续自增，漏掉 FUNC_END 会让 CD_TIME 之后的全部失败语义整体错位。
+func TestStArenaResultCodes(t *testing.T) {
+	cases := []struct {
+		name string
+		got  uint8
+		want uint8
+	}{
+		{"SUCCESS", protocol.StArenaResultSuccess, 13},
+		{"CD_TIME", protocol.StArenaResultCDTime, 14},
+		{"FUNC_END", protocol.StArenaResultFuncEnd, 15},
+		{"FAIL", protocol.StArenaResultFail, 16},
+		{"NOT_ENOUGH_CHALLENGE_TIMES", protocol.StArenaResultNotEnoughChallengeTimes, 17},
+		{"NOT_IN_LIST", protocol.StArenaResultNotInList, 18},
+		{"ITEM_NOT_EXIST", protocol.StArenaResultItemNotExist, 19},
+		{"NOT_ENOUGH_EXPLOIT", protocol.StArenaResultNotEnoughExploit, 20},
+		{"NOT_ENOUGH_NUM", protocol.StArenaResultNotEnoughNum, 21},
+		{"NOT_ENOUGH_FUN", protocol.StArenaResultNotEnoughFun, 22},
+		{"PACK_FULL", protocol.StArenaResultPackFull, 23},
+		{"REBET", protocol.StArenaResultRebet, 24},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("结果码 %s 不匹配: got=%d want=%d", c.name, c.got, c.want)
+		}
 	}
 }
 

@@ -4,6 +4,8 @@
 // 基准对齐: 官方 AS3 Mod_StArena_Base.open_st_arena / refresh_player_list / challenge 描述符
 // 运行命令: go run -tags=probe test/probes/probe_st_arena.go
 // 可选开关: SXD_PROBE_ST_ARENA_CHALLENGE=1 时对面板中等级最低的对手发起一次真实挑战
+// 可选开关: SXD_PROBE_ST_ARENA_DELAY_MS=N 在开面板与挑战之间等待 N 毫秒
+// 可选开关: SXD_PROBE_ST_ARENA_DEBUG=1 打印全部收发报文，便于核对 PrevAct 线格式
 // 预期表现: 建立仙界跨服会话，打印面板积分/剩余次数/对手与战报；挑战开关开启时打印结果码
 package main
 
@@ -13,6 +15,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -23,6 +27,9 @@ import (
 
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
+	if os.Getenv("SXD_PROBE_ST_ARENA_DEBUG") == "1" {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
 	cfg, err := config.Load("configs/config.yaml")
 	if err != nil {
 		slog.Error("加载配置失败", "err", err)
@@ -87,6 +94,17 @@ func main() {
 		return
 	}
 	defer crossSess.Close()
+
+	// 记录全部入站报文，用于确认挑战回包是否真的没有下发。
+	var inboundMu sync.Mutex
+	var inboundActions []string
+	crossSess.SetPacketObserver(func(p *protocol.Packet) {
+		inboundMu.Lock()
+		inboundActions = append(inboundActions,
+			fmt.Sprintf("0x%08X(len=%d)", p.ActionID, len(p.Payload)))
+		inboundMu.Unlock()
+	})
+
 	slog.Info("仙界会话已激活",
 		"player_id", crossSess.PlayerID(),
 		"last_action", fmt.Sprintf("0x%08X", crossSess.LastActionID()),
@@ -146,6 +164,13 @@ func main() {
 			target = opp
 		}
 	}
+	// 可选：在开面板与挑战之间插入等待，验证服务端是否存在操作间隔校验。
+	delayMs, _ := strconv.Atoi(os.Getenv("SXD_PROBE_ST_ARENA_DELAY_MS"))
+	if delayMs > 0 {
+		slog.Info("挑战前等待", "delay_ms", delayMs)
+		time.Sleep(time.Duration(delayMs) * time.Millisecond)
+	}
+
 	challengePkt, err := protocol.BuildStArenaChallengePacket(protocol.StArenaChallengeRequest{
 		StPlayerID: target.StPlayerID,
 		Integral:   target.Integral,
@@ -156,10 +181,16 @@ func main() {
 	}
 	slog.Info("发起仙界竞技场挑战", "st_player_id", target.StPlayerID,
 		"integral", target.Integral, "level", target.Level,
-		"request_hex", hex.EncodeToString(challengePkt.Payload))
-	chResp, err := call(challengePkt, protocol.ActionIDStArenaChallenge, 10*time.Second)
+		"request_hex", hex.EncodeToString(challengePkt.Payload),
+		"last_action", fmt.Sprintf("0x%08X", crossSess.LastActionID()))
+	chResp, err := call(challengePkt, protocol.ActionIDStArenaChallenge, 20*time.Second)
 	if err != nil {
-		slog.Error("仙界竞技场挑战失败", "err", err)
+		inboundMu.Lock()
+		actions := append([]string(nil), inboundActions...)
+		inboundMu.Unlock()
+		slog.Error("仙界竞技场挑战失败", "err", err,
+			"last_action", fmt.Sprintf("0x%08X", crossSess.LastActionID()),
+			"inbound_actions", actions)
 		return
 	}
 	slog.Info("challenge 原始回包", "len", len(chResp.Payload), "hex", hex.EncodeToString(chResp.Payload))

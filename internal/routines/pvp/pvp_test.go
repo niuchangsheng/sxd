@@ -323,8 +323,8 @@ func TestCelestialArenaRoutine_ConsumesAllChallenges(t *testing.T) {
 				w.WriteInt16(remain)   // reduce_challenge_count
 				w.WriteInt32(0)        // award_feats
 				w.WriteInt32(0)        // award_get_time
-				w.WriteInt32(0)        // award_reserved
 				w.WriteInt32(1)        // reduce_refresh_time
+				w.WriteInt32(0)        // proficiency
 				w.WriteUint16(2)       // challengeList
 				w.WriteInt32(7001)
 				w.WriteInt32(1200)
@@ -440,4 +440,241 @@ func TestCelestialArenaRoutine_ConsumesAllChallenges(t *testing.T) {
 	session.Close()
 	mainClient.Close()
 	crossClient.Close()
+}
+
+// stArenaMockConfig 描述仙界竞技场跨服 mock 的挑战行为。
+type stArenaMockConfig struct {
+	// initialTimes 面板初始剩余挑战次数。
+	initialTimes int16
+	// challengeResult 挑战回包结果码。
+	challengeResult uint8
+	// replyChallenge 为 false 时模拟挑战回包超时 (服务端已结算但不下发回包)。
+	replyChallenge bool
+}
+
+// startStArenaMock 搭建主服 + 仙界跨服双连接 mock 并返回已激活的主服会话。
+func startStArenaMock(t *testing.T, cfg stArenaMockConfig) (*client.RoleSession, *atomic.Int32) {
+	t.Helper()
+
+	const (
+		playerID        int32 = 65536
+		mainServerAddr        = "main-st-arena-branch"
+		crossServerAddr       = "cross-st-arena-branch:9000"
+	)
+
+	mainServer, mainClient := net.Pipe()
+	crossServer, crossClient := net.Pipe()
+	t.Cleanup(func() {
+		mainClient.Close()
+		crossClient.Close()
+		mainServer.Close()
+		crossServer.Close()
+	})
+
+	var challengeCalls atomic.Int32
+
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(mainServer)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerLogin:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerLogin, []byte{
+					0x00, 0x00, 0x00, 0x00, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x00, 0x10, 0x85, 0x01,
+				}))
+			case protocol.ActionIDPlayerInitStep1:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerInitStep1,
+					[]byte{0x00, 0x00, 0x13, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x13, 0x0f, 0x00, 0x00, 0x13, 0x12}))
+			case protocol.ActionIDPlayerInitStep2:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00}))
+			case protocol.ActionIDPlayerInitStep3:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerInitStep3, make([]byte, 8)))
+			case protocol.ActionIDPlayerGetInfo:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDPlayerGetInfo, []byte{
+					0x00, 0x09, 0xe6, 0xa2, 0xa6, 0xe4, 0xb8, 0x80, 0xe5, 0x9c, 0xba,
+					0x00, 0x00, 0x01, 0x2c,
+					0x00, 0x00, 0x9a, 0x37,
+					0x00, 0x00, 0x00, 0x08, 0x6f, 0x93, 0xac, 0xf8,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0a, 0xd1,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0f, 0x99,
+					0x00, 0x00, 0x01, 0x2c,
+				}))
+			case protocol.ActionIDStcLoginGetInfo:
+				w := protocol.NewWriter()
+				w.WriteString("cross-st-arena-branch")
+				w.WriteUint16(9000)
+				w.WriteString("s703")
+				w.WriteInt32(1793549704)
+				w.WriteString("mock_pass_code")
+				w.WriteString("XianJie")
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionIDStcLoginGetInfo, w.Bytes()))
+			case protocol.ActionHeartbeat:
+				_ = protocol.WritePacket(mainServer, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+			}
+		}
+	}()
+
+	remain := cfg.initialTimes
+	integral := int32(1000)
+	reportID := int32(0)
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(crossServer)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDStLogin:
+				w := protocol.NewWriter()
+				w.WriteUint8(0)
+				w.WriteInt32(playerID)
+				w.WriteInt32(1793549704)
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStLogin, w.Bytes()))
+			case protocol.ActionIDStTownEnter:
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStTownEnter, []byte{protocol.StTownResultSuccess}))
+			case protocol.ActionIDStArenaOpen:
+				w := protocol.NewWriter()
+				w.WriteInt32(integral)
+				w.WriteInt16(remain)
+				w.WriteInt32(0)
+				w.WriteInt32(0)
+				w.WriteInt32(1) // reduce_refresh_time
+				w.WriteInt32(0) // proficiency
+				w.WriteUint16(2)
+				w.WriteInt32(7001)
+				w.WriteInt32(1200)
+				w.WriteInt32(101)
+				w.WriteInt16(60)
+				w.WriteInt32(7002)
+				w.WriteInt32(1800)
+				w.WriteInt32(102)
+				w.WriteInt16(90)
+				if reportID > 0 {
+					w.WriteUint16(1)
+					w.WriteInt32(reportID)
+					w.WriteUint8(0)
+					w.WriteInt32(playerID)
+					w.WriteString("测试角色")
+					w.WriteInt32(7001)
+					w.WriteString("对手")
+					w.WriteInt32(playerID)
+					w.WriteInt32(25)
+					w.WriteString("v1")
+					w.WriteInt32(int32(time.Now().Unix()))
+					w.WriteUint8(0)
+				} else {
+					w.WriteUint16(0)
+				}
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStArenaOpen, w.Bytes()))
+			case protocol.ActionIDStArenaChallenge:
+				n := challengeCalls.Add(1)
+				// 成功或模拟超时均视为服务端已结算；明确失败码不扣次。
+				if cfg.challengeResult == protocol.StArenaResultSuccess || !cfg.replyChallenge {
+					remain--
+					integral += 25
+					reportID = n
+				}
+				if cfg.replyChallenge {
+					_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStArenaChallenge,
+						[]byte{cfg.challengeResult}))
+				}
+			case protocol.ActionIDStArenaRefreshPlayerList:
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.StArenaResultSuccess)
+				w.WriteUint16(2)
+				w.WriteInt32(7001)
+				w.WriteInt32(1200)
+				w.WriteInt32(101)
+				w.WriteInt16(60)
+				w.WriteInt32(7002)
+				w.WriteInt32(1800)
+				w.WriteInt32(102)
+				w.WriteInt16(90)
+				w.WriteInt32(1)
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionIDStArenaRefreshPlayerList, w.Bytes()))
+			case protocol.ActionHeartbeat:
+				_ = protocol.WritePacket(crossServer, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_st_arena_branch",
+		RoleName:   "仙界竞技场分支测试",
+		ServerAddr: mainServerAddr,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr == mainServerAddr {
+				return mainClient, nil
+			}
+			if addr == crossServerAddr {
+				return crossClient, nil
+			}
+			return nil, &net.AddrError{Err: "unexpected address", Addr: addr}
+		},
+	})
+	session.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.PlayerID = playerID
+		ps.OriginNickName = "测试角色.s703"
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	t.Cleanup(session.Close)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("会话未进入激活态: %s", session.State())
+	}
+	return session, &challengeCalls
+}
+
+// TestCelestialArenaRoutine_ChallengeTimeoutReconciles 验证挑战回包超时后
+// 会重新拉取面板核对次数：服务端已扣次则按已结算继续，不会中断整轮挑战。
+func TestCelestialArenaRoutine_ChallengeTimeoutReconciles(t *testing.T) {
+	oldTimeout := stArenaChallengeTimeout
+	stArenaChallengeTimeout = 150 * time.Millisecond
+	defer func() { stArenaChallengeTimeout = oldTimeout }()
+
+	const initialTimes int16 = 3
+	session, challengeCalls := startStArenaMock(t, stArenaMockConfig{
+		initialTimes:    initialTimes,
+		challengeResult: protocol.StArenaResultSuccess,
+		replyChallenge:  false,
+	})
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer execCancel()
+	if err := NewCelestialArenaRoutine().Execute(execCtx, session, nil); err != nil {
+		t.Fatalf("仙界竞技场例程执行失败: %v", err)
+	}
+	if got := challengeCalls.Load(); got != int32(initialTimes) {
+		t.Errorf("回包超时后应继续消耗剩余次数, 期望 %d 次, 实际 %d 次", initialTimes, got)
+	}
+}
+
+// TestCelestialArenaRoutine_NotInListReloadsPanel 验证结果码 18 (NOT_IN_LIST)
+// 会被识别为目标失效并重拉面板，而非直接终止整轮挑战。
+func TestCelestialArenaRoutine_NotInListReloadsPanel(t *testing.T) {
+	session, challengeCalls := startStArenaMock(t, stArenaMockConfig{
+		initialTimes:    5,
+		challengeResult: protocol.StArenaResultNotInList,
+		replyChallenge:  true,
+	})
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer execCancel()
+	if err := NewCelestialArenaRoutine().Execute(execCtx, session, nil); err != nil {
+		t.Fatalf("仙界竞技场例程执行失败: %v", err)
+	}
+	want := int32(stArenaMaxStaleRetries + 1)
+	if got := challengeCalls.Load(); got != want {
+		t.Errorf("NOT_IN_LIST 应按最大重试次数重拉面板后退出, 期望 %d 次挑战, 实际 %d 次", want, got)
+	}
 }
