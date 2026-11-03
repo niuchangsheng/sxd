@@ -16,6 +16,7 @@ func buildStArenaPanelPayload() []byte {
 	w.WriteInt16(4)
 	w.WriteInt32(120)
 	w.WriteInt32(1762000000)
+	w.WriteInt32(0) // award_reserved: 官方回包固定多出的 4 字节
 	w.WriteInt32(2)
 
 	w.WriteUint16(2)

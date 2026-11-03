@@ -435,7 +435,7 @@ Int, String, String, String, Int, UByte, UByte,
 
 ```
 Int32 integral, Int16 reduceChallengeCount, Int32 awardFeats,
-Int32 awardGetTime, Int32 reduceRefreshTime,
+Int32 awardGetTime, Int32 awardReserved, Int32 reduceRefreshTime,
 Uint16 challengeCount, challengeCount × [
     Int32 stPlayerID, Int32 integral, Int32 roleID, Int16 level ],
 Uint16 reportCount, reportCount × [
@@ -444,8 +444,15 @@ Uint16 reportCount, reportCount × [
     String version, Int32 time, UByte isBack ],
 Uint16 rankCount, rankCount × [
     Int32 stPlayerID, String nickName, String stageName,
-    String serverName, Int32 integral, Int32 feats ]
+    String serverName, Int32 integral, Int32 feats ],
+14B trailer
 ```
+
+- `awardReserved` 是官方 2026-11 实机回包在 `awardGetTime` 后固定多下发的 4 字节
+  （实测恒为 0）。旧布局漏读该字段会让后续三个列表整体偏移 4 字节，
+  典型症状为 `failed to read st arena rank server_name: unexpected EOF`。
+- 排行榜之后还有 14 字节尾随字段（实测 `Int32 0, Int32 0, Int16, Int32`），
+  自动化不需要，解析器读完成员列表后即返回，不强制消费尾部。
 
 - `reduceChallengeCount` 为本次操作后的**剩余挑战次数**；
   `reduceRefreshTime` 为剩余**刷新对手次数**（并非冷却秒数）。

@@ -164,8 +164,8 @@ type StArenaRankEntry struct {
 // 线格式 (逆向 Mod_StArena_Base.open_st_arena 描述符):
 //
 //	Int32 integral, Int16 reduce_challenge_count, Int32 award_feats,
-//	Int32 award_get_time, Int32 reduce_refresh_time,
-//	[challengeList], [reportList], [integralRankList]
+//	Int32 award_get_time, Int32 reserved, Int32 reduce_refresh_time,
+//	[challengeList], [reportList], [integralRankList], 14B trailer (忽略)
 //
 // reduce_challenge_count 为本次操作后剩余挑战次数；
 // reduce_refresh_time 为剩余可刷新对手次数。
@@ -296,6 +296,11 @@ func ParseStArenaPanelResult(payload []byte) (*StArenaPanel, error) {
 	}
 	if res.AwardGetTime, err = r.ReadInt32(); err != nil {
 		return nil, fmt.Errorf("%w: failed to read award_get_time: %v", ErrInvalidPayload, err)
+	}
+	// 官方 2026-11 回包在 award_get_time 后固定多下发 4 字节（实测恒为 0），
+	// 旧布局漏读该字段会导致后续 challengeList/reportList/rankList 整体偏移。
+	if _, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read award_reserved: %v", ErrInvalidPayload, err)
 	}
 	if res.ReduceRefreshTime, err = r.ReadInt32(); err != nil {
 		return nil, fmt.Errorf("%w: failed to read reduce_refresh_time: %v", ErrInvalidPayload, err)

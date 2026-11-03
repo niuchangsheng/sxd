@@ -323,6 +323,7 @@ func TestCelestialArenaRoutine_ConsumesAllChallenges(t *testing.T) {
 				w.WriteInt16(remain)   // reduce_challenge_count
 				w.WriteInt32(0)        // award_feats
 				w.WriteInt32(0)        // award_get_time
+				w.WriteInt32(0)        // award_reserved
 				w.WriteInt32(1)        // reduce_refresh_time
 				w.WriteUint16(2)       // challengeList
 				w.WriteInt32(7001)
