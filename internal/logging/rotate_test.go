@@ -107,6 +107,64 @@ func TestWriter_RotateByTime(t *testing.T) {
 	}
 }
 
+func TestWriter_RotateOnStartup(t *testing.T) {
+	dir := t.TempDir()
+	activePath := filepath.Join(dir, "sxd.log")
+	if err := os.WriteFile(activePath, []byte("previous-run\n"), 0o644); err != nil {
+		t.Fatalf("seed active log failed: %v", err)
+	}
+
+	w, err := newWriter(Config{
+		Dir:          dir,
+		FileName:     "sxd.log",
+		MaxSizeBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("newWriter failed: %v", err)
+	}
+	defer w.Close()
+
+	backups, _ := filepath.Glob(filepath.Join(dir, "sxd-*.log"))
+	if len(backups) != 1 {
+		t.Fatalf("expected 1 backup on startup, got %d: %v", len(backups), backups)
+	}
+	backupData, _ := os.ReadFile(backups[0])
+	if string(backupData) != "previous-run\n" {
+		t.Errorf("backup content = %q, want %q", backupData, "previous-run\n")
+	}
+	activeData, _ := os.ReadFile(activePath)
+	if len(activeData) != 0 {
+		t.Errorf("active log should be empty after startup rotation, got %q", activeData)
+	}
+
+	if _, err := w.Write([]byte("current-run\n")); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	activeData, _ = os.ReadFile(activePath)
+	if string(activeData) != "current-run\n" {
+		t.Errorf("active log content = %q, want %q", activeData, "current-run\n")
+	}
+}
+
+func TestWriter_NoStartupRotationForEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	activePath := filepath.Join(dir, "sxd.log")
+	if err := os.WriteFile(activePath, nil, 0o644); err != nil {
+		t.Fatalf("seed empty log failed: %v", err)
+	}
+
+	w, err := newWriter(Config{Dir: dir, FileName: "sxd.log"})
+	if err != nil {
+		t.Fatalf("newWriter failed: %v", err)
+	}
+	defer w.Close()
+
+	backups, _ := filepath.Glob(filepath.Join(dir, "sxd-*.log"))
+	if len(backups) != 0 {
+		t.Fatalf("empty active log should not be rotated on startup, got %v", backups)
+	}
+}
+
 func TestWriter_PruneMaxBackups(t *testing.T) {
 	dir := t.TempDir()
 	w, err := newWriter(Config{

@@ -13,7 +13,8 @@ import (
 // Writer 线程安全的日志文件写入器，按大小或时间周期自动轮转。
 //
 // 活动日志始终写入固定的 cfg.FileName；每次轮转时将其重命名为带时间戳的
-// 历史文件，随后重新创建活动文件并清理超限的历史文件。
+// 历史文件，随后重新创建活动文件并清理超限的历史文件。进程启动时若活动
+// 日志已有内容，也会立即归档一次。
 type Writer struct {
 	cfg        Config
 	path       string
@@ -38,6 +39,14 @@ func newWriter(cfg Config) (*Writer, error) {
 	}
 	if err := w.openLocked(); err != nil {
 		return nil, err
+	}
+
+	// 每次进程启动时，若活动日志已有内容，先归档一次。
+	// 这样单次运行的日志始终从空文件开始，便于按启动批次定位问题。
+	if w.size > 0 {
+		if err := w.rotateLocked(); err != nil {
+			return nil, err
+		}
 	}
 	return w, nil
 }
