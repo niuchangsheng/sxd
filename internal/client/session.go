@@ -142,6 +142,11 @@ type RoleSession struct {
 
 	lastActionID atomic.Uint32
 	lastSendTime atomic.Int64
+
+	// factionUnavailable 标记本次会话内已确认帮派模块对当前角色不可用。
+	// 服务端对未加入帮派角色的帮派类请求会静默丢弃（无任何回包），
+	// 由首个超时的帮派任务置位，供其余帮派玩法直接跳过，避免重复空等。
+	factionUnavailable atomic.Bool
 }
 
 // NewRoleSession 构造一个新的角色会话实例。
@@ -1712,6 +1717,17 @@ func (s *RoleSession) Close() {
 	s.wg.Wait()
 
 	slog.Info("角色会话已安全关闭", "role_id", s.cfg.RoleID, "role_name", s.cfg.RoleName)
+}
+
+// MarkFactionFeatureUnavailable 标记本次会话内帮派模块对当前角色不可用。
+// 触发条件为帮派类只读请求静默无回包（典型原因：角色未加入帮派）。
+func (s *RoleSession) MarkFactionFeatureUnavailable() {
+	s.factionUnavailable.Store(true)
+}
+
+// IsFactionFeatureUnavailable 返回本次会话内是否已确认帮派模块不可用。
+func (s *RoleSession) IsFactionFeatureUnavailable() bool {
+	return s.factionUnavailable.Load()
 }
 
 // LastActionID 获取最后一次向对端发送的协议 ActionID。

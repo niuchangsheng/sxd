@@ -7,7 +7,9 @@ package minigame
 import (
 	"bytes"
 	"context"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -398,5 +400,72 @@ func TestClassifyWuFaDrawResult(t *testing.T) {
 	}
 	if err := classifyWuFaDrawResult(200); err == nil {
 		t.Error("未知结果码应返回错误")
+	}
+}
+
+// TestFactionLuckyStarRoutine_SkipsWhenRemainTimesZero 验证帮派吉星高照会先查询
+// 剩余次数 (Mod 10 Act 44)：次数为 0 时直接结束本轮，不再请求会携带帮派成员列表、
+// 在无帮派角色上被静默丢弃的战绩面板 (Act 45)。
+func TestFactionLuckyStarRoutine_SkipsWhenRemainTimesZero(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	var mu sync.Mutex
+	infoRequested := false
+
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDFactionRollCakeRemainTimes:
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDFactionRollCakeRemainTimes, []byte{0},
+				))
+			case protocol.ActionIDFactionRollCakeInfo:
+				mu.Lock()
+				infoRequested = true
+				mu.Unlock()
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_faction_rollcake",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error {
+			return nil
+		},
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("测试会话未进入激活状态: %s", session.State())
+	}
+
+	if err := NewFactionLuckyStarRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("帮派吉星高照执行失败: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if infoRequested {
+		t.Fatal("剩余次数为 0 时不应再请求战绩面板")
+	}
+	if session.IsFactionFeatureUnavailable() {
+		t.Fatal("剩余次数为 0 不应判定帮派模块不可用")
 	}
 }

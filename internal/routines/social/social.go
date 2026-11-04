@@ -6,6 +6,7 @@ package social
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -185,6 +186,10 @@ func NewFactionBlessingRoutine(cfgs ...FactionBlessingConfig) scheduler.Activity
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			if session.IsFactionFeatureUnavailable() {
+				slog.Info("帮派模块对当前角色不可用，跳过帮派祭神", "role_id", session.RoleID())
+				return nil
+			}
 			slog.Info("正在执行社交任务: 帮派祭神上香",
 				"role_id", session.RoleID(),
 				"offering_id", offering.ID,
@@ -197,6 +202,38 @@ func NewFactionBlessingRoutine(cfgs ...FactionBlessingConfig) scheduler.Activity
 			infoResp, infoErr := session.Call(infoCtx, infoPkt, protocol.ActionIDFactionGodInfo)
 			infoCancel()
 			if infoErr != nil || infoResp == nil {
+				if errors.Is(infoErr, context.DeadlineExceeded) {
+					// 面板 (Act 22) 携带帮派上香成员列表，未加入帮派的角色上会被服务端静默丢弃。
+					// 用免费白檀香 (Act 23，合法供品) 探测一次上香结果码以区分“未加入帮派”和偶发丢包：
+					// MEMBER_NOT_EXIST / FACTION_NOT_EXIST 即确认无帮派；SUCCESS/COUNT_USED 说明帮派上下文正常。
+					probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
+					probeResp, probeErr := session.Call(probeCtx,
+						protocol.BuildFactionIncensePacket(protocol.FactionOfferingWhiteSandalwood),
+						protocol.ActionIDFactionIncense)
+					probeCancel()
+					if probeErr == nil && probeResp != nil {
+						if code, pErr := protocol.ParseFactionIncenseResult(probeResp.Payload); pErr == nil {
+							switch code {
+							case protocol.FactionIncenseResultMemberNotExist, protocol.FactionIncenseResultFactionNotExist:
+								session.MarkFactionFeatureUnavailable()
+								slog.Info("帮派祭神上香返回“无此帮派成员/帮派”，确认角色未加入帮派，跳过本轮帮派任务",
+									"role_id", session.RoleID(), "result_code", code)
+							case protocol.FactionIncenseResultSuccess:
+								slog.Info("帮派祭神面板无回包，但免费白檀香上香成功", "role_id", session.RoleID())
+							case protocol.FactionIncenseResultCountUsed:
+								slog.Info("今日帮派祭神上香次数已用尽", "role_id", session.RoleID())
+							default:
+								slog.Warn("帮派祭神面板无回包，上香探测返回未知结果码",
+									"role_id", session.RoleID(), "result_code", code)
+							}
+							return nil
+						}
+					}
+					session.MarkFactionFeatureUnavailable()
+					slog.Info("帮派祭神面板与上香探测均无回包，判定帮派模块不可用，跳过本轮帮派任务",
+						"role_id", session.RoleID())
+					return nil
+				}
 				slog.Warn("查询帮派祭神信息失败", "role_id", session.RoleID(), "err", infoErr)
 				return nil
 			}
@@ -369,6 +406,10 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			if session.IsFactionFeatureUnavailable() {
+				slog.Info("帮派模块对当前角色不可用，跳过帮派转盘", "role_id", session.RoleID())
+				return nil
+			}
 			slog.Info("正在执行社交任务: 帮派转盘", "role_id", session.RoleID())
 
 			// 1. 查询转盘状态与剩余青龙令 (Mod 69, Act 1)
@@ -377,6 +418,12 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 			openResp, openErr := session.Call(openCtx, openPkt, protocol.ActionIDLuckyWheelOpen)
 			openCancel()
 			if openErr != nil || openResp == nil {
+				if errors.Is(openErr, context.DeadlineExceeded) {
+					session.MarkFactionFeatureUnavailable()
+					slog.Info("帮派转盘面板无任何回包，判定帮派模块不可用（角色可能未加入帮派），跳过本轮帮派任务",
+						"role_id", session.RoleID())
+					return nil
+				}
 				slog.Warn("查询帮派转盘状态失败", "role_id", session.RoleID(), "err", openErr)
 				return nil
 			}

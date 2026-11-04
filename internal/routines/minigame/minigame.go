@@ -47,23 +47,50 @@ func NewFactionLuckyStarRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			if session.IsFactionFeatureUnavailable() {
+				slog.Info("帮派模块对当前角色不可用，跳过帮派吉星高照", "role_id", session.RoleID())
+				return nil
+			}
 			slog.Info("正在执行益智任务: 帮派吉星高照摇骰子", "role_id", session.RoleID())
 
-			// 1. 查询吉星高照战绩与剩余投掷次数 (Mod 10, Act 45)
+			// 1. 先查询剩余投掷次数 (Mod 10, Act 44)。
+			// 该动作在未加入帮派的角色上依然正常回包（实测 s0 返回 0），
+			// 是唯一可用于提前判断“今日还有没有次数”的轻量状态查询；
+			// 战绩面板 (Act 45) 会携带帮派成员列表，无帮派角色上会被服务端静默丢弃，
+			// 因此不能把面板查询放在最前面。
+			remainPkt := protocol.BuildFactionRollCakeRemainTimesPacket(protocol.ActionIDTownEnter)
+			rCtx, rCancel := context.WithTimeout(ctx, 3*time.Second)
+			remainResp, remainErr := session.Call(rCtx, remainPkt, protocol.ActionIDFactionRollCakeRemainTimes)
+			rCancel()
+
+			var remain int8
+			remainKnown := false
+			if remainErr == nil && remainResp != nil {
+				if parsed, err := protocol.ParseFactionRollCakeRemainTimesResult(remainResp.Payload); err != nil {
+					slog.Warn("解析吉星高照剩余次数回包失败，尝试查询战绩面板", "role_id", session.RoleID(), "err", err)
+				} else {
+					remain = parsed
+					remainKnown = true
+				}
+			} else {
+				slog.Warn("查询吉星高照剩余次数失败，尝试查询战绩面板", "role_id", session.RoleID(), "err", remainErr)
+			}
+
+			if remainKnown && remain <= 0 {
+				slog.Info("今日帮派吉星高照投掷次数已用尽", "role_id", session.RoleID())
+				return nil
+			}
+
+			// 2. 查询战绩面板 (Mod 10, Act 45)：仅用于日志与 44 失败时的兜底。
+			prevAct := protocol.ActionIDFactionRollCakeRemainTimes
 			infoPkt := protocol.BuildFactionRollCakeInfoPacket(protocol.ActionIDTownEnter)
 			infoCtx, infoCancel := context.WithTimeout(ctx, 3*time.Second)
 			infoResp, infoErr := session.Call(infoCtx, infoPkt, protocol.ActionIDFactionRollCakeInfo)
 			infoCancel()
-
-			var remain int8
-			needRemainFallback := true
 			if infoErr == nil && infoResp != nil {
-				info, err := protocol.ParseFactionRollCakeInfoResult(infoResp.Payload)
-				if err != nil {
-					slog.Warn("解析吉星高照战绩回包失败，尝试仅查询剩余次数", "role_id", session.RoleID(), "err", err)
+				if info, err := protocol.ParseFactionRollCakeInfoResult(infoResp.Payload); err != nil {
+					slog.Warn("解析吉星高照战绩回包失败", "role_id", session.RoleID(), "err", err)
 				} else {
-					needRemainFallback = false
-					remain = info.RemainTimes
 					slog.Info("吉星高照当前战绩",
 						"role_id", session.RoleID(),
 						"week_best_score", info.WeekBestScore,
@@ -72,39 +99,34 @@ func NewFactionLuckyStarRoutine() scheduler.ActivityRoutine {
 						"faction_score", info.FactionScore,
 						"member_count", len(info.Members),
 					)
+					if !remainKnown {
+						remain = info.RemainTimes
+						remainKnown = true
+						prevAct = protocol.ActionIDFactionRollCakeInfo
+					}
 				}
 			} else {
-				slog.Warn("查询吉星高照战绩失败，尝试仅查询剩余次数", "role_id", session.RoleID(), "err", infoErr)
+				slog.Warn("查询吉星高照战绩失败", "role_id", session.RoleID(), "err", infoErr)
 			}
 
-			// 2. 战绩查询或解析失败时兜底查询剩余次数 (Mod 10, Act 44)
-			if needRemainFallback {
-				remainPkt := protocol.BuildFactionRollCakeRemainTimesPacket(protocol.ActionIDTownEnter)
-				rCtx, rCancel := context.WithTimeout(ctx, 3*time.Second)
-				remainResp, err := session.Call(rCtx, remainPkt, protocol.ActionIDFactionRollCakeRemainTimes)
-				rCancel()
-				if err != nil || remainResp == nil {
-					slog.Warn("查询吉星高照剩余次数失败", "role_id", session.RoleID(), "err", err)
-					return nil
+			if !remainKnown {
+				if errors.Is(remainErr, context.DeadlineExceeded) || errors.Is(infoErr, context.DeadlineExceeded) {
+					// 两个只读动作都没有任何回包：判定帮派模块不可用并熔断后续帮派任务。
+					session.MarkFactionFeatureUnavailable()
+					slog.Info("帮派吉星高照剩余次数与战绩面板均无任何回包，判定帮派模块不可用（角色可能未加入帮派），跳过本轮帮派任务",
+						"role_id", session.RoleID())
+				} else {
+					slog.Warn("无法确定帮派吉星高照剩余次数，跳过本轮", "role_id", session.RoleID())
 				}
-				parsed, err := protocol.ParseFactionRollCakeRemainTimesResult(remainResp.Payload)
-				if err != nil {
-					slog.Warn("解析吉星高照剩余次数回包失败", "role_id", session.RoleID(), "err", err)
-					return nil
-				}
-				remain = parsed
+				return nil
 			}
 
 			if remain <= 0 {
-				slog.Info("今日吉星高照投掷次数已用尽", "role_id", session.RoleID())
+				slog.Info("今日帮派吉星高照投掷次数已用尽", "role_id", session.RoleID())
 				return nil
 			}
 
 			// 3. 循环投掷直至次数用尽 (Mod 10, Act 46)
-			prevAct := protocol.ActionIDFactionRollCakeInfo
-			if needRemainFallback {
-				prevAct = protocol.ActionIDFactionRollCakeRemainTimes
-			}
 			rolls := 0
 			for remain > 0 && rolls < maxLuckyStarRolls {
 				if err := ctx.Err(); err != nil {
