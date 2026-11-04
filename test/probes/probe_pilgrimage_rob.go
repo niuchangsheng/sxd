@@ -25,9 +25,13 @@ func main() {
 	execute := flag.Bool("execute", false, "实际发起打劫 (会消耗每日打劫次数)")
 	targetPlayerID := flag.Int64("player", 0, "指定目标玩家 ID，0 表示自动选择收益最高的队伍")
 	maxAttempts := flag.Int("max", 1, "最多尝试打劫次数")
+	debug := flag.Bool("debug", false, "打印全部收发报文 (定位静默丢包)")
 	flag.Parse()
 
 	slog.SetLogLoggerLevel(slog.LevelInfo)
+	if *debug {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
 	cfg, err := config.Load("configs/config.yaml")
 	if err != nil {
 		slog.Error("加载配置失败", "err", err)
@@ -136,6 +140,7 @@ func main() {
 			"protection", protocol.StTakeBibleCrossProtectionName(team.Protection),
 			"sequence_id", team.SequenceID,
 			"protect_player_id", team.ProtectPlayerID,
+			"is_deeds_so", team.IsDeedsSo,
 			"distance", team.Distance,
 		)
 	}
@@ -231,7 +236,7 @@ func main() {
 		robResp, rErr := call(
 			protocol.BuildStTakeBibleCrossRobPacket(selected.PlayerID, selected.SequenceID),
 			protocol.ActionIDStTakeBibleCrossRob,
-			5*time.Second,
+			15*time.Second, // 回包含完整战报，需等待跨服节点完成战斗计算
 		)
 		if rErr != nil {
 			slog.Error("rob 失败", "err", rErr)

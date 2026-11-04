@@ -299,3 +299,180 @@ func TestCrossPilgrimageRob_SkipsRobbedAndExhaustedTargets(t *testing.T) {
 		t.Errorf("expected no rob for invalid targets, got %d", robCalls)
 	}
 }
+
+// TestCrossPilgrimageRob_TimeoutThenCooldownTreatedAsSettled 覆盖 rob 回包超时后的受理复核：
+// 冷却已被触发说明服务端已完成结算，必须按已受理收手，不得重复打劫同一轮目标。
+func TestCrossPilgrimageRob_TimeoutThenCooldownTreatedAsSettled(t *testing.T) {
+	session := newRobTestSession(1000, 180)
+	initialCoins := session.GetPlayerState().Coins
+
+	var cdCalls, robCalls int
+	cdValues := []int16{0, 600}
+	crossCall := func(pkt *protocol.Packet, expectedAct uint32, _ time.Duration) (*protocol.Packet, error) {
+		switch expectedAct {
+		case protocol.ActionIDStTakeBibleCrossOpen:
+			return protocol.NewPacket(expectedAct, buildRoadPayload([]protocol.StTakeBibleCrossRoadTeam{
+				{PlayerID: 1001, Protection: protocol.StTakeBibleCrossProtectionTangSeng, SequenceID: 1},
+				{PlayerID: 1002, Protection: protocol.StTakeBibleCrossProtectionSunWuKong, SequenceID: 1},
+			}, 4)), nil
+		case protocol.ActionIDStTakeBibleCrossGetRobCD:
+			seconds := int16(0)
+			if len(cdValues) > 0 {
+				seconds = cdValues[0]
+				cdValues = cdValues[1:]
+			}
+			cdCalls++
+			return protocol.NewPacket(expectedAct, buildRobCDPayload(seconds, 10)), nil
+		case protocol.ActionIDStTakeBibleCrossGetPlayer:
+			playerID := int32(1001)
+			if playerCallsFromPacket(pkt) == 1002 {
+				playerID = 1002
+			}
+			return protocol.NewPacket(expectedAct, buildPlayerInfoPayload(protocol.StTakeBibleCrossPlayerInfo{
+				PlayerID:         playerID,
+				NickName:         "可劫目标",
+				SequenceID:       1,
+				TotalCanRobTimes: 3,
+				RobCoin:          5000,
+				RobFame:          20,
+				RobStExp:         10,
+			})), nil
+		case protocol.ActionIDStTakeBibleCrossRob:
+			robCalls++
+			// 服务端已完成战斗并触发冷却，但战报回包在预算内没有送达。
+			return nil, context.DeadlineExceeded
+		case protocol.ActionIDStTakeBibleCrossClose:
+			return protocol.NewPacket(expectedAct, nil), nil
+		}
+		return nil, context.DeadlineExceeded
+	}
+
+	crossPilgrimageRob(context.Background(), session, crossCall, DefaultPilgrimageConfig())
+
+	if robCalls != 1 {
+		t.Errorf("expected exactly 1 rob attempt after timeout, got %d", robCalls)
+	}
+	if cdCalls != 2 {
+		t.Errorf("expected cooldown checked before rob and after timeout, got %d", cdCalls)
+	}
+	if got := session.GetPlayerState().Coins; got != initialCoins {
+		t.Errorf("timeout reconciliation must not credit rewards, coins %d -> %d", initialCoins, got)
+	}
+}
+
+// TestCrossPilgrimageRob_TimeoutThenNoCooldownSkipsTarget 覆盖 rob 回包超时且冷却仍为 0：
+// 请求未被受理，应跳过该目标继续尝试后续目标，而不是中断整轮打劫。
+func TestCrossPilgrimageRob_TimeoutThenNoCooldownSkipsTarget(t *testing.T) {
+	session := newRobTestSession(1000, 180)
+	initialCoins := session.GetPlayerState().Coins
+
+	var cdCalls, robCalls int
+	crossCall := func(pkt *protocol.Packet, expectedAct uint32, _ time.Duration) (*protocol.Packet, error) {
+		switch expectedAct {
+		case protocol.ActionIDStTakeBibleCrossOpen:
+			return protocol.NewPacket(expectedAct, buildRoadPayload([]protocol.StTakeBibleCrossRoadTeam{
+				{PlayerID: 1001, Protection: protocol.StTakeBibleCrossProtectionTangSeng, SequenceID: 1},
+				{PlayerID: 1002, Protection: protocol.StTakeBibleCrossProtectionSunWuKong, SequenceID: 1},
+			}, 4)), nil
+		case protocol.ActionIDStTakeBibleCrossGetRobCD:
+			cdCalls++
+			return protocol.NewPacket(expectedAct, buildRobCDPayload(0, 10)), nil
+		case protocol.ActionIDStTakeBibleCrossGetPlayer:
+			return protocol.NewPacket(expectedAct, buildPlayerInfoPayload(protocol.StTakeBibleCrossPlayerInfo{
+				PlayerID:         playerCallsFromPacket(pkt),
+				NickName:         "可劫目标",
+				SequenceID:       1,
+				TotalCanRobTimes: 3,
+				RobCoin:          5000,
+				RobFame:          20,
+				RobStExp:         10,
+			})), nil
+		case protocol.ActionIDStTakeBibleCrossRob:
+			robCalls++
+			if robCalls == 1 {
+				// 首个目标静默丢包且未触发冷却。
+				return nil, context.DeadlineExceeded
+			}
+			return protocol.NewPacket(expectedAct, buildRobResultPayload(protocol.StTakeBibleCrossRobResult{
+				Msg:            protocol.StTakeBibleCrossMsgSuccess,
+				TargetPlayerID: playerCallsFromPacket(pkt),
+				TargetNickName: "可劫目标",
+				RobCoin:        5000,
+				RobFame:        20,
+				RobStExp:       10,
+				WarReportID:    9002,
+			})), nil
+		case protocol.ActionIDStTakeBibleCrossClose:
+			return protocol.NewPacket(expectedAct, nil), nil
+		}
+		return nil, context.DeadlineExceeded
+	}
+
+	crossPilgrimageRob(context.Background(), session, crossCall, DefaultPilgrimageConfig())
+
+	if robCalls != 2 {
+		t.Errorf("expected to skip timed-out target and rob the next one, got %d rob calls", robCalls)
+	}
+	if cdCalls != 3 {
+		t.Errorf("expected 3 cooldown checks (before, reconcile, after success), got %d", cdCalls)
+	}
+	if got := session.GetPlayerState().Coins; got != initialCoins+5000 {
+		t.Errorf("expected only the settled rob reward, coins %d -> %d", initialCoins, got)
+	}
+}
+
+// TestCrossPilgrimageRob_TimeoutThenReconcileFailsStops 覆盖 rob 回包超时且冷却复核也失败：
+// 状态未知时必须保守结束本轮，避免在未知结算态下继续打劫。
+func TestCrossPilgrimageRob_TimeoutThenReconcileFailsStops(t *testing.T) {
+	session := newRobTestSession(1000, 180)
+
+	var cdCalls, robCalls int
+	crossCall := func(pkt *protocol.Packet, expectedAct uint32, _ time.Duration) (*protocol.Packet, error) {
+		switch expectedAct {
+		case protocol.ActionIDStTakeBibleCrossOpen:
+			return protocol.NewPacket(expectedAct, buildRoadPayload([]protocol.StTakeBibleCrossRoadTeam{
+				{PlayerID: 1001, Protection: protocol.StTakeBibleCrossProtectionTangSeng, SequenceID: 1},
+				{PlayerID: 1002, Protection: protocol.StTakeBibleCrossProtectionSunWuKong, SequenceID: 1},
+			}, 4)), nil
+		case protocol.ActionIDStTakeBibleCrossGetRobCD:
+			cdCalls++
+			if cdCalls == 1 {
+				return protocol.NewPacket(expectedAct, buildRobCDPayload(0, 10)), nil
+			}
+			return nil, context.DeadlineExceeded
+		case protocol.ActionIDStTakeBibleCrossGetPlayer:
+			return protocol.NewPacket(expectedAct, buildPlayerInfoPayload(protocol.StTakeBibleCrossPlayerInfo{
+				PlayerID:         playerCallsFromPacket(pkt),
+				NickName:         "可劫目标",
+				SequenceID:       1,
+				TotalCanRobTimes: 3,
+				RobCoin:          5000,
+				RobFame:          20,
+				RobStExp:         10,
+			})), nil
+		case protocol.ActionIDStTakeBibleCrossRob:
+			robCalls++
+			return nil, context.DeadlineExceeded
+		case protocol.ActionIDStTakeBibleCrossClose:
+			return protocol.NewPacket(expectedAct, nil), nil
+		}
+		return nil, context.DeadlineExceeded
+	}
+
+	crossPilgrimageRob(context.Background(), session, crossCall, DefaultPilgrimageConfig())
+
+	if robCalls != 1 {
+		t.Errorf("expected to stop after unknown settlement state, got %d rob calls", robCalls)
+	}
+	if cdCalls != 2 {
+		t.Errorf("expected initial cooldown check plus one reconcile, got %d", cdCalls)
+	}
+}
+
+// playerCallsFromPacket 从请求载荷的起始 Int32 读取玩家 ID，便于 mock 区分目标。
+func playerCallsFromPacket(pkt *protocol.Packet) int32 {
+	if pkt == nil || len(pkt.Payload) < 4 {
+		return 0
+	}
+	return int32(uint32(pkt.Payload[0])<<24 | uint32(pkt.Payload[1])<<16 | uint32(pkt.Payload[2])<<8 | uint32(pkt.Payload[3]))
+}

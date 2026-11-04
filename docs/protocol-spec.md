@@ -358,9 +358,18 @@ Byte bless, Byte buff
    `UByte msg, [Int player_id, String nickname, String stage_name, String server_name],
    Int rob_coin, Short rob_fame, Short rob_st_exp, Int war_report_id, ...`
    其后的 `warData` 为完整战报，业务层可忽略。
-5. 每次打劫成功后客户端都会重新查询 `get_rob_take_bible_cd_time`；常见打劫结果码：
-   `SUCCESS=9`、`INVALID_PLAYER_ID=10`、`PROTECT_TIME=20`、`FULL_ROB_TIMES=21`、
-   `HAVE_CD_TIME=22`、`BE_ROB_ALL=23`、`INVALID_SEQUENCE_ID=24`。
+   - rob 回包必须先由跨服节点完成战斗计算再下发，实机成功回包约 8KB（随目标
+     战力与战斗回合数增长）。单次回包预算按 15s 设置；4s 预算会把高战力目标
+     或节点拥塞场景误判为 `context deadline exceeded`。
+5. 每次打劫（无论成功还是失败）后客户端都会重新查询 `get_rob_take_bible_cd_time`；
+   常见打劫结果码：`SUCCESS=9`、`INVALID_PLAYER_ID=10`、`PROTECT_TIME=20`、
+   `FULL_ROB_TIMES=21`、`HAVE_CD_TIME=22`、`BE_ROB_ALL=23`、`INVALID_SEQUENCE_ID=24`。
+6. rob 回包超时**不等于**打劫未被受理。自动化在超时后立即补查
+   `get_rob_take_bible_cd_time` 复核受理状态：
+   - 冷却已触发（`cd_seconds > 0`）：服务端已完成结算，按已受理处理并结束本轮，
+     严禁对同一目标重复发起；
+   - 冷却仍为 0：确认请求未被受理，可跳过该目标继续尝试下一支队伍；
+   - 复核查询本身失败：状态未知，保守结束本轮打劫。
 
 ### 4.9 Module 345 (0x0159): 邮箱 (`Mod_Email_Base`)
 

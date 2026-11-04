@@ -291,6 +291,14 @@ const (
 	crossTakeBibleRobProbeHardLimit = 50
 	// crossTakeBibleRobInterval 连续打劫之间的拟人化间隔。
 	crossTakeBibleRobInterval = 500 * time.Millisecond
+	// crossTakeBibleRobTimeout 单次打劫等待结算回包的超时。
+	//
+	// rob 回包携带完整战报 (实机约 8KB，随目标战力与战斗回合数增长)，
+	// 跨服节点需要先完成战斗计算再下发；4s 预算曾把高战力/拥塞场景误判为无应答，
+	// 因此与仙界竞技场 challenge 对齐，给足战报结算时间。
+	crossTakeBibleRobTimeout = 15 * time.Second
+	// crossTakeBibleRobCDTimeout 打劫冷却查询超时 (也用于超时后的受理复核)。
+	crossTakeBibleRobCDTimeout = 3 * time.Second
 )
 
 // PilgrimageConfig 西天取经护送与打劫自动化策略配置。
@@ -339,7 +347,8 @@ func normalizePilgrimageConfig(cfg PilgrimageConfig) PilgrimageConfig {
 func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg PilgrimageConfig) bool {
 	cfg = normalizePilgrimageConfig(cfg)
 	// 一次巡检最多包含护送、刷新、路况查询、目标探测与多次打劫，放宽整体超时。
-	crossCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	// rob 回包需等待跨服节点完成战斗计算 (单次预算 15s)，整体预算相应放宽。
+	crossCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
 	// 1. 先以短超时申请凭据：单机/测试环境无此模块时应快速回退，不阻塞传统链路。
@@ -537,6 +546,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 	}
 	level := int16(session.GetPlayerState().Level)
 	targets := make([]robTarget, 0, probeCount)
+	probeFailed := 0
 	for _, team := range candidates[:probeCount] {
 		infoResp, cErr := crossCall(
 			protocol.BuildStTakeBibleCrossGetPlayerPacket(team.PlayerID, level, 0, team.SequenceID),
@@ -544,6 +554,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 			2*time.Second,
 		)
 		if cErr != nil {
+			probeFailed++
 			slog.Debug("仙界取经目标详情无应答", "role_id", session.RoleID(), "player_id", team.PlayerID, "error", cErr)
 			continue
 		}
@@ -567,6 +578,16 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 	sort.SliceStable(targets, func(i, j int) bool {
 		return targets[i].score > targets[j].score
 	})
+	// 探测超时会被静默跳过；聚合到一条 Info 日志，便于区分“路上没人可劫”
+	// 与“跨服节点繁忙/丢包”，避免线上只能看到打劫无应答而缺少上下文。
+	if probeFailed > 0 {
+		slog.Info("仙界取经目标探测存在无应答",
+			"role_id", session.RoleID(),
+			"probes", probeCount,
+			"failed", probeFailed,
+			"robbable", len(targets),
+		)
+	}
 
 	attempts := int(road.CanRobTimes)
 	if attempts > cfg.MaxRobAttempts {
@@ -593,7 +614,12 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 			"target_player_id", target.team.PlayerID,
 			"target_nickname", target.info.NickName,
 			"protection", protocol.StTakeBibleCrossProtectionName(target.team.Protection),
+			"protect_player_id", target.team.ProtectPlayerID,
+			"is_deeds_so", target.team.IsDeedsSo,
+			"distance", target.team.Distance,
 			"sequence_id", target.team.SequenceID,
+			"be_rob_times", target.info.BeRobTimes,
+			"total_can_rob_times", target.info.TotalCanRobTimes,
 			"expect_coin", target.info.RobCoin,
 			"expect_fame", target.info.RobFame,
 		)
@@ -601,11 +627,43 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 		robResp, cErr := crossCall(
 			protocol.BuildStTakeBibleCrossRobPacket(target.team.PlayerID, target.team.SequenceID),
 			protocol.ActionIDStTakeBibleCrossRob,
-			4*time.Second,
+			crossTakeBibleRobTimeout,
 		)
 		if cErr != nil {
-			slog.Warn("仙界取经打劫无应答", "role_id", session.RoleID(), "target_player_id", target.team.PlayerID, "error", cErr)
-			break
+			// 回包超时不等于打劫未被受理：rob 回包要先由服务端完成战斗计算，
+			// 高战力目标或跨服节点拥塞时可能超过任何固定预算。
+			// 立即补查冷却：已进入冷却说明服务端已结算，绝不能重复发起；
+			// 冷却仍为 0 才说明请求确实未被受理，可安全尝试下一个目标。
+			accepted, known := crossTakeBibleRobReconcile(session, crossCall)
+			if !known {
+				slog.Warn("仙界取经打劫无应答且冷却复核失败，保守结束本轮打劫",
+					"role_id", session.RoleID(),
+					"target_player_id", target.team.PlayerID,
+					"error", cErr,
+				)
+				break
+			}
+			if accepted {
+				slog.Warn("仙界取经打劫无应答但服务端已进入冷却，按已受理结束本轮打劫",
+					"role_id", session.RoleID(),
+					"target_player_id", target.team.PlayerID,
+					"error", cErr,
+				)
+				break
+			}
+			slog.Warn("仙界取经打劫无应答且服务端未进入冷却，跳过该目标",
+				"role_id", session.RoleID(),
+				"target_player_id", target.team.PlayerID,
+				"error", cErr,
+			)
+			if i+1 < attempts {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(crossTakeBibleRobInterval):
+				}
+			}
+			continue
 		}
 		result, pErr := protocol.ParseStTakeBibleCrossRobResult(robResp.Payload)
 		switch {
@@ -673,7 +731,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 
 // crossTakeBibleRobCD 查询仙界取经打劫冷却。
 func crossTakeBibleRobCD(session *client.RoleSession, crossCall crossTakeBibleCallFunc) (*protocol.StTakeBibleCrossRobCD, bool) {
-	resp, err := crossCall(protocol.BuildStTakeBibleCrossGetRobCDPacket(), protocol.ActionIDStTakeBibleCrossGetRobCD, 2*time.Second)
+	resp, err := crossCall(protocol.BuildStTakeBibleCrossGetRobCDPacket(), protocol.ActionIDStTakeBibleCrossGetRobCD, crossTakeBibleRobCDTimeout)
 	if err != nil {
 		slog.Warn("仙界取经打劫冷却查询无应答", "role_id", session.RoleID(), "error", err)
 		return nil, false
@@ -684,6 +742,21 @@ func crossTakeBibleRobCD(session *client.RoleSession, crossCall crossTakeBibleCa
 		return nil, false
 	}
 	return cd, true
+}
+
+// crossTakeBibleRobReconcile 在 rob 回包超时后核对本次打劫是否已被服务端受理。
+//
+// 官方客户端每次打劫后都会重新查询打劫冷却；服务端一旦受理 (无论胜负) 都会
+// 设置冷却。因此回包缺失时以冷却状态作为唯一可靠的受理凭证：
+//   - accepted=true：冷却已触发，按已结算处理，绝不能重复发起；
+//   - accepted=false 且 known=true：冷却仍为 0，确认请求未被受理，可安全尝试下一目标；
+//   - known=false：冷却查询本身失败，状态未知，调用方必须保守收手。
+func crossTakeBibleRobReconcile(session *client.RoleSession, crossCall crossTakeBibleCallFunc) (accepted, known bool) {
+	cd, ok := crossTakeBibleRobCD(session, crossCall)
+	if !ok {
+		return false, false
+	}
+	return cd.CDSeconds > 0, true
 }
 
 // NewPilgrimageRoutine 构造西天取经护送与打劫任务。
