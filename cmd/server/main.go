@@ -24,6 +24,7 @@ import (
 	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/routines"
+	"sxd-pie-ng/internal/routines/daily"
 	"sxd-pie-ng/internal/routines/dungeon"
 	"sxd-pie-ng/internal/routines/farming"
 	"sxd-pie-ng/internal/routines/minigame"
@@ -378,6 +379,16 @@ func run(ctx context.Context, args []string) error {
 		lsCfg.MaxRerollsPerRoll = cfg.Scheduler.LuckyStar.MaxRerollsPerRoll
 	}
 	factory.SetLuckyStarConfig(lsCfg)
+
+	// 在线礼包与功能终结礼包策略配置
+	ogCfg := daily.DefaultOnlineGiftConfig()
+	if cfg.Scheduler.OnlineGift.ClaimFunctionEndGifts != nil {
+		ogCfg.ClaimFunctionEndGifts = *cfg.Scheduler.OnlineGift.ClaimFunctionEndGifts
+	}
+	if cfg.Scheduler.OnlineGift.MaxClaimsPerGift > 0 {
+		ogCfg.MaxClaimsPerGift = cfg.Scheduler.OnlineGift.MaxClaimsPerGift
+	}
+	factory.SetOnlineGiftConfig(ogCfg)
 
 	// 魔王试炼自动化策略配置
 	btCfg := dungeon.DefaultBeelzebubTrialsConfig()

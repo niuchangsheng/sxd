@@ -110,6 +110,7 @@ type SchedulerConfig struct {
 	FactionBlessing FactionBlessingConfig  `yaml:"faction_blessing"`
 	TreasureHouse   TreasureHouseConfig    `yaml:"treasure_house"`
 	LuckyStar       LuckyStarConfig        `yaml:"lucky_star"`
+	OnlineGift      OnlineGiftConfig       `yaml:"online_gift"`
 	Expert          map[string]interface{} `yaml:"expert"`
 }
 
@@ -157,6 +158,16 @@ type FactionBlessingConfig struct {
 type LuckyStarConfig struct {
 	// MaxRerollsPerRoll 每次投掷最多逆天改运次数 (默认 9)
 	MaxRerollsPerRoll int `yaml:"max_rerolls_per_roll"`
+}
+
+// OnlineGiftConfig 在线礼包与功能终结礼包策略配置
+type OnlineGiftConfig struct {
+	// ClaimFunctionEndGifts 是否领取功能终结礼包 (默认 true)。
+	// 功能终结礼包指吉星高照、喜从天降 (龙鱼仙令/境界点)、灵脉、拜关公、聚灵等
+	// 玩法达到等级上限终结后转为每日领取的补偿礼包。
+	ClaimFunctionEndGifts *bool `yaml:"claim_function_end_gifts"`
+	// MaxClaimsPerGift 单个终结礼包连续领取次数上限 (默认 20)。
+	MaxClaimsPerGift int `yaml:"max_claims_per_gift"`
 }
 
 // PilgrimageConfig 西天取经护送与打劫策略配置。

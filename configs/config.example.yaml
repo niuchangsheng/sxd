@@ -51,7 +51,7 @@ scheduler:
     celestial_arena: true       # 仙界竞技场 (跨服积分赛自动挑战，不消耗元宝)
 
     # 18项抓包与日常核心功能
-    online_gift: true           # 1. 领取奖励 (在线礼包等)
+    online_gift: true           # 1. 领取奖励 (在线礼包 + 全部功能终结礼包)
     jieyuan_box: true           # 2. 结缘宝箱 (除了传说，其他都开)
     daily_quest: true           # 3. 领取日活跃奖励
     qimen_dunjia: true          # 4. 奇门遁甲
@@ -131,6 +131,14 @@ scheduler:
   # 个人吉星高照自动化策略配置 (仅使用免费逆天改运次数，永不消耗元宝)
   lucky_star:
     max_rerolls_per_roll: 9     # 每次投掷最大逆天改运次数 (客户端上限 9)
+
+  # 在线礼包与功能终结礼包配置
+  # 功能终结礼包: 吉星高照、喜从天降(龙鱼仙令/境界点)、灵脉、拜关公、聚灵等
+  # 玩法达到等级上限终结后转为每日领取的补偿礼包 (Mod_FunctionEnd, Module 127)
+  online_gift:
+    claim_function_end_gifts: true  # 是否领取功能终结礼包 (默认 true)
+    max_claims_per_gift: 20         # 单个礼包连续领取次数上限 (默认 20)
+    # 注意: 服务端标记需要消耗元宝的终结礼包 (如吉星高照) 一律跳过，不提供花元宝开关。
 
   # 喜从天降与五福临门均无策略参数，也不会消耗元宝：
   # - 喜从天降：查询龙鱼令数量后串行召唤并领奖，直到龙鱼令耗尽；

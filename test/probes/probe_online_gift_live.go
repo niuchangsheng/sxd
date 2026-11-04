@@ -3,11 +3,14 @@
 // 目标协议: [Module 0, Action 31] get_player_current_online_gift 查询在线礼包状态
 //
 //	[Module 0, Action 30] player_get_online_gift 领取在线礼包
+//	[Module 127, Action 1/2] 功能终结礼包列表与领取 (由生产 routine 内部调用)
 //
-// 基准对齐: 原版客户端 Main.swf Mod_Player_Base.cinit 协议描述表 (请求体均为空)
-// 运行命令: go run -tags=probe test/probes/probe_online_gift_live.go
-// 预期表现: 登录 s0 后打印查询与领取的服务端原始回包、结果码与奖励列表，
-//           直接复用生产 routine `daily.NewOnlineGiftRoutine()` 验证真实代码路径。
+// 基准对齐: 原版客户端 Main.swf Mod_Player_Base / Mod_FunctionEnd_Base 协议描述表
+// 运行命令: SXD_CONFIG=configs/s0.yaml go run -tags=probe test/probes/probe_online_gift_live.go
+//
+// 预期表现: 登录后直接复用生产 routine `daily.NewOnlineGiftRoutine()`，
+// 打印功能终结礼包与在线礼包的领取结果、结果码与奖励列表；
+// 服务端标记需要消耗元宝的礼包一律跳过。
 package main
 
 import (
@@ -15,6 +18,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -26,9 +30,13 @@ import (
 
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
-	cfg, err := config.Load("configs/config.yaml")
+	cfgPath := os.Getenv("SXD_CONFIG")
+	if cfgPath == "" {
+		cfgPath = "configs/config.yaml"
+	}
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		slog.Error("加载配置失败", "err", err)
+		slog.Error("加载配置失败", "path", cfgPath, "err", err)
 		return
 	}
 	if len(cfg.Accounts) == 0 || len(cfg.Accounts[0].Roles) == 0 {
@@ -107,7 +115,8 @@ func main() {
 	fmt.Printf("============================================================\n")
 
 	// 直接执行生产 routine，验证真实代码路径
-	routine := daily.NewOnlineGiftRoutine()
+	giftCfg := daily.DefaultOnlineGiftConfig()
+	routine := daily.NewOnlineGiftRoutine(giftCfg)
 	start := time.Now()
 	if err := routine.Execute(ctx, sess, nil); err != nil {
 		slog.Error("online_gift routine 执行失败", "err", err)

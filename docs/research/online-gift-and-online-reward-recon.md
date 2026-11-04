@@ -129,10 +129,61 @@ go run -tags=probe test/probes/probe_module_call_live.go 02C80000 02C80000
 
 ---
 
+## 三之二、`Mod_FunctionEnd` 功能终结礼包 (Module 127)
+
+吉星高照、喜从天降（龙鱼仙令/境界点）、灵脉、拜关公、聚灵等玩法达到等级上限终结后，转为每日领取的补偿礼包。官方客户端由 `com.views.GetAwardView` 统一处理（`TitleEndRollCake` / `TitleEndNimbus` / `TitleEndWorShip` / `TitleEndFindImmortal` 等标签）。
+
+### 3.2.1 协议
+
+| 动作 | Module | Action | request | response |
+| --- | ---: | ---: | --- | --- |
+| `is_game_function_end` | 127 | 0 | `[]` | `[Short count, count × (Short function_id, Byte ended)]` |
+| `game_function_end_gift` | 127 | 1 | `[]` | `[Short count, count × 33B gift_record]` |
+| `get_game_function_end_gift` | 127 | 2 | `[Short gift_id]` | 28B，见下 |
+| `random_award` | 127 | 3 | `[Short gift_id]` | `[Short state_point, Int × 7]` |
+| `notify_function_end` | 127 | 4 | `[]` | `[Short function_id]` |
+
+礼包记录字段：`gift_id(Short), state_point(Short), skill(Int), xian_ling(Int), fame(Int), nimbus(Int), coin_buff(Short), exp_buff(Short), ingot_cost(Int), bei(Byte), juling(Int)`。
+
+领取回包字段：`result(Byte), state_point(Short), skill(Int), xian_ling(Int), fame(Int), nimbus(Int), coin_buff(Short), exp_buff(Short), is_have_next(Byte), juling(Int)`。
+
+结果码：`0 SUCCESS / 1 NO_INGOT / 2 NO_VIP_LEVEL / 3 ITEM_PACK_FULL`。`is_have_next == 1` 时客户端保留同一礼包继续领取。
+
+### 3.2.2 实机验证 (s0-niuchangsheng, 2026-11-04)
+
+`is_game_function_end` 返回 9 个已终结功能（`0x36/0x46/0x55/0x37/0x6a/0x70/0x44/0x27/0x93`）。
+
+`game_function_end_gift` 返回 6 个待领取礼包：
+
+| gift_id | 对应玩法 (客户端 `ConsumeAlertSetType`) | ingot_cost | bei |
+| ---: | --- | ---: | ---: |
+| 1 | 喜从天降 (`V3FindImmortal`) | 0 | 2 |
+| 4 | 吉星高照 (`V3RollCake`) | 50 | 4 |
+| 7 | 灵脉 (`V3Nimbus`) | 0 | 2 |
+| 13 | 拜关公 (`V1WorshipMars`) | 0 | 10 |
+| 16 | 喜从天降境界点 (`V3FindImmortal1`) | 0 | 2 |
+| 17 | 聚灵/灵尘 | 0 | 2 |
+
+`get_game_function_end_gift(4)` 实测消耗 50 元宝，回包 `result=0`、`skill=320000`、`xian_ling=120`、`fame=1280`、`is_have_next=0`。领取完全部礼包后再次查询返回 `0000`（无待领取）。
+
+> 生产 routine 遵循「自动化永不消耗元宝」铁律：`ingot_cost > 0` 的礼包一律跳过，**不提供**花元宝开关。
+
+复现探针：
+
+```bash
+SXD_CONFIG=configs/s0.yaml go run -tags=probe test/probes/probe_function_end_live.go
+SXD_CONFIG=configs/s0.yaml SXD_CLAIM=1 go run -tags=probe test/probes/probe_function_end_live.go
+SXD_CONFIG=configs/s0.yaml go run -tags=probe test/probes/probe_online_gift_live.go
+```
+
+---
+
 ## 四、相关代码
 
 - `internal/protocol/constants.go`：结果码 `97/98/100/101`、属性 ID `81/82`
+- `internal/protocol/function_end.go`：Module 127 功能终结礼包协议与结果码
 - `internal/client/session.go`：`PlayerState.OnlineGiftTime` / `IsGetOnlineGift`
 - `internal/routines/daily/daily.go`：`online_gift` 状态机
+- `internal/routines/daily/function_end_gift.go`：功能终结礼包批量领取与熔断
 - `internal/client/player_update_test.go`：属性 81/82 同步单测
-- `test/probes/probe_online_gift_state.go`、`probe_online_gift_prevact.go`、`probe_ticket_extra.go`
+- `test/probes/probe_online_gift_state.go`、`probe_online_gift_prevact.go`、`probe_function_end_live.go`、`probe_ticket_extra.go`

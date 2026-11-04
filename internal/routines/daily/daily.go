@@ -7,6 +7,7 @@ package daily
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -222,11 +223,16 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewOnlineGiftRoutine 构造在线成长礼包领取任务 (Feature 1: 领取在线时长福利)。
+// NewOnlineGiftRoutine 构造在线礼包与功能终结礼包领取任务 (Feature 1: 领取奖励)。
 //
-// 协议基准 (原版客户端 Main.swf Mod_Player_Base.cinit / ActivitiesView):
-//   - get_player_current_online_gift -> Module 0, Action 31 (0x0000001F), 请求体为空
-//   - player_get_online_gift         -> Module 0, Action 30 (0x0000001E), 请求体为空
+// 协议基准 (原版客户端 Main.swf):
+//   - 在线成长礼包 Mod_Player_Base:
+//     get_player_current_online_gift -> Module 0, Action 31 (0x0000001F), 请求体为空
+//     player_get_online_gift         -> Module 0, Action 30 (0x0000001E), 请求体为空
+//   - 功能终结礼包 Mod_FunctionEnd (吉星高照/喜从天降/灵脉/拜关公/聚灵等玩法终结后的
+//     每日补偿礼包):
+//     game_function_end_gift       -> Module 127, Action 1 (0x007F0001), 请求体为空
+//     get_game_function_end_gift   -> Module 127, Action 2 (0x007F0002), 请求体为 gift_id
 //
 // 状态机对齐官方客户端 ActivitiesView.onlineGiftActivity:
 //   - update_player_data prop 82 (GET_ONLINE_GIFT): -1 无礼包 / 0 倒计时 / 1 可领取;
@@ -235,7 +241,14 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 //
 // 领取结果码对齐 Mod_Player_Base: 97 ACTION_SUCCESS, 98 ALREADY_GET,
 // 100 ACTION_FAILED (时间未到), 101 PACK_FULL。
-func NewOnlineGiftRoutine() scheduler.ActivityRoutine {
+//
+// 功能终结礼包使用完全独立的 Module 127，与各玩法的活跃协议互不干扰；
+// 在线礼包部分保持原有状态机与结果码分流不变。
+func NewOnlineGiftRoutine(cfgs ...OnlineGiftConfig) scheduler.ActivityRoutine {
+	cfg := DefaultOnlineGiftConfig()
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
 	return scheduler.NewBaseRoutine(
 		"online_gift",
 		"daily",
@@ -252,7 +265,21 @@ func NewOnlineGiftRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			slog.Info("正在执行日常任务: 在线成长礼包领取", "role_id", session.RoleID())
+			slog.Info("正在执行日常任务: 在线礼包与功能终结礼包领取", "role_id", session.RoleID())
+
+			// 0. 功能终结礼包 (吉星高照/喜从天降/灵脉/拜关公/聚灵等)。
+			// 独立模块，先于在线礼包状态检查执行，避免在线礼包未开放时漏领。
+			if cfg.ClaimFunctionEndGifts {
+				if err := claimFunctionEndGifts(ctx, session, cfg); err != nil {
+					if errors.Is(err, scheduler.ErrBagFull) {
+						return err
+					}
+					slog.Warn("功能终结礼包领取异常，继续尝试在线礼包",
+						"role_id", session.RoleID(),
+						"err", err,
+					)
+				}
+			}
 
 			// 1. 读取服务端下发的在线礼包状态 (update_player_data prop 82)。
 			// 客户端 ActivitiesView.onlineGiftActivity: -1 时直接移除活动, 不查询也不领取。

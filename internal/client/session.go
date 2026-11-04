@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -2087,6 +2088,67 @@ func writeFiveBlessingsAwardsMock(w *protocol.Writer) {
 	w.WriteInt16(1)   // jewel_scrap
 }
 
+// mockFunctionEndAward 是 mock 服务端为功能终结礼包摇出的固定奖励。
+type mockFunctionEndAward struct {
+	statePoint int16
+	skill      int32
+	xianLing   int32
+	fame       int32
+	nimbus     int32
+	expBuff    int32
+	ingot      int32
+	juLing     int32
+}
+
+func mockFunctionEndAwardFor(giftID int16) mockFunctionEndAward {
+	switch giftID {
+	case 1:
+		// 免费礼包: ingot=0, 可正常领取。
+		return mockFunctionEndAward{statePoint: 20, skill: 85000}
+	case 4:
+		return mockFunctionEndAward{skill: 80000, xianLing: 28, fame: 320, ingot: 50}
+	case 7:
+		return mockFunctionEndAward{nimbus: 43, ingot: 60}
+	case 13:
+		return mockFunctionEndAward{fame: 10, expBuff: 120, ingot: 10}
+	case 16:
+		return mockFunctionEndAward{statePoint: 13, ingot: 60}
+	case 17:
+		return mockFunctionEndAward{ingot: 100, juLing: 5500}
+	default:
+		return mockFunctionEndAward{skill: 1000, ingot: 10}
+	}
+}
+
+func writeMockFunctionEndRandomAward(w *protocol.Writer, giftID int16) {
+	award := mockFunctionEndAwardFor(giftID)
+	w.WriteInt16(award.statePoint)
+	w.WriteInt32(award.skill)
+	w.WriteInt32(award.xianLing)
+	w.WriteInt32(award.fame)
+	w.WriteInt32(award.nimbus)
+	w.WriteInt32(award.expBuff)
+	w.WriteInt32(award.ingot)
+	w.WriteInt32(award.juLing)
+}
+
+func writeMockFunctionEndClaimRewards(w *protocol.Writer, giftID int16, isHaveNext bool) {
+	award := mockFunctionEndAwardFor(giftID)
+	w.WriteInt16(award.statePoint)
+	w.WriteInt32(award.skill)
+	w.WriteInt32(award.xianLing)
+	w.WriteInt32(award.fame)
+	w.WriteInt32(award.nimbus)
+	w.WriteInt16(0) // coin_buff
+	w.WriteInt16(int16(award.expBuff))
+	if isHaveNext {
+		w.WriteUint8(1)
+	} else {
+		w.WriteUint8(0)
+	}
+	w.WriteInt32(award.juLing)
+}
+
 func runMockGameServer(conn net.Conn) {
 	defer conn.Close()
 
@@ -2113,6 +2175,16 @@ func runMockGameServer(conn net.Conn) {
 	luckyStarPending := false
 	luckyStarDice := []int8{1, 2, 3, 4, 4, 4}
 	luckyStarType := int8(3)
+
+	// 功能终结礼包 mock 状态: 每个礼包的剩余可领取次数与元宝消耗。
+	// 1 = 免费礼包(可连续领取 2 次), 4 = 吉星高照(消耗 50 元宝), 16 = 免费礼包。
+	// functionEndRolled 记录已通过 random_award 摇出的待领取奖励；
+	// 未摇奖直接领取时服务端只返回空奖励且 is_have_next=1。
+	functionEndGiftIDs := []int16{1, 4, 16}
+	functionEndRemaining := map[int16]int{1: 2, 4: 1, 16: 1}
+	functionEndCost := map[int16]int32{1: 0, 4: 50, 16: 0}
+	functionEndRolled := map[int16]bool{}
+	mockIngots := int64(1000)
 
 	// 喜从天降 mock 状态: 持有 2 枚龙鱼令、1 次五福祈福机会
 	findImmortalTokens := int16(2)
@@ -2839,6 +2911,110 @@ func runMockGameServer(conn net.Conn) {
 		case protocol.ActionIDPlayerSignFinishedPractice:
 			// 响应城镇打坐结束并结算经验
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerSignFinishedPractice, []byte{}))
+
+		case protocol.ActionIDIsGameFunctionEnd:
+			// 响应已终结功能列表 (两个已终结功能)
+			fw := protocol.NewWriter()
+			fw.WriteUint16(2)
+			fw.WriteInt16(1)
+			fw.WriteUint8(1)
+			fw.WriteInt16(4)
+			fw.WriteUint8(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDIsGameFunctionEnd, fw.Bytes()))
+
+		case protocol.ActionIDGameFunctionEndGift:
+			// 响应待领取功能终结礼包列表 (仅返回仍有剩余次数的礼包)
+			available := make([]int16, 0, len(functionEndGiftIDs))
+			for _, id := range functionEndGiftIDs {
+				if functionEndRemaining[id] > 0 {
+					available = append(available, id)
+				}
+			}
+			gw := protocol.NewWriter()
+			gw.WriteUint16(uint16(len(available)))
+			for _, id := range available {
+				gw.WriteInt16(id)
+				if functionEndRolled[id] {
+					// 已摇奖: 回填本次奖励与领取价格，与线上服务端一致。
+					award := mockFunctionEndAwardFor(id)
+					gw.WriteInt16(award.statePoint)
+					gw.WriteInt32(award.skill)
+					gw.WriteInt32(award.xianLing)
+					gw.WriteInt32(award.fame)
+					gw.WriteInt32(award.nimbus)
+					gw.WriteInt16(0) // coin_buff
+					gw.WriteInt16(int16(award.expBuff))
+					gw.WriteInt32(award.ingot)
+					gw.WriteUint8(2) // bei
+					gw.WriteInt32(award.juLing)
+				} else {
+					gw.WriteInt16(0)                   // state_point
+					gw.WriteInt32(0)                   // skill
+					gw.WriteInt32(0)                   // xian_ling
+					gw.WriteInt32(0)                   // fame
+					gw.WriteInt32(0)                   // nimbus
+					gw.WriteInt16(0)                   // coin_buff
+					gw.WriteInt16(0)                   // exp_buff
+					gw.WriteInt32(functionEndCost[id]) // ingot cost
+					gw.WriteUint8(2)                   // bei
+					gw.WriteInt32(0)                   // juling
+				}
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDGameFunctionEndGift, gw.Bytes()))
+
+		case protocol.ActionIDGetGameFunctionEndGift:
+			// 响应领取功能终结礼包。
+			// 对齐线上行为: 未先 random_award 时返回空奖励且 is_have_next=1，
+			// 先摇奖才会发放对应奖励。
+			gr := protocol.NewReader(pkt.Payload)
+			giftID, gerr := gr.ReadInt16()
+			result := protocol.FunctionEndSuccess
+			isHaveNext := false
+			rolled := functionEndRolled[giftID]
+			switch {
+			case gerr != nil:
+				isHaveNext = true
+			case !rolled:
+				// 未摇奖: 空奖励 + is_have_next，复现线上空转行为。
+				isHaveNext = true
+			case functionEndRemaining[giftID] <= 0:
+				// 无剩余次数: 按成功但无后续处理
+			case os.Getenv("SXD_MOCK_FUNCTION_END_PACK_FULL") == "1":
+				result = protocol.FunctionEndItemPackFull
+			case int64(functionEndCost[giftID]) > mockIngots:
+				result = protocol.FunctionEndNoIngot
+			default:
+				delete(functionEndRolled, giftID)
+				mockIngots -= int64(functionEndCost[giftID])
+				functionEndRemaining[giftID]--
+				isHaveNext = functionEndRemaining[giftID] > 0
+			}
+			cw := protocol.NewWriter()
+			cw.WriteUint8(result)
+			if !rolled {
+				// 空奖励占位，字段长度与正常回包一致。
+				cw.WriteInt16(0)
+				cw.WriteInt32(0)
+				cw.WriteInt32(0)
+				cw.WriteInt32(0)
+				cw.WriteInt32(0)
+				cw.WriteInt16(0)
+				cw.WriteInt16(0)
+				cw.WriteUint8(1)
+				cw.WriteInt32(0)
+			} else {
+				writeMockFunctionEndClaimRewards(cw, giftID, isHaveNext)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDGetGameFunctionEndGift, cw.Bytes()))
+
+		case protocol.ActionIDFunctionEndRandomAward:
+			// 响应功能终结礼包奖励预览，并记录该礼包已完成摇奖。
+			rr := protocol.NewReader(pkt.Payload)
+			giftID, _ := rr.ReadInt16()
+			functionEndRolled[giftID] = true
+			rw := protocol.NewWriter()
+			writeMockFunctionEndRandomAward(rw, giftID)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFunctionEndRandomAward, rw.Bytes()))
 
 		case protocol.ActionIDNewPracticeGetInfo:
 			// 响应现代新版打坐练功数据查询

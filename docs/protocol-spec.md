@@ -184,6 +184,14 @@ classDiagram
 - `0x00000048 (0, 72)`：角色初次进场同步城镇数据步 1。
 - `0x00000063 (0, 99)`：角色初次进场同步城镇数据步 2。
 
+### 4.1.1 Module 127 (0x7F): 功能终结礼包模块 (`Mod_FunctionEnd_Base`)
+> 吉星高照、喜从天降（龙鱼仙令/境界点）、灵脉、拜关公、聚灵等玩法达到等级上限终结后，转为每日领取的补偿礼包，统一由本模块管理。它与各玩法的活跃协议相互独立。
+- `0x007F0000 (127, 0)` `is_game_function_end`：请求体为空；响应 `uint16 count` + `count × (int16 function_id, uint8 ended)`。
+- `0x007F0001 (127, 1)` `game_function_end_gift`：查询待领取礼包列表，请求体为空；响应 `uint16 count` + `count × (int16 gift_id, int16 state_point, int32 skill, int32 xian_ling, int32 fame, int32 nimbus, int16 coin_buff, int16 exp_buff, int32 ingot_cost, uint8 bei, int32 juling)`。`ingot_cost > 0` 表示领取该礼包需要消耗对应元宝。
+- `0x007F0002 (127, 2)` `get_game_function_end_gift`：领取指定礼包，请求 `int16 gift_id`；响应 `uint8 result` + `int16 state_point` + `int32 skill` + `int32 xian_ling` + `int32 fame` + `int32 nimbus` + `int16 coin_buff` + `int16 exp_buff` + `uint8 is_have_next` + `int32 juling`。`result` 对齐 `Mod_FunctionEnd_Base`：`0` SUCCESS、`1` NO_INGOT、`2` NO_VIP_LEVEL、`3` ITEM_PACK_FULL；`is_have_next == 1` 时应继续领取同一礼包。
+- `0x007F0003 (127, 3)` `random_award`：预览指定礼包奖励，请求 `int16 gift_id`；响应 `int16 state_point` + `int32 × 7 (skill, xian_ling, fame, nimbus, exp_buff, ingot, juling)`。
+- `0x007F0004 (127, 4)` `notify_function_end`：服务端主动推送新终结功能，响应 `int16 function_id`。
+
 ### 4.2 Module 13 (0x0D): 药园农场模块 (`Mod_Farm_Base`)
 - `0x000D0000 (13, 0)`：查询药园全量土地状态（是否开垦、作物类型、成熟剩余时间）。
 - `0x000D0018 (13, 24)`：种植指定作物（参数：土地编号 `SoilID`、种子编号 `SeedID`、伙伴编号 `RoleID`）。
