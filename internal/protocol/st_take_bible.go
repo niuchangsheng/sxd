@@ -346,6 +346,29 @@ type StTakeBibleCrossRobResult struct {
 	RobStExp int16
 	// WarReportID 战报编号
 	WarReportID int32
+	// DeployType 战报单元布阵类型 (官方 WarData 与竞技场共用结构)
+	DeployType uint8
+	// WinPlayerID 战报胜方玩家 ID (等于本方 PlayerID 表示打劫获胜)
+	WinPlayerID int32
+	// WarParsed 是否成功解析出战报胜负位；节点仅回传前缀时为 false
+	WarParsed bool
+}
+
+// IsWin 判断本次打劫战斗中 playerID 一方是否获胜。
+//
+// rob 回包的 msg=SUCCESS 只代表服务端受理并完成了战斗计算，并不代表打劫获胜；
+// 真正的胜负由战报单元第 2 个字段 winPlayerID 决定。失败时服务端下发
+// rob_coin/rob_fame/rob_st_exp 均为 0，且不会扣除每日打劫次数。
+func (r *StTakeBibleCrossRobResult) IsWin(playerID int32) bool {
+	return r != nil && r.Msg == StTakeBibleCrossMsgSuccess && r.WarParsed && r.WinPlayerID == playerID
+}
+
+// StTakeBibleCrossUpdateData 代表护送/打劫剩余次数增量同步 (0x0072000F)。
+type StTakeBibleCrossUpdateData struct {
+	// CanRobTimes 今日剩余打劫次数
+	CanRobTimes int16
+	// CanTakeBibleTimes 今日剩余护送次数
+	CanTakeBibleTimes uint8
 }
 
 // StTakeBibleCrossRobCD 代表打劫冷却信息 (get_rob_take_bible_cd_time 回包)。
@@ -407,6 +430,13 @@ func BuildStTakeBibleCrossRobPacket(playerID int32, sequenceID int8) *Packet {
 // BuildStTakeBibleCrossGetRobCDPacket 构造查询打劫冷却封包 (0x00720010)。
 func BuildStTakeBibleCrossGetRobCDPacket() *Packet {
 	return NewPacket(ActionIDStTakeBibleCrossGetRobCD, nil)
+}
+
+// BuildStTakeBibleCrossUpdateDataPacket 构造查询剩余护送/打劫次数封包 (0x0072000F)。
+//
+// 官方客户端在每次 rob 回包后都会调用该协议刷新面板上的剩余次数。
+func BuildStTakeBibleCrossUpdateDataPacket() *Packet {
+	return NewPacket(ActionIDStTakeBibleCrossUpdateData, nil)
 }
 
 // BuildStTakeBibleCrossGetRecentRobPlayerPacket 构造查询最近被劫玩家封包 (0x00720013)。
@@ -789,6 +819,36 @@ func ParseStTakeBibleCrossRobResult(payload []byte) (*StTakeBibleCrossRobResult,
 		return nil, fmt.Errorf("%w: failed to read rob war_report_id: %v", ErrInvalidPayload, err)
 	}
 
+	// 战报列表 (官方 WarData 与仙界竞技场共用结构)：Uint16 单元数，
+	// 每个单元前缀为 UByte deploy_type, Int win_player_id。
+	// 胜负位用于判定打劫是否真正成功；战报体可达 8KB，后续内容业务侧无需消费，
+	// 因此仅读取首单元前缀，解析失败也不影响回包前缀字段的语义。
+	if r.Remaining() >= 2 {
+		warCount, wErr := r.ReadUint16()
+		if wErr == nil && warCount > 0 && r.Remaining() >= 5 {
+			deployType, dErr := r.ReadUint8()
+			winPlayerID, pErr := r.ReadInt32()
+			if dErr == nil && pErr == nil {
+				res.DeployType, res.WinPlayerID, res.WarParsed = deployType, winPlayerID, true
+			}
+		}
+	}
+
+	return res, nil
+}
+
+// ParseStTakeBibleCrossUpdateDataResult 解析剩余护送/打劫次数回包 (0x0072000F)。
+func ParseStTakeBibleCrossUpdateDataResult(payload []byte) (*StTakeBibleCrossUpdateData, error) {
+	r := NewReader(payload)
+	res := &StTakeBibleCrossUpdateData{}
+
+	var err error
+	if res.CanRobTimes, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read take bible update can_rob_times: %v", ErrInvalidPayload, err)
+	}
+	if res.CanTakeBibleTimes, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read take bible update can_take_bible_times: %v", ErrInvalidPayload, err)
+	}
 	return res, nil
 }
 

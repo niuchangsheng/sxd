@@ -154,7 +154,7 @@ type LuckyStarConfig struct {
 type PilgrimageConfig struct {
 	// AutoRob 是否在取经巡检后自动打劫其他玩家队伍 (默认 true)
 	AutoRob *bool `yaml:"auto_rob"`
-	// MaxRobAttempts 单轮最多尝试打劫次数 (1-4，默认 4)
+	// MaxRobAttempts 单轮最多尝试打劫次数 (1-5，默认 5)
 	MaxRobAttempts int `yaml:"max_rob_attempts"`
 	// MaxProbeTargets 单轮最多探测的目标队伍数量 (1-50，默认 8)
 	MaxProbeTargets int `yaml:"max_probe_targets"`
@@ -393,10 +393,10 @@ func Load(path string) (*Config, error) {
 		cfg.Scheduler.Pilgrimage.AutoRob = &autoRob
 	}
 	if cfg.Scheduler.Pilgrimage.MaxRobAttempts <= 0 {
-		cfg.Scheduler.Pilgrimage.MaxRobAttempts = 4
+		cfg.Scheduler.Pilgrimage.MaxRobAttempts = 5
 	}
-	if cfg.Scheduler.Pilgrimage.MaxRobAttempts > 4 {
-		cfg.Scheduler.Pilgrimage.MaxRobAttempts = 4
+	if cfg.Scheduler.Pilgrimage.MaxRobAttempts > 5 {
+		cfg.Scheduler.Pilgrimage.MaxRobAttempts = 5
 	}
 	if cfg.Scheduler.Pilgrimage.MaxProbeTargets <= 0 {
 		cfg.Scheduler.Pilgrimage.MaxProbeTargets = 8

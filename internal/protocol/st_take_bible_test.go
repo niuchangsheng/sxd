@@ -325,6 +325,10 @@ func TestParseStTakeBibleCrossRobResult(t *testing.T) {
 	w.WriteInt16(120)
 	w.WriteInt16(80)
 	w.WriteInt32(88001)
+	// 战报单元列表：Uint16 单元数，单元前缀 Uint8 deploy_type, Int32 win_player_id。
+	w.WriteUint16(1)
+	w.WriteUint8(3)
+	w.WriteInt32(999)
 
 	result, err := protocol.ParseStTakeBibleCrossRobResult(w.Bytes())
 	if err != nil {
@@ -337,6 +341,12 @@ func TestParseStTakeBibleCrossRobResult(t *testing.T) {
 		result.TargetNickName != "曹植始" || result.RobCoin != 500000 ||
 		result.RobFame != 120 || result.RobStExp != 80 || result.WarReportID != 88001 {
 		t.Errorf("unexpected rob result: %+v", result)
+	}
+	if !result.WarParsed || result.DeployType != 3 || result.WinPlayerID != 999 {
+		t.Fatalf("unexpected war outcome: %+v", result)
+	}
+	if !result.IsWin(999) || result.IsWin(1001) {
+		t.Errorf("IsWin must follow win_player_id, got %+v", result)
 	}
 
 	// 失败回包可能只含结果码。
@@ -362,6 +372,20 @@ func TestParseStTakeBibleCrossRobCDResult(t *testing.T) {
 	}
 	if cd.CDSeconds != 45 || cd.ClearIngot != 20 {
 		t.Errorf("unexpected rob cd: %+v", cd)
+	}
+}
+
+func TestParseStTakeBibleCrossUpdateDataResult(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteInt16(3)
+	w.WriteUint8(1)
+
+	update, err := protocol.ParseStTakeBibleCrossUpdateDataResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseStTakeBibleCrossUpdateDataResult failed: %v", err)
+	}
+	if update.CanRobTimes != 3 || update.CanTakeBibleTimes != 1 {
+		t.Errorf("unexpected update data: %+v", update)
 	}
 }
 

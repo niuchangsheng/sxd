@@ -285,8 +285,8 @@ type crossTakeBibleCallFunc func(pkt *protocol.Packet, expectedAct uint32, d tim
 const (
 	// crossTakeBibleRobMaxProbes 单轮打劫最多探测的目标数量，避免遍历整条取经路。
 	crossTakeBibleRobMaxProbes = 8
-	// crossTakeBibleRobMaxAttempts 单轮打劫最多尝试次数 (与游戏每日上限保持一致)。
-	crossTakeBibleRobMaxAttempts = 4
+	// crossTakeBibleRobMaxAttempts 单轮打劫最多尝试次数 (与游戏每日上限 5 次保持一致)。
+	crossTakeBibleRobMaxAttempts = 5
 	// crossTakeBibleRobProbeHardLimit 探测数量硬上限，防止异常配置造成大量请求。
 	crossTakeBibleRobProbeHardLimit = 50
 	// crossTakeBibleRobInterval 连续打劫之间的拟人化间隔。
@@ -305,13 +305,13 @@ const (
 type PilgrimageConfig struct {
 	// AutoRob 是否在启程护送后自动打劫取经路上其他玩家队伍。
 	AutoRob bool
-	// MaxRobAttempts 单轮最多尝试打劫次数 (上限 4)。
+	// MaxRobAttempts 单轮最多尝试打劫次数 (上限 5)。
 	MaxRobAttempts int
 	// MaxProbeTargets 单轮最多探测的目标队伍数量 (上限 50)。
 	MaxProbeTargets int
 }
 
-// DefaultPilgrimageConfig 返回默认取经策略：自动打劫、最多尝试 4 次、探测 8 支队伍。
+// DefaultPilgrimageConfig 返回默认取经策略：自动打劫、最多尝试 5 次、探测 8 支队伍。
 func DefaultPilgrimageConfig() PilgrimageConfig {
 	return PilgrimageConfig{
 		AutoRob:         true,
@@ -376,7 +376,13 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 
 	crossPilgrimageEscort(ctx, session, crossCall)
 	if cfg.AutoRob {
-		crossPilgrimageRob(ctx, session, crossCall, cfg)
+		// 路况队伍与战报中的玩家 ID 均为跨服 ID 空间，必须使用跨服会话的身份
+		// 判断“自己发起的队伍”与打劫胜负，不能混用主服 PlayerID。
+		selfID := cross.PlayerID()
+		if selfID <= 0 {
+			selfID = session.PlayerID()
+		}
+		crossPilgrimageRob(ctx, session, selfID, crossCall, cfg)
 	} else {
 		slog.Debug("仙界取经自动打劫已关闭，仅执行护送巡检", "role_id", session.RoleID())
 	}
@@ -470,10 +476,12 @@ func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, cro
 //
 // 官方客户端流程：open_take_bible 取得路况队伍列表 → get_rob_take_bible_cd_time
 // 确认冷却 → get_player_take_bible 校验目标是否可劫 → rob(player_id, sequence_id)。
-// 单次调度的探测与尝试上限由 PilgrimageConfig 控制 (默认 8 支/4 次)，
-// 成功一次后重新查询冷却，冷却中立即收手。
+// 单次调度的探测与尝试上限由 PilgrimageConfig 控制 (默认 8 支/5 次)；
+// 每次打劫后重新查询冷却与剩余次数，冷却中立即收手。
 // 本流程仅使用免费次数，不消耗元宝清冷却或购买额外打劫次数。
-func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossCall crossTakeBibleCallFunc, cfg PilgrimageConfig) {
+//
+// selfID 为跨服会话玩家 ID：路况队伍、战报胜负位与 stageServer 均使用跨服 ID 空间。
+func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID int32, crossCall crossTakeBibleCallFunc, cfg PilgrimageConfig) {
 	openResp, err := crossCall(protocol.BuildStTakeBibleCrossOpenPacket(), protocol.ActionIDStTakeBibleCrossOpen, 3*time.Second)
 	if err != nil {
 		slog.Warn("仙界取经路况查询无应答", "role_id", session.RoleID(), "error", err)
@@ -510,7 +518,6 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 		return
 	}
 
-	selfID := session.PlayerID()
 	candidates := make([]protocol.StTakeBibleCrossRoadTeam, 0, len(road.Teams))
 	for _, team := range road.Teams {
 		// 跳过自己发起的队伍，以及自己正在保护的队伍：官方客户端同样禁止打劫。
@@ -525,6 +532,8 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 	}
 
 	// 优先探测高品质使者队伍：收益更高，同时把请求量控制在固定上限内。
+	// 注意这里只决定“探测谁”，最终出手顺序由目标详情中的等级决定 (软柿子优先)：
+	// 打劫失败的战斗不扣除每日次数，因此先打等级最低的目标才能实际消耗次数。
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].Protection != candidates[j].Protection {
 			return candidates[i].Protection > candidates[j].Protection
@@ -575,8 +584,22 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 		score := int64(info.RobCoin)*1000 + int64(info.RobFame)*10 + int64(info.RobStExp)
 		targets = append(targets, robTarget{team: team, info: *info, score: score})
 	}
+	// 软柿子优先：服务端只按战斗胜负扣减每日打劫次数，攻击打不过的高战目标
+	// 会白白浪费一次 10 分钟冷却而不消耗次数。等级是 get_player_take_bible
+	// 下发的唯一实力代理指标 (与仙界竞技场软柿子算法一致)，等级越低越先打；
+	// 等级相同时再按预期收益从高到低选择。等级未知 (0) 的目标排到最后。
 	sort.SliceStable(targets, func(i, j int) bool {
-		return targets[i].score > targets[j].score
+		li, lj := targets[i].info.Level, targets[j].info.Level
+		if (li > 0) != (lj > 0) {
+			return li > 0
+		}
+		if li != lj {
+			return li < lj
+		}
+		if targets[i].score != targets[j].score {
+			return targets[i].score > targets[j].score
+		}
+		return targets[i].team.PlayerID < targets[j].team.PlayerID
 	})
 	// 探测超时会被静默跳过；聚合到一条 Info 日志，便于区分“路上没人可劫”
 	// 与“跨服节点繁忙/丢包”，避免线上只能看到打劫无应答而缺少上下文。
@@ -609,15 +632,22 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 	)
 	for i := 0; i < attempts; i++ {
 		target := targets[i]
+		// 官方客户端使用 get_player_take_bible 回包的 sequence_id 发起打劫；
+		// 路况包中的 sequence_id 仅用于探测。两者不一致时以目标详情为准。
+		sequenceID := target.info.SequenceID
+		if sequenceID == 0 {
+			sequenceID = target.team.SequenceID
+		}
 		slog.Info("仙界取经发起打劫",
 			"role_id", session.RoleID(),
 			"target_player_id", target.team.PlayerID,
 			"target_nickname", target.info.NickName,
+			"target_level", target.info.Level,
 			"protection", protocol.StTakeBibleCrossProtectionName(target.team.Protection),
 			"protect_player_id", target.team.ProtectPlayerID,
 			"is_deeds_so", target.team.IsDeedsSo,
 			"distance", target.team.Distance,
-			"sequence_id", target.team.SequenceID,
+			"sequence_id", sequenceID,
 			"be_rob_times", target.info.BeRobTimes,
 			"total_can_rob_times", target.info.TotalCanRobTimes,
 			"expect_coin", target.info.RobCoin,
@@ -625,7 +655,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 		)
 
 		robResp, cErr := crossCall(
-			protocol.BuildStTakeBibleCrossRobPacket(target.team.PlayerID, target.team.SequenceID),
+			protocol.BuildStTakeBibleCrossRobPacket(target.team.PlayerID, sequenceID),
 			protocol.ActionIDStTakeBibleCrossRob,
 			crossTakeBibleRobTimeout,
 		)
@@ -666,24 +696,49 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 			continue
 		}
 		result, pErr := protocol.ParseStTakeBibleCrossRobResult(robResp.Payload)
+		won := false
 		switch {
 		case pErr != nil:
 			slog.Warn("解析仙界取经打劫回包失败", "role_id", session.RoleID(), "target_player_id", target.team.PlayerID, "error", pErr)
 		case result.Msg == protocol.StTakeBibleCrossMsgSuccess:
-			robbed++
-			totalCoin += int64(result.RobCoin)
-			totalFame += int64(result.RobFame)
-			totalStExp += int64(result.RobStExp)
-			session.AddRewards(int64(result.RobStExp), int64(result.RobCoin))
-			slog.Info("仙界取经打劫成功",
-				"role_id", session.RoleID(),
-				"target_player_id", result.TargetPlayerID,
-				"target_nickname", result.TargetNickName,
-				"rob_coin", result.RobCoin,
-				"rob_fame", result.RobFame,
-				"rob_st_exp", result.RobStExp,
-				"war_report_id", result.WarReportID,
-			)
+			// msg=SUCCESS 只代表战斗已完成结算，不代表打劫获胜。服务端只有在
+			// 战胜目标时才会扣减每日打劫次数并发放奖励；战败时 rob_coin/fame/exp
+			// 均为 0，次数保持不变。必须依据战报胜负位如实记录，不能记成成功。
+			won = result.IsWin(selfID)
+			if !result.WarParsed {
+				// 兼容不回传战报的节点：以是否发放奖励粗判胜负。
+				won = result.RobCoin > 0 || result.RobFame > 0 || result.RobStExp > 0
+			}
+			if won {
+				robbed++
+				totalCoin += int64(result.RobCoin)
+				totalFame += int64(result.RobFame)
+				totalStExp += int64(result.RobStExp)
+				session.AddRewards(int64(result.RobStExp), int64(result.RobCoin))
+				slog.Info("仙界取经打劫获胜",
+					"role_id", session.RoleID(),
+					"target_player_id", result.TargetPlayerID,
+					"target_nickname", result.TargetNickName,
+					"target_level", target.info.Level,
+					"rob_coin", result.RobCoin,
+					"rob_fame", result.RobFame,
+					"rob_st_exp", result.RobStExp,
+					"win_player_id", result.WinPlayerID,
+					"deploy_type", result.DeployType,
+					"war_report_id", result.WarReportID,
+				)
+			} else {
+				slog.Warn("仙界取经打劫战斗失败，未消耗每日打劫次数",
+					"role_id", session.RoleID(),
+					"target_player_id", target.team.PlayerID,
+					"target_nickname", target.info.NickName,
+					"target_level", target.info.Level,
+					"self_level", level,
+					"win_player_id", result.WinPlayerID,
+					"war_parsed", result.WarParsed,
+					"war_report_id", result.WarReportID,
+				)
+			}
 		default:
 			slog.Info("仙界取经打劫未成功",
 				"role_id", session.RoleID(),
@@ -710,6 +765,20 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, crossC
 		if result.Msg == protocol.StTakeBibleCrossMsgFullRobTimes ||
 			result.Msg == protocol.StTakeBibleCrossMsgHaveCDTime {
 			break
+		}
+		// 官方客户端每次 rob 回包后都会同步 get_take_bible_updata_data。
+		// 打劫失败不会扣减每日次数，以服务端下发的剩余次数为准决定是否继续，
+		// 避免仅凭路况快照把“未消耗次数”误当成“还有次数”。
+		if update, uErr := crossTakeBibleRobTimes(session, crossCall); uErr == nil {
+			slog.Info("仙界取经打劫后剩余次数同步",
+				"role_id", session.RoleID(),
+				"remain_rob_times", update.CanRobTimes,
+				"remain_take_times", update.CanTakeBibleTimes,
+			)
+			if update.CanRobTimes <= 0 {
+				slog.Info("仙界取经今日打劫次数已用尽", "role_id", session.RoleID())
+				break
+			}
 		}
 		if i+1 < attempts {
 			select {
@@ -742,6 +811,21 @@ func crossTakeBibleRobCD(session *client.RoleSession, crossCall crossTakeBibleCa
 		return nil, false
 	}
 	return cd, true
+}
+
+// crossTakeBibleRobTimes 查询仙界取经今日剩余护送/打劫次数。
+func crossTakeBibleRobTimes(session *client.RoleSession, crossCall crossTakeBibleCallFunc) (*protocol.StTakeBibleCrossUpdateData, error) {
+	resp, err := crossCall(protocol.BuildStTakeBibleCrossUpdateDataPacket(), protocol.ActionIDStTakeBibleCrossUpdateData, crossTakeBibleRobCDTimeout)
+	if err != nil {
+		slog.Warn("仙界取经剩余次数查询无应答", "role_id", session.RoleID(), "error", err)
+		return nil, err
+	}
+	update, err := protocol.ParseStTakeBibleCrossUpdateDataResult(resp.Payload)
+	if err != nil {
+		slog.Warn("解析仙界取经剩余次数失败", "role_id", session.RoleID(), "error", err)
+		return nil, err
+	}
+	return update, nil
 }
 
 // crossTakeBibleRobReconcile 在 rob 回包超时后核对本次打劫是否已被服务端受理。

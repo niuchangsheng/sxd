@@ -354,14 +354,24 @@ Byte bless, Byte buff
    （`type=1` 表示已开启圣域/仙界城镇），回包 20 字段，其中
    `Byte is_robbed`、`Byte be_rob_times`、`Byte total_can_rob_times`、`Short protect_time`
    用于判断目标是否可劫。
-4. `rob (11)` 请求 `Int player_id, Byte sequence_id`。回包前缀：
+4. `rob (11)` 请求 `Int player_id, Byte sequence_id`（`sequence_id` 取自
+   `get_player_take_bible` 回包，而非路况队伍条目）。回包前缀：
    `UByte msg, [Int player_id, String nickname, String stage_name, String server_name],
-   Int rob_coin, Short rob_fame, Short rob_st_exp, Int war_report_id, ...`
-   其后的 `warData` 为完整战报，业务层可忽略。
+   Int rob_coin, Short rob_fame, Short rob_st_exp, Int war_report_id, [warData], Byte, UByte`
+   - **`msg=SUCCESS` 只表示服务端已受理并完成战斗计算，不代表打劫获胜**。
+     `warData` 与仙界竞技场共用官方 `WarData` 结构：`Uint16` 单元数开头，
+     单元前缀为 `UByte deploy_type, Int32 win_player_id`；`win_player_id` 等于
+     本方 PlayerID 才是真正的打劫胜利。
+   - 战败时 `rob_coin` / `rob_fame` / `rob_st_exp` 均为 0，且**不扣减每日打劫次数**，
+     但同样会触发 10 分钟打劫冷却并标记该队伍为“已拦截”。因此自动化必须按
+     战报胜负位判定结果，并优先攻击等级最低的目标，避免反复打不过高战目标。
    - rob 回包必须先由跨服节点完成战斗计算再下发，实机成功回包约 8KB（随目标
      战力与战斗回合数增长）。单次回包预算按 15s 设置；4s 预算会把高战力目标
      或节点拥塞场景误判为 `context deadline exceeded`。
-5. 每次打劫（无论成功还是失败）后客户端都会重新查询 `get_rob_take_bible_cd_time`；
+5. 每次打劫（无论成功还是失败）后客户端都会重新查询 `get_rob_take_bible_cd_time`
+   与 `get_take_bible_updata_data (15)`；后者回包 `Short can_rob_times,
+   Byte can_take_bible_times` 是服务端下发的剩余次数，每次打劫后必须用它刷新，
+   不能仅依赖 `open_take_bible` 的初始快照。每日打劫次数上限为 5 次。
    常见打劫结果码：`SUCCESS=9`、`INVALID_PLAYER_ID=10`、`PROTECT_TIME=20`、
    `FULL_ROB_TIMES=21`、`HAVE_CD_TIME=22`、`BE_ROB_ALL=23`、`INVALID_SEQUENCE_ID=24`。
 6. rob 回包超时**不等于**打劫未被受理。自动化在超时后立即补查

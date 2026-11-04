@@ -163,11 +163,25 @@ func main() {
 	}
 	slog.Info("打劫冷却", "cd_seconds", cd.CDSeconds, "clear_ingot", cd.ClearIngot)
 
+	// 2.1 只读核对剩余次数增量同步 (官方客户端每次 rob 后都会调用)
+	updateResp, err := call(protocol.BuildStTakeBibleCrossUpdateDataPacket(), protocol.ActionIDStTakeBibleCrossUpdateData, 3*time.Second)
+	if err != nil {
+		slog.Warn("get_take_bible_updata_data 失败", "err", err)
+	} else if update, uErr := protocol.ParseStTakeBibleCrossUpdateDataResult(updateResp.Payload); uErr != nil {
+		slog.Warn("解析剩余次数失败", "err", uErr)
+	} else {
+		slog.Info("剩余次数同步",
+			"can_rob_times", update.CanRobTimes,
+			"can_take_times", update.CanTakeBibleTimes,
+			"road_can_rob_times", road.CanRobTimes,
+		)
+	}
+
 	// 3. 选择目标
 	var selected *protocol.StTakeBibleCrossRoadTeam
 	for i := range road.Teams {
 		team := road.Teams[i]
-		if team.PlayerID == mainSess.PlayerID() || team.PlayerID <= 0 {
+		if team.PlayerID == cross.PlayerID() || team.PlayerID <= 0 {
 			continue
 		}
 		if *targetPlayerID != 0 && int64(team.PlayerID) != *targetPlayerID {
@@ -233,8 +247,13 @@ func main() {
 		attempts = 1
 	}
 	for i := 0; i < attempts; i++ {
+		// 官方客户端使用 get_player_take_bible 回包的 sequence_id 发起打劫。
+		sequenceID := info.SequenceID
+		if sequenceID == 0 {
+			sequenceID = selected.SequenceID
+		}
 		robResp, rErr := call(
-			protocol.BuildStTakeBibleCrossRobPacket(selected.PlayerID, selected.SequenceID),
+			protocol.BuildStTakeBibleCrossRobPacket(selected.PlayerID, sequenceID),
 			protocol.ActionIDStTakeBibleCrossRob,
 			15*time.Second, // 回包含完整战报，需等待跨服节点完成战斗计算
 		)
@@ -256,6 +275,9 @@ func main() {
 			"rob_fame", result.RobFame,
 			"rob_st_exp", result.RobStExp,
 			"war_report_id", result.WarReportID,
+			"win_player_id", result.WinPlayerID,
+			"war_parsed", result.WarParsed,
+			"win", result.IsWin(cross.PlayerID()),
 		)
 		if result.Msg != protocol.StTakeBibleCrossMsgSuccess {
 			return

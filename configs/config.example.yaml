@@ -95,7 +95,7 @@ scheduler:
   # 西天取经护送与打劫策略配置 (仅使用免费次数，不消耗元宝)
   pilgrimage:
     auto_rob: true              # 启程护送后是否自动打劫取经路上其他玩家队伍 (默认 true)
-    max_rob_attempts: 4         # 单轮最多尝试打劫次数 (1-4，默认 4)
+    max_rob_attempts: 5         # 单轮最多尝试打劫次数 (1-5，默认 5)
     max_probe_targets: 8        # 单轮最多探测的目标队伍数量 (1-50，默认 8)
 
   # 魔王试炼自动化策略配置

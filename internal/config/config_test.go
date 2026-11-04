@@ -228,7 +228,7 @@ server:
 	if cfg.Scheduler.Pilgrimage.AutoRob == nil || !*cfg.Scheduler.Pilgrimage.AutoRob {
 		t.Errorf("expected pilgrimage.auto_rob default true")
 	}
-	if cfg.Scheduler.Pilgrimage.MaxRobAttempts != 4 || cfg.Scheduler.Pilgrimage.MaxProbeTargets != 8 {
+	if cfg.Scheduler.Pilgrimage.MaxRobAttempts != 5 || cfg.Scheduler.Pilgrimage.MaxProbeTargets != 8 {
 		t.Errorf("unexpected pilgrimage defaults: attempts=%d probes=%d",
 			cfg.Scheduler.Pilgrimage.MaxRobAttempts, cfg.Scheduler.Pilgrimage.MaxProbeTargets)
 	}
