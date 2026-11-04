@@ -546,3 +546,47 @@ Int32 lucky_item_num
 | `FULL_GRADE` | 16 | 已满级 |
 | `FIELD_TYPE_ERROR` | 17 | 秘馆类型错误 |
 | `NO_ENOUGTH_DRAW_TIMES` | 18 | 感悟次数不足 |
+
+### 4.12 Module 57 (0x0039): 魔王试炼 (`Mod_BeelzebubTrials_Base`)
+
+协议描述符采自官方客户端 `Main.swf` 的 `com.protocols.Mod_BeelzebubTrials_Base`。
+该模块的请求**不携带 `PrevAct` 尾部**（自动化侧全部构造为纯业务字段载荷）。
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | `0x00390001` | 打开面板 | 空 | 活动/道行与可挑战魔王明细 |
+| 3 | `0x00390003` | 当前队伍信息 | 空 | `Int32 teamID, Uint16 count, count × 成员` |
+| 4 | `0x00390004` | 创建队伍 | `Int32 bossID, UByte teamType` | `UByte result` |
+| 6 | `0x00390006` | 加入队伍 | `Int32 teamID` | `UByte result` |
+| 7 | `0x00390007` | 退出队伍 | 空 | `UByte result` |
+| 8 | `0x00390008` | 助战伙伴列表 | 空 | 助战镜像记录列表 |
+| 13 | `0x0039000D` | 发起战斗 | 空 | **单向通知，无回包** |
+| 14 | `0x0039000E` | 拉取战报 | 空 | 有战报才回包；无战报时服务端静默不回包 |
+| 20 | `0x00390014` | 今日挑战资格 | 空 | `UByte`（`1`/`5` 均表示活动可用，**不代表还有剩余关卡次数**） |
+| 21 | `0x00390015` | 挑战冷却 | 空 | `Uint16 cdSeconds` |
+| 22 | `0x00390016` | 可挑战魔王列表 | 空 | `Uint16 count, count × Int32 bossID` |
+| 23 | `0x00390017` | 道行面板 | 空 | `Int32 exp, Int32 level, Int32 canClaim` |
+| 24 | `0x00390018` | 领取道行奖励 | `Int32 level` | `UByte result` |
+
+> **实采陷阱（2026-11-04 线上验证）**：`get_team_list (2)`、`get_war_result (14)`
+> 在无数据时服务端**静默不回包**，属正常语义，不能据此判定连接异常。
+> 而 `create_team (4)` 在 s1 服以 5 字节载荷（`Int32 bossID + UByte teamType`）
+> 正常返回 `UByte result=5`；在 s0 服（等级 300 角色）无论采用 4/5/6/8/9 字节载荷、
+> 前置/后置 `PrevAct`、任意 `teamType`（0/2/3）或任意 bossID，服务端均**静默丢弃且无任何回包**，
+> 而同角色的 Action 1/3/6/7/8/20/21/22/23 与 `join_team` 均正常回包。
+> 该差异为服务端角色/版本状态决定，客户端无法通过载荷修正；自动化必须在建队请求
+> 连续无回包时熔断本轮试炼（见 `client.ErrBeelzebubTrialsNoResponse`），
+> 禁止遍历全部可挑战关卡盲目重试。
+
+**可提前检查的关卡状态（`open` 回包）**：官方描述符中的 Boss 行是
+`[Int bossID, Int param, Int remainTimes]`。线上对照实验（同日 s0 / s1 双角色）：
+
+| 角色状态 | Action 20 | Action 22 列表 | 面板 Boss 行第三列 | `create_team` |
+| :--- | :---: | :---: | :---: | :--- |
+| s1 可挑战 | `1` | 39 个 | 全部 `1` | 正常返回 `result=5` |
+| s0 全部通关/无剩余次数 | `1` | 155 个 | 全部 `0` | **静默丢弃** |
+
+因此 `check_can_challenge` 与 `can_challenge_list` 都**不足以**判定今日是否还有可打关卡，
+必须解析 `open (1)` 面板第三列：全部为 `0` 时直接跳过本轮（此时任何建队请求都会被丢弃），
+部分为 `0` 时仅跳过这些关卡。自动化实现见
+`client.BeelzebubTrialsAutoChallengeAll` 的关卡可用性预检。

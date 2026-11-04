@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -180,6 +181,11 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 					protocol.ActionIDBeelzebubTrialsCheckCanChallenge,
 					[]byte{protocol.BeelzebubTrialsSuccess},
 				))
+			case protocol.ActionIDBeelzebubTrialsOpen:
+				// 不关卡卡状态（与 runMockGameServer 一致），跳过可用性预检。
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsOpen, beelzebubOpenPayload(nil),
+				))
 			case protocol.ActionIDBeelzebubTrialsGetCanChallengeList:
 				// 初始只返回 3 个普通关卡；清完后服务端解锁两个神秘层关卡：
 				// 41 = 魔剑 (30 级)，42 = 紫霞仙子 (60 级)。
@@ -302,6 +308,382 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 	for i, want := range wantBosses {
 		if createdBosses[i] != want {
 			t.Fatalf("expected create_team order %v, got %v", wantBosses, createdBosses)
+		}
+	}
+}
+
+// TestRoleSession_BeelzebubTrialsAutoChallengeAll_SilentDropCircuitBreaker 验证建队请求被服务端
+// 静默丢弃（超时且无任何回包）时，逐关挑战会在连续两次无回包后熔断本轮，
+// 而不是对可挑战列表中的每个关卡反复重试。
+func TestRoleSession_BeelzebubTrialsAutoChallengeAll_SilentDropCircuitBreaker(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	var mu sync.Mutex
+	createAttempts := 0
+
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDBeelzebubTrialsCheckCanChallenge:
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsCheckCanChallenge,
+					[]byte{protocol.BeelzebubTrialsSuccess},
+				))
+			case protocol.ActionIDBeelzebubTrialsOpen:
+				// 不关卡卡状态（与 runMockGameServer 一致），跳过可用性预检。
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsOpen, beelzebubOpenPayload(nil),
+				))
+			case protocol.ActionIDBeelzebubTrialsGetCanChallengeList:
+				bw := protocol.NewWriter()
+				bw.WriteUint16(3)
+				bw.WriteInt32(71)
+				bw.WriteInt32(72)
+				bw.WriteInt32(1)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsGetCanChallengeList, bw.Bytes(),
+				))
+			case protocol.ActionIDBeelzebubTrialsCreateTeam:
+				mu.Lock()
+				createAttempts++
+				mu.Unlock()
+				// 关键：不回包，模拟服务端静默丢弃建队动作。
+			}
+		}
+	}()
+
+	s := NewRoleSession(SessionConfig{
+		// 复用 sandbox 的短超时（300ms），测试无需等待真实 3 秒。
+		ServerAddr: "sandbox",
+		RoleID:     "1001",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *RoleSession) error {
+			return nil
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("session start failed: %v", err)
+	}
+	defer s.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for s.State() != StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	results, err := s.BeelzebubTrialsAutoChallengeAll(ctx, 0)
+	if !errors.Is(err, ErrBeelzebubTrialsNoResponse) {
+		t.Fatalf("expected ErrBeelzebubTrialsNoResponse, got %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no challenge results after circuit break, got %d", len(results))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if createAttempts != beelzebubSilentDropThreshold {
+		t.Fatalf("expected circuit break after %d create attempts, got %d",
+			beelzebubSilentDropThreshold, createAttempts)
+	}
+}
+
+// TestRoleSession_BeelzebubTrialsCreateTeam_WrapsSilentDrop 验证建队请求超时时会被识别为
+// 服务端静默丢弃，方便上层按确定性拒绝处理，而不是当成普通业务失败码。
+func TestRoleSession_BeelzebubTrialsCreateTeam_WrapsSilentDrop(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	go func() {
+		for {
+			if _, err := protocol.ReadPacket(serverConn); err != nil {
+				return
+			}
+			// 不回复任何报文。
+		}
+	}()
+
+	s := NewRoleSession(SessionConfig{
+		ServerAddr: "sandbox",
+		RoleID:     "1001",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *RoleSession) error {
+			return nil
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("session start failed: %v", err)
+	}
+	defer s.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for s.State() != StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	_, err := s.BeelzebubTrialsCreateTeam(ctx, 71, protocol.BeelzebubTrialsNotLimit)
+	if !errors.Is(err, ErrBeelzebubTrialsNoResponse) {
+		t.Fatalf("expected ErrBeelzebubTrialsNoResponse, got %v", err)
+	}
+}
+
+// beelzebubOpenPayload 构造含关卡状态列表的面板回包，用于可用性预检测试。
+func beelzebubOpenPayload(bosses []protocol.BeelzebubBossStatus) []byte {
+	w := protocol.NewWriter()
+	w.WriteUint16(0) // 无现有队伍
+	w.WriteInt32(0)  // 附加 Int32
+	w.WriteUint16(uint16(len(bosses)))
+	for _, b := range bosses {
+		w.WriteInt32(b.BossID)
+		w.WriteInt32(b.Param)
+		w.WriteInt32(b.RemainTimes)
+	}
+	w.WriteInt32(0) // moralExp
+	w.WriteInt32(1) // moralLv
+	w.WriteInt32(0) // bGet
+	w.WriteUint8(protocol.BeelzebubTrialsOnActivity)
+	return w.Bytes()
+}
+
+// TestRoleSession_BeelzebubTrialsAutoChallengeAll_AllBossesCleared 验证面板显示所有关卡
+// 均无剩余次数（今日已全部通关）时，自动化不再发送任何 create_team 请求。
+func TestRoleSession_BeelzebubTrialsAutoChallengeAll_AllBossesCleared(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	var mu sync.Mutex
+	createAttempts := 0
+
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDBeelzebubTrialsCheckCanChallenge:
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsCheckCanChallenge,
+					[]byte{protocol.BeelzebubTrialsSuccess},
+				))
+			case protocol.ActionIDBeelzebubTrialsOpen:
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsOpen,
+					beelzebubOpenPayload([]protocol.BeelzebubBossStatus{
+						{BossID: 71, RemainTimes: 0},
+						{BossID: 72, RemainTimes: 0},
+						{BossID: 1, RemainTimes: 0},
+					}),
+				))
+			case protocol.ActionIDBeelzebubTrialsGetCanChallengeList:
+				bw := protocol.NewWriter()
+				bw.WriteUint16(3)
+				bw.WriteInt32(71)
+				bw.WriteInt32(72)
+				bw.WriteInt32(1)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsGetCanChallengeList, bw.Bytes(),
+				))
+			case protocol.ActionIDBeelzebubTrialsCreateTeam:
+				mu.Lock()
+				createAttempts++
+				mu.Unlock()
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsCreateTeam,
+					[]byte{protocol.BeelzebubTrialsSuccess},
+				))
+			case protocol.ActionIDBeelzebubTrialsOpenMoral:
+				mw := protocol.NewWriter()
+				mw.WriteInt32(0)
+				mw.WriteInt32(0)
+				mw.WriteInt32(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsOpenMoral, mw.Bytes(),
+				))
+			}
+		}
+	}()
+
+	s := NewRoleSession(SessionConfig{
+		ServerAddr: "sandbox",
+		RoleID:     "1001",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *RoleSession) error {
+			return nil
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("session start failed: %v", err)
+	}
+	defer s.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for s.State() != StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	results, err := s.BeelzebubTrialsAutoChallengeAll(ctx, 0)
+	if err != nil {
+		t.Fatalf("expected clean skip, got error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results when all bosses cleared, got %d", len(results))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if createAttempts != 0 {
+		t.Fatalf("expected no create_team requests when all bosses cleared, got %d", createAttempts)
+	}
+}
+
+// TestRoleSession_BeelzebubTrialsAutoChallengeAll_FiltersClearedBosses 验证面板中
+// RemainTimes=0 的关卡会被跳过，而面板未收录的新解锁关卡仍然挑战。
+func TestRoleSession_BeelzebubTrialsAutoChallengeAll_FiltersClearedBosses(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	var mu sync.Mutex
+	createdBosses := make([]int32, 0, 3)
+
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDBeelzebubTrialsCheckCanChallenge:
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsCheckCanChallenge,
+					[]byte{protocol.BeelzebubTrialsSuccess},
+				))
+			case protocol.ActionIDBeelzebubTrialsOpen:
+				// 71 已通关；72 可挑战；1 未出现在面板（视为新解锁，保持可挑战）。
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsOpen,
+					beelzebubOpenPayload([]protocol.BeelzebubBossStatus{
+						{BossID: 71, RemainTimes: 0},
+						{BossID: 72, RemainTimes: 1},
+					}),
+				))
+			case protocol.ActionIDBeelzebubTrialsGetCanChallengeList:
+				bw := protocol.NewWriter()
+				bw.WriteUint16(3)
+				bw.WriteInt32(71)
+				bw.WriteInt32(72)
+				bw.WriteInt32(1)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsGetCanChallengeList, bw.Bytes(),
+				))
+			case protocol.ActionIDBeelzebubTrialsCreateTeam:
+				r := protocol.NewReader(pkt.Payload)
+				bossID, _ := r.ReadInt32()
+				mu.Lock()
+				createdBosses = append(createdBosses, bossID)
+				mu.Unlock()
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsCreateTeam,
+					[]byte{protocol.BeelzebubTrialsSuccess},
+				))
+			case protocol.ActionIDBeelzebubTrialsGetHelperRoleList:
+				hw := protocol.NewWriter()
+				hw.WriteUint16(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsGetHelperRoleList, hw.Bytes(),
+				))
+			case protocol.ActionIDBeelzebubTrialsFight:
+				// 单向通知，不回包。
+			case protocol.ActionIDBeelzebubTrialsGetWarResult:
+				ww := protocol.NewWriter()
+				ww.WriteUint8(protocol.BeelzebubTrialsSuccess)
+				ww.WriteInt32(0)
+				ww.WriteInt32(0)
+				ww.WriteUint16(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsGetWarResult, ww.Bytes(),
+				))
+			case protocol.ActionIDBeelzebubTrialsLeaveWar:
+				// 单向离场通知，不回包。
+			case protocol.ActionIDBeelzebubTrialsExitTeam:
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsExitTeam,
+					[]byte{protocol.BeelzebubTrialsSuccess},
+				))
+			case protocol.ActionIDBeelzebubTrialsOpenMoral:
+				mw := protocol.NewWriter()
+				mw.WriteInt32(0)
+				mw.WriteInt32(0)
+				mw.WriteInt32(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsOpenMoral, mw.Bytes(),
+				))
+			}
+		}
+	}()
+
+	s := NewRoleSession(SessionConfig{
+		ServerAddr: "sandbox",
+		RoleID:     "1001",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *RoleSession) error {
+			return nil
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("session start failed: %v", err)
+	}
+	defer s.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for s.State() != StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	results, err := s.BeelzebubTrialsAutoChallengeAll(ctx, 0)
+	if err != nil {
+		t.Fatalf("auto challenge failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 challenge results (72 + newly unlocked 1), got %d", len(results))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []int32{72, 1}
+	if len(createdBosses) != len(want) {
+		t.Fatalf("expected create_team for %v, got %v", want, createdBosses)
+	}
+	for i := range want {
+		if createdBosses[i] != want[i] {
+			t.Fatalf("expected create_team order %v, got %v", want, createdBosses)
 		}
 	}
 }

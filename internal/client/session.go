@@ -1183,6 +1183,10 @@ func (s *RoleSession) BeelzebubTrialsCreateTeam(ctx context.Context, bossID int3
 
 	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsCreateTeam)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			// 等待期内没有任何回包：服务端静默丢弃该动作，交由上层熔断本轮试炼。
+			return 0, fmt.Errorf("create beelzebub trials team: %w: %v", ErrBeelzebubTrialsNoResponse, err)
+		}
 		return 0, fmt.Errorf("create beelzebub trials team: %w", err)
 	}
 	if resp == nil {

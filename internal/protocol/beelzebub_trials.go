@@ -151,12 +151,28 @@ func BeelzebubTrialsBossDisplayName(bossID int32) string {
 	return "神秘层·" + name
 }
 
+// BeelzebubBossStatus 魔王试炼面板中的单个关卡状态行 (官方 AS3 `[Int, Int, Int]`)。
+//
+// 实机对照 (2026-11-04)：
+//   - s1 可挑战角色：全部关卡第三列为 1，建队正常；
+//   - s0 已通关/无剩余次数角色：全部关卡第三列为 0，服务端对 create_team 静默丢弃。
+//
+// 因此第三列是判定“该关卡今日是否仍可挑战”的唯一可靠状态，Action 22 的
+// 可挑战列表只反映等级解锁，不反映今日剩余次数。
+type BeelzebubBossStatus struct {
+	BossID      int32 `json:"boss_id"`
+	Param       int32 `json:"param"`        // 第二列，语义未确认，仅保留用于诊断
+	RemainTimes int32 `json:"remain_times"` // 第三列：1=今日可挑战，0=已通关/次数用尽
+}
+
 // BeelzebubTrialsOpenData 魔王试炼主面板数据。
 type BeelzebubTrialsOpenData struct {
 	InActivity  bool  // 是否处于18:00-19:00双倍声望活动时段
 	MoralExp    int32 // 当前累积道行经验
 	MoralLv     int32 // 当前道行等级
 	MoralCanGet bool  // 道行奖励是否可领取
+	// Bosses 面板下发的关卡状态列表；服务端未下发时为空。
+	Bosses []BeelzebubBossStatus
 }
 
 // BeelzebubTeamMember 队伍成员信息。
@@ -174,13 +190,13 @@ type BeelzebubHelperRole struct {
 	Name        string `json:"name"`
 	Level       int32  `json:"level"`
 	JobID       int32  `json:"job_id"`
-	InBody      bool   `json:"in_body"`      // 是否已处于上阵中
+	InBody      bool   `json:"in_body"` // 是否已处于上阵中
 	SuitEquipID int16  `json:"suit_equip_id"`
 }
 
 // BeelzebubTrialsWarResult 魔王试炼战斗结算与奖励。
 type BeelzebubTrialsWarResult struct {
-	Result     uint8 `json:"result"`      // 5: 成功击败, 14: 失败
+	Result     uint8 `json:"result"` // 5: 成功击败, 14: 失败
 	AwardFlag  int32 `json:"award_flag"`
 	AwardFame  int32 `json:"award_fame"`  // 奖励声望
 	AwardCoin  int32 `json:"award_coin"`  // 奖励铜钱
@@ -285,6 +301,10 @@ func BuildBeelzebubTrialsGetMoralAwardPacket(level int32, _ uint32) *Packet {
 // --- 回包解析函数 (Response Parsers) ---
 
 // ParseBeelzebubTrialsCheckCanChallengeResponse 解析今日是否可挑战魔王回包 (Module 57, Action 20)。
+//
+// 注意（2026-11-04 实机）：返回值 1 仅表示活动/功能可用；角色所有关卡均已无剩余次数时
+// 本动作仍返回 1。判定“今天是否还有可挑战关卡”必须读取 Open 面板的
+// BeelzebubBossStatus.RemainTimes（第三列），否则会向服务端发送必然被静默丢弃的建队请求。
 func ParseBeelzebubTrialsCheckCanChallengeResponse(payload []byte) (bool, error) {
 	r := NewReader(payload)
 	res, err := r.ReadUint8()
@@ -322,17 +342,39 @@ func ParseBeelzebubTrialsOpenResponse(payload []byte) (*BeelzebubTrialsOpenData,
 		return nil, fmt.Errorf("read team count: %w", err)
 	}
 	for i := 0; i < int(teamCount); i++ {
-		if _, err := r.ReadInt32(); err != nil { return nil, err }
-		if _, err := r.ReadInt32(); err != nil { return nil, err }
-		if _, err := r.ReadString(); err != nil { return nil, err }
-		if _, err := r.ReadInt8(); err != nil { return nil, err }
-		if _, err := r.ReadUint8(); err != nil { return nil, err }
-		if _, err := r.ReadString(); err != nil { return nil, err }
-		if _, err := r.ReadInt8(); err != nil { return nil, err }
-		if _, err := r.ReadInt8(); err != nil { return nil, err }
-		if _, err := r.ReadString(); err != nil { return nil, err }
-		if _, err := r.ReadInt32(); err != nil { return nil, err }
-		if _, err := r.ReadInt32(); err != nil { return nil, err }
+		if _, err := r.ReadInt32(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadInt32(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadString(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadInt8(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadUint8(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadString(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadInt8(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadInt8(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadString(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadInt32(); err != nil {
+			return nil, err
+		}
+		if _, err := r.ReadInt32(); err != nil {
+			return nil, err
+		}
 	}
 
 	// 2. Int32
@@ -345,10 +387,25 @@ func ParseBeelzebubTrialsOpenResponse(payload []byte) (*BeelzebubTrialsOpenData,
 	if err != nil {
 		return nil, fmt.Errorf("read boss count: %w", err)
 	}
+	bosses := make([]BeelzebubBossStatus, 0, bossCount)
 	for i := 0; i < int(bossCount); i++ {
-		if _, err := r.ReadInt32(); err != nil { return nil, err }
-		if _, err := r.ReadInt32(); err != nil { return nil, err }
-		if _, err := r.ReadInt32(); err != nil { return nil, err }
+		bossID, err := r.ReadInt32()
+		if err != nil {
+			return nil, err
+		}
+		param, err := r.ReadInt32()
+		if err != nil {
+			return nil, err
+		}
+		remainTimes, err := r.ReadInt32()
+		if err != nil {
+			return nil, err
+		}
+		bosses = append(bosses, BeelzebubBossStatus{
+			BossID:      bossID,
+			Param:       param,
+			RemainTimes: remainTimes,
+		})
 	}
 
 	// 4. 道行经验 moralObj.exp
@@ -380,6 +437,7 @@ func ParseBeelzebubTrialsOpenResponse(payload []byte) (*BeelzebubTrialsOpenData,
 		MoralExp:    moralExp,
 		MoralLv:     moralLv,
 		MoralCanGet: bGet == 1,
+		Bosses:      bosses,
 	}, nil
 }
 
@@ -419,18 +477,36 @@ func ParseBeelzebubTrialsPlayerTeamInfoResponse(payload []byte) (int32, []Beelze
 	members := make([]BeelzebubTeamMember, 0, count)
 	for i := 0; i < int(count); i++ {
 		playerID, err := r.ReadInt32()
-		if err != nil { return leaderID, nil, err }
+		if err != nil {
+			return leaderID, nil, err
+		}
 		nickname, err := r.ReadString()
-		if err != nil { return leaderID, nil, err }
+		if err != nil {
+			return leaderID, nil, err
+		}
 		roleName, err := r.ReadString()
-		if err != nil { return leaderID, nil, err }
+		if err != nil {
+			return leaderID, nil, err
+		}
 		lv, err := r.ReadInt16()
-		if err != nil { return leaderID, nil, err }
-		if _, err := r.ReadInt32(); err != nil { return leaderID, nil, err }
-		if _, err := r.ReadInt32(); err != nil { return leaderID, nil, err }
-		if _, err := r.ReadInt32(); err != nil { return leaderID, nil, err }
-		if _, err := r.ReadString(); err != nil { return leaderID, nil, err }
-		if _, err := r.ReadInt16(); err != nil { return leaderID, nil, err }
+		if err != nil {
+			return leaderID, nil, err
+		}
+		if _, err := r.ReadInt32(); err != nil {
+			return leaderID, nil, err
+		}
+		if _, err := r.ReadInt32(); err != nil {
+			return leaderID, nil, err
+		}
+		if _, err := r.ReadInt32(); err != nil {
+			return leaderID, nil, err
+		}
+		if _, err := r.ReadString(); err != nil {
+			return leaderID, nil, err
+		}
+		if _, err := r.ReadInt16(); err != nil {
+			return leaderID, nil, err
+		}
 
 		members = append(members, BeelzebubTeamMember{
 			PlayerID: playerID,
@@ -454,17 +530,29 @@ func ParseBeelzebubTrialsHelperRoleListResponse(payload []byte) ([]BeelzebubHelp
 	roles := make([]BeelzebubHelperRole, 0, count)
 	for i := 0; i < int(count); i++ {
 		roleID, err := r.ReadInt32()
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		name, err := r.ReadString()
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		lv, err := r.ReadInt32()
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		jobID, err := r.ReadInt32()
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		inBodyByte, err := r.ReadUint8()
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		suitEquipID, err := r.ReadInt16()
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 
 		roles = append(roles, BeelzebubHelperRole{
 			RoleID:      roleID,
@@ -515,8 +603,12 @@ func ParseBeelzebubTrialsWarResultResponse(payload []byte) (*BeelzebubTrialsWarR
 	}
 
 	// 跳过战报结构: Int32, Int32
-	if _, err := r.ReadInt32(); err != nil { return nil, err }
-	if _, err := r.ReadInt32(); err != nil { return nil, err }
+	if _, err := r.ReadInt32(); err != nil {
+		return nil, err
+	}
+	if _, err := r.ReadInt32(); err != nil {
+		return nil, err
+	}
 
 	// 跳过战报动画包列表 (Array)
 	warDataCount, err := r.ReadUint16()

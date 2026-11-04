@@ -34,21 +34,21 @@ func TestBeelzebubTrialsBossLevel(t *testing.T) {
 		id   int32
 		want int32
 	}{
-		{7, 15},   // 幽鬼 (Level 15)
-		{8, 15},   // 将臣 (Level 15)
-		{66, 20},  // 魔化小蝶 (Level 20)
-		{71, 30},  // 魔掌门元识 (Level 30)
-		{72, 30},  // 魔掌门神识 (Level 30)
-		{13, 40},  // 魔化刑天 (Level 40)
-		{15, 50},  // 鬼眼 (Level 50)
-		{17, 60},  // 魔化天将 (Level 60)
-		{41, 30},  // 神秘层·魔剑 (Level 30)
-		{42, 60},  // 神秘层·紫霞仙子 (Level 60)
-		{1, 100},  // 魔化大魔王 (Level 100)
-		{3, 150},  // 魔神蚩尤 (Level 150)
-		{82, 60},  // 魔五道将军 (Level 60)
+		{7, 15},    // 幽鬼 (Level 15)
+		{8, 15},    // 将臣 (Level 15)
+		{66, 20},   // 魔化小蝶 (Level 20)
+		{71, 30},   // 魔掌门元识 (Level 30)
+		{72, 30},   // 魔掌门神识 (Level 30)
+		{13, 40},   // 魔化刑天 (Level 40)
+		{15, 50},   // 鬼眼 (Level 50)
+		{17, 60},   // 魔化天将 (Level 60)
+		{41, 30},   // 神秘层·魔剑 (Level 30)
+		{42, 60},   // 神秘层·紫霞仙子 (Level 60)
+		{1, 100},   // 魔化大魔王 (Level 100)
+		{3, 150},   // 魔神蚩尤 (Level 150)
+		{82, 60},   // 魔五道将军 (Level 60)
 		{159, 185}, // 龙之魔女 (Level 185)
-		{9999, 0}, // 未知 Boss
+		{9999, 0},  // 未知 Boss
 	}
 
 	for _, c := range cases {
@@ -260,7 +260,7 @@ func TestBuildAndParseBeelzebubTrialsFightAndResult(t *testing.T) {
 	w.WriteUint8(BeelzebubTrialsSuccess)
 	w.WriteInt32(100) // extra
 	w.WriteInt32(200)
-	w.WriteUint16(0)   // 0 war data
+	w.WriteUint16(0) // 0 war data
 
 	res, err := ParseBeelzebubTrialsWarResultResponse(w.Bytes())
 	if err != nil {
@@ -308,5 +308,39 @@ func TestBuildAndParseBeelzebubTrialsMoral(t *testing.T) {
 	aRes, err := ParseBeelzebubTrialsGetMoralAwardResponse([]byte{BeelzebubTrialsSuccess})
 	if err != nil || aRes != BeelzebubTrialsSuccess {
 		t.Fatalf("moral award parse failed: %v, res: %d", err, aRes)
+	}
+}
+
+// TestParseBeelzebubTrialsOpenBossStatuses 验证面板回包中每关卡的
+// [bossID, param, remainTimes] 三元组会被完整保留，供自动化提前判定
+// “今日是否还有可挑战关卡”，避免在全部通关后继续发送必然被静默丢弃的建队请求。
+func TestParseBeelzebubTrialsOpenBossStatuses(t *testing.T) {
+	w := NewWriter()
+	w.WriteUint16(0)   // teamCount
+	w.WriteInt32(8023) // 队伍列表后的附加 Int32
+	w.WriteUint16(2)   // bossCount
+	w.WriteInt32(71)   // bossID: 魔掌门元识
+	w.WriteInt32(9)    // param
+	w.WriteInt32(1)    // remainTimes: 可挑战
+	w.WriteInt32(72)   // bossID: 魔掌门神识
+	w.WriteInt32(0)    // param
+	w.WriteInt32(0)    // remainTimes: 已通关 / 无剩余次数
+	w.WriteInt32(4520) // moralExp
+	w.WriteInt32(10)   // moralLv
+	w.WriteInt32(1)    // bGet
+	w.WriteUint8(BeelzebubTrialsOnActivity)
+
+	data, err := ParseBeelzebubTrialsOpenResponse(w.Bytes())
+	if err != nil {
+		t.Fatalf("parse open response failed: %v", err)
+	}
+	if len(data.Bosses) != 2 {
+		t.Fatalf("expected 2 boss statuses, got %d", len(data.Bosses))
+	}
+	if data.Bosses[0] != (BeelzebubBossStatus{BossID: 71, Param: 9, RemainTimes: 1}) {
+		t.Fatalf("unexpected boss status #0: %+v", data.Bosses[0])
+	}
+	if data.Bosses[1] != (BeelzebubBossStatus{BossID: 72, Param: 0, RemainTimes: 0}) {
+		t.Fatalf("unexpected boss status #1: %+v", data.Bosses[1])
 	}
 }
