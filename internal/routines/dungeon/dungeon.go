@@ -1208,21 +1208,6 @@ func NewXunXianRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewTrainingRoomRoutine 构造仙界练功房挂机任务。
-func NewTrainingRoomRoutine() scheduler.ActivityRoutine {
-	return scheduler.NewBaseRoutine(
-		"training_room",
-		"dungeon",
-		scheduler.ScheduleLoop,
-		scheduler.PriorityLow,
-		60*time.Minute,
-		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行副本任务: 仙界练功房收益维护")
-			return nil
-		},
-	)
-}
-
 // NewZodiacRoutine 构造生肖挑战与金油洗练任务。
 func NewZodiacRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(

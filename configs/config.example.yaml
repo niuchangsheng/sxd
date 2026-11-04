@@ -40,6 +40,7 @@ scheduler:
     six_realms: true            # 六道轮回爬塔与灵件处理 (每日免费重置/自动爬塔/蓝装自动出售)
     town_practice: true         # 城镇打坐练功 (上线自动结算并领取离线经验)
     beelzebub_trials: true      # 魔王试炼 (自建队伍、招募助战镜像、挑战每日魔王并领道行奖励)
+    training_room: true         # 仙界练功房 (领取累积经验并维持最佳空闲席位)
     lucky_star: true            # 吉星高照 (个人摇骰子与免费逆天改运)
     faction_lucky_star: true    # 帮派吉星高照 (帮派成员成绩与排名奖励)
     faction_blessing: true      # 帮派祭神 (每日免费上香获取祝福/声望/神像灵气)
@@ -103,6 +104,11 @@ scheduler:
     prefer_boss_id: 0           # 优先挑战的魔王编号 (0 表示自动选择最高难度魔王；如指定 72 为魔掌门神识)
     auto_moral_award: true      # 战斗后自动查询并领取道行等级宝箱奖励
     min_level: 0                # 开启等级门槛 (0 表示由服务端资格检查自动决定，不设客户端硬编码限制)
+
+  # 仙界练功房挂机收益维护配置 (跨服玩法，仅使用免费争夺次数)
+  training_room:
+    allow_rob_seat: false       # 是否抢夺已满员的高星席位 (默认 false，只占空闲席位)
+    max_rob_attempts: 1         # 单轮巡检最多争夺次数 (仅 allow_rob_seat=true 时生效)
 
   # 结缘宝箱配置 (每批最多10个，除了传说其他都开)
   jieyuan_box:

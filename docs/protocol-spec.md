@@ -630,3 +630,113 @@ Int32 lucky_item_num
 >   次数为 0 直接结束，不再请求会被丢弃的 `faction_roll_cake_info (10,45)`；
 > - 确认无帮派后通过 `client.RoleSession.MarkFactionFeatureUnavailable`
 >   置位会话级标记，同一会话内其余帮派玩法直接跳过，不再重复空等 3 秒。
+
+### 4.14 Module 117 (0x0075): 仙界练功房 (`Mod_StPracticeRoom_Base`)
+
+协议描述符采自官方 2026 客户端 `Main.swf` 的
+`com.protocols.Mod_StPracticeRoom_Base`，并与 s1 实机跨服会话对齐验证。
+该模块**仅在 Mod 94 登录并进入仙界城镇后的跨服连接**（`DataBase.SOCKETSERVERTOWN`）上可用。
+**PrevAct 规则并非统一**：
+
+- 空业务载荷的查询/面板动作（`get_rooms`、`enter_room`、`exit_room`、
+  `player_leave_seat`、`get_room_practice_exp`、`get_exp_flag`、
+  `get_free_room_info`、`get_rob_cd_time` 等）可携带 4 字节 `PrevAct`；
+- 带 `Byte`/`Short` 业务字段的动作（`get_room_info`、`sit_down`、
+  `get_seat_info`、`rob_the_seat`、`get_free_room_info_by_page`）
+  在线上处理器中执行**严格长度校验**，追加 `PrevAct` 会被静默丢弃，
+  必须发送精确长度的纯业务载荷。
+
+> **实采陷阱（2026-11-04 s1 跨服验证）**：
+> `get_room_info(4)` 发送 5 字节（`04 + PrevAct`）时 8 秒无任何回包；
+> 同一请求改为严格 1 字节 `04` 后立即返回完整席位列表（482 字节）。
+> `sit_down(100,0)` 同理：6 字节（`6400 + PrevAct`）被静默丢弃，
+> 严格 2 字节 `6400` 返回 `result=4` 成功。
+> 实现侧对应 `protocol.newStPracticeRoomStrictPacket`；
+> 禁止用“无回包”判定请求格式正确。
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00750000` | `get_rooms` | 空 | `Uint16 count, count × (Byte quality, Short playerCount), UByte in_practice_flag, Byte quality` |
+| 1 | `0x00750001` | `get_room_info` | `Byte quality` | `Uint16 seatCount, seatCount × 席位记录, Int practice_time, Long exp, Short rob_time, Byte room_quality, UByte exp_plus_flag, Byte exp_plus_percent` |
+| 2 | `0x00750002` | `sit_down` | `Byte quality, Byte seat` | `UByte result` |
+| 3 | `0x00750003` | `get_seat_info` | `Byte quality, Byte seat` | `UByte status`（`10` 有人 / `11` 空位） |
+| 4 | `0x00750004` | `rob_the_seat` | `Byte quality, Byte seat` | `UByte result` + 完整战斗回放（自动化只消费结果码） |
+| 5 | `0x00750005` | `buy_rob_time` | 空 | `UByte result, Short rob_time`（消耗元宝，自动化不主动调用） |
+| 6 | `0x00750006` | `get_room_practice_exp` | 空 | `UByte result, Long exp` |
+| 7 | `0x00750007` | `get_exp_flag` | 空 | `UByte flag`（`2` 有未领取经验 / `3` 无） |
+| 8 | `0x00750008` | `enter_room` | 空 | `UByte result` |
+| 9 | `0x00750009` | `exit_room` | 空 | `UByte result` |
+| 10 | `0x0075000A` | `clean_rob_cd_time` | 空 | `UByte result`（消耗元宝，自动化不主动调用） |
+| 11 | `0x0075000B` | `get_rob_cd_time` | 空 | `Short cd, Short ingot` |
+| 12 | `0x0075000C` | `notify_refresh_exp` | 服务端通知 | `Long total_exp` |
+| 13 | `0x0075000D` | `player_leave_seat` | 空 | `UByte result` |
+| 14 | `0x0075000E` | `get_player_room_quality` | 空 | `Byte quality` |
+| 15 | `0x0075000F` | `notify_practice_room_msg` | 服务端通知 | `UByte msg` |
+| 16 | `0x00750010` | `get_free_room_info` | 空 | `Short total_page, Short total_player, Int practice_time, Long exp, Short rob_time, Short player_page, Byte room_quality, UByte exp_plus_flag, Byte exp_plus_percent` |
+| 17 | `0x00750011` | `get_free_room_info_by_page` | `Short page` | `Uint16 count, count × 席位记录` |
+
+**席位记录线格式**（`get_room_info` / `get_free_room_info_by_page` 元素）：
+
+```
+Byte seat_seq, Int player_id, Int role_id, Int equip_id,
+String nick_name, String stage_name, String server_name,
+Long attack_power, Int level, UByte enemy_flag, Int supreme_vip_prefix
+```
+
+**房间品质与固定席位数**（官方 `com.assist.server.StPracticeRoomType.Qualities`）：
+
+| quality | 席位数 | 经验系数 (普通/至尊) | 说明 |
+| :---: | :---: | :---: | :--- |
+| 1 | 6 | 20 / 30 | 一星练功房 |
+| 2 | 7 | 40 / 50 | 二星练功房 |
+| 3 | 8 | 60 / 80 | 三星练功房 |
+| 4 | 10 | 100 / 120 | 四星练功房 |
+| 5 | 12 | 150 / 200 | 五星练功房 |
+| 100 | 18/页 | 10 / 0 | 普通练功场（自由练功区） |
+
+**业务结果码**（`Mod_StPracticeRoom_Base`）：
+
+| 常量 | 值 | 语义 |
+| :--- | :---: | :--- |
+| `TRUE` | 0 | 布尔真 |
+| `FALSE` | 1 | 布尔假 |
+| `YES` | 2 | 是 / 有未领取经验 |
+| `NO` | 3 | 否 / 无未领取经验 |
+| `SUCCESS` | 4 | 操作成功 |
+| `ROOM_SEAT_ERROR` | 5 | 房间或席位编号错误 |
+| `ALREADY_IN_USED` | 6 | 席位已被占用 |
+| `EXP_NOT_GOTTEN` | 7 | 尚有未领取经验，不能练功 |
+| `FUNCTION_NO_OPEN` | 8 | 功能未开放 |
+| `ALREADY_SAT_DOWN` | 9 | 已在练功状态 |
+| `SOMEBODY` | 10 | 席位有人 |
+| `NOBODY` | 11 | 席位为空 |
+| `ROB_TIME_USED_UP` | 12 | 今日争夺次数已用完 |
+| `CD_TIME` | 13 | 争夺冷却中 |
+| `NO_WAR` | 14 | 目标席位已空，无需争夺 |
+| `NO_ENOUGH_INGOT` | 15 | 元宝不足 |
+| `NO_EXP_TO_GET` | 16 | 没有经验可领取 |
+| `FAILURE` | 17 | 操作失败 |
+| `NO_IN_PRACTICE` | 18 | 当前不在练功状态 |
+| `MAX_PRACTICE_TIME` | 19 | 单次练功时长已达上限 |
+| `BE_ROBBED` | 20 | 席位已被夺走 |
+
+> **实采结论（2026-11-04 s1 跨服会话）**：`get_rooms` 回包示例
+> `0006 010000 05000c 020000 030004 040008 640001 02 64` 表示 6 个房间
+> （1 星 0 人、5 星 12 人、2 星 0 人、3 星 4 人、4 星 8 人、普通场 1 人），
+> `in_practice_flag=2`（正在练功），当前品质 `100`（普通练功场）。
+> `get_free_room_info` 回包 `0001 0001 0000a1c9 0000000000015dda 000a 0001 64 03 00`
+> 表示累计练功 41417 秒、待领取经验 89562、剩余争夺 10 次。
+> 上述 4 个只读请求在追加 `PrevAct` 后均正常回包，未出现静默丢弃。
+
+**自动化对齐**（`internal/routines/dungeon/training_room.go`）：
+
+1. 进入面板 → `get_rooms` 读取当前品质与各房间人数；
+2. 按 5→1 星查找 `count < 固定席位数` 的房间，再以 `get_room_info`
+   核对空闲席位（避免只看人数产生竞态）；
+3. 当前收益不低于所有候选时原地领取经验（`get_room_practice_exp`），不反复换座；
+4. 需要换房时严格按官方顺序 `player_leave_seat` → `get_room_practice_exp`
+   → `get_seat_info` → `sit_down`；
+5. 默认只占空闲席位；`allow_rob_seat=true` 时才在满员高星房间中
+   按对手战力升序选择最弱目标发起 `rob_the_seat`，且每次争夺后重新
+   `get_rooms` 确认席位归属；
+6. 永不主动调用 `buy_rob_time` / `clean_rob_cd_time`，不消耗元宝。

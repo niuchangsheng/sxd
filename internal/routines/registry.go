@@ -102,6 +102,7 @@ type RegistryFactory struct {
 	dungeonCfg    dungeon.SweepConfig
 	sixRealmsCfg  dungeon.SixRealmsConfig
 	beelzebubCfg  dungeon.BeelzebubTrialsConfig
+	trainingCfg   dungeon.TrainingRoomConfig
 	jieyuanCfg    social.JieYuanBoxConfig
 	blessingCfg   social.FactionBlessingConfig
 	treasureCfg   minigame.TreasureHouseConfig
@@ -119,6 +120,7 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 		dungeonCfg:    cfg,
 		sixRealmsCfg:  dungeon.DefaultSixRealmsConfig(),
 		beelzebubCfg:  dungeon.DefaultBeelzebubTrialsConfig(),
+		trainingCfg:   dungeon.DefaultTrainingRoomConfig(),
 		jieyuanCfg:    social.DefaultJieYuanBoxConfig(),
 		blessingCfg:   social.DefaultFactionBlessingConfig(),
 		treasureCfg:   minigame.DefaultTreasureHouseConfig(),
@@ -140,6 +142,11 @@ func (f *RegistryFactory) SetSixRealmsConfig(cfg dungeon.SixRealmsConfig) {
 // SetBeelzebubTrialsConfig 设置魔王试炼策略配置。
 func (f *RegistryFactory) SetBeelzebubTrialsConfig(cfg dungeon.BeelzebubTrialsConfig) {
 	f.beelzebubCfg = cfg
+}
+
+// SetTrainingRoomConfig 设置仙界练功房挂机收益维护策略配置。
+func (f *RegistryFactory) SetTrainingRoomConfig(cfg dungeon.TrainingRoomConfig) {
+	f.trainingCfg = cfg
 }
 
 // SetJieYuanBoxConfig 设置结缘宝箱策略配置。
@@ -255,7 +262,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "demon_tower":
 		return dungeon.NewDemonTowerRoutine()
 	case "training_room":
-		return dungeon.NewTrainingRoomRoutine()
+		return dungeon.NewTrainingRoomRoutine(f.trainingCfg)
 	case "zodiac_challenge":
 		return dungeon.NewZodiacRoutine()
 	case "spirit_trial":

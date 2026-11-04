@@ -105,6 +105,7 @@ type SchedulerConfig struct {
 	SixRealms       SixRealmsConfig        `yaml:"six_realms"`
 	Pilgrimage      PilgrimageConfig       `yaml:"pilgrimage"`
 	BeelzebubTrials BeelzebubTrialsConfig  `yaml:"beelzebub_trials"`
+	TrainingRoom    TrainingRoomConfig     `yaml:"training_room"`
 	JieYuanBox      JieYuanBoxConfig       `yaml:"jieyuan_box"`
 	FactionBlessing FactionBlessingConfig  `yaml:"faction_blessing"`
 	TreasureHouse   TreasureHouseConfig    `yaml:"treasure_house"`
@@ -128,6 +129,14 @@ type BeelzebubTrialsConfig struct {
 	AutoMoralAward bool `yaml:"auto_moral_award"`
 	// MinLevel 开启等级门槛 (默认 70 级开放魔王试炼)
 	MinLevel int `yaml:"min_level"`
+}
+
+// TrainingRoomConfig 仙界练功房挂机收益维护策略配置
+type TrainingRoomConfig struct {
+	// AllowRobSeat 是否允许通过战斗抢夺已满员的高星席位 (默认 false，仅使用空闲席位)
+	AllowRobSeat bool `yaml:"allow_rob_seat"`
+	// MaxRobAttempts 单轮巡检最多发起的席位争夺次数 (默认 1)
+	MaxRobAttempts int `yaml:"max_rob_attempts"`
 }
 
 // JieYuanBoxConfig 结缘宝箱配置

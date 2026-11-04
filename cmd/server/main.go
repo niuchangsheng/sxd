@@ -390,6 +390,16 @@ func run(ctx context.Context, args []string) error {
 	btCfg.AutoMoralAward = cfg.Scheduler.BeelzebubTrials.AutoMoralAward
 	factory.SetBeelzebubTrialsConfig(btCfg)
 
+	// 仙界练功房挂机收益维护策略配置 (默认只占空闲席位，不主动 PVP 争夺)
+	trCfg := dungeon.DefaultTrainingRoomConfig()
+	if cfg.Scheduler.TrainingRoom.AllowRobSeat || cfg.Scheduler.TrainingRoom.MaxRobAttempts > 0 {
+		trCfg.AllowRobSeat = cfg.Scheduler.TrainingRoom.AllowRobSeat
+		if cfg.Scheduler.TrainingRoom.MaxRobAttempts > 0 {
+			trCfg.MaxRobAttempts = cfg.Scheduler.TrainingRoom.MaxRobAttempts
+		}
+	}
+	factory.SetTrainingRoomConfig(trCfg)
+
 	// 六道轮回挑战与灵件策略配置
 	srCfg := dungeon.DefaultSixRealmsConfig()
 	if cfg.Scheduler.SixRealms.AutoReset || cfg.Scheduler.SixRealms.AutoSellBlue || cfg.Scheduler.SixRealms.AutoSellPurple || cfg.Scheduler.SixRealms.MaxFloorRetries > 0 {

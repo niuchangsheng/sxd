@@ -122,6 +122,7 @@ func TestSubdomains_Instances(t *testing.T) {
 		{dungeon.NewXunXianRoutine(), "xunxian_road"},
 		{dungeon.NewDemonTowerRoutine(), "demon_tower"},
 		{dungeon.NewBeelzebubTrialsRoutine(dungeon.DefaultBeelzebubTrialsConfig()), "beelzebub_trials"},
+		{dungeon.NewTrainingRoomRoutine(dungeon.DefaultTrainingRoomConfig()), "training_room"},
 		{minigame.NewEraTravelRoutine(), "era_travel"},
 		{minigame.NewLingDaoRoutine(), "lingdao_practice"},
 		{minigame.NewHuanshouRoutine(), "huanshou_invade"},

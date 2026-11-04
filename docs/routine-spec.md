@@ -151,6 +151,19 @@ stateDiagram-v2
   1. 维持 8 大核心祝福（取经、宠物、觉醒、虚空、魔石、五行、仙桃、种植祝福）；当剩余有效时间小于 4000 秒时重新炼化；
   2. 自动与 10 位仙界 NPC（土地公、陆吾、柳如烟、月老、芸娘等）批量送礼结交，消耗配置指定的货币（道源）。
 
+### 3.6 仙界练功房 (`training_room`)
+- **调度策略**：`ScheduleLoop`，每 60 分钟巡检一次。
+- **跨服链路**：`Mod 96` 申请凭据 → `Mod 94` 登录仙界节点 → `Mod 95` 进入仙界城镇 → `Mod 117` 练功房业务。
+- **前置卫语句**：`enter_room` 返回 `FUNCTION_NO_OPEN (8)` 时返回 `scheduler.ErrConditionNotMet` 熔断本轮；跨服凭据不可用时静默跳过，不阻断主服任务。
+- **状态机**：
+  1. `get_rooms` 读取各房间人数、当前练功标记与所在品质；
+  2. 按 5→1 星查找 `count < 固定席位数` 的房间，再以 `get_room_info` 核对真实空闲席位（固定席位数见协议规范 4.14）；
+  3. 当前房间收益不低于所有候选时原地领取经验，不反复换座；
+  4. 需要换房时严格按官方顺序执行 `player_leave_seat` → `get_room_practice_exp` → `get_seat_info` → `sit_down`；
+  5. 星级席位在查询与入座之间被抢占时继续尝试下一空位，全部失败后回落普通练功场（品质 100）。
+- **严格载荷约束**：`get_room_info` / `sit_down` / `get_seat_info` / `rob_the_seat` / `get_free_room_info_by_page` 必须发送精确长度的纯业务载荷，**禁止追加 `PrevAct`**（追加会被服务端静默丢弃）；其余空载荷动作可携带 `PrevAct`。
+- **资源约束**：默认 `allow_rob_seat=false`，只占空闲席位；开启后按对手战力升序抢夺满员高星房间，且每次争夺后重新 `get_rooms` 确认归属。永不调用 `buy_rob_time` / `clean_rob_cd_time`，不消耗元宝。
+
 ---
 
 ## 四、 存量代码迁移与接口对接契约
