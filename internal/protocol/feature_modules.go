@@ -211,18 +211,45 @@ const (
 	// ActionIDMasterPracticeBreakthrough 突破宗师境界 (Module 665, Action 5 -> 0x02990005)
 	ActionIDMasterPracticeBreakthrough uint32 = 0x02990005
 
-	// ActionIDTreasureHouseInfo 查询天帝宝库钥匙与信息 (Module 594, Action 2 -> 0x02520002)
-	ActionIDTreasureHouseInfo uint32 = 0x02520002
-	// ActionIDTreasureHousePool 拉取天帝宝库自选奖池 (Module 594, Action 9 -> 0x02520009)
-	ActionIDTreasureHousePool uint32 = 0x02520009
-	// ActionIDTreasureHouseSelect 设定自选大奖 (Module 594, Action 3 -> 0x02520003)
-	ActionIDTreasureHouseSelect uint32 = 0x02520003
-	// ActionIDTreasureHouseConfirm 锁定确认自选大奖 (Module 594, Action 4 -> 0x02520004)
-	ActionIDTreasureHouseConfirm uint32 = 0x02520004
-	// ActionIDTreasureHouseRefresh 刷新天帝宝库状态 (Module 594, Action 1 -> 0x02520001)
-	ActionIDTreasureHouseRefresh uint32 = 0x02520001
-	// ActionIDTreasureHouseDraw 开启天帝宝库抽奖 (Module 594, Action 6 -> 0x02520006)
-	ActionIDTreasureHouseDraw uint32 = 0x02520006
+	// 天帝宝库 Module 594 动作编号对齐原版 com.protocols.Mod_TreasureHouse_Base:
+	// Actions = [main_panel, select_panel, set_award, set_use_free_flag, set_notify_flag,
+	//            lottery, refresh_award, get_free_item, get_award_list, get_lottery_record]
+
+	// ActionIDTreasureHouseMainPanel 查询主面板 (钥匙/免费次数/当前自选)，回包首字节为 result_code (Module 594, Action 1 -> 0x02520001)
+	ActionIDTreasureHouseMainPanel uint32 = 0x02520001
+	// ActionIDTreasureHouseSelectPanel 查询自选面板与当前可选大奖候选 (Module 594, Action 2 -> 0x02520002)
+	ActionIDTreasureHouseSelectPanel uint32 = 0x02520002
+	// ActionIDTreasureHouseSetAward 设定三档自选大奖，回包为单字节 result_code (Module 594, Action 3 -> 0x02520003)
+	ActionIDTreasureHouseSetAward uint32 = 0x02520003
+	// ActionIDTreasureHouseSetUseFreeFlag 设置优先使用免费次数，回包为单字节 result_code (Module 594, Action 4 -> 0x02520004)
+	ActionIDTreasureHouseSetUseFreeFlag uint32 = 0x02520004
+	// ActionIDTreasureHouseSetNotifyFlag 设置中奖通知开关 (Module 594, Action 5 -> 0x02520005)
+	ActionIDTreasureHouseSetNotifyFlag uint32 = 0x02520005
+	// ActionIDTreasureHouseLottery 消耗钥匙开启抽奖，回包为 result_code + 中奖条目 ID (Module 594, Action 6 -> 0x02520006)
+	ActionIDTreasureHouseLottery uint32 = 0x02520006
+	// ActionIDTreasureHouseRefreshAward 刷新指定档位的候选大奖，回包为单字节 result_code (Module 594, Action 7 -> 0x02520007)
+	ActionIDTreasureHouseRefreshAward uint32 = 0x02520007
+	// ActionIDTreasureHouseGetFreeItem 领取免费钥匙，回包为单字节 result_code (Module 594, Action 8 -> 0x02520008)
+	ActionIDTreasureHouseGetFreeItem uint32 = 0x02520008
+	// ActionIDTreasureHouseGetAwardList 拉取全部候选大奖条目，回包为 [award_id, is_full] 列表 (Module 594, Action 9 -> 0x02520009)
+	ActionIDTreasureHouseGetAwardList uint32 = 0x02520009
+	// ActionIDTreasureHouseGetLotteryRecord 拉取抽奖记录 (Module 594, Action 10 -> 0x0252000A)
+	ActionIDTreasureHouseGetLotteryRecord uint32 = 0x0252000A
+
+	// 兼容旧命名 (历史代码沿用了与官方动作语义不一致的名字，保留别名避免破坏调用方)
+	//
+	// ActionIDTreasureHouseInfo 旧称"查询钥匙与信息"，实际为 select_panel (Action 2)
+	ActionIDTreasureHouseInfo = ActionIDTreasureHouseSelectPanel
+	// ActionIDTreasureHousePool 旧称"拉取自选奖池"，实际为 get_award_list (Action 9)
+	ActionIDTreasureHousePool = ActionIDTreasureHouseGetAwardList
+	// ActionIDTreasureHouseSelect 旧称"设定自选大奖"，实际为 set_award (Action 3)
+	ActionIDTreasureHouseSelect = ActionIDTreasureHouseSetAward
+	// ActionIDTreasureHouseConfirm 旧称"锁定确认自选大奖"，实际为 set_use_free_flag (Action 4)
+	ActionIDTreasureHouseConfirm = ActionIDTreasureHouseSetUseFreeFlag
+	// ActionIDTreasureHouseRefresh 旧称"刷新宝库状态"，实际为 main_panel (Action 1)
+	ActionIDTreasureHouseRefresh = ActionIDTreasureHouseMainPanel
+	// ActionIDTreasureHouseDraw 旧称"开启抽奖"，实际为 lottery (Action 6)
+	ActionIDTreasureHouseDraw = ActionIDTreasureHouseLottery
 
 	// ActionIDFactionRollCakeRemainTimes 查询帮派吉星高照今日剩余投掷次数 (Module 10, Action 44 -> 0x000A002C)
 	ActionIDFactionRollCakeRemainTimes uint32 = 0x000A002C

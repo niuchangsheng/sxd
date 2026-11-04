@@ -2128,6 +2128,18 @@ func runMockGameServer(conn net.Conn) {
 	findBlessStage := int8(0)
 	findBlessTotalCount := int8(0)
 
+	// 天帝宝库 mock 状态: 持有 2 枚免费钥匙、1 次可领免费，三档各开放 3 个候选。
+	treasureFreeItemNum := int32(2)
+	treasureLeftCanGetFree := int32(1)
+	treasureUseFreeFlag := int32(0)
+	treasureTotalTimes := int32(0)
+	treasureWishList := map[int32]int32{1: 50, 2: 25, 3: 42}
+	treasureOffered := map[int32][]int32{
+		1: {50, 12, 9},
+		2: {25, 21, 30},
+		3: {42, 33, 31},
+	}
+
 	for {
 		pkt, err := protocol.ReadPacket(conn)
 		if err != nil {
@@ -2526,6 +2538,132 @@ func runMockGameServer(conn net.Conn) {
 			w.WriteUint8(protocol.FindImmortalResultSuccess)
 			w.WriteUint16(0)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDFindImmortalChangeLucky, w.Bytes()))
+
+		case protocol.ActionIDTreasureHouseMainPanel:
+			// 响应天帝宝库主面板: result + wish_list + 免费钥匙/累计字段
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.TreasureHouseResultSuccess)
+			w.WriteUint16(3)
+			for _, quality := range []int32{3, 2, 1} {
+				w.WriteInt32(quality)
+				w.WriteInt32(treasureWishList[quality])
+			}
+			w.WriteInt32(treasureFreeItemNum)
+			w.WriteInt32(treasureUseFreeFlag)
+			w.WriteInt32(5) // free_need_times
+			w.WriteInt32(0) // free_item_accu
+			w.WriteInt32(0) // use_ingot_times
+			w.WriteUint16(1)
+			w.WriteInt32(1)  // min
+			w.WriteInt32(10) // max
+			w.WriteInt32(20) // cost ingot
+			w.WriteInt32(treasureLeftCanGetFree)
+			w.WriteInt32(treasureTotalTimes)
+			w.WriteUint8(0) // is_new_around_shop_privilege_flag
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTreasureHouseMainPanel, w.Bytes()))
+
+		case protocol.ActionIDTreasureHouseSelectPanel:
+			// 响应天帝宝库自选面板: 三档候选及其 open_flag
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.TreasureHouseResultSuccess)
+			w.WriteUint16(3)
+			for _, quality := range []int32{3, 2, 1} {
+				w.WriteInt32(quality)
+				w.WriteInt32(0) // refresh_times
+				w.WriteInt32(10)
+				w.WriteInt32(3) // refresh_limit
+				items := treasureOffered[quality]
+				w.WriteUint16(uint16(len(items)))
+				for _, itemID := range items {
+					w.WriteInt32(itemID)
+					w.WriteInt32(1) // open_flag
+				}
+			}
+			w.WriteInt32(0) // notify_flag
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTreasureHouseSelectPanel, w.Bytes()))
+
+		case protocol.ActionIDTreasureHouseSetAward:
+			// 响应设定自选大奖: 校验三档候选必须位于当前开放池
+			result := uint8(protocol.TreasureHouseResultSuccess)
+			r := protocol.NewReader(pkt.Payload)
+			count, cErr := r.ReadUint16()
+			if cErr != nil || int(count) != 3 {
+				result = protocol.TreasureHouseResultFailed
+			} else {
+				chosen := make(map[int32]int32, 3)
+				for i := 0; i < int(count); i++ {
+					quality, e1 := r.ReadInt32()
+					awardID, e2 := r.ReadInt32()
+					if e1 != nil || e2 != nil {
+						result = protocol.TreasureHouseResultFailed
+						break
+					}
+					chosen[quality] = awardID
+				}
+				if result == protocol.TreasureHouseResultSuccess {
+					for quality, awardID := range chosen {
+						valid := false
+						for _, offeredID := range treasureOffered[quality] {
+							if offeredID == awardID {
+								valid = true
+								break
+							}
+						}
+						if !valid {
+							result = protocol.TreasureHouseResultFailed
+							break
+						}
+					}
+				}
+				if result == protocol.TreasureHouseResultSuccess {
+					treasureWishList = chosen
+				}
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTreasureHouseSetAward, []byte{result}))
+
+		case protocol.ActionIDTreasureHouseSetUseFreeFlag:
+			// 响应设置优先免费次数
+			if v, rErr := protocol.NewReader(pkt.Payload).ReadInt32(); rErr == nil {
+				treasureUseFreeFlag = v
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTreasureHouseSetUseFreeFlag,
+				[]byte{protocol.TreasureHouseResultSuccess}))
+
+		case protocol.ActionIDTreasureHouseGetFreeItem:
+			// 响应领取免费钥匙
+			if treasureLeftCanGetFree > 0 {
+				treasureLeftCanGetFree--
+				treasureFreeItemNum++
+				_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTreasureHouseGetFreeItem,
+					[]byte{protocol.TreasureHouseResultSuccess}))
+			} else {
+				_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTreasureHouseGetFreeItem,
+					[]byte{protocol.TreasureHouseResultNoFreeItem}))
+			}
+
+		case protocol.ActionIDTreasureHouseLottery:
+			// 响应抽奖: 优先消耗免费钥匙，耗尽后返回 NO_ITEM
+			w := protocol.NewWriter()
+			if treasureFreeItemNum <= 0 {
+				w.WriteUint8(protocol.TreasureHouseResultNoItem)
+				w.WriteInt32(0)
+			} else {
+				treasureFreeItemNum--
+				treasureTotalTimes++
+				w.WriteUint8(protocol.TreasureHouseResultSuccess)
+				w.WriteInt32(42)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTreasureHouseLottery, w.Bytes()))
+
+		case protocol.ActionIDTreasureHouseGetAwardList:
+			// 响应全量候选大奖列表: 45 项 [award_id, is_full]
+			w := protocol.NewWriter()
+			w.WriteUint16(45)
+			for id := int32(1); id <= 45; id++ {
+				w.WriteInt32(id)
+				w.WriteInt32(0)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTreasureHouseGetAwardList, w.Bytes()))
 
 		case protocol.ActionIDRollCakeGetState:
 			// 响应个人吉星高照未领取记录

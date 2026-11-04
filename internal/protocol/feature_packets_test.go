@@ -266,3 +266,126 @@ func TestFeaturePackets_Decompress(t *testing.T) {
 		t.Errorf("解压缩不匹配, 期望 %s, 实际 %s", string(raw), string(decomp))
 	}
 }
+
+func TestTreasureHouse_ParseMainPanelResult(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteUint8(protocol.TreasureHouseResultSuccess)
+	w.WriteUint16(3)
+	w.WriteInt32(3)
+	w.WriteInt32(42)
+	w.WriteInt32(2)
+	w.WriteInt32(25)
+	w.WriteInt32(1)
+	w.WriteInt32(50)
+	w.WriteInt32(2) // free_item_num
+	w.WriteInt32(1) // use_free_flag
+	w.WriteInt32(5) // free_need_times
+	w.WriteInt32(0) // free_item_accu
+	w.WriteInt32(0) // use_ingot_times
+	w.WriteUint16(1)
+	w.WriteInt32(1)
+	w.WriteInt32(10)
+	w.WriteInt32(20)
+	w.WriteInt32(1) // left_can_get_free
+	w.WriteInt32(7) // total_times
+	w.WriteUint8(0)
+
+	panel, err := protocol.ParseTreasureHouseMainPanelResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("解析主面板失败: %v", err)
+	}
+	if panel.Result != protocol.TreasureHouseResultSuccess {
+		t.Fatalf("result 期望 0, 实际 %d", panel.Result)
+	}
+	if len(panel.WishList) != 3 || panel.WishList[2].TierID != 1 || panel.WishList[2].ItemID != 50 {
+		t.Errorf("wish_list 解析异常: %+v", panel.WishList)
+	}
+	if panel.FreeItemNum != 2 || panel.UseFreeFlag != 1 || panel.FreeNeedTimes != 5 {
+		t.Errorf("免费钥匙字段解析异常: %+v", panel)
+	}
+	if panel.LeftCanGetFree != 1 || panel.TotalTimes != 7 {
+		t.Errorf("累计字段解析异常: %+v", panel)
+	}
+	if len(panel.IngotCostList) != 1 || panel.IngotCostList[0].Cost != 20 {
+		t.Errorf("价格阶梯解析异常: %+v", panel.IngotCostList)
+	}
+}
+
+func TestTreasureHouse_ParseMainPanelFailure(t *testing.T) {
+	panel, err := protocol.ParseTreasureHouseMainPanelResult([]byte{protocol.TreasureHouseResultNoIngot})
+	if err != nil {
+		t.Fatalf("失败回包解析应成功: %v", err)
+	}
+	if panel.Result != protocol.TreasureHouseResultNoIngot {
+		t.Errorf("result 期望 %d, 实际 %d", protocol.TreasureHouseResultNoIngot, panel.Result)
+	}
+	if protocol.TreasureHouseResultName(panel.Result) != "元宝不足" {
+		t.Errorf("结果码语义异常: %s", protocol.TreasureHouseResultName(panel.Result))
+	}
+}
+
+func TestTreasureHouse_ParseSelectPanelResult(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteUint8(protocol.TreasureHouseResultSuccess)
+	w.WriteUint16(2)
+	w.WriteInt32(1)
+	w.WriteInt32(0)
+	w.WriteInt32(10)
+	w.WriteInt32(3)
+	w.WriteUint16(2)
+	w.WriteInt32(50)
+	w.WriteInt32(1)
+	w.WriteInt32(12)
+	w.WriteInt32(0)
+	w.WriteInt32(3)
+	w.WriteInt32(1)
+	w.WriteInt32(20)
+	w.WriteInt32(5)
+	w.WriteUint16(1)
+	w.WriteInt32(42)
+	w.WriteInt32(1)
+	w.WriteInt32(1) // notify_flag
+
+	panel, err := protocol.ParseTreasureHouseSelectPanelResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("解析自选面板失败: %v", err)
+	}
+	if panel.Result != protocol.TreasureHouseResultSuccess || len(panel.Qualities) != 2 {
+		t.Fatalf("面板字段异常: %+v", panel)
+	}
+	if panel.Qualities[0].Quality != 1 || len(panel.Qualities[0].Awards) != 2 {
+		t.Errorf("一档候选异常: %+v", panel.Qualities[0])
+	}
+	if panel.Qualities[0].Awards[1].AwardID != 12 || panel.Qualities[0].Awards[1].OpenFlag != 0 {
+		t.Errorf("未开放候选解析异常: %+v", panel.Qualities[0].Awards[1])
+	}
+	if panel.NotifyFlag != 1 {
+		t.Errorf("notify_flag 期望 1, 实际 %d", panel.NotifyFlag)
+	}
+}
+
+func TestTreasureHouse_ParseResultCodeAndLottery(t *testing.T) {
+	code, err := protocol.ParseTreasureHouseResultCode([]byte{protocol.TreasureHouseResultItemPackFull})
+	if err != nil || code != protocol.TreasureHouseResultItemPackFull {
+		t.Fatalf("单字节结果码解析异常: code=%d err=%v", code, err)
+	}
+
+	w := protocol.NewWriter()
+	w.WriteUint8(protocol.TreasureHouseResultSuccess)
+	w.WriteInt32(50)
+	lottery, err := protocol.ParseTreasureHouseLotteryResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("解析抽奖成功回包失败: %v", err)
+	}
+	if lottery.Result != protocol.TreasureHouseResultSuccess || lottery.AwardID != 50 {
+		t.Errorf("抽奖成功回包异常: %+v", lottery)
+	}
+
+	failed, err := protocol.ParseTreasureHouseLotteryResult([]byte{protocol.TreasureHouseResultNoItem})
+	if err != nil {
+		t.Fatalf("解析抽奖失败回包失败: %v", err)
+	}
+	if failed.Result != protocol.TreasureHouseResultNoItem {
+		t.Errorf("抽奖失败码期望 %d, 实际 %d", protocol.TreasureHouseResultNoItem, failed.Result)
+	}
+}

@@ -1121,86 +1121,279 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				"max_draw_times", cfg.MaxDrawTimes,
 			)
 
-			// 1. 查询宝库基本信息 (Mod 594, Act 2)
-			infoPkt := protocol.BuildTreasureHouseInfoPacket(protocol.ActionIDTownEnter)
-			iCtx, iCancel := context.WithTimeout(ctx, 2*time.Second)
-			resp, err := session.Call(iCtx, infoPkt, protocol.ActionIDTreasureHouseInfo)
-			iCancel()
-
-			if err != nil || resp == nil {
-				slog.Warn("查询天帝宝库状态超时", "err", err)
-				return nil
+			prevAct := session.LastActionID()
+			if prevAct == 0 {
+				prevAct = protocol.ActionIDTownEnter
+			}
+			call := func(pkt *protocol.Packet, action uint32, timeout time.Duration) *protocol.Packet {
+				cctx, ccancel := context.WithTimeout(ctx, timeout)
+				defer ccancel()
+				resp, cErr := session.Call(cctx, pkt, action)
+				if cErr != nil || resp == nil {
+					slog.Warn("天帝宝库请求无回包",
+						"action", fmt.Sprintf("0x%08X", action), "err", cErr)
+					return nil
+				}
+				prevAct = action
+				return resp
 			}
 
-			// 2. 向服务端拉取刷新奖池并解析当前可选道具 (Mod 594, Act 9)
-			poolPkt := protocol.BuildTreasureHousePoolPacket(protocol.ActionIDTreasureHouseInfo)
-			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
-			poolResp, poolErr := session.Call(pCtx, poolPkt, protocol.ActionIDTreasureHousePool)
-			pCancel()
+			// 1. 主面板 (Mod 594, Act 1): 校验 result_code 并读取免费钥匙/当前自选
+			mainResp := call(protocol.BuildTreasureHouseMainPanelPacket(prevAct),
+				protocol.ActionIDTreasureHouseMainPanel, 2*time.Second)
+			if mainResp == nil {
+				return nil
+			}
+			mainInfo, pErr := protocol.ParseTreasureHouseMainPanelResult(mainResp.Payload)
+			if pErr != nil {
+				slog.Warn("解析天帝宝库主面板失败", "err", pErr)
+				return nil
+			}
+			if mainInfo.Result != protocol.TreasureHouseResultSuccess {
+				slog.Warn("天帝宝库主面板返回失败",
+					"result", mainInfo.Result,
+					"meaning", protocol.TreasureHouseResultName(mainInfo.Result))
+				return nil
+			}
+			slog.Info("天帝宝库主面板",
+				"role_id", session.RoleID(),
+				"free_item_num", mainInfo.FreeItemNum,
+				"use_free_flag", mainInfo.UseFreeFlag,
+				"left_can_get_free", mainInfo.LeftCanGetFree,
+				"total_times", mainInfo.TotalTimes,
+				"wish_list", mainInfo.WishList)
 
-			selectedAwards := cfg.Awards
-			if poolErr == nil && poolResp != nil {
-				if pool, pErr := protocol.ParseTreasureHousePoolResult(poolResp.Payload); pErr == nil && pool != nil {
-					slog.Info("天帝宝库备选奖池拉取成功",
-						"role_id", session.RoleID(),
-						"total_items", pool.TotalCount,
-						"tier1_options", pool.Tier1Items,
-						"tier2_options", pool.Tier2Items,
-						"tier3_options", pool.Tier3Items,
-					)
-
-					// 交互选奖：若配置了 Selector 则优先调用，否则若开启 Interactive 则通过交互式终端输入
-					if cfg.Selector != nil {
-						if chosen, cErr := cfg.Selector(ctx, pool, cfg.DictRepo); cErr == nil && len(chosen) >= 3 {
-							selectedAwards = chosen
+			// 2. 领取今日免费钥匙 (Mod 594, Act 8)
+			if mainInfo.LeftCanGetFree > 0 {
+				freeResp := call(protocol.BuildTreasureHouseGetFreeItemPacket(prevAct),
+					protocol.ActionIDTreasureHouseGetFreeItem, 2*time.Second)
+				if freeResp != nil {
+					code, cErr := protocol.ParseTreasureHouseResultCode(freeResp.Payload)
+					switch {
+					case cErr != nil:
+						slog.Warn("解析领取免费钥匙回包失败", "err", cErr)
+					case code != protocol.TreasureHouseResultSuccess:
+						slog.Warn("领取免费钥匙失败",
+							"result", code,
+							"meaning", protocol.TreasureHouseResultName(code))
+					default:
+						slog.Info("已领取今日免费钥匙", "left_can_get_free", mainInfo.LeftCanGetFree)
+						if refresh := call(protocol.BuildTreasureHouseMainPanelPacket(prevAct),
+							protocol.ActionIDTreasureHouseMainPanel, 2*time.Second); refresh != nil {
+							if mi, e := protocol.ParseTreasureHouseMainPanelResult(refresh.Payload); e == nil && mi.Result == protocol.TreasureHouseResultSuccess {
+								mainInfo = mi
+							}
 						}
-					} else if cfg.Interactive {
-						selectedAwards = promptUserAwardSelection(ctx, cfg.In, cfg.Out, pool, cfg.DictRepo, cfg.Awards)
 					}
 				}
 			}
 
-			// 3. 设定自选大奖 (Mod 594, Act 3: 依据用户交互输入或配置设定三档奖品)
-			selPkt := protocol.BuildTreasureHouseSelectPacket(selectedAwards, protocol.ActionIDTreasureHousePool)
-			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
-			_, _ = session.Call(sCtx, selPkt, protocol.ActionIDTreasureHouseSelect)
-			sCancel()
+			// 3. 自选面板 (Mod 594, Act 2): 只有 open_flag=1 的候选才能被服务端接受
+			panelResp := call(protocol.BuildTreasureHouseInfoPacket(prevAct),
+				protocol.ActionIDTreasureHouseSelectPanel, 2*time.Second)
+			if panelResp == nil {
+				return nil
+			}
+			panel, pErr := protocol.ParseTreasureHouseSelectPanelResult(panelResp.Payload)
+			if pErr != nil {
+				slog.Warn("解析天帝宝库自选面板失败", "err", pErr)
+				return nil
+			}
+			if panel.Result != protocol.TreasureHouseResultSuccess {
+				slog.Warn("天帝宝库自选面板返回失败",
+					"result", panel.Result,
+					"meaning", protocol.TreasureHouseResultName(panel.Result))
+				return nil
+			}
 
-			// 4. 确认锁定自选大奖 (Mod 594, Act 4)
-			confPkt := protocol.BuildTreasureHouseConfirmPacket(1, protocol.ActionIDTreasureHouseSelect)
-			cCtx, cCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-			_, _ = session.Call(cCtx, confPkt, protocol.ActionIDTreasureHouseConfirm)
-			cCancel()
+			offered := offeredAwardPool(panel)
+			selectedAwards := resolveTreasureAwards(cfg.Awards, mainInfo.WishList, offered)
+			slog.Info("天帝宝库当前可选大奖",
+				"role_id", session.RoleID(),
+				"tier1_options", offered.Tier1Items,
+				"tier2_options", offered.Tier2Items,
+				"tier3_options", offered.Tier3Items,
+				"resolved_awards", selectedAwards)
 
-			// 5. 消耗宝库钥匙开启抽奖 (Mod 594, Act 6 与 Act 1 连续抽奖流)
+			// 交互选奖：若配置了 Selector 则优先调用，否则若开启 Interactive 则通过交互式终端输入
+			if cfg.Selector != nil {
+				if chosen, cErr := cfg.Selector(ctx, offered, cfg.DictRepo); cErr == nil && len(chosen) >= 3 {
+					selectedAwards = chosen
+				}
+			} else if cfg.Interactive {
+				selectedAwards = promptUserAwardSelection(ctx, cfg.In, cfg.Out, offered, cfg.DictRepo, selectedAwards)
+			}
+
+			// 4. 设定三档自选大奖 (Mod 594, Act 3): 必须解析 result_code
+			selResp := call(protocol.BuildTreasureHouseSelectPacket(selectedAwards, prevAct),
+				protocol.ActionIDTreasureHouseSetAward, 2*time.Second)
+			if selResp == nil {
+				return nil
+			}
+			code, cErr := protocol.ParseTreasureHouseResultCode(selResp.Payload)
+			if cErr != nil {
+				slog.Warn("解析设定自选大奖回包失败", "err", cErr)
+				return nil
+			}
+			if code != protocol.TreasureHouseResultSuccess {
+				slog.Warn("设定天帝宝库自选大奖失败",
+					"result", code,
+					"meaning", protocol.TreasureHouseResultName(code),
+					"awards", selectedAwards)
+				return nil
+			}
+			slog.Info("天帝宝库自选大奖设定成功", "awards", selectedAwards)
+
+			// 5. 设置优先使用免费次数 (Mod 594, Act 4)。
+			// 该标记决定抽奖是否优先消耗免费道具；设置失败时直接放弃抽奖，避免误扣元宝。
+			flagResp := call(protocol.BuildTreasureHouseUseFreeFlagPacket(1, prevAct),
+				protocol.ActionIDTreasureHouseSetUseFreeFlag, 1500*time.Millisecond)
+			if flagResp == nil {
+				slog.Warn("设置免费次数优先无回包，跳过抽奖以免误消耗元宝")
+				return nil
+			}
+			flagCode, fErr := protocol.ParseTreasureHouseResultCode(flagResp.Payload)
+			if fErr != nil {
+				slog.Warn("解析设置免费次数优先回包失败，跳过抽奖", "err", fErr)
+				return nil
+			}
+			if flagCode != protocol.TreasureHouseResultSuccess {
+				slog.Warn("设置免费次数优先失败，跳过抽奖以免误消耗元宝",
+					"result", flagCode,
+					"meaning", protocol.TreasureHouseResultName(flagCode))
+				return nil
+			}
+
+			// 6. 消耗免费钥匙抽奖 (Mod 594, Act 6): 每次必须解析 result_code，失败立即熔断
+			drawLimit := cfg.MaxDrawTimes
+			if int(mainInfo.FreeItemNum) < drawLimit {
+				drawLimit = int(mainInfo.FreeItemNum)
+			}
+			if drawLimit <= 0 {
+				slog.Info("天帝宝库无免费钥匙，跳过抽奖以免消耗元宝",
+					"role_id", session.RoleID(),
+					"free_item_num", mainInfo.FreeItemNum)
+				return nil
+			}
+
 			drawCount := 0
-			prevAct := protocol.ActionIDTreasureHouseConfirm
-			for i := 0; i < cfg.MaxDrawTimes; i++ {
-				drawPkt := protocol.BuildTreasureHouseDrawPacket(prevAct)
-				dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
-				dResp, dErr := session.Call(dCtx, drawPkt, protocol.ActionIDTreasureHouseDraw)
-				dCancel()
-
-				if dErr != nil || dResp == nil {
+			for i := 0; i < drawLimit; i++ {
+				drawResp := call(protocol.BuildTreasureHouseDrawPacket(prevAct),
+					protocol.ActionIDTreasureHouseLottery, 2*time.Second)
+				if drawResp == nil {
+					break
+				}
+				lottery, lErr := protocol.ParseTreasureHouseLotteryResult(drawResp.Payload)
+				if lErr != nil {
+					slog.Warn("解析天帝宝库抽奖回包失败", "err", lErr)
+					break
+				}
+				if lottery.Result != protocol.TreasureHouseResultSuccess {
+					slog.Warn("天帝宝库抽奖失败，停止后续抽奖",
+						"result", lottery.Result,
+						"meaning", protocol.TreasureHouseResultName(lottery.Result),
+						"draw_index", i+1)
 					break
 				}
 				drawCount++
-				prevAct = protocol.ActionIDTreasureHouseDraw
-
-				// 每次抽奖后刷新宝库状态 (Act 1)
-				refPkt := protocol.BuildTreasureHouseRefreshPacket(prevAct)
-				rCtx, rCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-				_, _ = session.Call(rCtx, refPkt, protocol.ActionIDTreasureHouseRefresh)
-				rCancel()
-				prevAct = protocol.ActionIDTreasureHouseRefresh
-
+				slog.Info("天帝宝库抽奖成功",
+					"award_id", lottery.AwardID,
+					"draw_index", i+1)
 				time.Sleep(50 * time.Millisecond)
+			}
+
+			// 7. 抽取结束后刷新主面板同步剩余钥匙与累计次数
+			if refresh := call(protocol.BuildTreasureHouseMainPanelPacket(prevAct),
+				protocol.ActionIDTreasureHouseMainPanel, 1500*time.Millisecond); refresh != nil {
+				if mi, e := protocol.ParseTreasureHouseMainPanelResult(refresh.Payload); e == nil && mi.Result == protocol.TreasureHouseResultSuccess {
+					slog.Info("天帝宝库抽奖后状态",
+						"free_item_num", mi.FreeItemNum,
+						"total_times", mi.TotalTimes,
+						"wish_list", mi.WishList)
+				}
 			}
 
 			slog.Info("天帝宝库抽奖流程完成", "role_id", session.RoleID(), "draw_count", drawCount)
 			return nil
 		},
 	)
+}
+
+// offeredAwardPool 将自选面板中 open_flag=1 的候选大奖整理为三档奖池。
+// 服务端只接受当前开放的候选，配置里未开放的道具会被 set_award 拒绝。
+func offeredAwardPool(panel *protocol.TreasureHouseSelectPanel) *protocol.TreasureHousePool {
+	pool := &protocol.TreasureHousePool{}
+	if panel == nil {
+		return pool
+	}
+	for _, q := range panel.Qualities {
+		for _, c := range q.Awards {
+			if c.OpenFlag == 0 {
+				continue
+			}
+			switch q.Quality {
+			case 1:
+				pool.Tier1Items = append(pool.Tier1Items, c.AwardID)
+			case 2:
+				pool.Tier2Items = append(pool.Tier2Items, c.AwardID)
+			case 3:
+				pool.Tier3Items = append(pool.Tier3Items, c.AwardID)
+			default:
+				continue
+			}
+			pool.TotalCount++
+		}
+	}
+	return pool
+}
+
+// containsAwardID 判断道具条目 ID 是否在候选列表中。
+func containsAwardID(items []int32, id int32) bool {
+	for _, item := range items {
+		if item == id {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveTreasureAwards 解析最终三档自选大奖:
+// 优先采用配置值；若配置值不在当前开放候选中，则回退到主面板当前自选；最后回退到该档首个开放候选。
+func resolveTreasureAwards(configured, current []protocol.TreasureAwardSelect, offered *protocol.TreasureHousePool) []protocol.TreasureAwardSelect {
+	configuredMap := make(map[int32]int32, len(configured))
+	for _, a := range configured {
+		configuredMap[a.TierID] = a.ItemID
+	}
+	currentMap := make(map[int32]int32, len(current))
+	for _, a := range current {
+		currentMap[a.TierID] = a.ItemID
+	}
+
+	tiers := []struct {
+		tier    int32
+		options []int32
+	}{
+		{1, offered.Tier1Items},
+		{2, offered.Tier2Items},
+		{3, offered.Tier3Items},
+	}
+
+	resolved := make([]protocol.TreasureAwardSelect, 0, len(tiers))
+	for _, t := range tiers {
+		id := configuredMap[t.tier]
+		if len(t.options) > 0 && !containsAwardID(t.options, id) {
+			if cur := currentMap[t.tier]; containsAwardID(t.options, cur) {
+				id = cur
+			} else {
+				id = t.options[0]
+			}
+		}
+		if id == 0 && len(t.options) > 0 {
+			id = t.options[0]
+		}
+		resolved = append(resolved, protocol.TreasureAwardSelect{TierID: t.tier, ItemID: id})
+	}
+	return resolved
 }
 
 // --------------------------------------------------------------------------------

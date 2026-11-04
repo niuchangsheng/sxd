@@ -716,6 +716,277 @@ func ParseTreasureHousePoolResult(payload []byte) (*TreasureHousePool, error) {
 	return pool, nil
 }
 
+// 天帝宝库业务结果码 (对齐原版 com.protocols.Mod_TreasureHouse_Base)。
+const (
+	TreasureHouseResultSuccess        uint8 = 0  // 成功
+	TreasureHouseResultFailed         uint8 = 1  // 通用失败
+	TreasureHouseResultNoFreeItem     uint8 = 2  // 无免费次数/免费道具
+	TreasureHouseResultNoIngot        uint8 = 3  // 元宝不足
+	TreasureHouseResultNoEmptyGrid    uint8 = 4  // 无空格
+	TreasureHouseResultItemPackFull   uint8 = 5  // 背包已满
+	TreasureHouseResultDragonballFull uint8 = 6  // 龙珠包已满
+	TreasureHouseResultLinkfateFull   uint8 = 7  // 结缘包已满
+	TreasureHouseResultMaxTimes       uint8 = 8  // 达到最大次数
+	TreasureHouseResultNotSelectAward uint8 = 9  // 未选择大奖
+	TreasureHouseResultArrayChipFull  uint8 = 10 // 阵符包已满
+	TreasureHouseResultTimesLimit     uint8 = 11 // 次数上限
+	TreasureHouseResultNoItem         uint8 = 12 // 无可用道具
+)
+
+// TreasureHouseResultName 返回结果码的中文语义，便于日志与熔断分支定位。
+func TreasureHouseResultName(code uint8) string {
+	switch code {
+	case TreasureHouseResultSuccess:
+		return "成功"
+	case TreasureHouseResultFailed:
+		return "通用失败"
+	case TreasureHouseResultNoFreeItem:
+		return "无免费次数"
+	case TreasureHouseResultNoIngot:
+		return "元宝不足"
+	case TreasureHouseResultNoEmptyGrid:
+		return "无空格"
+	case TreasureHouseResultItemPackFull:
+		return "背包已满"
+	case TreasureHouseResultDragonballFull:
+		return "龙珠包已满"
+	case TreasureHouseResultLinkfateFull:
+		return "结缘包已满"
+	case TreasureHouseResultMaxTimes:
+		return "达到最大次数"
+	case TreasureHouseResultNotSelectAward:
+		return "未选择大奖"
+	case TreasureHouseResultArrayChipFull:
+		return "阵符包已满"
+	case TreasureHouseResultTimesLimit:
+		return "次数上限"
+	case TreasureHouseResultNoItem:
+		return "无可用道具"
+	default:
+		return fmt.Sprintf("未知结果码(%d)", code)
+	}
+}
+
+// TreasureHouseIngotCost 表示元宝抽奖的阶梯价格。
+type TreasureHouseIngotCost struct {
+	Min  int32
+	Max  int32
+	Cost int32
+}
+
+// TreasureHouseMainPanel 表示天帝宝库主面板 (Module 594, Action 1)。
+type TreasureHouseMainPanel struct {
+	Result                     uint8
+	WishList                   []TreasureAwardSelect // 当前三档自选大奖 (quality, award_id)
+	FreeItemNum                int32                 // 当前持有的免费钥匙数量
+	UseFreeFlag                int32                 // 是否优先使用免费次数
+	FreeNeedTimes              int32                 // 免费次数累计所需次数
+	FreeItemAccu               int32                 // 免费道具累计进度
+	UseIngotTimes              int32                 // 已用元宝抽奖次数
+	IngotCostList              []TreasureHouseIngotCost
+	LeftCanGetFree             int32 // 今日仍可领取的免费次数
+	TotalTimes                 int32 // 累计抽奖次数
+	NewAroundShopPrivilegeFlag uint8 // 新周边商店特权标记
+}
+
+// ParseTreasureHouseMainPanelResult 解析主面板回包:
+//
+//	UByte result_code
+//	[Int quality, Int award_id] wish_list
+//	Int free_item_num, Int use_free_flag, Int free_need_times, Int free_item_accu, Int use_ingot_times
+//	[Int min, Int max, Int cost] ingot_cost_list
+//	Int left_can_get_free, Int total_times, UByte is_new_around_shop_privilege_flag
+func ParseTreasureHouseMainPanelResult(payload []byte) (*TreasureHouseMainPanel, error) {
+	decomp := DecompressPayloadIfNeeded(payload)
+	r := NewReader(decomp)
+	result, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: 缺少 result_code", ErrInvalidPayload)
+	}
+	panel := &TreasureHouseMainPanel{Result: result}
+	if result != TreasureHouseResultSuccess {
+		return panel, nil
+	}
+
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: 缺少 wish_list 数量", ErrInvalidPayload)
+	}
+	for i := 0; i < int(count); i++ {
+		quality, qErr := r.ReadInt32()
+		awardID, aErr := r.ReadInt32()
+		if qErr != nil || aErr != nil {
+			return nil, fmt.Errorf("%w: wish_list 第 %d 项截断", ErrInvalidPayload, i)
+		}
+		panel.WishList = append(panel.WishList, TreasureAwardSelect{TierID: quality, ItemID: awardID})
+	}
+
+	fields := []*int32{
+		&panel.FreeItemNum, &panel.UseFreeFlag, &panel.FreeNeedTimes,
+		&panel.FreeItemAccu, &panel.UseIngotTimes,
+	}
+	for i, dst := range fields {
+		v, fErr := r.ReadInt32()
+		if fErr != nil {
+			return nil, fmt.Errorf("%w: 主面板第 %d 个整型字段截断", ErrInvalidPayload, i)
+		}
+		*dst = v
+	}
+
+	costCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: 缺少 ingot_cost_list 数量", ErrInvalidPayload)
+	}
+	for i := 0; i < int(costCount); i++ {
+		min, e1 := r.ReadInt32()
+		max, e2 := r.ReadInt32()
+		cost, e3 := r.ReadInt32()
+		if e1 != nil || e2 != nil || e3 != nil {
+			return nil, fmt.Errorf("%w: ingot_cost_list 第 %d 项截断", ErrInvalidPayload, i)
+		}
+		panel.IngotCostList = append(panel.IngotCostList, TreasureHouseIngotCost{Min: min, Max: max, Cost: cost})
+	}
+
+	if v, vErr := r.ReadInt32(); vErr == nil {
+		panel.LeftCanGetFree = v
+	}
+	if v, vErr := r.ReadInt32(); vErr == nil {
+		panel.TotalTimes = v
+	}
+	if v, vErr := r.ReadUint8(); vErr == nil {
+		panel.NewAroundShopPrivilegeFlag = v
+	}
+	return panel, nil
+}
+
+// TreasureHouseAwardCandidate 表示一档候选大奖条目。
+type TreasureHouseAwardCandidate struct {
+	AwardID  int32
+	OpenFlag int32 // 1 表示当前可选，0 表示未解锁
+}
+
+// TreasureHouseQualityPanel 表示单个档位的自选候选信息。
+type TreasureHouseQualityPanel struct {
+	Quality      int32
+	RefreshTimes int32
+	RefreshIngot int32
+	RefreshLimit int32
+	Awards       []TreasureHouseAwardCandidate
+}
+
+// TreasureHouseSelectPanel 表示自选面板 (Module 594, Action 2)。
+type TreasureHouseSelectPanel struct {
+	Result     uint8
+	Qualities  []TreasureHouseQualityPanel
+	NotifyFlag int32
+}
+
+// ParseTreasureHouseSelectPanelResult 解析自选面板回包:
+//
+//	UByte result_code
+//	[Int quality, Int refresh_times, Int refresh_ingot, Int refresh_limit,
+//	 [Int award_id, Int open_flag]] quality_award_list
+//	Int notify_flag
+func ParseTreasureHouseSelectPanelResult(payload []byte) (*TreasureHouseSelectPanel, error) {
+	decomp := DecompressPayloadIfNeeded(payload)
+	r := NewReader(decomp)
+	result, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: 缺少 result_code", ErrInvalidPayload)
+	}
+	panel := &TreasureHouseSelectPanel{Result: result}
+	if result != TreasureHouseResultSuccess {
+		return panel, nil
+	}
+
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: 缺少 quality_award_list 数量", ErrInvalidPayload)
+	}
+	for i := 0; i < int(count); i++ {
+		quality, e1 := r.ReadInt32()
+		refreshTimes, e2 := r.ReadInt32()
+		refreshIngot, e3 := r.ReadInt32()
+		refreshLimit, e4 := r.ReadInt32()
+		if e1 != nil || e2 != nil || e3 != nil || e4 != nil {
+			return nil, fmt.Errorf("%w: quality_award_list 第 %d 项字段截断", ErrInvalidPayload, i)
+		}
+		awardCount, e5 := r.ReadUint16()
+		if e5 != nil {
+			return nil, fmt.Errorf("%w: quality_award_list 第 %d 项候选数量截断", ErrInvalidPayload, i)
+		}
+		qp := TreasureHouseQualityPanel{
+			Quality:      quality,
+			RefreshTimes: refreshTimes,
+			RefreshIngot: refreshIngot,
+			RefreshLimit: refreshLimit,
+		}
+		for j := 0; j < int(awardCount); j++ {
+			awardID, e6 := r.ReadInt32()
+			openFlag, e7 := r.ReadInt32()
+			if e6 != nil || e7 != nil {
+				return nil, fmt.Errorf("%w: quality_award_list 第 %d 项候选 %d 截断", ErrInvalidPayload, i, j)
+			}
+			qp.Awards = append(qp.Awards, TreasureHouseAwardCandidate{AwardID: awardID, OpenFlag: openFlag})
+		}
+		panel.Qualities = append(panel.Qualities, qp)
+	}
+	if v, vErr := r.ReadInt32(); vErr == nil {
+		panel.NotifyFlag = v
+	}
+	return panel, nil
+}
+
+// ParseTreasureHouseResultCode 解析仅含单字节 result_code 的回包 (set_award / set_use_free_flag / get_free_item 等)。
+func ParseTreasureHouseResultCode(payload []byte) (uint8, error) {
+	decomp := DecompressPayloadIfNeeded(payload)
+	if len(decomp) < 1 {
+		return 0, fmt.Errorf("%w: 空回包", ErrInvalidPayload)
+	}
+	return decomp[0], nil
+}
+
+// TreasureHouseLotteryResult 表示单次抽奖回包 (Module 594, Action 6)。
+type TreasureHouseLotteryResult struct {
+	Result  uint8
+	AwardID int32 // 中奖条目 ID，失败时可能缺省为 0
+}
+
+// ParseTreasureHouseLotteryResult 解析抽奖回包: UByte result_code + Int award_id。
+func ParseTreasureHouseLotteryResult(payload []byte) (*TreasureHouseLotteryResult, error) {
+	decomp := DecompressPayloadIfNeeded(payload)
+	r := NewReader(decomp)
+	result, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: 缺少 result_code", ErrInvalidPayload)
+	}
+	lr := &TreasureHouseLotteryResult{Result: result}
+	if awardID, aErr := r.ReadInt32(); aErr == nil {
+		lr.AwardID = awardID
+	}
+	return lr, nil
+}
+
+// BuildTreasureHouseMainPanelPacket 构造查询主面板封包 (Module 594, Action 1)。
+func BuildTreasureHouseMainPanelPacket(prevAct uint32) *Packet {
+	return BuildTreasureHouseRefreshPacket(prevAct)
+}
+
+// BuildTreasureHouseUseFreeFlagPacket 构造设置优先使用免费次数封包 (Module 594, Action 4)。
+func BuildTreasureHouseUseFreeFlagPacket(flag int32, prevAct uint32) *Packet {
+	return BuildTreasureHouseConfirmPacket(flag, prevAct)
+}
+
+// BuildTreasureHouseGetFreeItemPacket 构造领取免费钥匙封包 (Module 594, Action 8)。
+func BuildTreasureHouseGetFreeItemPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = ActionIDTreasureHouseGetFreeItem
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDTreasureHouseGetFreeItem, w.Bytes())
+}
+
 // BuildTreasureHouseSelectPacket 构造设定自选大奖封包 (Module 594, Action 3)。
 func BuildTreasureHouseSelectPacket(selections []TreasureAwardSelect, prevAct uint32) *Packet {
 	w := NewWriter()

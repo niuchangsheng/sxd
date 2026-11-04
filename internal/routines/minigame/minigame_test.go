@@ -469,3 +469,93 @@ func TestFactionLuckyStarRoutine_SkipsWhenRemainTimesZero(t *testing.T) {
 		t.Fatal("剩余次数为 0 不应判定帮派模块不可用")
 	}
 }
+
+func TestTreasureHouseRoutine_ExecuteSuccessWithMock(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_treasure_house",
+		RoleName:   "测试宝库角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	routine := NewTreasureHouseRoutine(TreasureHouseConfig{MaxDrawTimes: 10})
+	if err := routine.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("天帝宝库 Routine 执行失败: %v", err)
+	}
+	// 成功路径: 领免费钥匙 -> 设定自选 -> 设置免费优先 -> 抽奖 -> 结束刷新主面板
+	if got := session.LastActionID(); got != protocol.ActionIDTreasureHouseMainPanel {
+		t.Errorf("期望最后动作为主面板刷新 0x%08X, 实际 0x%08X",
+			protocol.ActionIDTreasureHouseMainPanel, got)
+	}
+}
+
+func TestTreasureHouseRoutine_SetAwardFailureStopsLottery(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_treasure_house_fail",
+		RoleName:   "测试宝库失败角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// 注入一个不在服务端开放候选中的大奖: set_award 回包 FAILED，Routine 必须熔断且不再抽奖。
+	cfg := TreasureHouseConfig{
+		MaxDrawTimes: 10,
+		Selector: func(ctx context.Context, pool *protocol.TreasureHousePool, dict dictionary.Repository) ([]protocol.TreasureAwardSelect, error) {
+			return []protocol.TreasureAwardSelect{
+				{TierID: 1, ItemID: 999},
+				{TierID: 2, ItemID: 25},
+				{TierID: 3, ItemID: 42},
+			}, nil
+		},
+	}
+	routine := NewTreasureHouseRoutine(cfg)
+	if err := routine.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("天帝宝库 Routine 执行失败: %v", err)
+	}
+	if got := session.LastActionID(); got != protocol.ActionIDTreasureHouseSetAward {
+		t.Errorf("set_award 失败后应立即熔断, 期望最后动作 0x%08X, 实际 0x%08X",
+			protocol.ActionIDTreasureHouseSetAward, got)
+	}
+}
+
+func TestTreasureHouseAwardResolution(t *testing.T) {
+	panel := &protocol.TreasureHouseSelectPanel{
+		Result: protocol.TreasureHouseResultSuccess,
+		Qualities: []protocol.TreasureHouseQualityPanel{
+			{Quality: 3, Awards: []protocol.TreasureHouseAwardCandidate{{AwardID: 42, OpenFlag: 1}, {AwardID: 43, OpenFlag: 0}}},
+			{Quality: 2, Awards: []protocol.TreasureHouseAwardCandidate{{AwardID: 25, OpenFlag: 0}, {AwardID: 21, OpenFlag: 1}}},
+			{Quality: 1, Awards: []protocol.TreasureHouseAwardCandidate{{AwardID: 50, OpenFlag: 0}, {AwardID: 12, OpenFlag: 1}}},
+		},
+	}
+	pool := offeredAwardPool(panel)
+	if pool.TotalCount != 3 {
+		t.Fatalf("期望仅 3 个开放候选, 实际 %d", pool.TotalCount)
+	}
+	if !containsAwardID(pool.Tier1Items, 12) || containsAwardID(pool.Tier1Items, 50) {
+		t.Errorf("一档开放候选解析异常: %+v", pool.Tier1Items)
+	}
+
+	configured := []protocol.TreasureAwardSelect{
+		{TierID: 1, ItemID: 50}, // 未开放 -> 回退首个开放候选 12
+		{TierID: 2, ItemID: 21}, // 已开放 -> 保留
+		{TierID: 3, ItemID: 99}, // 未开放 -> 回退首个开放候选 42
+	}
+	current := []protocol.TreasureAwardSelect{
+		{TierID: 1, ItemID: 12},
+	}
+	resolved := resolveTreasureAwards(configured, current, pool)
+	want := []int32{12, 21, 42}
+	for i, id := range want {
+		if resolved[i].ItemID != id {
+			t.Errorf("第 %d 档期望 %d, 实际 %d (%+v)", i+1, id, resolved[i].ItemID, resolved)
+		}
+	}
+}
