@@ -128,6 +128,7 @@ func main() {
 		{0x023C0001, "sect_utility.sect_main_info(1)", []byte{0, 0, 0, 1}},
 		{0x00760000, "god_war.get_status", nil},
 		{0x00100003, "rune.batch_rune_list", nil},
+		{0x03740006, "sect_alliance.alliance_panel(0)", []byte{0, 0, 0, 0}},
 		{0x00100001, "rune.rune_list", nil},
 		{0x024F0001, "sect_bonus.open_panel(1)", []byte{0, 0, 0, 1}},
 		{0x023C000D, "sect_worship(1)", []byte{0, 0, 0, 1}},

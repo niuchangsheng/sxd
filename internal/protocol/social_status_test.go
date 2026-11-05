@@ -33,3 +33,25 @@ func TestMarryHomeSelfInfoResult(t *testing.T) {
 		t.Error("空住宅状态回包应返回解析错误")
 	}
 }
+
+func TestSectBonusPanelResult(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteUint8(0)
+	w.WriteUint16(2)
+	w.WriteInt32(8)
+	w.WriteInt32(200)
+	w.WriteInt32(11)
+	w.WriteInt32(200)
+	w.WriteInt32(5)   // left_get_times
+	w.WriteInt32(0)   // today_self_cont
+	w.WriteInt32(100) // sect_cont_limit
+	w.WriteInt32(671) // sect_cont
+	panel, err := protocol.ParseSectBonusPanelResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("解析仙盟福利面板失败: %v", err)
+	}
+	if panel.Result != 0 || len(panel.Gifts) != 2 || panel.Gifts[0].GiftID != 8 ||
+		panel.LeftGetTimes != 5 || panel.SectCont != 671 {
+		t.Errorf("仙盟福利面板不一致: %+v", panel)
+	}
+}

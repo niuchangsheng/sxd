@@ -538,12 +538,14 @@ func luckyWheelResultText(result uint8) string {
 }
 
 // NewGuildActivitiesRoutine 构造仙盟神兽与捐献任务。
-// NewGuildActivitiesRoutine 构造仙盟日常任务 (Module 571)。
+// NewGuildActivitiesRoutine 构造仙盟日常任务 (Mod 571/591/575)。
 //
-// 先查询仙盟功能开放状态与面板信息：未开放/未加入仙盟时明确跳过，
-// 避免对不存在的关系发送业务请求。
+// 流程：主服读取仙盟分组与城镇凭据 → 建立仙盟城镇会话 (Mod 575 登录+enter_town)
+// → 读取仙盟主页 → 领取仙盟福利 → 每日膜拜。
+// 未加入仙盟/城镇登录失败时安全跳过；不消耗元宝。
 func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const townCtxTimeout = 30 * time.Second
+	const callTimeout = 5 * time.Second
 	return scheduler.NewBaseRoutine(
 		"guild_activities",
 		"social",
@@ -558,31 +560,117 @@ func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			sCtx, sCancel := context.WithTimeout(ctx, callTimeout)
-			statusResp, err := session.Call(sCtx, protocol.BuildSectOpenStatusPacket(), protocol.ActionIDSectOpenStatus)
-			sCancel()
+			townCtx, townCancel := context.WithTimeout(ctx, townCtxTimeout)
+			defer townCancel()
+			town, err := session.OpenSectTownSession(townCtx)
 			if err != nil {
-				slog.Info("仙盟功能不可用/未开放，跳过", "role_id", session.RoleID(), "err", err)
+				if errors.Is(err, client.ErrNotInSect) {
+					slog.Info("账号未加入仙盟，跳过仙盟日常", "role_id", session.RoleID())
+				} else {
+					slog.Info("仙盟城镇会话不可用，跳过仙盟日常", "role_id", session.RoleID(), "err", err)
+				}
 				return nil
 			}
-			status, pErr := protocol.ParseSectOpenStatusResult(statusResp.Payload)
-			if pErr != nil {
-				slog.Warn("解析仙盟开放状态失败", "role_id", session.RoleID(), "err", pErr)
+			defer town.Close()
+
+			cred, err := session.FetchSectTownCredentials(townCtx)
+			if err != nil {
+				slog.Warn("读取仙盟凭据失败", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 
-			pCtx, pCancel := context.WithTimeout(ctx, callTimeout)
-			panelResp, err := session.Call(pCtx, protocol.BuildSectPanelInfoPacket(), protocol.ActionIDSectPanelInfo)
-			pCancel()
-			if err != nil || panelResp == nil || len(panelResp.Payload) == 0 {
-				slog.Info("账号未加入仙盟，跳过仙盟日常", "role_id", session.RoleID(), "open_status", status)
-				return nil
+			// 1. 仙盟主页
+			mCtx, mCancel := context.WithTimeout(townCtx, callTimeout)
+			mainResp, err := town.Call(mCtx, protocol.BuildSectMainInfoPacket(cred.SectID), 0x023C0001)
+			mCancel()
+			if err != nil {
+				slog.Warn("读取仙盟主页失败", "role_id", session.RoleID(), "err", err)
+			} else if mainInfo, pErr := protocol.ParseSectMainInfoResult(mainResp.Payload); pErr != nil {
+				slog.Warn("解析仙盟主页失败", "role_id", session.RoleID(), "err", pErr)
+			} else {
+				slog.Info("仙盟主页",
+					"role_id", session.RoleID(),
+					"result", mainInfo.Result,
+					"sect_id", mainInfo.SelfSectID,
+					"sect_name", mainInfo.SectName,
+					"sect_level", mainInfo.SectLevel,
+					"alliance_id", mainInfo.AllianceID,
+				)
 			}
-			slog.Info("仙盟功能开放且账号已入盟；具体玩法需仙盟城镇会话，待下一批接入",
-				"role_id", session.RoleID(),
-				"open_status", status,
-				"panel_len", len(panelResp.Payload),
-			)
+
+			// 2. 仙盟福利领取
+			bCtx, bCancel := context.WithTimeout(townCtx, callTimeout)
+			bonusResp, err := town.Call(bCtx, protocol.BuildSectBonusPanelPacket(cred.SectID), 0x024F0001)
+			bCancel()
+			if err != nil {
+				slog.Warn("读取仙盟福利面板失败", "role_id", session.RoleID(), "err", err)
+			} else if panel, pErr := protocol.ParseSectBonusPanelResult(bonusResp.Payload); pErr != nil {
+				slog.Warn("解析仙盟福利面板失败", "role_id", session.RoleID(), "err", pErr)
+			} else {
+				slog.Info("仙盟福利面板",
+					"role_id", session.RoleID(),
+					"result", panel.Result,
+					"gifts", panel.Gifts,
+					"left_get_times", panel.LeftGetTimes,
+					"sect_cont", panel.SectCont,
+				)
+				if panel.Result == 0 && panel.LeftGetTimes > 0 {
+					// 官方客户端 get_gift 的参数是宗门 ID（不是 gift_id），每次领取一份。
+					claimed := int32(0)
+					for claimed < panel.LeftGetTimes {
+						gCtx, gCancel := context.WithTimeout(townCtx, callTimeout)
+						gResp, gErr := town.Call(gCtx, protocol.BuildSectBonusGetGiftPacket(cred.SectID), 0x024F0003)
+						gCancel()
+						if gErr != nil {
+							slog.Warn("领取仙盟福利无应答", "role_id", session.RoleID(), "err", gErr)
+							break
+						}
+						result, rErr := protocol.ParseSectActionResult(gResp.Payload)
+						if rErr != nil {
+							slog.Warn("解析仙盟福利回包失败", "role_id", session.RoleID(), "err", rErr)
+							break
+						}
+						switch result {
+						case 0:
+							claimed++
+							slog.Info("仙盟福利领取成功", "role_id", session.RoleID(), "index", claimed)
+						case 3: // LESS_TIMES
+							slog.Info("仙盟福利领取次数已用尽", "role_id", session.RoleID(), "claimed", claimed)
+							claimed = panel.LeftGetTimes
+						case 4: // ITEM_PACK_FULL
+							return scheduler.ErrBagFull
+						case 5: // NO_GIFT
+							slog.Info("仙盟福利暂无可领礼包", "role_id", session.RoleID(), "claimed", claimed)
+							claimed = panel.LeftGetTimes
+						case 1: // FUNC_NOT_OPEN
+							slog.Info("仙盟福利功能未开放/未满足贡献条件", "role_id", session.RoleID(), "claimed", claimed)
+							claimed = panel.LeftGetTimes
+						case 2: // FAILED
+							slog.Info("仙盟福利领取失败", "role_id", session.RoleID(), "claimed", claimed)
+							claimed = panel.LeftGetTimes
+						default:
+							slog.Info("仙盟福利未领取", "role_id", session.RoleID(), "result", result, "claimed", claimed)
+							claimed = panel.LeftGetTimes
+						}
+					}
+				}
+			}
+
+			// 3. 每日膜拜
+			wCtx, wCancel := context.WithTimeout(townCtx, callTimeout)
+			wResp, err := town.Call(wCtx, protocol.BuildSectWorshipPacket(cred.SectID), 0x023C000D)
+			wCancel()
+			if err != nil {
+				slog.Warn("仙盟膜拜无应答", "role_id", session.RoleID(), "err", err)
+			} else if result, rErr := protocol.ParseSectActionResult(wResp.Payload); rErr != nil {
+				slog.Warn("解析仙盟膜拜回包失败", "role_id", session.RoleID(), "err", rErr)
+			} else if result == 0 {
+				slog.Info("仙盟膜拜成功", "role_id", session.RoleID())
+			} else if result == 16 { // IS_WORSHIP
+				slog.Info("今日已膜拜", "role_id", session.RoleID())
+			} else {
+				slog.Info("仙盟膜拜未成功", "role_id", session.RoleID(), "result", result)
+			}
 			return nil
 		},
 	)
