@@ -881,35 +881,135 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			_ = qaEngine // 保留构造签名；当前无题库数据源
 
-			cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
-			resp, err := session.Call(cCtx, protocol.BuildImperialExamStatusPacket(), protocol.ActionIDImperialExamStatus)
-			cCancel()
+			stCtx, stCancel := context.WithTimeout(ctx, callTimeout)
+			statusResp, err := session.Call(stCtx, protocol.BuildImperialExamStatusPacket(), protocol.ActionIDImperialExamStatus)
+			stCancel()
 			if err != nil {
 				slog.Info("金榜题名功能不可用，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
-			status, err := protocol.ParseImperialExamStatusResult(resp.Payload)
+			status, err := protocol.ParseImperialExamStatusResult(statusResp.Payload)
 			if err != nil {
 				return fmt.Errorf("解析金榜题名活动状态失败: %w", err)
 			}
-			switch status.Status {
-			case protocol.ImperialExamActivityStart:
-				slog.Info("金榜题名活动进行中；缺少题库数据源，跳过作答",
+			if status.Status != protocol.ImperialExamActivityStart {
+				slog.Info("金榜题名当前非进行中阶段，跳过",
 					"role_id", session.RoleID(),
+					"status", status.Status,
 					"start_time", status.StartTime,
 					"end_time", status.EndTime,
 				)
-			case protocol.ImperialExamActivityEnd:
-				slog.Info("金榜题名活动已结束，跳过", "role_id", session.RoleID())
-			case protocol.ImperialExamActivityClose:
-				slog.Info("金榜题名活动已关闭，跳过", "role_id", session.RoleID())
-			case protocol.ImperialExamAnswerOver:
-				slog.Info("金榜题名今日答题已结束，跳过", "role_id", session.RoleID())
-			default:
-				slog.Info("金榜题名阶段未知，跳过", "role_id", session.RoleID(), "status", status.Status)
+				return nil
 			}
+
+			answered, right, wrong := 0, 0, 0
+			for round := 0; round < 100; round++ {
+				qCtx, qCancel := context.WithTimeout(ctx, callTimeout)
+				qResp, qErr := session.Call(qCtx, protocol.BuildImperialExamStartPacket(), protocol.ActionIDImperialExamStart)
+				qCancel()
+				if qErr != nil {
+					slog.Warn("金榜题名开始答题无应答", "role_id", session.RoleID(), "err", qErr)
+					break
+				}
+				q, pErr := protocol.ParseImperialExamQuestionResult(qResp.Payload)
+				if pErr != nil {
+					slog.Warn("解析金榜题名题目回包失败", "role_id", session.RoleID(), "err", pErr)
+					break
+				}
+				switch q.Result {
+				case protocol.ImperialExamAnswerOver:
+					slog.Info("金榜题名今日答题已结束", "role_id", session.RoleID(), "answered", answered, "right", right, "wrong", wrong)
+					return nil
+				case protocol.ImperialExamResultNonActivityTime:
+					slog.Info("金榜题名已过活动时间，结束", "role_id", session.RoleID())
+					return nil
+				case protocol.ImperialExamResultSuccess:
+					// 继续
+				default:
+					slog.Info("金榜题名开始答题未成功", "role_id", session.RoleID(), "result", q.Result)
+					return nil
+				}
+
+				cipher, ok := protocol.LookupExamQuestion(q.QuestionID)
+				if !ok {
+					slog.Warn("金榜题名题库缺少题目，结束", "role_id", session.RoleID(), "question_id", q.QuestionID)
+					return nil
+				}
+				question, dErr := protocol.DecryptExamString(cipher.Question, q.DecipherKey)
+				if dErr != nil {
+					slog.Warn("金榜题名题干解密失败", "role_id", session.RoleID(), "question_id", q.QuestionID, "err", dErr)
+					return nil
+				}
+				var options [4]string
+				for i, c := range []string{cipher.AnswerA, cipher.AnswerB, cipher.AnswerC, cipher.AnswerD} {
+					if c == "" {
+						continue
+					}
+					if options[i], dErr = protocol.DecryptExamString(c, q.DecipherKey); dErr != nil {
+						slog.Debug("金榜题名选项解密失败", "role_id", session.RoleID(), "index", i, "err", dErr)
+					}
+				}
+
+				knownAnswer, confidence := "", 0.0
+				if qaEngine != nil {
+					if ans, conf, found := qaEngine.Match(question); found {
+						knownAnswer, confidence = ans, conf
+					}
+				}
+				idx := protocol.ChooseExamOption(options, knownAnswer)
+				seq := protocol.ImperialExamSequenceA + uint8(idx)
+
+				sCtx, sCancel := context.WithTimeout(ctx, 5*time.Second)
+				sResp, sErr := session.Call(sCtx, protocol.BuildImperialExamSubmitPacket(q.CurAnswerSeq, seq), protocol.ActionIDImperialExamSubmit)
+				sCancel()
+				if sErr != nil {
+					slog.Warn("金榜题名提交答案无应答", "role_id", session.RoleID(), "err", sErr)
+					break
+				}
+				sub, spErr := protocol.ParseImperialExamSubmitResult(sResp.Payload)
+				if spErr != nil {
+					slog.Warn("解析金榜题名提交回包失败", "role_id", session.RoleID(), "err", spErr)
+					break
+				}
+				answered++
+				if sub.RightSequence == seq {
+					right++
+				} else {
+					wrong++
+				}
+				slog.Info("金榜题名答题",
+					"role_id", session.RoleID(),
+					"question_id", q.QuestionID,
+					"question", question,
+					"chosen", string(rune('A'+idx)),
+					"right_sequence", sub.RightSequence,
+					"known_answer", knownAnswer,
+					"confidence", confidence,
+				)
+				switch sub.Result {
+				case protocol.ImperialExamResultSuccess:
+					// 继续下一题
+				case protocol.ImperialExamAnswerOver:
+					slog.Info("金榜题名今日答题已结束", "role_id", session.RoleID(), "answered", answered, "right", right, "wrong", wrong)
+					return nil
+				case protocol.ImperialExamResultNonActivityTime:
+					slog.Info("金榜题名已过活动时间，结束", "role_id", session.RoleID())
+					return nil
+				case protocol.ImperialExamResultSubmitTimeOut:
+					slog.Warn("金榜题名提交超时，重新开始", "role_id", session.RoleID())
+					continue
+				default:
+					slog.Info("金榜题名提交未成功", "role_id", session.RoleID(), "result", sub.Result)
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(300 * time.Millisecond):
+				}
+			}
+			slog.Info("金榜题名答题巡检完成", "role_id", session.RoleID(), "answered", answered, "right", right, "wrong", wrong)
 			return nil
 		},
 	)
@@ -1071,6 +1171,8 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 // 仅使用剩余免费次数，不主动消耗元宝或感悟道具备用次数；
 // 服务端返回的业务失败码全部解析并按语义熔断。
 func NewWuFaRoutine() scheduler.ActivityRoutine {
+	// 未开放的悟法领域服务端不会回包，标记当日不可用以避免同日重复等待超时。
+	var unavailable scheduler.DailySkipCache
 	return scheduler.NewBaseRoutine(
 		"wufa_field",
 		"minigame",
@@ -1080,6 +1182,10 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
 				return client.ErrNotConnected
+			}
+			if unavailable.ShouldSkip(session.RoleID(), time.Now()) {
+				slog.Debug("悟法领域今日已确认未开放，跳过", "role_id", session.RoleID())
+				return nil
 			}
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
@@ -1093,7 +1199,13 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, infoPkt, protocol.ActionIDWuFaFieldInfo)
 			iCancel()
 			if err != nil || infoResp == nil {
-				slog.Warn("查询悟法领域面板未收到回包", "role_id", session.RoleID(), "err", err)
+				if errors.Is(err, context.DeadlineExceeded) {
+					// 服务端对未解锁模块静默丢弃请求，超时即视为当日功能未开放。
+					unavailable.MarkUnavailable(session.RoleID(), time.Now())
+					slog.Info("悟法领域功能未开放（服务端无回包），今日跳过", "role_id", session.RoleID())
+				} else {
+					slog.Warn("查询悟法领域面板未收到回包", "role_id", session.RoleID(), "err", err)
+				}
 				return nil
 			}
 
