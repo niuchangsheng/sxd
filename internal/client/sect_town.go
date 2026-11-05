@@ -42,9 +42,17 @@ type SectTownCredentials struct {
 }
 
 // FetchSectTownCredentials 通过主服会话获取仙盟城镇登录凭据。
+//
+// 主服只读查询使用独立短超时：角色未加入仙盟时服务端不会回包，
+// 不能让该探测占用调用方为仙盟城镇会话预留的长超时预算。
 func (s *RoleSession) FetchSectTownCredentials(ctx context.Context) (*SectTownCredentials, error) {
-	panelResp, err := s.Call(ctx, protocol.BuildSectPanelInfoPacket(), protocol.ActionIDSectPanelInfo)
+	pCtx, pCancel := context.WithTimeout(ctx, s.cfg.SectQueryTimeout)
+	panelResp, err := s.Call(pCtx, protocol.BuildSectPanelInfoPacket(), protocol.ActionIDSectPanelInfo)
+	pCancel()
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("client: 查询仙盟面板无回包（角色可能未加入仙盟或仙盟功能未开放）: %w", err)
+		}
 		return nil, fmt.Errorf("client: 查询仙盟面板失败: %w", err)
 	}
 	summary, err := protocol.ParseSectPanelSummary(panelResp.Payload)
@@ -63,7 +71,9 @@ func (s *RoleSession) FetchSectTownCredentials(ctx context.Context) (*SectTownCr
 			break
 		}
 	}
-	infoResp, err := s.Call(ctx, protocol.BuildSectLoginInfoPacket(summary.MySectGroup), 0x023F0001)
+	iCtx, iCancel := context.WithTimeout(ctx, s.cfg.SectQueryTimeout)
+	infoResp, err := s.Call(iCtx, protocol.BuildSectLoginInfoPacket(summary.MySectGroup), 0x023F0001)
+	iCancel()
 	if err != nil {
 		return nil, fmt.Errorf("client: 查询仙盟城镇凭据失败: %w", err)
 	}

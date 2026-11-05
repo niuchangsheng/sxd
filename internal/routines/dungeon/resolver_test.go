@@ -128,6 +128,18 @@ func (m *mockDictionaryRepo) GetHighestMissionByTypeAndLevel(level int, missionT
 	return best, nil
 }
 
+func (m *mockDictionaryRepo) GetEliteMissionTowns() ([]int, error) {
+	seen := make(map[int]bool)
+	towns := make([]int, 0)
+	for _, ms := range m.missions {
+		if ms.Type == 1 && ms.MapID > 0 && !seen[ms.MapID] {
+			seen[ms.MapID] = true
+			towns = append(towns, ms.MapID)
+		}
+	}
+	return towns, nil
+}
+
 func (m *mockDictionaryRepo) GetQuestMissions(questType int, playerLevel int) ([]int, error) {
 	return nil, nil
 }

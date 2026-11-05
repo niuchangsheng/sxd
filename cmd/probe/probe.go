@@ -220,7 +220,6 @@ func RunProbe(ctx context.Context, opts ProbeOptions) (*ProbeReport, error) {
 		}
 	})
 
-
 	// 4. 启动长连接并驱动五阶段握手流水线
 	startTime := time.Now()
 	fmt.Fprintf(opts.Output, "2. 正在建立 TCP Socket 连接并执行五阶段登录场景握手...\n")
@@ -456,7 +455,6 @@ func resolveProbeConfig(opts ProbeOptions) resolvedConfig {
 	return res
 }
 
-
 // runMockProbeServer 为离线 DryRun 或测试环境提供轻量级虚拟网关。
 func runMockProbeServer(conn net.Conn) {
 	defer conn.Close()
@@ -507,9 +505,10 @@ func runMockProbeServer(conn net.Conn) {
 	}
 }
 
-// probeHeroMissionSweep 对真实网关实机探测 Module 111 英雄副本扫荡状态机链路。
+// probeHeroMissionSweep 对真实网关实机探测 Module 35 英雄副本扫荡链路。
+// 协议基准: Mod_HeroMission_Base (get_hero_mission_list / start_practice / quickly)。
 func probeHeroMissionSweep(ctx context.Context, session *client.RoleSession, w io.Writer) {
-	fmt.Fprintf(w, "\n🎯 正在向网关实机测试完整扫荡状态机调用链 ...\n")
+	fmt.Fprintf(w, "\n🎯 正在向网关实机测试英雄副本扫荡 (Module 35) 调用链 ...\n")
 
 	// 步骤 1: 发送 Mod 0, Act 39 打开功能界面
 	p1 := protocol.NewPacket(protocol.ActionUIFunctionOpen, nil)
@@ -521,56 +520,65 @@ func probeHeroMissionSweep(ctx context.Context, session *client.RoleSession, w i
 	p2 := protocol.NewPacket(protocol.ActionTownMissionActive, nil)
 	fmt.Fprintf(w, "   [2/5] 发送 0x00020029 (Mod 2, Act 41)\n")
 	c2Ctx, c2Cancel := context.WithTimeout(ctx, 3*time.Second)
-	resp2, err2 := session.Call(c2Ctx, p2, protocol.ActionTownMissionActive)
+	_, err2 := session.Call(c2Ctx, p2, protocol.ActionTownMissionActive)
 	c2Cancel()
 	if err2 != nil {
 		fmt.Fprintf(w, "   ✗ 0x00020029 回包失败: %v\n", err2)
 		return
 	}
-	fmt.Fprintf(w, "   ✓ 成功捕获 0x00020029 回包! 载荷长度: %d 字节\n", len(resp2.Payload))
 
-	// 步骤 3: 发送 Mod 111, Act 0 拉取英雄副本列表
-	fmt.Fprintf(w, "   [3/5] 发送 0x006F0000 (Mod 111, Act 0, List)\n")
+	// 步骤 3: 查询城镇 4 的英雄副本列表 (Mod_HeroMission_Base.get_hero_mission_list)
+	const townID uint16 = 4
+	fmt.Fprintf(w, "   [3/5] 发送 0x00230000 (Mod 35, Act 0, List) town=%d\n", townID)
 	c0Ctx, c0Cancel := context.WithTimeout(ctx, 3*time.Second)
-	resp0, err0 := session.Call(c0Ctx, protocol.BuildHeroMissionListPacket(), protocol.ActionHeroMissionList)
+	resp0, err0 := session.Call(c0Ctx, protocol.BuildHeroMissionListPacket(townID), protocol.ActionHeroMissionList)
 	c0Cancel()
 	if err0 != nil {
-		fmt.Fprintf(w, "   ✗ 0x006F0000 回包失败: %v\n", err0)
+		fmt.Fprintf(w, "   ✗ 0x00230000 回包失败: %v\n", err0)
 		return
 	}
 	heroList, errParse := protocol.ParseHeroMissionListResponse(resp0.Payload)
-	if errParse != nil || heroList == nil || len(heroList.Items) == 0 {
-		fmt.Fprintf(w, "   ⚠ 当前无剩余可扫荡英雄副本 (TotalTimes=%v)\n", heroList)
+	if errParse != nil || heroList == nil || len(heroList.Missions) == 0 {
+		fmt.Fprintf(w, "   ⚠ 当前城镇暂无可扫荡英雄副本 (list=%+v, err=%v)\n", heroList, errParse)
 		return
 	}
-	fmt.Fprintf(w, "   ✓ 成功捕获英雄副本列表! 剩余总次数: %d, 条目数: %d\n", heroList.TotalTimes, len(heroList.Items))
+	fmt.Fprintf(w, "   ✓ 英雄副本列表: 条目数=%d 已通关=%d 剩余购买=%d\n",
+		len(heroList.Missions), heroList.FinishMissionNum, heroList.RemainBuyTimes)
 
-	firstItem := heroList.Items[0]
-	fmt.Fprintf(w, "   ✓ 选定副本实例句柄: 0x%08X (%d), 关卡ID: %d\n", firstItem.InstanceID, firstItem.InstanceID, firstItem.MissionID)
-
-	// 步骤 4: 发送 Mod 111, Act 1 选定副本
+	// 步骤 4: 开始扫荡 (auto_num=0 不自动购买翻牌, hero_type=0 普通英雄副本)
+	startPkt, _ := protocol.BuildHeroPracticePacket(protocol.HeroPracticeRequest{
+		TownID:   townID,
+		AutoNum:  0,
+		HeroType: 0,
+	})
+	fmt.Fprintf(w, "   [4/5] 发送 0x00230002 (Mod 35, Act 2, start_practice)\n")
 	c1Ctx, c1Cancel := context.WithTimeout(ctx, 3*time.Second)
-	resp1, err1 := session.Call(c1Ctx, protocol.BuildHeroMissionSelectPacket(firstItem.InstanceID), protocol.ActionHeroMissionSelect)
+	resp1, err1 := session.Call(c1Ctx, startPkt, protocol.ActionHeroMissionStartPractice)
 	c1Cancel()
 	if err1 != nil {
-		fmt.Fprintf(w, "   ✗ Act 1 选定回包失败: %v\n", err1)
+		fmt.Fprintf(w, "   ✗ Act 2 扫荡回包失败: %v\n", err1)
 		return
 	}
-	fmt.Fprintf(w, "   ✓ 选定确认! 回包载荷: %X\n", resp1.Payload)
+	startRes, parseErr := protocol.ParseHeroPracticeResult(resp1.Payload)
+	if parseErr != nil || startRes == nil {
+		fmt.Fprintf(w, "   ✗ Act 2 回包解析失败: %v\n", parseErr)
+		return
+	}
+	fmt.Fprintf(w, "   ✓ start_practice 回包: result=%d practice_time=%d\n", startRes.Result, startRes.PracticeTime)
+	if startRes.Result != protocol.HeroMissionResultSuccess {
+		return
+	}
 
-	// 步骤 5: 发送 Mod 111, Act 2 执行单次扫荡
+	// 步骤 5: 快速完成 (Mod_HeroMission_Base.quickly)
+	fmt.Fprintf(w, "   [5/5] 发送 0x00230007 (Mod 35, Act 7, quickly)\n")
 	cSweepCtx, cSweepCancel := context.WithTimeout(ctx, 3*time.Second)
-	respSweep, errSweep := session.Call(cSweepCtx, protocol.BuildHeroMissionSweepPacket(), protocol.ActionHeroMissionSweep)
+	respSweep, errSweep := session.Call(cSweepCtx, protocol.BuildHeroQuicklyPacket(), protocol.ActionHeroMissionQuickly)
 	cSweepCancel()
 	if errSweep != nil {
-		fmt.Fprintf(w, "   ✗ Act 2 单次扫荡回包失败: %v\n", errSweep)
+		fmt.Fprintf(w, "   ✗ Act 7 快速完成回包失败: %v\n", errSweep)
 		return
 	}
-	fmt.Fprintf(w, "   🎉 成功捕获 Act 2 扫荡回包! Hex=%X (扣除体力并获取收益)\n", respSweep.Payload)
-
-	// 步骤 6: 发送 Mod 111, Act 7 快速完成与 Mod 111, Act 14 关闭
-	_ = session.Send(protocol.BuildHeroMissionQuickFinishPacket(firstItem.InstanceID))
-	_ = session.Send(protocol.BuildHeroMissionClosePacket())
-	fmt.Fprintf(w, "   🎉 英雄副本扫荡状态机实机闭环验证成功!\n")
+	quickRes, _ := protocol.ParseHeroQuicklyResponse(respSweep.Payload)
+	fmt.Fprintf(w, "   🎉 快速完成回包: result=%v\n", quickRes)
+	_ = session.Send(protocol.BuildHeroStopPracticePacket())
 }
-

@@ -79,12 +79,13 @@ func startMockDungeonServer(srvConn net.Conn, handler func(pkt *protocol.Packet)
 				continue
 			}
 			if pkt.ActionID == protocol.ActionHeroMissionList {
+				// 默认返回空英雄副本列表 (官方 Mod_HeroMission_Base 响应布局)
 				w := protocol.NewWriter()
-				w.WriteUint32(0)
-				w.WriteUint8(0)
-				w.WriteUint32(0)
-				w.WriteUint16(0)
-				w.WriteUint16(0)
+				w.WriteUint16(0) // 条目数
+				w.WriteInt8(0)   // 当日总购买次数
+				w.WriteInt8(0)   // 剩余购买次数
+				w.WriteInt16(0)  // 购买价格
+				w.WriteInt32(0)  // 已通关数量
 				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
 				continue
 			}
@@ -147,7 +148,7 @@ func TestDungeonSweep_NormalExecution(t *testing.T) {
 	// 模拟服务端接收扫荡包并响应结算回包
 	pktCh := make(chan *protocol.Packet, 10)
 	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		if pkt.ActionID == protocol.ActionMissionSweep {
+		if pkt.ActionID == protocol.ActionIDPracticeStart {
 			select {
 			case pktCh <- pkt:
 			default:
@@ -171,18 +172,18 @@ func TestDungeonSweep_NormalExecution(t *testing.T) {
 		t.Fatalf("执行关卡扫荡失败: %v", err)
 	}
 
-	// 验证向服务器发送了 ActionMissionSweep 封包
+	// 验证向服务器发送了官方 Module 25 主线扫荡封包
 	select {
 	case pkt := <-pktCh:
-		if pkt.ActionID != protocol.ActionMissionSweep {
-			t.Errorf("期望 ActionID 0x%04X, 实际 0x%04X", protocol.ActionMissionSweep, pkt.ActionID)
+		if pkt.ActionID != protocol.ActionIDPracticeStart {
+			t.Errorf("期望 ActionID 0x%04X, 实际 0x%04X", protocol.ActionIDPracticeStart, pkt.ActionID)
 		}
-		req, err := protocol.ParseSweepRequest(pkt.Payload)
+		req, err := protocol.ParseStartPracticeRequest(pkt.Payload)
 		if err != nil {
 			t.Fatalf("解析服务端收到的请求包失败: %v", err)
 		}
-		if req.Times != 1 { // 对齐真实网关单次请求发 1
-			t.Errorf("期望单次请求扫荡 1 次, 实际 %d 次", req.Times)
+		if req.Count != 1 { // 对齐真实网关单次请求发 1
+			t.Errorf("期望单次请求扫荡 1 次, 实际 %d 次", req.Count)
 		}
 	default:
 		t.Error("未收到向服务端发送的扫荡封包")
@@ -447,20 +448,15 @@ func TestDungeonSweep_ServerResponse_RewardSync(t *testing.T) {
 
 	initialCoins := sess.GetPlayerState().Coins
 
-	// 模拟服务端接收扫荡并回复真实结算包
+	// 模拟服务端接收主线扫荡并回复成功
 	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		if pkt.ActionID == protocol.ActionMissionSweep {
-			req, _ := protocol.ParseSweepRequest(pkt.Payload)
-			res := protocol.SweepResult{
-				Success:   true,
+		if pkt.ActionID == protocol.ActionIDPracticeStart {
+			req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
+			respPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+				Result:    protocol.PracticeResultSuccess,
 				MissionID: req.MissionID,
-				Times:     req.Times,
-				CostPower: int(req.Times) * 5,
-				GainExp:   int64(req.Times) * 3500,
-				GainCoins: int64(req.Times) * 18000,
-				Message:   "扫荡完成",
-			}
-			respPkt, _ := protocol.BuildSweepResultPacket(res)
+				Count:     req.Count,
+			})
 			_ = protocol.WritePacket(srvConn, respPkt)
 			return true
 		}
@@ -480,9 +476,9 @@ func TestDungeonSweep_ServerResponse_RewardSync(t *testing.T) {
 		t.Errorf("期望剩余体力 50, 实际为 %d", rem)
 	}
 
-	// 验证铜钱收益按服务端回包增加 180,000
-	if currentCoins := sess.GetPlayerState().Coins; currentCoins != initialCoins+180000 {
-		t.Errorf("期望铜钱增加 180,000, 实际为 %d (初始: %d)", currentCoins, initialCoins)
+	// 验证铜钱收益按每轮固定结算增加 (10 * 12000 = 120,000)
+	if currentCoins := sess.GetPlayerState().Coins; currentCoins != initialCoins+120000 {
+		t.Errorf("期望铜钱增加 120,000, 实际为 %d (初始: %d)", currentCoins, initialCoins)
 	}
 }
 
@@ -493,15 +489,13 @@ func TestDungeonSweep_ServerRejection_StaminaDepleted(t *testing.T) {
 	defer srvConn.Close()
 
 	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		if pkt.ActionID == protocol.ActionMissionSweep {
-			req, _ := protocol.ParseSweepRequest(pkt.Payload)
-			res := protocol.SweepResult{
-				Success:   false,
+		if pkt.ActionID == protocol.ActionIDPracticeStart {
+			req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
+			respPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+				Result:    protocol.PracticeResultNotEnoughPower,
 				MissionID: req.MissionID,
-				Times:     req.Times,
-				Message:   "体力不足，扫荡失败",
-			}
-			respPkt, _ := protocol.BuildSweepResultPacket(res)
+				Count:     req.Count,
+			})
 			_ = protocol.WritePacket(srvConn, respPkt)
 			return true
 		}
@@ -524,15 +518,13 @@ func TestDungeonSweep_ServerRejection_BagFull(t *testing.T) {
 	defer srvConn.Close()
 
 	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		if pkt.ActionID == protocol.ActionMissionSweep {
-			req, _ := protocol.ParseSweepRequest(pkt.Payload)
-			res := protocol.SweepResult{
-				Success:   false,
+		if pkt.ActionID == protocol.ActionIDPracticeStart {
+			req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
+			respPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+				Result:    protocol.PracticeResultBagFull,
 				MissionID: req.MissionID,
-				Times:     req.Times,
-				Message:   "背包已满，无法放入掉落物品",
-			}
-			respPkt, _ := protocol.BuildSweepResultPacket(res)
+				Count:     req.Count,
+			})
 			_ = protocol.WritePacket(srvConn, respPkt)
 			return true
 		}
@@ -548,61 +540,81 @@ func TestDungeonSweep_ServerRejection_BagFull(t *testing.T) {
 	}
 }
 
-// TestDungeonSweep_HeroMission_FullWorkflow 验证 Module 111 英雄副本扫荡全流程 (列表->选定->扫荡->快速完成->界面关闭) 与真实体力资产结算
+// TestDungeonSweep_HeroMission_FullWorkflow 验证官方 Module 35 英雄副本扫荡全流程:
+// get_hero_mission_list(town_id) -> start_practice -> quickly -> notify FINISH。
 func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
-	sess, srvConn := createTestSession(t, 25) // 初始 25 点体力，扫 2 个副本实例各 1 次，消耗 10 点，剩余 15 点
+	sess, srvConn := createTestSession(t, 25)
 	defer sess.Close()
 	defer srvConn.Close()
 
-	var selectCount atomic.Int32
-	var sweepCount atomic.Int32
-	var quickFinishCount atomic.Int32
-	var closedFlag atomic.Bool
+	var startCount atomic.Int32
+	var quickCount atomic.Int32
+	var startedTown atomic.Int32
+	var listCount atomic.Int32
 
 	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
 		switch pkt.ActionID {
 		case protocol.ActionHeroMissionList:
-			// 响应包含 2 个英雄副本的列表
+			listCount.Add(1)
+			if len(pkt.Payload) < 2 {
+				t.Errorf("英雄副本列表请求缺少 town_id: %X", pkt.Payload)
+			}
+			townID := binary.BigEndian.Uint16(pkt.Payload[:2])
 			w := protocol.NewWriter()
-			w.WriteUint32(0)  // 保留头
-			w.WriteUint8(2)   // 总可扫荡次数 2
-			w.WriteUint32(10) // 消耗体力
-			w.WriteUint16(0)  // 倒计时
-			w.WriteUint16(2)  // 条数 2
-			// 副本 1
-			w.WriteUint32(27983) // InstanceID
-			w.WriteUint16(43)    // MissionID
-			w.WriteUint8(1)      // Times
-			// 副本 2
-			w.WriteUint32(27984) // InstanceID
-			w.WriteUint16(44)    // MissionID
-			w.WriteUint8(1)      // Times
+			if townID == 4 {
+				w.WriteUint16(2) // 条数
+				// mission 1
+				w.WriteInt32(166)
+				w.WriteInt8(1) // 可挑战
+				w.WriteUint8(0)
+				w.WriteInt8(1) // 已首通
+				// mission 2
+				w.WriteInt32(167)
+				w.WriteInt8(1)
+				w.WriteUint8(1)
+				w.WriteInt8(1)
+				w.WriteInt8(1) // 当日总购买次数
+				w.WriteInt8(1) // 剩余购买次数
+				w.WriteInt16(10)
+				w.WriteInt32(2)
+			} else {
+				w.WriteUint16(0)
+				w.WriteInt8(0)
+				w.WriteInt8(0)
+				w.WriteInt16(0)
+				w.WriteInt32(0)
+			}
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
 			return true
 
-		case protocol.ActionHeroMissionSelect:
-			selectCount.Add(1)
-			// 确认选定 (00 00 01)
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
-			return true
-
-		case protocol.ActionHeroMissionSweep:
-			sweepCount.Add(1)
-			// 回包结算 (3B status + 4B instanceID + 2B missionID + 1B times ...)
+		case protocol.ActionHeroMissionStartPractice:
+			startCount.Add(1)
+			if len(pkt.Payload) != 4 {
+				t.Errorf("start_practice 载荷应为严格 4 字节, 实际 %d: %X", len(pkt.Payload), pkt.Payload)
+			}
+			startedTown.Store(int32(binary.BigEndian.Uint16(pkt.Payload[:2])))
+			if pkt.Payload[2] != 0 {
+				t.Errorf("auto_num 必须为 0 (禁止自动购买翻牌), 实际 %d", pkt.Payload[2])
+			}
 			w := protocol.NewWriter()
-			w.WriteBytes([]byte{0x00, 0x00, 0x01})
-			w.WriteUint32(27983)
-			w.WriteUint16(43)
-			w.WriteUint8(1)
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+			w.WriteUint8(protocol.HeroMissionResultSuccess)
+			w.WriteInt32(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
 			return true
 
-		case protocol.ActionHeroMissionQuickFinish:
-			quickFinishCount.Add(1)
-			return true
-
-		case protocol.ActionHeroMissionClose:
-			closedFlag.Store(true)
+		case protocol.ActionHeroMissionQuickly:
+			quickCount.Add(1)
+			if len(pkt.Payload) != 0 {
+				t.Errorf("quickly 请求必须为空载荷, 实际 %X", pkt.Payload)
+			}
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
+			// 模拟服务端推送扫荡结束
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.HeroMissionNotifyFinish)
+			w.WriteUint16(0) // 战报数
+			w.WriteUint16(0) // 评价结算数
+			w.WriteInt16(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
 			return true
 		}
 		return false
@@ -611,27 +623,21 @@ func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
 	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
 		Pipeline: []string{"sweep_elite"},
 	})
-	err := routine.Execute(context.Background(), sess, nil)
-	if err != nil {
+	if err := routine.Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("执行英雄副本扫荡失败: %v", err)
 	}
 
-	if selectCount.Load() != 2 {
-		t.Errorf("期望选定 2 次副本, 实际 %d 次", selectCount.Load())
+	if listCount.Load() == 0 {
+		t.Errorf("期望至少查询一次英雄副本城镇列表")
 	}
-	if sweepCount.Load() != 2 {
-		t.Errorf("期望扫荡 2 次, 实际 %d 次", sweepCount.Load())
+	if startCount.Load() != 1 {
+		t.Errorf("期望仅对含副本的城镇启动 1 次扫荡, 实际 %d 次", startCount.Load())
 	}
-	if quickFinishCount.Load() != 2 {
-		t.Errorf("期望快速完成 2 次, 实际 %d 次", quickFinishCount.Load())
+	if got := startedTown.Load(); got != 4 {
+		t.Errorf("期望扫荡城镇 4, 实际 %d", got)
 	}
-	if !closedFlag.Load() {
-		t.Errorf("期望退出时发送关闭英雄副本界面封包 ActionHeroMissionClose")
-	}
-
-	// 验证体力扣减 (25 - 2*5 = 15)
-	if rem := sess.GetStamina(); rem != 15 {
-		t.Errorf("期望剩余体力 15, 实际 %d", rem)
+	if quickCount.Load() != 1 {
+		t.Errorf("期望快速完成 1 次, 实际 %d 次", quickCount.Load())
 	}
 }
 
@@ -701,9 +707,9 @@ func TestDungeonSweep_Module25_PracticeQuickly(t *testing.T) {
 	}
 }
 
-// TestDungeonSweep_Module25_FallbackToLegacy 验证当 Module 25 秒扫荡返回受限状态码时，
-// 自动无缝降级为 Module 35 普通扫荡协议执行自愈。
-func TestDungeonSweep_Module25_FallbackToLegacy(t *testing.T) {
+// TestDungeonSweep_Module25_NoLegacyFallback 验证 Module 25 返回受限状态码时不再降级到
+// 0x00230002 (该动作实际属于英雄副本 start_practice)，避免误触发英雄副本扫荡/误扣体力。
+func TestDungeonSweep_Module25_NoLegacyFallback(t *testing.T) {
 	sess, srvConn := createTestSession(t, 10)
 	defer sess.Close()
 	defer srvConn.Close()
@@ -715,7 +721,6 @@ func TestDungeonSweep_Module25_FallbackToLegacy(t *testing.T) {
 		switch pkt.ActionID {
 		case protocol.ActionIDPracticeStart:
 			m25Attempted.Store(true)
-			// 模拟元宝不足或其他非成功状态码
 			resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
 				Result:    protocol.PracticeResultNotEnoughIngot,
 				MissionID: 854,
@@ -725,18 +730,8 @@ func TestDungeonSweep_Module25_FallbackToLegacy(t *testing.T) {
 			return true
 
 		case protocol.ActionMissionSweep:
+			// 0x00230002 是英雄副本 start_practice，主线扫荡不得降级到该动作。
 			legacyExecuted.Store(true)
-			req, _ := protocol.ParseSweepRequest(pkt.Payload)
-			resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
-				Success:   true,
-				MissionID: req.MissionID,
-				Times:     req.Times,
-				CostPower: 5,
-				GainExp:   2500,
-				GainCoins: 12000,
-				Message:   "普通扫荡成功",
-			})
-			_ = protocol.WritePacket(srvConn, resPkt)
 			return true
 		}
 		return false
@@ -748,19 +743,18 @@ func TestDungeonSweep_Module25_FallbackToLegacy(t *testing.T) {
 		Pipeline:              []string{"sweep_highest_main"},
 	}
 	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
-	err := routine.Execute(context.Background(), sess, nil)
-	if err != nil {
-		t.Fatalf("降级扫荡失败: %v", err)
+	if err := routine.Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("扫荡执行失败: %v", err)
 	}
 
 	if !m25Attempted.Load() {
-		t.Errorf("期望前置尝试 Module 25 秒扫荡")
+		t.Errorf("期望前置尝试 Module 25 扫荡")
 	}
-	if !legacyExecuted.Load() {
-		t.Errorf("期望自愈降级执行 Module 35 普通扫荡")
+	if legacyExecuted.Load() {
+		t.Errorf("不得降级到 Module 35 英雄副本动作 0x00230002")
 	}
-	if rem := sess.GetStamina(); rem != 5 {
-		t.Errorf("期望扣减 5 点体力剩余 5, 实际 %d", rem)
+	if rem := sess.GetStamina(); rem != 10 {
+		t.Errorf("未成功扫荡时不应扣减体力, 期望 10, 实际 %d", rem)
 	}
 }
 
@@ -1047,51 +1041,61 @@ func TestDungeonSweep_PipelineExecutionOrder(t *testing.T) {
 
 	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
 		switch pkt.ActionID {
-		case protocol.ActionMissionSweep:
-			// 普通关卡进入/扫荡
+		case protocol.ActionIDPracticeStart:
+			// 主线最高级副本扫荡 (Module 25)
 			record("mission_sweep")
-			resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
-				Success:   true,
-				MissionID: 1,
-				Times:     1,
-				CostPower: 5,
-				GainExp:   2500,
-				GainCoins: 12000,
-				Message:   "扫荡成功",
+			resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+				Result:    protocol.PracticeResultSuccess,
+				MissionID: 43,
+				Count:     1,
 			})
 			_ = protocol.WritePacket(srvConn, resPkt)
 			return true
 
 		case protocol.ActionHeroMissionList:
 			record("hero_list")
+			townID := uint16(0)
+			if len(pkt.Payload) >= 2 {
+				townID = binary.BigEndian.Uint16(pkt.Payload[:2])
+			}
 			w := protocol.NewWriter()
-			w.WriteUint32(0)
-			w.WriteUint8(1)
-			w.WriteUint32(10)
-			w.WriteUint32(1)
-			w.WriteUint32(1001)
-			w.WriteUint16(43)
-			w.WriteUint8(1)
+			if townID == 4 {
+				w.WriteUint16(1)
+				w.WriteInt32(166)
+				w.WriteInt8(1)
+				w.WriteUint8(0)
+				w.WriteInt8(1)
+				w.WriteInt8(0)
+				w.WriteInt8(0)
+				w.WriteInt16(0)
+				w.WriteInt32(1)
+			} else {
+				w.WriteUint16(0)
+				w.WriteInt8(0)
+				w.WriteInt8(0)
+				w.WriteInt16(0)
+				w.WriteInt32(0)
+			}
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
 			return true
 
-		case protocol.ActionHeroMissionSelect:
-			record("hero_select")
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
-			return true
-
-		case protocol.ActionHeroMissionSweep:
+		case protocol.ActionHeroMissionStartPractice:
 			record("hero_sweep")
 			w := protocol.NewWriter()
-			w.WriteBytes([]byte{0x00, 0x00, 0x01})
-			w.WriteUint32(1001)
-			w.WriteUint16(43)
-			w.WriteUint8(1)
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+			w.WriteUint8(protocol.HeroMissionResultSuccess)
+			w.WriteInt32(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
 			return true
 
-		case protocol.ActionHeroMissionClose:
-			record("hero_close")
+		case protocol.ActionHeroMissionQuickly:
+			record("hero_quickly")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.HeroMissionNotifyFinish)
+			w.WriteUint16(0)
+			w.WriteUint16(0)
+			w.WriteInt16(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
 			return true
 		}
 		return false
@@ -1161,6 +1165,17 @@ func (m *mockQuestDungeonRepo) GetHighestMissionByType(missionType int) (*dictio
 }
 func (m *mockQuestDungeonRepo) GetHighestMissionByTypeAndLevel(level int, missionType int) (*dictionary.Mission, error) {
 	return &dictionary.Mission{ID: 43, Name: "万妖皇", MissionLock: 9999}, nil
+}
+func (m *mockQuestDungeonRepo) GetEliteMissionTowns() ([]int, error) {
+	seen := make(map[int]bool)
+	towns := make([]int, 0)
+	for _, ms := range m.missions {
+		if ms.Type == 1 && ms.MapID > 0 && !seen[ms.MapID] {
+			seen[ms.MapID] = true
+			towns = append(towns, ms.MapID)
+		}
+	}
+	return towns, nil
 }
 func (m *mockQuestDungeonRepo) GetQuestMissions(questType int, playerLevel int) ([]int, error) {
 	return nil, nil
@@ -1266,25 +1281,12 @@ func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x00}))
 			return true
 
-		case protocol.ActionMissionEnter, protocol.ActionMissionSweep, protocol.ActionIDPracticeStart:
+		case protocol.ActionIDPracticeStart:
 			recordEvent("mission_sweep")
-			if pkt.ActionID == protocol.ActionIDPracticeStart {
-				resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
-					Result:    protocol.PracticeResultSuccess,
-					MissionID: 88,
-					Count:     1,
-				})
-				_ = protocol.WritePacket(srvConn, resPkt)
-				return true
-			}
-			resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
-				Success:   true,
+			resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
+				Result:    protocol.PracticeResultSuccess,
 				MissionID: 88,
-				Times:     1,
-				CostPower: 5,
-				GainExp:   2500,
-				GainCoins: 12000,
-				Message:   "通关成功",
+				Count:     1,
 			})
 			_ = protocol.WritePacket(srvConn, resPkt)
 			return true
@@ -1296,34 +1298,48 @@ func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
 
 		case protocol.ActionHeroMissionList:
 			recordEvent("hero_list")
+			townID := uint16(0)
+			if len(pkt.Payload) >= 2 {
+				townID = binary.BigEndian.Uint16(pkt.Payload[:2])
+			}
 			w := protocol.NewWriter()
-			w.WriteUint32(0)
-			w.WriteUint8(1)
-			w.WriteUint32(10)
-			w.WriteUint32(1)
-			w.WriteUint32(1001)
-			w.WriteUint16(43)
-			w.WriteUint8(1)
+			if townID == 4 {
+				w.WriteUint16(1)
+				w.WriteInt32(166)
+				w.WriteInt8(1)
+				w.WriteUint8(0)
+				w.WriteInt8(1)
+				w.WriteInt8(0)
+				w.WriteInt8(0)
+				w.WriteInt16(0)
+				w.WriteInt32(1)
+			} else {
+				w.WriteUint16(0)
+				w.WriteInt8(0)
+				w.WriteInt8(0)
+				w.WriteInt16(0)
+				w.WriteInt32(0)
+			}
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
 			return true
 
-		case protocol.ActionHeroMissionSelect:
-			recordEvent("hero_select")
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
-			return true
-
-		case protocol.ActionHeroMissionSweep:
+		case protocol.ActionHeroMissionStartPractice:
 			recordEvent("hero_sweep")
 			w := protocol.NewWriter()
-			w.WriteBytes([]byte{0x00, 0x00, 0x01})
-			w.WriteUint32(1001)
-			w.WriteUint16(43)
-			w.WriteUint8(1)
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+			w.WriteUint8(protocol.HeroMissionResultSuccess)
+			w.WriteInt32(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
 			return true
 
-		case protocol.ActionHeroMissionClose:
-			recordEvent("hero_close")
+		case protocol.ActionHeroMissionQuickly:
+			recordEvent("hero_quickly")
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.HeroMissionNotifyFinish)
+			w.WriteUint16(0)
+			w.WriteUint16(0)
+			w.WriteInt16(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
 			return true
 		}
 		return false
@@ -1761,33 +1777,47 @@ func TestDungeonSweep_SweepElite_SellSweptItems(t *testing.T) {
 		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
 			switch pkt.ActionID {
 			case protocol.ActionHeroMissionList:
+				townID := uint16(0)
+				if len(pkt.Payload) >= 2 {
+					townID = binary.BigEndian.Uint16(pkt.Payload[:2])
+				}
 				w := protocol.NewWriter()
-				w.WriteUint32(0)
-				w.WriteUint8(1)
-				w.WriteUint32(5)
-				w.WriteUint16(0)
-				w.WriteUint16(1)
-				w.WriteUint32(1001)
-				w.WriteUint16(43)
-				w.WriteUint8(1)
+				if townID == 4 {
+					w.WriteUint16(1)
+					w.WriteInt32(166)
+					w.WriteInt8(1)
+					w.WriteUint8(0)
+					w.WriteInt8(1)
+					w.WriteInt8(1)
+					w.WriteInt8(1)
+					w.WriteInt16(10)
+					w.WriteInt32(1)
+				} else {
+					w.WriteUint16(0)
+					w.WriteInt8(0)
+					w.WriteInt8(0)
+					w.WriteInt16(0)
+					w.WriteInt32(0)
+				}
 				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
 				return true
 
-			case protocol.ActionHeroMissionSelect:
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
-				return true
-
-			case protocol.ActionHeroMissionSweep:
+			case protocol.ActionHeroMissionStartPractice:
 				heroSweepCount.Add(1)
 				w := protocol.NewWriter()
-				w.WriteBytes([]byte{0x00, 0x00, 0x01})
-				w.WriteUint32(1001)
-				w.WriteUint16(43)
-				w.WriteUint8(1)
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+				w.WriteUint8(protocol.HeroMissionResultSuccess)
+				w.WriteInt32(30)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
 				return true
 
-			case protocol.ActionHeroMissionQuickFinish, protocol.ActionHeroMissionClose:
+			case protocol.ActionHeroMissionQuickly:
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.HeroMissionNotifyFinish)
+				w.WriteUint16(0)
+				w.WriteUint16(0)
+				w.WriteInt16(30)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
 				return true
 
 			case protocol.ActionIDItemGetPackList:
@@ -1816,6 +1846,8 @@ func TestDungeonSweep_SweepElite_SellSweptItems(t *testing.T) {
 						PlayerItemID: 20002,
 						ItemID:       54,
 						GridID:       2,
+						Field4:       100, // 售价
+						Field5:       1,   // 数量
 					})
 				}
 				_ = binary.Write(buf, binary.BigEndian, int16(10))
@@ -1869,32 +1901,46 @@ func TestDungeonSweep_SweepElite_SellSweptItems(t *testing.T) {
 		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
 			switch pkt.ActionID {
 			case protocol.ActionHeroMissionList:
+				townID := uint16(0)
+				if len(pkt.Payload) >= 2 {
+					townID = binary.BigEndian.Uint16(pkt.Payload[:2])
+				}
 				w := protocol.NewWriter()
-				w.WriteUint32(0)
-				w.WriteUint8(1)
-				w.WriteUint32(5)
-				w.WriteUint16(0)
-				w.WriteUint16(1)
-				w.WriteUint32(1001)
-				w.WriteUint16(43)
-				w.WriteUint8(1)
+				if townID == 4 {
+					w.WriteUint16(1)
+					w.WriteInt32(166)
+					w.WriteInt8(1)
+					w.WriteUint8(0)
+					w.WriteInt8(1)
+					w.WriteInt8(1)
+					w.WriteInt8(1)
+					w.WriteInt16(10)
+					w.WriteInt32(1)
+				} else {
+					w.WriteUint16(0)
+					w.WriteInt8(0)
+					w.WriteInt8(0)
+					w.WriteInt16(0)
+					w.WriteInt32(0)
+				}
 				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
 				return true
 
-			case protocol.ActionHeroMissionSelect:
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
-				return true
-
-			case protocol.ActionHeroMissionSweep:
+			case protocol.ActionHeroMissionStartPractice:
 				w := protocol.NewWriter()
-				w.WriteBytes([]byte{0x00, 0x00, 0x01})
-				w.WriteUint32(1001)
-				w.WriteUint16(43)
-				w.WriteUint8(1)
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+				w.WriteUint8(protocol.HeroMissionResultSuccess)
+				w.WriteInt32(30)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
 				return true
 
-			case protocol.ActionHeroMissionQuickFinish, protocol.ActionHeroMissionClose:
+			case protocol.ActionHeroMissionQuickly:
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.HeroMissionNotifyFinish)
+				w.WriteUint16(0)
+				w.WriteUint16(0)
+				w.WriteInt16(30)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
 				return true
 
 			case protocol.ActionIDItemSell:
@@ -1921,6 +1967,203 @@ func TestDungeonSweep_SweepElite_SellSweptItems(t *testing.T) {
 
 		if soldCount.Load() != 0 {
 			t.Errorf("未开启卖出扫荡物时, 期望售出 0 次, 实际售出 %d 次", soldCount.Load())
+		}
+	})
+
+	t.Run("SellSweptItems_ServerRejects", func(t *testing.T) {
+		sess, srvConn := createTestSession(t, 25)
+		defer sess.Close()
+		defer srvConn.Close()
+
+		var sellAttempts atomic.Int32
+		var getPackCount atomic.Int32
+
+		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+			switch pkt.ActionID {
+			case protocol.ActionHeroMissionList:
+				townID := uint16(0)
+				if len(pkt.Payload) >= 2 {
+					townID = binary.BigEndian.Uint16(pkt.Payload[:2])
+				}
+				w := protocol.NewWriter()
+				if townID == 4 {
+					w.WriteUint16(1)
+					w.WriteInt32(166)
+					w.WriteInt8(1)
+					w.WriteUint8(0)
+					w.WriteInt8(1)
+					w.WriteInt8(1)
+					w.WriteInt8(1)
+					w.WriteInt16(10)
+					w.WriteInt32(1)
+				} else {
+					w.WriteUint16(0)
+					w.WriteInt8(0)
+					w.WriteInt8(0)
+					w.WriteInt16(0)
+					w.WriteInt32(0)
+				}
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+				return true
+
+			case protocol.ActionHeroMissionStartPractice:
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.HeroMissionResultSuccess)
+				w.WriteInt32(30)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
+				return true
+
+			case protocol.ActionHeroMissionQuickly:
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.HeroMissionNotifyFinish)
+				w.WriteUint16(0)
+				w.WriteUint16(0)
+				w.WriteInt16(30)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
+				return true
+
+			case protocol.ActionIDItemGetPackList:
+				c := getPackCount.Add(1)
+				buf := new(bytes.Buffer)
+				_ = binary.Write(buf, binary.BigEndian, int16(30))
+				_ = binary.Write(buf, binary.BigEndian, int32(28))
+				if c == 1 {
+					_ = binary.Write(buf, binary.BigEndian, uint16(0))
+				} else {
+					_ = binary.Write(buf, binary.BigEndian, uint16(1))
+					_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+						PlayerItemID: 20002,
+						ItemID:       54,
+						GridID:       2,
+						Field4:       100,
+						Field5:       1,
+					})
+				}
+				_ = binary.Write(buf, binary.BigEndian, int16(10))
+				_ = binary.Write(buf, binary.BigEndian, uint16(0))
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
+				return true
+
+			case protocol.ActionIDItemSell:
+				sellAttempts.Add(1)
+				// 非成功结果码: 自动化必须识别并继续, 不能误判为售出成功
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemSell, []byte{0x0B}))
+				return true
+			}
+			return false
+		})
+
+		cfg := dungeon.SweepConfig{
+			Sweep: dungeon.SweepFeatureConfig{
+				Enabled:        true,
+				Pipeline:       []string{"sweep_elite"},
+				SellSweptItems: true,
+			},
+		}
+		if err := dungeon.NewDungeonSweepRoutine(nil, cfg).Execute(context.Background(), sess, nil); err != nil {
+			t.Fatalf("售出被拒绝时不应中断扫荡: %v", err)
+		}
+		if sellAttempts.Load() != 1 {
+			t.Errorf("期望尝试售出 1 次, 实际 %d 次", sellAttempts.Load())
+		}
+	})
+
+	t.Run("SellSweptItems_DoesNotSellExistingConsumableStack", func(t *testing.T) {
+		sess, srvConn := createTestSession(t, 25)
+		defer sess.Close()
+		defer srvConn.Close()
+
+		var sellAttempts atomic.Int32
+		var getPackCount atomic.Int32
+
+		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+			switch pkt.ActionID {
+			case protocol.ActionHeroMissionList:
+				townID := uint16(0)
+				if len(pkt.Payload) >= 2 {
+					townID = binary.BigEndian.Uint16(pkt.Payload[:2])
+				}
+				w := protocol.NewWriter()
+				if townID == 4 {
+					w.WriteUint16(1)
+					w.WriteInt32(166)
+					w.WriteInt8(1)
+					w.WriteUint8(0)
+					w.WriteInt8(1)
+					w.WriteInt8(1)
+					w.WriteInt8(1)
+					w.WriteInt16(10)
+					w.WriteInt32(1)
+				} else {
+					w.WriteUint16(0)
+					w.WriteInt8(0)
+					w.WriteInt8(0)
+					w.WriteInt16(0)
+					w.WriteInt32(0)
+				}
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+				return true
+
+			case protocol.ActionHeroMissionStartPractice:
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.HeroMissionResultSuccess)
+				w.WriteInt32(30)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
+				return true
+
+			case protocol.ActionHeroMissionQuickly:
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.HeroMissionNotifyFinish)
+				w.WriteUint16(0)
+				w.WriteUint16(0)
+				w.WriteInt16(30)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
+				return true
+
+			case protocol.ActionIDItemGetPackList:
+				c := getPackCount.Add(1)
+				qty := int32(10)
+				if c > 1 {
+					qty = 11
+				}
+				buf := new(bytes.Buffer)
+				_ = binary.Write(buf, binary.BigEndian, int16(30))
+				_ = binary.Write(buf, binary.BigEndian, int32(28))
+				_ = binary.Write(buf, binary.BigEndian, uint16(1))
+				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+					PlayerItemID: 10001,
+					ItemID:       protocol.ItemIDSteamedBun,
+					GridID:       1,
+					Field4:       1,
+					Field5:       qty,
+				})
+				_ = binary.Write(buf, binary.BigEndian, int16(10))
+				_ = binary.Write(buf, binary.BigEndian, uint16(0))
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
+				return true
+
+			case protocol.ActionIDItemSell:
+				sellAttempts.Add(1)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemSell, []byte{protocol.ItemActionSuccess}))
+				return true
+			}
+			return false
+		})
+
+		cfg := dungeon.SweepConfig{
+			Sweep: dungeon.SweepFeatureConfig{
+				Enabled:        true,
+				Pipeline:       []string{"sweep_elite"},
+				SellSweptItems: true,
+			},
+		}
+		if err := dungeon.NewDungeonSweepRoutine(nil, cfg).Execute(context.Background(), sess, nil); err != nil {
+			t.Fatalf("执行扫荡失败: %v", err)
+		}
+		if sellAttempts.Load() != 0 {
+			t.Errorf("已有消耗品堆叠数量增加时不得整格出售, 实际尝试 %d 次", sellAttempts.Load())
 		}
 	})
 }

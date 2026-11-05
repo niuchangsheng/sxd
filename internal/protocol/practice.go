@@ -46,30 +46,31 @@ type QuicklyResult struct {
 	Count int16
 }
 
-// HeroPracticeRequest 代表章节英雄副本一键扫荡请求 (Mod_HeroMission_Base.start_practice, ActionID=0x00230002)。
+// HeroPracticeRequest 代表英雄副本一键扫荡请求 (Mod_HeroMission_Base.start_practice, ActionID=0x00230002)。
+// 官方请求 schema: request=[ShortUtil(town_id), ByteUtil(auto_num), ByteUtil(hero_type)]，共 4 字节。
 type HeroPracticeRequest struct {
-	// MapID 地图/章节唯一标识 (如 43, 54, 55)
-	MapID uint16
-	// Count 扫荡轮次 (通常为 1)
-	Count uint8
-	// AutoSale 自动出售配置 (0: 否, 1: 是)
-	AutoSale uint8
-	// PrevAct 前序指令号 (如 ActionIDHeroGetList 0x00230000)
-	PrevAct uint32
+	// TownID 城镇/地图唯一标识 (对应 Missions.map)
+	TownID uint16
+	// AutoNum 战斗后是否自动购买翻牌奖励 (0: 否, 1: 是)
+	AutoNum uint8
+	// HeroType 英雄副本类型 (0: 普通城镇英雄副本, 1: 特殊/超级英雄副本)
+	HeroType uint8
 }
 
-// HeroPracticeResult 代表章节英雄副本扫荡启动回包。
+// HeroPracticeResult 代表英雄副本扫荡启动回包。
+// 官方响应 schema: response=[UByteUtil(result), IntUtil(practice_time)]。
 type HeroPracticeResult struct {
-	// Result 状态码 (3=成功, 8=今日次数已达上限)
+	// Result 业务结果码 (3=成功, 6=背包已满, 7=体力不足, 8=暂无可扫荡副本)
 	Result uint8
-	// Battles 计划排队的战斗场次数
-	Battles uint32
+	// PracticeTime 本批扫荡预计耗时 (秒)
+	PracticeTime int32
 }
 
-// HeroQuicklyRequest 代表极速秒完成英雄副本扫荡请求 (ActionID=0x00230007)。
-type HeroQuicklyRequest struct {
-	// PrevAct 前序指令号 (ActionIDHeroPracticeStart 0x00230002)
-	PrevAct uint32
+// HeroQuicklyResult 代表英雄副本扫荡快速完成回包。
+// 官方响应 schema: response=[UByteUtil(result)]。
+type HeroQuicklyResult struct {
+	// Result 业务结果码 (3=成功)
+	Result uint8
 }
 
 // BuildStartPracticePacket 构造开始扫荡二进制封包。
@@ -212,53 +213,54 @@ func ParseQuicklyResult(payload []byte) (*QuicklyResult, error) {
 	}, nil
 }
 
-// BuildHeroPracticePacket 构造章节英雄副本扫荡请求封包。
+// BuildHeroPracticePacket 构造英雄副本扫荡请求封包 (Module 35, Action 2)。
+// 实机验证严格 4 字节业务载荷: [town_id u16][auto_num u8][hero_type u8]，不追加 PrevAct。
 func BuildHeroPracticePacket(req HeroPracticeRequest) (*Packet, error) {
 	w := NewWriter()
-	w.WriteUint16(req.MapID)
-	count := req.Count
-	if count == 0 {
-		count = 1
-	}
-	w.WriteUint8(count)
-	w.WriteUint8(req.AutoSale)
-	prevAct := req.PrevAct
-	if prevAct == 0 {
-		prevAct = ActionIDHeroGetList
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDHeroPracticeStart, w.Bytes()), nil
+	w.WriteUint16(req.TownID)
+	w.WriteUint8(req.AutoNum)
+	w.WriteUint8(req.HeroType)
+	return NewPacket(ActionHeroMissionStartPractice, w.Bytes()), nil
 }
 
-// ParseHeroPracticeResult 解析章节英雄副本扫荡响应回包。
+// ParseHeroPracticeResult 解析英雄副本扫荡启动响应回包。
 func ParseHeroPracticeResult(payload []byte) (*HeroPracticeResult, error) {
-	if len(payload) == 0 {
-		return nil, ErrInvalidPayload
+	if len(payload) < 5 {
+		return nil, fmt.Errorf("%w: hero practice response too short (%d bytes)", ErrInvalidPayload, len(payload))
 	}
 	r := NewReader(payload)
 	code, err := r.ReadUint8()
 	if err != nil {
 		return nil, err
 	}
-	var battles uint32
-	if r.Remaining() >= 4 {
-		battles, _ = r.ReadUint32()
+	practiceTime, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read practice_time: %v", ErrInvalidPayload, err)
 	}
 	return &HeroPracticeResult{
-		Result:  code,
-		Battles: battles,
+		Result:       code,
+		PracticeTime: practiceTime,
 	}, nil
 }
 
-// BuildHeroQuicklyPacket 构造英雄副本极速秒完成封包。
-func BuildHeroQuicklyPacket(req HeroQuicklyRequest) (*Packet, error) {
-	w := NewWriter()
-	prevAct := req.PrevAct
-	if prevAct == 0 {
-		prevAct = ActionIDHeroPracticeStart
+// BuildHeroQuicklyPacket 构造英雄副本扫荡快速完成请求封包 (Module 35, Action 7)。
+// 实机验证严格空载荷，不追加 PrevAct。
+func BuildHeroQuicklyPacket() *Packet {
+	return NewPacket(ActionHeroMissionQuickly, nil)
+}
+
+// ParseHeroQuicklyResponse 解析英雄副本扫荡快速完成响应。
+func ParseHeroQuicklyResponse(payload []byte) (*HeroQuicklyResult, error) {
+	if len(payload) < 1 {
+		return nil, fmt.Errorf("%w: hero quickly response is empty", ErrInvalidPayload)
 	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDHeroPracticeQuickly, w.Bytes()), nil
+	return &HeroQuicklyResult{Result: payload[0]}, nil
+}
+
+// BuildHeroStopPracticePacket 构造停止英雄副本扫荡请求封包 (Module 35, Action 3)。
+// 官方请求 schema 为空，实机验证不追加 PrevAct。
+func BuildHeroStopPracticePacket() *Packet {
+	return NewPacket(ActionHeroMissionStopPractice, nil)
 }
 
 // PracticeStatusMissionItem 代表扫荡状态中的单个关卡配置项。
@@ -389,7 +391,7 @@ func ParsePracticeNotifyResult(payload []byte) (*PracticeNotifyResult, error) {
 			// 0x05: 轮次信息与经验列表
 			res.RoundIndex, _ = r.ReadUint16()
 			res.RoundTotal, _ = r.ReadUint16()
-			_ , _ = r.ReadUint16() // 预留/状态
+			_, _ = r.ReadUint16() // 预留/状态
 			res.RemainingSec, _ = r.ReadUint16()
 			if r.Remaining() >= 2 {
 				roleCount, _ := r.ReadUint16()
@@ -406,10 +408,10 @@ func ParsePracticeNotifyResult(payload []byte) (*PracticeNotifyResult, error) {
 		case 0x06:
 			// 0x06: 完整掉落与伙伴结算快照
 			res.RoundIndex = 1
-			_ , _ = r.ReadUint32() // 预留/标志
+			_, _ = r.ReadUint32() // 预留/标志
 			res.CoinsGain, _ = r.ReadUint32()
-			_ , _ = r.ReadUint32() // 预留
-			_ , _ = r.ReadUint16() // 预留
+			_, _ = r.ReadUint32() // 预留
+			_, _ = r.ReadUint16() // 预留
 			if r.Remaining() >= 2 {
 				roleCount, _ := r.ReadUint16()
 				res.RoleExpItems = make([]PracticeRoleExpItem, 0, roleCount)
@@ -431,4 +433,3 @@ func ParsePracticeNotifyResult(payload []byte) (*PracticeNotifyResult, error) {
 
 	return res, nil
 }
-

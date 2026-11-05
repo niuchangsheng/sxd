@@ -81,6 +81,9 @@ type SessionConfig struct {
 	ReconnectInterval time.Duration
 	// MaxReconnectAttempts 最大重连尝试次数 (0 为无限重连)
 	MaxReconnectAttempts int
+	// SectQueryTimeout 主服仙盟只读查询超时 (默认 5s)。
+	// 角色未加入仙盟时服务端对仙盟面板查询静默无回包，必须用短超时避免占用调用方的城镇会话预算。
+	SectQueryTimeout time.Duration
 
 	// Dialer 自定义网络拨号器接口（用于单元测试 net.Pipe 注入）
 	Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -163,6 +166,9 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 	}
 	if cfg.ReconnectInterval <= 0 {
 		cfg.ReconnectInterval = 2 * time.Second
+	}
+	if cfg.SectQueryTimeout <= 0 {
+		cfg.SectQueryTimeout = 5 * time.Second
 	}
 	isCustom := cfg.Dialer != nil
 	if cfg.Authenticator == nil {
@@ -2582,6 +2588,34 @@ func runMockGameServer(conn net.Conn) {
 		case protocol.ActionIDFishDo:
 			_ = protocol.WritePacket(conn, protocol.BuildFishDoResultPacket(protocol.FishResultSuccess, 5715, 1))
 
+		case protocol.ActionIDForbiddenBookInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildForbiddenBookInfoResultPacket(protocol.ForbiddenBookInfo{
+				Areas: []protocol.ForbiddenBookArea{{
+					ForbiddenType: protocol.ForbiddenBookRegulus, ExploreType: protocol.ForbiddenBookOnce,
+					CostCoin: 1000, CostIngot: 0, CurNumber: 1, TotalNumber: 5,
+				}},
+			}))
+
+		case protocol.ActionIDForbiddenBookExplore:
+			_ = protocol.WritePacket(conn, protocol.BuildForbiddenBookExploreResultPacket(protocol.AwakeResultSuccess))
+
+		case protocol.ActionIDForbiddenBookExchange:
+			_ = protocol.WritePacket(conn, protocol.BuildForbiddenBookExchangeResultPacket(protocol.AwakeResultSuccess))
+
+		case protocol.ActionIDGoldenTouchStoneStatus:
+			_ = protocol.WritePacket(conn, protocol.BuildGoldenTouchStoneStatusResultPacket(protocol.GoldenTouchStoneStatusTouch))
+
+		case protocol.ActionIDGoldenTouchStoneTouchPanel:
+			_ = protocol.WritePacket(conn, protocol.BuildGoldenTouchStoneTouchPanelResultPacket(protocol.GoldenTouchStonePanel{
+				Level: 1, Exp: 10, ThisWeekLuckValue: 5, TodayTouchNum: 1,
+			}))
+
+		case protocol.ActionIDGoldenTouchStoneInit:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDGoldenTouchStoneInit, []byte{0}))
+
+		case protocol.ActionIDGoldenTouchStoneTouch:
+			_ = protocol.WritePacket(conn, protocol.BuildGoldenTouchStoneTouchResultPacket(protocol.GoldenTouchStoneResultSuccess, 10, 5))
+
 		case protocol.ActionIDAskFairyInfo:
 			_ = protocol.WritePacket(conn, protocol.BuildAskFairyInfoResultPacket(protocol.AskFairyInfo{
 				TotalLoginDay: 100,
@@ -3196,6 +3230,10 @@ func runMockGameServer(conn net.Conn) {
 		case protocol.ActionIDPlayerSignFinishedPractice:
 			// 响应城镇打坐结束并结算经验
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerSignFinishedPractice, []byte{}))
+
+		case protocol.ActionIDPlayerCheckFunctionOpen:
+			// Mock 环境默认所有功能均已开放；未开放分支由测试自定义服务端覆盖。
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerCheckFunctionOpen, []byte{protocol.PlayerFunctionOpenTrue}))
 
 		case protocol.ActionIDIsGameFunctionEnd:
 			// 响应已终结功能列表 (两个已终结功能)

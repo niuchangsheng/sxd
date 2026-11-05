@@ -870,8 +870,6 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 // 需要元宝的苏合香/天木香一律不调用。
 func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 3 * time.Second
-	// 未开放的膜拜模块服务端不会回包，标记当日不可用以避免同日重复等待超时。
-	var unavailable scheduler.DailySkipCache
 	return scheduler.NewBaseRoutine(
 		"fame_blessing",
 		"social",
@@ -882,26 +880,30 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 			if session == nil {
 				return client.ErrNotConnected
 			}
-			if unavailable.ShouldSkip(session.RoleID(), time.Now()) {
-				slog.Debug("膜拜功能今日已确认未开放，跳过", "role_id", session.RoleID())
-				return nil
-			}
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
 
-			// 1. 膜拜信息：功能未开放或无数据时跳过。
+			// 0. 原生探测功能开放状态 (Mod_Player_Base.check_function_open)。
+			// 未解锁模块服务端会静默丢弃业务请求，先查询可避免空等超时。
+			chkCtx, chkCancel := context.WithTimeout(ctx, callTimeout)
+			open, chkErr := session.CheckFunctionOpen(chkCtx, protocol.FunctionIDWorshipMars)
+			chkCancel()
+			if chkErr != nil {
+				slog.Warn("查询膜拜功能开放状态失败，跳过", "role_id", session.RoleID(), "err", chkErr)
+				return nil
+			}
+			if !open {
+				slog.Info("膜拜功能未开启，跳过", "role_id", session.RoleID())
+				return nil
+			}
+
+			// 1. 膜拜信息：无数据时跳过。
 			iCtx, iCancel := context.WithTimeout(ctx, callTimeout)
 			infoResp, err := session.Call(iCtx, protocol.BuildWorshipMarsInfoPacket(), protocol.ActionIDWorshipMarsInfo)
 			iCancel()
 			if err != nil {
-				if errors.Is(err, context.DeadlineExceeded) {
-					// 服务端对未解锁模块静默丢弃请求，超时即视为当日功能未开放。
-					unavailable.MarkUnavailable(session.RoleID(), time.Now())
-					slog.Info("膜拜功能未开放（服务端无回包），今日跳过", "role_id", session.RoleID())
-				} else {
-					slog.Warn("查询膜拜信息失败，跳过", "role_id", session.RoleID(), "err", err)
-				}
+				slog.Warn("查询膜拜信息失败，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 			info, err := protocol.ParseWorshipMarsInfoResult(infoResp.Payload)

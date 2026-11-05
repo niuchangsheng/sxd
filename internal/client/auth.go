@@ -6,7 +6,6 @@ package client
 
 import (
 	"sxd-pie-ng/internal/platform"
-	"sxd-pie-ng/internal/protocol"
 )
 
 // ApplyTicket 将双轨平台凭据一键装载至角色会话配置中。
@@ -39,13 +38,9 @@ func DefaultAuthenticator(s *RoleSession) error {
 	// 1. 角色属性/体力更新监听器 (Mod_Player_Base 0x00000003) 已由 NewRoleSession 统一注册,
 	//    此处重复注册会导致同一条属性变更被应用两次, 故不再注册。
 
-	// 2. 注册扫荡回包全局监听更新
-	s.RegisterHandler(protocol.ActionMissionSweep, func(p *protocol.Packet) {
-		res, err := protocol.ParseSweepResult(p.Payload)
-		if err == nil && res.Success {
-			s.AddRewards(res.GainExp, res.GainCoins)
-		}
-	})
+	// 2. 扫荡结算奖励由具体 Routine 在解析业务回包后自行结算。
+	//    注意: 0x00230002 属于英雄副本 start_practice (Module 35)，
+	//    不能再作为主线扫荡的全局奖励监听挂载，否则会把英雄副本回包误判为扫荡结算。
 
 	// 3. 执行严密的五阶段登录认证握手与城镇场景/全量资产初始化流水线
 	return DefaultGatewayAuthenticator(s)

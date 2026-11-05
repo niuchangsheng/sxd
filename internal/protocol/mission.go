@@ -29,16 +29,24 @@ const (
 	ActionUIFunctionOpen uint32 = 0x00000027
 	// ActionTownMissionActive 激活城镇关卡界面 (Module 2, Action 41)
 	ActionTownMissionActive uint32 = 0x00020029
-	// ActionHeroMissionList 拉取可扫荡英雄副本列表 (Module 111, Action 0)
-	ActionHeroMissionList uint32 = 0x006F0000
-	// ActionHeroMissionSelect 选定英雄副本实例 (Module 111, Action 1)
-	ActionHeroMissionSelect uint32 = 0x006F0001
-	// ActionHeroMissionSweep 执行英雄副本单次扫荡 (Module 111, Action 2)
-	ActionHeroMissionSweep uint32 = 0x006F0002
-	// ActionHeroMissionQuickFinish 跳过扫荡倒计时快速完成 (Module 111, Action 7)
-	ActionHeroMissionQuickFinish uint32 = 0x006F0007
-	// ActionHeroMissionClose 关闭英雄副本扫荡界面 (Module 111, Action 14)
-	ActionHeroMissionClose uint32 = 0x006F000E
+	// 英雄副本协议族 (Mod_HeroMission_Base, Module 35 -> 0x0023)
+	// 对齐原版客户端 com.protocols.Mod_HeroMission_Base。
+	// ActionHeroMissionList 查询指定城镇的英雄副本列表 (Module 35, Action 0)
+	ActionHeroMissionList uint32 = 0x00230000
+	// ActionHeroMissionBuyChallenge 购买英雄副本挑战次数 (Module 35, Action 1)
+	ActionHeroMissionBuyChallenge uint32 = 0x00230001
+	// ActionHeroMissionStartPractice 开始英雄副本扫荡 (Module 35, Action 2)
+	ActionHeroMissionStartPractice uint32 = 0x00230002
+	// ActionHeroMissionStopPractice 停止英雄副本扫荡 (Module 35, Action 3)
+	ActionHeroMissionStopPractice uint32 = 0x00230003
+	// ActionHeroMissionNotify 英雄副本扫荡战报/结束推送 (Module 35, Action 4)
+	ActionHeroMissionNotify uint32 = 0x00230004
+	// ActionHeroMissionQuickly 英雄副本扫荡快速完成 (Module 35, Action 7)
+	ActionHeroMissionQuickly uint32 = 0x00230007
+	// ActionHeroMissionSpecialList 查询特殊/超级英雄副本列表 (Module 35, Action 8)
+	ActionHeroMissionSpecialList uint32 = 0x00230008
+	// ActionHeroMissionFinishInfo 查询英雄副本首通信息 (Module 35, Action 9)
+	ActionHeroMissionFinishInfo uint32 = 0x00230009
 
 	// Module 4 (Mod_Mission_Base) 剧情副本推进与首通挑战协议族
 	// ActionIDMissionGetSections 查询大地图章节已开放副本列表与状态 (Module 4, Action 0)
@@ -228,141 +236,198 @@ func ParseLoginPacket(payload []byte) (roleName, token string, err error) {
 	return name, tok, nil
 }
 
-// HeroMissionItem 代表单个可扫荡英雄副本条目。
+// 英雄副本 (Mod_HeroMission_Base) 业务结果码与推送类型。
+// 对齐原版客户端 com.protocols.Mod_HeroMission_Base 静态常量。
+const (
+	// HeroMissionScoreA/B/C 英雄副本评价等级 (非业务结果码)。
+	HeroMissionScoreA uint8 = 0
+	HeroMissionScoreB uint8 = 1
+	HeroMissionScoreC uint8 = 2
+	// HeroMissionResultSuccess 操作成功。
+	HeroMissionResultSuccess uint8 = 3
+	// HeroMissionResultNotEnoughIngot 元宝不足。
+	HeroMissionResultNotEnoughIngot uint8 = 4
+	// HeroMissionResultFullBuyTimes 购买次数已达上限。
+	HeroMissionResultFullBuyTimes uint8 = 5
+	// HeroMissionResultBagFull 背包已满。
+	HeroMissionResultBagFull uint8 = 6
+	// HeroMissionResultNotEnoughPower 体力不足。
+	HeroMissionResultNotEnoughPower uint8 = 7
+	// HeroMissionResultNoMission 当前城镇暂无可扫荡英雄副本。
+	HeroMissionResultNoMission uint8 = 8
+	// HeroMissionNotifyNewWarReport 扫荡战报推送。
+	HeroMissionNotifyNewWarReport uint8 = 9
+	// HeroMissionNotifyFinish 扫荡队列结束推送。
+	HeroMissionNotifyFinish uint8 = 10
+)
+
+// HeroMissionItem 代表城镇内单个英雄副本条目。
+// 对齐官方响应 [IntUtil, ByteUtil, UByteUtil, ByteUtil]。
 type HeroMissionItem struct {
-	InstanceID uint32 // 副本实例句柄
-	MissionID  uint16 // 关卡配置编号
-	Times      uint8  // 剩余可扫荡次数
+	MissionID    int32 // 关卡配置编号
+	CanChallenge int8  // 是否可挑战 (1=可挑战)
+	Rank         uint8 // 评价等级 (HeroMissionScoreA/B/C)
+	Finished     int8  // 是否已首通 (1=已通关)
 }
 
-// HeroMissionList 代表英雄副本扫荡列表及状态。
+// HeroMissionList 代表指定城镇的英雄副本列表与购买状态。
+// 对齐官方响应 [[IntUtil,ByteUtil,UByteUtil,ByteUtil],ByteUtil,ByteUtil,ShortUtil,IntUtil]。
 type HeroMissionList struct {
-	TotalTimes uint8             // 剩余总可扫荡次数
-	CostPower  uint32            // 消耗体力
-	Countdown  uint16            // 倒计时
-	Items      []HeroMissionItem // 副本条目列表
+	Missions         []HeroMissionItem // 城镇内英雄副本条目
+	AllBuyTimes      int8              // 当日总可购买次数
+	RemainBuyTimes   int8              // 剩余可购买次数
+	BuyPrice         int16             // 单次购买价格 (元宝)
+	FinishMissionNum int32             // 已通关英雄副本数量
 }
 
-// BuildHeroMissionListPacket 构造拉取可扫荡英雄副本列表请求封包 (Module 111, Action 0)。
-func BuildHeroMissionListPacket() *Packet {
-	return NewPacket(ActionHeroMissionList, nil)
+// BuildHeroMissionListPacket 构造查询指定城镇英雄副本列表请求封包 (Module 35, Action 0)。
+// 官方请求 schema: request=[ShortUtil(town_id)]，实机验证严格 2 字节，不追加 PrevAct。
+func BuildHeroMissionListPacket(townID uint16) *Packet {
+	w := NewWriter()
+	w.WriteUint16(townID)
+	return NewPacket(ActionHeroMissionList, w.Bytes())
 }
 
-// ParseHeroMissionListResponse 从响应封包载荷中反序列化英雄副本列表。
+// ParseHeroMissionListResponse 从响应载荷中反序列化英雄副本列表。
 func ParseHeroMissionListResponse(payload []byte) (*HeroMissionList, error) {
-	if len(payload) < 13 {
-		return nil, fmt.Errorf("%w: hero mission list payload too short (%d bytes)", ErrInvalidPayload, len(payload))
-	}
 	r := NewReader(payload)
-	// 跳过 4 字节保留头 (通常为 0x00000000)
-	if _, err := r.ReadUint32(); err != nil {
-		return nil, fmt.Errorf("%w: failed to read header: %v", ErrInvalidPayload, err)
-	}
-	totalTimes, err := r.ReadUint8()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read total_times: %v", ErrInvalidPayload, err)
-	}
-	costPower, err := r.ReadUint32()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read cost_power: %v", ErrInvalidPayload, err)
-	}
-	countdown, err := r.ReadUint16()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read countdown: %v", ErrInvalidPayload, err)
-	}
 	count, err := r.ReadUint16()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read item count: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: failed to read hero mission count: %v", ErrInvalidPayload, err)
 	}
-
-	items := make([]HeroMissionItem, 0, count)
-	for i := 0; i < int(count); i++ {
-		if r.Remaining() < 7 {
-			break
-		}
-		instID, err := r.ReadUint32()
+	out := &HeroMissionList{Missions: make([]HeroMissionItem, 0, count)}
+	for i := uint16(0); i < count; i++ {
+		missionID, err := r.ReadInt32()
 		if err != nil {
-			break
+			return nil, fmt.Errorf("%w: failed to read hero mission #%d id: %v", ErrInvalidPayload, i, err)
 		}
-		mID, err := r.ReadUint16()
+		canChallenge, err := r.ReadInt8()
 		if err != nil {
-			break
+			return nil, fmt.Errorf("%w: failed to read hero mission #%d can_challenge: %v", ErrInvalidPayload, i, err)
 		}
-		times, err := r.ReadUint8()
+		rank, err := r.ReadUint8()
 		if err != nil {
-			break
+			return nil, fmt.Errorf("%w: failed to read hero mission #%d rank: %v", ErrInvalidPayload, i, err)
 		}
-		items = append(items, HeroMissionItem{
-			InstanceID: instID,
-			MissionID:  mID,
-			Times:      times,
+		finished, err := r.ReadInt8()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read hero mission #%d finished: %v", ErrInvalidPayload, i, err)
+		}
+		out.Missions = append(out.Missions, HeroMissionItem{
+			MissionID:    missionID,
+			CanChallenge: canChallenge,
+			Rank:         rank,
+			Finished:     finished,
 		})
 	}
-
-	return &HeroMissionList{
-		TotalTimes: totalTimes,
-		CostPower:  costPower,
-		Countdown:  countdown,
-		Items:      items,
-	}, nil
-}
-
-// BuildHeroMissionSelectPacket 构造选定英雄副本实例请求封包 (Module 111, Action 1)。
-func BuildHeroMissionSelectPacket(instanceID uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint8(0)
-	w.WriteUint8(1)
-	w.WriteUint32(instanceID)
-	return NewPacket(ActionHeroMissionSelect, w.Bytes())
-}
-
-// ParseHeroMissionSelectResponse 从响应封包载荷中反序列化选定副本结果。
-func ParseHeroMissionSelectResponse(payload []byte) (bool, error) {
-	if len(payload) < 3 {
-		return false, fmt.Errorf("%w: select payload too short", ErrInvalidPayload)
+	if out.AllBuyTimes, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read all_buy_times: %v", ErrInvalidPayload, err)
 	}
-	return payload[2] == 0x01, nil
-}
-
-// BuildHeroMissionSweepPacket 构造执行英雄副本单次扫荡请求封包 (Module 111, Action 2)。
-func BuildHeroMissionSweepPacket() *Packet {
-	return NewPacket(ActionHeroMissionSweep, []byte{0x04, 0x07})
-}
-
-// ParseHeroMissionSweepResponse 从响应封包载荷中反序列化单次扫荡回包。
-func ParseHeroMissionSweepResponse(payload []byte) (*SweepResult, error) {
-	if len(payload) < 3 {
-		return nil, fmt.Errorf("%w: sweep response too short", ErrInvalidPayload)
+	if out.RemainBuyTimes, err = r.ReadInt8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read remain_buy_times: %v", ErrInvalidPayload, err)
 	}
-	success := payload[2] == 0x01
-	res := &SweepResult{
-		Success:   success,
-		Times:     1,
-		CostPower: 5,
-		Message:   "扫荡成功",
+	if out.BuyPrice, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read buy_price: %v", ErrInvalidPayload, err)
 	}
-	if len(payload) >= 10 {
-		r := NewReader(payload[3:])
-		instID, _ := r.ReadUint32()
-		mID, _ := r.ReadUint16()
-		res.MissionID = uint32(mID)
-		_ = instID
+	if out.FinishMissionNum, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read finish_mission_num: %v", ErrInvalidPayload, err)
 	}
-	return res, nil
+	return out, nil
 }
 
-// BuildHeroMissionQuickFinishPacket 构造跳过倒计时快速完成请求封包 (Module 111, Action 7)。
-func BuildHeroMissionQuickFinishPacket(instanceID uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint8(0)
-	w.WriteUint8(1)
-	w.WriteUint32(instanceID)
-	return NewPacket(ActionHeroMissionQuickFinish, w.Bytes())
+// HeroMissionNotify 代表英雄副本扫荡过程中的服务端主动推送。
+type HeroMissionNotify struct {
+	Type              uint8 // HeroMissionNotifyNewWarReport / HeroMissionNotifyFinish / 错误码
+	NewWarReportCount int   // 本轮战报条数
+	RankReportCount   int   // 本轮评价结算条数
+	EmptyBagNumber    int16 // 剩余背包空格
 }
 
-// BuildHeroMissionClosePacket 构造关闭英雄副本扫荡界面请求封包 (Module 111, Action 14)。
-func BuildHeroMissionClosePacket() *Packet {
-	return NewPacket(ActionHeroMissionClose, nil)
+// ParseHeroMissionNotify 解析英雄副本扫荡推送 (Module 35, Action 4)。
+// 官方响应 schema:
+//
+//	[UByte type,
+//	 [[Int,Int],[Int,Int],Short] new_war_reports,
+//	 [Int,Int,Short,Int,[Int,Int],[Int,Int],Short,Short,Int,Int] rank_reports,
+//	 Short empty_bag_number]
+func ParseHeroMissionNotify(payload []byte) (*HeroMissionNotify, error) {
+	r := NewReader(payload)
+	typ, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read hero notify type: %v", ErrInvalidPayload, err)
+	}
+	out := &HeroMissionNotify{Type: typ}
+
+	// 1. new_war_reports
+	warCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read new_war_report count: %v", ErrInvalidPayload, err)
+	}
+	for i := uint16(0); i < warCount; i++ {
+		if err := skipIntPairArray(r); err != nil {
+			return nil, fmt.Errorf("%w: new_war_report #%d experience: %v", ErrInvalidPayload, i, err)
+		}
+		if err := skipIntPairArray(r); err != nil {
+			return nil, fmt.Errorf("%w: new_war_report #%d award: %v", ErrInvalidPayload, i, err)
+		}
+		if _, err := r.ReadInt16(); err != nil {
+			return nil, fmt.Errorf("%w: new_war_report #%d worship: %v", ErrInvalidPayload, i, err)
+		}
+	}
+	out.NewWarReportCount = int(warCount)
+
+	// 2. rank_reports
+	rankCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read rank_report count: %v", ErrInvalidPayload, err)
+	}
+	for i := uint16(0); i < rankCount; i++ {
+		fields := []func(*Reader) error{
+			skipInt32, skipInt32, skipInt16, skipInt32,
+			skipIntPairArray, skipIntPairArray,
+			skipInt16, skipInt16, skipInt32, skipInt32,
+		}
+		for _, f := range fields {
+			if err := f(r); err != nil {
+				return nil, fmt.Errorf("%w: rank_report #%d: %v", ErrInvalidPayload, i, err)
+			}
+		}
+	}
+	out.RankReportCount = int(rankCount)
+
+	emptyBag, err := r.ReadInt16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read empty_bag_number: %v", ErrInvalidPayload, err)
+	}
+	out.EmptyBagNumber = emptyBag
+	return out, nil
+}
+
+func skipInt32(r *Reader) error {
+	_, err := r.ReadInt32()
+	return err
+}
+
+func skipInt16(r *Reader) error {
+	_, err := r.ReadInt16()
+	return err
+}
+
+// skipIntPairArray 跳过一个 [IntUtil, IntUtil] 数组 (2 字节数量前缀 + 每项 8 字节)。
+func skipIntPairArray(r *Reader) error {
+	count, err := r.ReadUint16()
+	if err != nil {
+		return err
+	}
+	for i := uint16(0); i < count; i++ {
+		if _, err := r.ReadInt32(); err != nil {
+			return err
+		}
+		if _, err := r.ReadInt32(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // MissionSectionItem 代表 Module 4 get_sections 返回的单个章节关卡状态条目 (10 字节)。

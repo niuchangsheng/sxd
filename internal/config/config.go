@@ -265,8 +265,8 @@ type QuestCycleConfig struct {
 type DungeonSweepFeatureConfig struct {
 	Enabled               bool     `yaml:"enabled"`
 	Pipeline              []string `yaml:"pipeline"`                // 扫荡优先级流水线: "sweep_elite"
-	MaxBatchTimes         int      `yaml:"max_batch_times"`         // 扫荡批次单次最大执行次数 (仅作用于扫荡)
-	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"` // 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
+	MaxBatchTimes         int      `yaml:"max_batch_times"`         // 主线扫荡单次最大轮数 (sweep_highest_main)；精英副本按城镇全量扫荡
+	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"` // 优先使用秒完成协议 (主线 Module 25 / 英雄副本 quickly)
 	SellSweptItems        bool     `yaml:"sell_swept_items"`        // 扫荡精英副本后是否自动卖掉扫荡物
 	AutoSellSweptItems    bool     `yaml:"auto_sell_swept_items"`   // 扫荡精英副本后是否自动卖掉扫荡物 (兼容别名)
 }

@@ -1160,9 +1160,8 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 
 			// 1. 探测功能是否开放 (Mod 0, Act 69)。未解锁模块服务端会静默丢弃业务请求,
 			// 先查询可避免每个周期都等待 open_panel 超时。
-			chkPkt := protocol.BuildCheckFunctionOpenPacket(protocol.FunctionIDRefinePool, session.LastActionID())
 			chkCtx, chkCancel := context.WithTimeout(ctx, callTimeout)
-			chkResp, chkErr := session.Call(chkCtx, chkPkt, protocol.ActionIDPlayerCheckFunctionOpen)
+			open, chkErr := session.CheckFunctionOpen(chkCtx, protocol.FunctionIDRefinePool)
 			chkCancel()
 			if chkErr != nil {
 				if errors.Is(chkErr, context.DeadlineExceeded) {
@@ -1178,16 +1177,10 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				}
 				return nil
 			}
-			openFlag, err := protocol.ParseCheckFunctionOpenResponse(chkResp.Payload)
-			if err != nil {
-				slog.Warn("解析粗铁淬炼池开放状态失败", "role_id", session.RoleID(), "err", err)
-				return nil
-			}
-			if openFlag != protocol.PlayerFunctionOpenTrue {
+			if !open {
 				slog.Info("粗铁淬炼池功能未开启, 跳过",
 					"role_id", session.RoleID(),
 					"target", targetName,
-					"open_flag", openFlag,
 				)
 				return nil
 			}

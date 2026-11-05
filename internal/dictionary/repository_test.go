@@ -165,4 +165,34 @@ func TestRepository_Queries(t *testing.T) {
 			t.Errorf("预期大奖映射数量 >= 30, 实际: %d", len(awards))
 		}
 	})
+
+	t.Run("GetEliteMissionTowns", func(t *testing.T) {
+		towns, err := repo.GetEliteMissionTowns()
+		if err != nil {
+			t.Fatalf("查询精英副本城镇列表失败: %v", err)
+		}
+		if len(towns) == 0 {
+			t.Fatalf("预期至少存在一个含精英副本的城镇")
+		}
+		seen := make(map[int]bool, len(towns))
+		hasFirst, hasLast := false, false
+		for _, townID := range towns {
+			if townID <= 0 {
+				t.Errorf("精英副本城镇 ID 必须为正数, 实际 %d", townID)
+			}
+			if seen[townID] {
+				t.Errorf("精英副本城镇 ID 重复: %d", townID)
+			}
+			seen[townID] = true
+			if townID == 4 {
+				hasFirst = true
+			}
+			if townID == 55 {
+				hasLast = true
+			}
+		}
+		if !hasFirst || !hasLast {
+			t.Errorf("预期精英副本城镇覆盖 4..55, 实际: %v", towns)
+		}
+	})
 }

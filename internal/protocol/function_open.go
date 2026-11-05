@@ -17,6 +17,10 @@ const (
 
 	// FunctionIDRefinePool 粗铁淬炼池功能编号 (FunctionTypeData: RefinePool)
 	FunctionIDRefinePool int32 = 163
+	// FunctionIDWorshipMars 尊像膜拜功能编号 (FunctionTypeData: WorshipMars)
+	FunctionIDWorshipMars int32 = 55
+	// FunctionIDWuFaField 悟法领域功能编号 (FunctionTypeData: WuFaField)
+	FunctionIDWuFaField int32 = 245
 )
 
 // BuildCheckFunctionOpenPacket 构造功能开放状态查询封包。

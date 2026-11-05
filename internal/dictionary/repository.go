@@ -31,6 +31,9 @@ type Repository interface {
 	GetHighestMissionByLevel(level int, sweepElite bool) (*Mission, error)
 	GetHighestMissionByType(missionType int) (*Mission, error)
 	GetHighestMissionByTypeAndLevel(level int, missionType int) (*Mission, error)
+	// GetEliteMissionTowns 返回数据字典中所有存在精英副本 (MissionType=1) 的城镇/地图 ID，
+	// 按该城镇内精英关卡的最低解锁值升序排列。
+	GetEliteMissionTowns() ([]int, error)
 	GetQuestMissions(questType int, playerLevel int) ([]int, error)
 	GetQuest(id int) (*Quest, error)
 	GetTownNPCs(townID int) ([]int, error)
@@ -397,6 +400,41 @@ func (r *sqliteRepository) GetHighestMissionByTypeAndLevel(level int, missionTyp
 	return &m, nil
 }
 
+// GetEliteMissionTowns 返回所有存在精英副本 (MissionType=1) 的城镇/地图 ID。
+// 精英副本扫荡协议 (Mod_HeroMission_Base.start_practice) 以城镇为入口，
+// 因此需要按 Missions.map 去重后逐城镇下发扫荡指令。
+func (r *sqliteRepository) GetEliteMissionTowns() ([]int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if r.db == nil {
+		return nil, errors.New("dictionary: database not connected")
+	}
+
+	rows, err := r.db.Query(`SELECT map
+	                         FROM Missions
+	                         WHERE MissionType = 1 AND map > 0
+	                         GROUP BY map
+	                         ORDER BY MIN(MissionLock) ASC, map ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: 查询精英副本城镇列表失败: %w", err)
+	}
+	defer rows.Close()
+
+	towns := make([]int, 0, 24)
+	for rows.Next() {
+		var townID int
+		if err := rows.Scan(&townID); err != nil {
+			return nil, fmt.Errorf("dictionary: 扫描精英副本城镇失败: %w", err)
+		}
+		towns = append(towns, townID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("dictionary: 遍历精英副本城镇失败: %w", err)
+	}
+	return towns, nil
+}
+
 // GetQuestMissions 根据任务类型 (1=主线, 2=支线) 及角色等级获取可挑战的任务关联关卡列表。
 func (r *sqliteRepository) GetQuestMissions(questType int, playerLevel int) ([]int, error) {
 	r.mu.RLock()
@@ -574,6 +612,3 @@ func (r *sqliteRepository) GetWishpoolAwards() (map[int]*WishpoolAward, error) {
 	}
 	return res, nil
 }
-
-
-

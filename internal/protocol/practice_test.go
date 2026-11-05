@@ -374,3 +374,82 @@ func TestGolden_Module25_LiveFilesReplay(t *testing.T) {
 	})
 }
 
+// TestHeroPractice_OfficialProtocol 验证 Module 35 英雄副本扫荡的请求/响应布局。
+// 基准: com.protocols.Mod_HeroMission_Base
+//
+//	start_practice request=[Short(town_id),Byte(auto_num),Byte(hero_type)]
+//	start_practice response=[UByte(result),Int(practice_time)]
+//	quickly request=[] response=[UByte(result)]
+func TestHeroPractice_OfficialProtocol(t *testing.T) {
+	pkt, err := protocol.BuildHeroPracticePacket(protocol.HeroPracticeRequest{
+		TownID:   13,
+		AutoNum:  0,
+		HeroType: 0,
+	})
+	if err != nil {
+		t.Fatalf("BuildHeroPracticePacket 失败: %v", err)
+	}
+	if pkt.ActionID != protocol.ActionHeroMissionStartPractice {
+		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionHeroMissionStartPractice, pkt.ActionID)
+	}
+	if len(pkt.Payload) != 4 {
+		t.Fatalf("期望 4 字节严格业务载荷 (实机验证不追加 PrevAct), 实际 %d: %X", len(pkt.Payload), pkt.Payload)
+	}
+	if pkt.HasPrevAct {
+		t.Errorf("实机验证 start_practice 不应追加 PrevAct")
+	}
+	if got := int(pkt.Payload[0])<<8 | int(pkt.Payload[1]); got != 13 {
+		t.Errorf("期望 town_id=13, 实际 %d", got)
+	}
+	if pkt.Payload[2] != 0 || pkt.Payload[3] != 0 {
+		t.Errorf("期望 auto_num=0 hero_type=0, 实际 %d/%d", pkt.Payload[2], pkt.Payload[3])
+	}
+
+	// 成功回包: result=3, practice_time=45
+	res, err := protocol.ParseHeroPracticeResult([]byte{3, 0, 0, 0, 45})
+	if err != nil {
+		t.Fatalf("ParseHeroPracticeResult 成功回包失败: %v", err)
+	}
+	if res.Result != protocol.HeroMissionResultSuccess || res.PracticeTime != 45 {
+		t.Errorf("成功回包解析不一致: %+v", *res)
+	}
+
+	// 失败回包: result=7 (体力不足)
+	failRes, err := protocol.ParseHeroPracticeResult([]byte{7, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatalf("ParseHeroPracticeResult 失败回包解析出错: %v", err)
+	}
+	if failRes.Result != protocol.HeroMissionResultNotEnoughPower {
+		t.Errorf("期望体力不足结果码 7, 实际 %d", failRes.Result)
+	}
+
+	// 截断回包必须报错, 不能静默按成功处理
+	if _, err := protocol.ParseHeroPracticeResult([]byte{3, 0}); err == nil {
+		t.Errorf("期望截断回包返回错误")
+	}
+}
+
+// TestHeroQuickly_OfficialProtocol 验证英雄副本快速完成请求为空载荷。
+func TestHeroQuickly_OfficialProtocol(t *testing.T) {
+	pkt := protocol.BuildHeroQuicklyPacket()
+	if pkt.ActionID != protocol.ActionHeroMissionQuickly {
+		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionHeroMissionQuickly, pkt.ActionID)
+	}
+	if len(pkt.Payload) != 0 {
+		t.Errorf("实机验证 quickly 必须为空载荷, 实际 %X", pkt.Payload)
+	}
+	if pkt.HasPrevAct {
+		t.Errorf("实机验证 quickly 不应追加 PrevAct")
+	}
+
+	res, err := protocol.ParseHeroQuicklyResponse([]byte{protocol.HeroMissionResultSuccess})
+	if err != nil {
+		t.Fatalf("ParseHeroQuicklyResponse 失败: %v", err)
+	}
+	if res.Result != protocol.HeroMissionResultSuccess {
+		t.Errorf("期望成功结果码, 实际 %d", res.Result)
+	}
+	if _, err := protocol.ParseHeroQuicklyResponse(nil); err == nil {
+		t.Errorf("空回包必须返回错误")
+	}
+}

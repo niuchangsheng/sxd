@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -34,7 +35,7 @@ type QuestCycleFeatureConfig struct {
 type SweepFeatureConfig struct {
 	Enabled               bool     `json:"enabled"`
 	Pipeline              []string `json:"pipeline"`                // 扫荡流水线优先级: "sweep_elite"
-	MaxBatchTimes         int      `json:"max_batch_times"`         // 扫荡批次单次最大执行次数 (仅作用于扫荡)
+	MaxBatchTimes         int      `json:"max_batch_times"`         // 单次执行最大扫荡次数 (仅作用于 sweep_highest_main；精英副本由服务端每日次数/体力熔断)
 	PreferPracticeQuickly bool     `json:"prefer_practice_quickly"` // 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
 	SellSweptItems        bool     `json:"sell_swept_items"`        // 扫荡精英副本后是否自动卖掉扫荡物
 	AutoSellSweptItems    bool     `json:"auto_sell_swept_items"`   // 别名
@@ -151,6 +152,567 @@ func (c SweepConfig) ToDungeonSweepConfig() DungeonSweepConfig {
 		Pipeline:              c.Pipeline,
 		SellSweptItems:        c.Sweep.SellSweptItems || c.Sweep.AutoSellSweptItems || c.SellSweptItems || c.AutoSellSweptItems,
 	}
+}
+
+// fallbackEliteTowns 为数据字典不可用时的兜底精英副本城镇列表
+// (来源于 Pieb.db: SELECT DISTINCT map FROM Missions WHERE MissionType=1)。
+var fallbackEliteTowns = []int{4, 5, 7, 8, 9, 13, 14, 15, 21, 22, 23, 24, 26, 27, 29, 33, 35, 39, 40, 43, 54, 55}
+
+// eliteMissionTowns 返回所有存在精英副本的城镇/地图 ID。
+func eliteMissionTowns(dictRepo dictionary.Repository) []int {
+	if dictRepo != nil {
+		if towns, err := dictRepo.GetEliteMissionTowns(); err == nil && len(towns) > 0 {
+			return towns
+		} else if err != nil {
+			slog.Warn("查询精英副本城镇列表失败，使用内置兜底列表", "err", err)
+		}
+	}
+	return fallbackEliteTowns
+}
+
+// heroNotifyWaiter 聚合服务端主动推送的英雄副本扫荡战报。
+type heroNotifyWaiter struct {
+	ch chan protocol.HeroMissionNotify
+}
+
+// heroNotifyWaiters 按会话缓存推送监听器，避免每次 Routine 执行重复注册。
+var heroNotifyWaiters sync.Map // map[*client.RoleSession]*heroNotifyWaiter
+
+// heroNotifyWaiterFor 获取 (或首次创建) 指定会话的英雄副本推送监听器。
+func heroNotifyWaiterFor(session *client.RoleSession) *heroNotifyWaiter {
+	if v, ok := heroNotifyWaiters.Load(session); ok {
+		return v.(*heroNotifyWaiter)
+	}
+	w := &heroNotifyWaiter{ch: make(chan protocol.HeroMissionNotify, 64)}
+	actual, loaded := heroNotifyWaiters.LoadOrStore(session, w)
+	if loaded {
+		return actual.(*heroNotifyWaiter)
+	}
+	session.RegisterHandler(protocol.ActionHeroMissionNotify, func(pkt *protocol.Packet) {
+		n, err := protocol.ParseHeroMissionNotify(pkt.Payload)
+		if err != nil {
+			slog.Warn("解析英雄副本扫荡推送失败", "role_id", session.RoleID(), "err", err)
+			return
+		}
+		select {
+		case w.ch <- *n:
+		default:
+		}
+	})
+	return w
+}
+
+// drain 丢弃上一轮残留的推送，保证本轮等待从干净状态开始。
+func (w *heroNotifyWaiter) drain() {
+	for {
+		select {
+		case <-w.ch:
+		default:
+			return
+		}
+	}
+}
+
+// waitTerminal 等待本轮扫荡的终态推送 (结束/背包满/体力不足)。
+// 返回 (是否终态, 错误)。超时视为非终态，由上层继续处理。
+func (w *heroNotifyWaiter) waitTerminal(ctx context.Context, timeout time.Duration) (bool, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case n := <-w.ch:
+			switch n.Type {
+			case protocol.HeroMissionNotifyFinish:
+				return true, nil
+			case protocol.HeroMissionResultBagFull:
+				return true, scheduler.ErrBagFull
+			case protocol.HeroMissionResultNotEnoughPower:
+				return true, scheduler.ErrStaminaDepleted
+			}
+			if n.EmptyBagNumber <= 0 {
+				return true, scheduler.ErrBagFull
+			}
+		case <-timer.C:
+			return false, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+}
+
+// packItemSnapshot 记录背包某时刻的物品数量，用于识别扫荡新增/叠加的掉落物。
+type packItemSnapshot struct {
+	byPlayerItem map[int32]int32 // PlayerItemID -> 当前数量
+}
+
+func newPackItemSnapshot(pack *protocol.PackItemListResponse) *packItemSnapshot {
+	s := &packItemSnapshot{byPlayerItem: make(map[int32]int32, len(pack.PackItems))}
+	for _, it := range pack.PackItems {
+		s.byPlayerItem[it.PlayerItemID] = packItemQuantity(it)
+	}
+	return s
+}
+
+// packItemQuantity 返回物品堆叠数量。官方 ItemRecord 第 6 个 Int 字段为 num。
+func packItemQuantity(it protocol.ItemRecord) int32 {
+	if it.Field5 > 0 {
+		return it.Field5
+	}
+	return 1
+}
+
+// fetchPackItemList 拉取当前主背包物品列表。
+func fetchPackItemList(ctx context.Context, session *client.RoleSession) (*protocol.PackItemListResponse, error) {
+	pkt := protocol.BuildGetPackItemListPacket()
+	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := session.Call(c, pkt, protocol.ActionIDItemGetPackList)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("dungeon: 背包列表返回空响应")
+	}
+	return protocol.ParsePackItemListResponse(resp.Payload)
+}
+
+// capturePackSnapshot 拉取并记录当前背包快照；失败时返回 nil。
+func capturePackSnapshot(ctx context.Context, session *client.RoleSession) *packItemSnapshot {
+	pack, err := fetchPackItemList(ctx, session)
+	if err != nil || pack == nil {
+		if err != nil {
+			slog.Warn("拉取背包快照失败，本轮跳过扫荡物出售", "role_id", session.RoleID(), "err", err)
+		}
+		return nil
+	}
+	return newPackItemSnapshot(pack)
+}
+
+// sellPackItem 出售背包中的单件物品。
+// 返回 (是否售出, 是否可重试)。网络超时/解析失败可重试；服务端明确拒绝则不再重试。
+func sellPackItem(ctx context.Context, session *client.RoleSession, it protocol.ItemRecord) (bool, bool) {
+	if it.GridID <= 0 || it.GridID > 32767 {
+		return false, false
+	}
+	sellPkt, err := protocol.BuildSellItemPacket(int16(it.GridID))
+	if err != nil {
+		return false, false
+	}
+	sellCtx, sellCancel := context.WithTimeout(ctx, 8*time.Second)
+	sellResp, callErr := session.Call(sellCtx, sellPkt, protocol.ActionIDItemSell)
+	sellCancel()
+	if callErr != nil || sellResp == nil {
+		slog.Warn("自动卖出扫荡物无回包", "role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID, "err", callErr)
+		return false, true
+	}
+	ok, code, pErr := protocol.ParseSellItemResponse(sellResp.Payload)
+	if pErr != nil {
+		slog.Warn("自动卖出扫荡物回包解析失败", "role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID, "err", pErr)
+		return false, true
+	}
+	if !ok {
+		slog.Warn("自动卖出扫荡物被服务端拒绝", "role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID, "result_code", code)
+		return false, false
+	}
+	slog.Info("自动卖出精英副本扫荡物成功",
+		"role_id", session.RoleID(),
+		"player_item_id", it.PlayerItemID,
+		"item_id", it.ItemID,
+		"grid_id", it.GridID,
+		"quantity", packItemQuantity(it),
+	)
+	return true, false
+}
+
+// sellNewPackItems 对比基线快照，卖出扫荡后新增或数量增加的物品，返回成功售出数量。
+func sellNewPackItems(ctx context.Context, session *client.RoleSession, dictRepo dictionary.Repository, base *packItemSnapshot) int {
+	if base == nil {
+		return 0
+	}
+	pack, err := fetchPackItemList(ctx, session)
+	if err != nil || pack == nil {
+		return 0
+	}
+
+	sold := 0
+	var pending []protocol.ItemRecord
+	for _, it := range pack.PackItems {
+		qty := packItemQuantity(it)
+		prevQty, existed := base.byPlayerItem[it.PlayerItemID]
+		if existed && qty <= prevQty {
+			continue
+		}
+		// 新格位必然是扫荡掉落；已有格位数量增加时，仅对精英副本主要掉落类型
+		// (1002=制作卷) 整格出售，避免把玩家原有消耗品/体力道具整组卖掉。
+		if existed && !isEliteSweepStackType(dictRepo, it) {
+			continue
+		}
+		if !isPackItemSellable(dictRepo, it) {
+			continue
+		}
+		ok, retryable := sellPackItem(ctx, session, it)
+		if ok {
+			sold++
+		} else if retryable {
+			pending = append(pending, it)
+		}
+	}
+
+	// 扫荡刚结束时服务端可能仍在结算，首个出售请求容易超时；短暂等待后重试一次。
+	var unresolved []protocol.ItemRecord
+	if len(pending) > 0 {
+		time.Sleep(500 * time.Millisecond)
+		for _, it := range pending {
+			ok, retryable := sellPackItem(ctx, session, it)
+			if ok {
+				sold++
+			} else if retryable {
+				unresolved = append(unresolved, it)
+			}
+		}
+	}
+
+	// 以本轮结束时的背包为下一轮基线；未能售出的物品保留原始基线，
+	// 使其在下一城镇/下一次执行时仍可被识别为扫荡产物并重试。
+	newBase := newPackItemSnapshot(pack)
+	for _, it := range unresolved {
+		if prevQty, existed := base.byPlayerItem[it.PlayerItemID]; existed {
+			newBase.byPlayerItem[it.PlayerItemID] = prevQty
+		} else {
+			delete(newBase.byPlayerItem, it.PlayerItemID)
+		}
+	}
+	*base = *newBase
+	return sold
+}
+
+// isPackItemSellable 判断扫荡物是否可出售。
+// ItemRecord 第 5 个 Int 字段为 price；同时参考数据字典兜底。
+func isPackItemSellable(dictRepo dictionary.Repository, it protocol.ItemRecord) bool {
+	if it.Field4 > 0 {
+		return true
+	}
+	if dictRepo != nil {
+		if dItem, err := dictRepo.GetItem(int(it.ItemID)); err == nil && dItem != nil && dItem.Price > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// eliteSweepStackItemTypeID 精英副本可堆叠掉落的主要道具类型 (制作卷)。
+const eliteSweepStackItemTypeID = 1002
+
+// isEliteSweepStackType 判断数量增加的已有格位是否属于可安全整格出售的精英掉落类型。
+// 消耗品 (包子/粽子/茶叶蛋等) 即使数量增加也不整格出售，避免误卖玩家原有库存。
+func isEliteSweepStackType(dictRepo dictionary.Repository, it protocol.ItemRecord) bool {
+	if dictRepo == nil {
+		return false
+	}
+	dItem, err := dictRepo.GetItem(int(it.ItemID))
+	if err != nil || dItem == nil {
+		return false
+	}
+	return dItem.TypeID == eliteSweepStackItemTypeID
+}
+
+// fetchHeroMissionList 查询指定城镇的英雄副本列表 (Module 35, Action 0)。
+func fetchHeroMissionList(ctx context.Context, session *client.RoleSession, townID int) (*protocol.HeroMissionList, error) {
+	pkt := protocol.BuildHeroMissionListPacket(uint16(townID))
+	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := session.Call(c, pkt, protocol.ActionHeroMissionList)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("dungeon: 英雄副本列表返回空响应")
+	}
+	return protocol.ParseHeroMissionListResponse(resp.Payload)
+}
+
+// startHeroMissionPractice 向指定城镇下发英雄副本扫荡指令 (Module 35, Action 2)。
+func startHeroMissionPractice(ctx context.Context, session *client.RoleSession, townID int, autoNum, heroType uint8) (*protocol.HeroPracticeResult, error) {
+	pkt, err := protocol.BuildHeroPracticePacket(protocol.HeroPracticeRequest{
+		TownID:   uint16(townID),
+		AutoNum:  autoNum,
+		HeroType: heroType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, callErr := session.Call(c, pkt, protocol.ActionHeroMissionStartPractice)
+	cancel()
+	if callErr != nil {
+		return nil, callErr
+	}
+	if resp == nil {
+		return nil, errors.New("dungeon: 英雄副本扫荡返回空响应")
+	}
+	return protocol.ParseHeroPracticeResult(resp.Payload)
+}
+
+// quicklyHeroMissionPractice 立即完成当前英雄副本扫荡队列 (Module 35, Action 7)。
+func quicklyHeroMissionPractice(ctx context.Context, session *client.RoleSession) (*protocol.HeroQuicklyResult, error) {
+	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := session.Call(c, protocol.BuildHeroQuicklyPacket(), protocol.ActionHeroMissionQuickly)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("dungeon: 英雄副本快速完成返回空响应")
+	}
+	return protocol.ParseHeroQuicklyResponse(resp.Payload)
+}
+
+// eliteTownOutcome 表示单个城镇英雄副本扫荡的终态分类。
+type eliteTownOutcome int
+
+const (
+	eliteTownDone eliteTownOutcome = iota
+	eliteTownNoMission
+	eliteTownBagFull
+	eliteTownNotEnoughPower
+	eliteTownIngotRisk
+)
+
+// performEliteTownSweep 对单个城镇执行一次完整扫荡 (list 前置检查由调用方完成):
+// start_practice -> quickly -> 等待 notify 终态。
+func performEliteTownSweep(
+	ctx context.Context,
+	session *client.RoleSession,
+	waiter *heroNotifyWaiter,
+	townID int,
+) (eliteTownOutcome, *protocol.HeroPracticeResult, error) {
+	waiter.drain()
+
+	startRes, startErr := startHeroMissionPractice(ctx, session, townID, 0, 0)
+	if startErr != nil {
+		return eliteTownDone, nil, startErr
+	}
+	switch startRes.Result {
+	case protocol.HeroMissionResultSuccess:
+		// 继续快速完成
+	case protocol.HeroMissionResultNoMission:
+		return eliteTownNoMission, startRes, nil
+	case protocol.HeroMissionResultBagFull:
+		return eliteTownBagFull, startRes, nil
+	case protocol.HeroMissionResultNotEnoughPower:
+		return eliteTownNotEnoughPower, startRes, nil
+	case protocol.HeroMissionResultNotEnoughIngot:
+		return eliteTownIngotRisk, startRes, nil
+	default:
+		return eliteTownDone, startRes, fmt.Errorf("start_practice rejected: result=%d", startRes.Result)
+	}
+
+	quickRes, quickErr := quicklyHeroMissionPractice(ctx, session)
+	if quickErr != nil {
+		slog.Warn("英雄副本扫荡快速完成未收到回包", "role_id", session.RoleID(), "town_id", townID, "err", quickErr)
+	} else if quickRes != nil {
+		switch quickRes.Result {
+		case protocol.HeroMissionResultSuccess:
+			// 正常终态
+		case protocol.HeroMissionResultBagFull:
+			return eliteTownBagFull, startRes, nil
+		case protocol.HeroMissionResultNotEnoughPower:
+			return eliteTownNotEnoughPower, startRes, nil
+		case protocol.HeroMissionResultNotEnoughIngot:
+			return eliteTownIngotRisk, startRes, nil
+		default:
+			slog.Warn("英雄副本快速完成被服务端拒绝", "role_id", session.RoleID(), "town_id", townID, "result_code", quickRes.Result)
+		}
+	}
+
+	// 等待终态推送，确保掉落已结算后再卖物品；超时则继续下一城镇。
+	if _, waitErr := waiter.waitTerminal(ctx, 2*time.Second); waitErr != nil {
+		switch {
+		case errors.Is(waitErr, scheduler.ErrBagFull):
+			return eliteTownBagFull, startRes, nil
+		case errors.Is(waitErr, scheduler.ErrStaminaDepleted):
+			return eliteTownNotEnoughPower, startRes, nil
+		default:
+			return eliteTownDone, startRes, waitErr
+		}
+	}
+	return eliteTownDone, startRes, nil
+}
+
+// executeEliteMissionSweep 按官方 Mod_HeroMission_Base 协议逐城镇扫荡精英副本。
+//
+// 关键点:
+//  1. 扫荡入口是城镇 (town_id)，不是单个副本实例；一个城镇一次 start_practice 即排队该城镇可扫荡副本。
+//  2. 不允许通过 max_batch_times 截断城镇数量，否则无法覆盖全部精英副本；体力/每日次数由服务端熔断。
+//  3. 只使用免费扫荡 (auto_num=0)，绝不自动购买翻牌奖励或消耗元宝。
+func executeEliteMissionSweep(
+	ctx context.Context,
+	session *client.RoleSession,
+	dictRepo dictionary.Repository,
+	cfg SweepConfig,
+	sweepHasStamina func() bool,
+	totalCostStamina *int,
+	totalGainExp *int64,
+	totalGainCoins *int64,
+) (int, error) {
+	towns := eliteMissionTowns(dictRepo)
+	if len(towns) == 0 {
+		slog.Warn("数据字典中未发现精英副本城镇，跳过精英扫荡", "role_id", session.RoleID())
+		return 0, nil
+	}
+
+	waiter := heroNotifyWaiterFor(session)
+	var packBase *packItemSnapshot
+	if cfg.Sweep.SellSweptItems {
+		packBase = capturePackSnapshot(ctx, session)
+	}
+
+	successRounds := 0
+	for _, townID := range towns {
+		if ctx.Err() != nil {
+			return successRounds, ctx.Err()
+		}
+		if !sweepHasStamina() {
+			slog.Info("当前角色体力不足，精英副本扫荡阶段结束",
+				"role_id", session.RoleID(),
+				"remaining_stamina", session.GetStamina(),
+			)
+			break
+		}
+		if session.State() != client.StateActive {
+			for i := 0; i < 15 && session.State() != client.StateActive; i++ {
+				time.Sleep(200 * time.Millisecond)
+			}
+			if session.State() != client.StateActive {
+				break
+			}
+		}
+
+		const maxTownAttempts = 4
+		for attempt := 0; attempt < maxTownAttempts; attempt++ {
+			if attempt > 0 {
+				time.Sleep(500 * time.Millisecond)
+			}
+
+			list, listErr := fetchHeroMissionList(ctx, session, townID)
+			if listErr != nil {
+				if isTransientDungeonError(listErr) && attempt < maxTownAttempts-1 {
+					slog.Warn("查询英雄副本列表超时，准备重试",
+						"role_id", session.RoleID(), "town_id", townID, "attempt", attempt+1, "err", listErr)
+					continue
+				}
+				slog.Warn("查询英雄副本列表失败，跳过该城镇", "role_id", session.RoleID(), "town_id", townID, "err", listErr)
+				break
+			}
+			if list == nil || len(list.Missions) == 0 {
+				break
+			}
+			challengeable := 0
+			for _, m := range list.Missions {
+				if m.CanChallenge == 1 {
+					challengeable++
+				}
+			}
+			// 即使 can_challenge 全为 0 也继续下发 start_practice：
+			// 已首通/可扫荡副本仍可能出现在列表中，最终由服务端以 NO_MISSION 兜底。
+
+			beforeStamina := session.GetStamina()
+			beforeState := session.GetPlayerState()
+			outcome, startRes, sweepErr := performEliteTownSweep(ctx, session, waiter, townID)
+
+			afterStamina := session.GetStamina()
+			if cost := beforeStamina - afterStamina; cost > 0 {
+				*totalCostStamina += cost
+			}
+			afterState := session.GetPlayerState()
+			if afterState.Experience > beforeState.Experience {
+				*totalGainExp += afterState.Experience - beforeState.Experience
+			}
+			if afterState.Coins > beforeState.Coins {
+				*totalGainCoins += afterState.Coins - beforeState.Coins
+			}
+
+			if sweepErr != nil {
+				if isTransientDungeonError(sweepErr) && attempt < maxTownAttempts-1 {
+					slog.Warn("英雄副本城镇扫荡超时，准备重试",
+						"role_id", session.RoleID(), "town_id", townID, "attempt", attempt+1, "err", sweepErr)
+					continue
+				}
+				slog.Warn("英雄副本城镇扫荡失败，跳过该城镇",
+					"role_id", session.RoleID(), "town_id", townID, "err", sweepErr)
+				break
+			}
+
+			switch outcome {
+			case eliteTownNoMission:
+				slog.Debug("该城镇暂无可扫荡英雄副本", "role_id", session.RoleID(), "town_id", townID)
+			case eliteTownNotEnoughPower:
+				slog.Info("英雄副本扫荡返回体力不足，结束扫荡", "role_id", session.RoleID(), "town_id", townID)
+				session.SetStamina(0)
+				session.SetExtraStamina(0)
+				return successRounds, scheduler.ErrStaminaDepleted
+			case eliteTownIngotRisk:
+				slog.Warn("英雄副本扫荡返回元宝不足，立即停止以避免误消耗元宝", "role_id", session.RoleID(), "town_id", townID)
+				return successRounds, nil
+			case eliteTownBagFull:
+				// 停止当前扫荡队列，先把已结算的掉落卖掉，为后续副本腾出背包格位。
+				_ = session.Send(protocol.BuildHeroStopPracticePacket())
+				sold := 0
+				if cfg.Sweep.SellSweptItems {
+					sold = sellNewPackItems(ctx, session, dictRepo, packBase)
+				}
+				if sold > 0 && attempt < maxTownAttempts-1 && sweepHasStamina() {
+					slog.Info("背包已满，已卖出扫荡物并重试当前城镇",
+						"role_id", session.RoleID(),
+						"town_id", townID,
+						"sold", sold,
+						"retry", attempt+1,
+					)
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+				slog.Warn("背包已满且无法通过出售扫荡物腾出空间，暂停精英扫荡",
+					"role_id", session.RoleID(),
+					"town_id", townID,
+					"sold", sold,
+				)
+				return successRounds, scheduler.ErrBagFull
+			case eliteTownDone:
+				successRounds++
+				practiceTime := int32(0)
+				if startRes != nil {
+					practiceTime = startRes.PracticeTime
+				}
+				slog.Info("英雄副本城镇扫荡完成",
+					"role_id", session.RoleID(),
+					"town_id", townID,
+					"missions", len(list.Missions),
+					"challengeable", challengeable,
+					"practice_time", practiceTime,
+					"remaining_stamina", afterStamina,
+				)
+				if cfg.Sweep.SellSweptItems {
+					if sold := sellNewPackItems(ctx, session, dictRepo, packBase); sold > 0 {
+						slog.Info("英雄副本扫荡物出售完成", "role_id", session.RoleID(), "town_id", townID, "sold", sold)
+					}
+				}
+			}
+			break
+		}
+	}
+
+	return successRounds, nil
+}
+
+// isTransientDungeonError 判断是否为可重试的瞬时网络超时。
+func isTransientDungeonError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "timeout")
 }
 
 // NewDungeonRoutine 构造副本推图与扫荡任务 (统一命名为 dungeon)。
@@ -416,144 +978,18 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 
 					switch step {
 					case "sweep_elite":
-						// 扫荡精英 (Module 111 英雄/精英副本)
-						initialItemIDs := make(map[int32]bool)
-						if cfg.Sweep.SellSweptItems {
-							packCtx, packCancel := context.WithTimeout(ctx, 3*time.Second)
-							if packPkt, err := session.Call(packCtx, protocol.BuildGetPackItemListPacket(), protocol.ActionIDItemGetPackList); err == nil && packPkt != nil {
-								if pack, pErr := protocol.ParsePackItemListResponse(packPkt.Payload); pErr == nil && pack != nil {
-									for _, it := range pack.PackItems {
-										initialItemIDs[it.PlayerItemID] = true
-									}
-								}
-							}
-							packCancel()
+						// 扫荡精英: 按官方 Mod_HeroMission_Base (Module 35) 协议逐城镇下发。
+						// 协议与主线 Module 25 完全不同，详见 executeEliteMissionSweep 注释。
+						rounds, eliteErr := executeEliteMissionSweep(
+							ctx, session, dictRepo, cfg, sweepHasStamina,
+							&totalCostStamina, &totalGainExp, &totalGainCoins,
+						)
+						sweepSuccessRounds += rounds
+						if eliteErr != nil {
+							return eliteErr
 						}
-
-						sellSweptItems := func() {
-							if !cfg.Sweep.SellSweptItems {
-								return
-							}
-							packCtx, packCancel := context.WithTimeout(ctx, 3*time.Second)
-							packPkt, err := session.Call(packCtx, protocol.BuildGetPackItemListPacket(), protocol.ActionIDItemGetPackList)
-							packCancel()
-							if err != nil || packPkt == nil {
-								return
-							}
-							pack, pErr := protocol.ParsePackItemListResponse(packPkt.Payload)
-							if pErr != nil || pack == nil {
-								return
-							}
-
-							for _, it := range pack.PackItems {
-								if initialItemIDs[it.PlayerItemID] {
-									continue
-								}
-								// 检查道具字典价格：若道具字典明确标明 price <= 0 则不可售卖
-								if dictRepo != nil {
-									if dItem, dErr := dictRepo.GetItem(int(it.ItemID)); dErr == nil && dItem != nil && dItem.Price <= 0 {
-										initialItemIDs[it.PlayerItemID] = true
-										continue
-									}
-								}
-
-								sellPkt, sErr := protocol.BuildSellItemPacket(int16(it.GridID))
-								if sErr != nil {
-									continue
-								}
-								sellCtx, sellCancel := context.WithTimeout(ctx, 3*time.Second)
-								sellResp, callErr := session.Call(sellCtx, sellPkt, protocol.ActionIDItemSell)
-								sellCancel()
-								if callErr == nil && sellResp != nil {
-									if ok, _, _ := protocol.ParseSellItemResponse(sellResp.Payload); ok {
-										initialItemIDs[it.PlayerItemID] = true
-										slog.Info("自动卖出精英副本扫荡物成功",
-											"role_id", session.RoleID(),
-											"player_item_id", it.PlayerItemID,
-											"item_id", it.ItemID,
-											"grid_id", it.GridID,
-										)
-									}
-								}
-							}
-						}
-
-						listCtx, listCancel := context.WithTimeout(ctx, 3*time.Second)
-						listPkt, listErr := session.Call(listCtx, protocol.BuildHeroMissionListPacket(), protocol.ActionHeroMissionList)
-						listCancel()
-
-						var heroList *protocol.HeroMissionList
-						if listErr == nil && listPkt != nil {
-							heroList, _ = protocol.ParseHeroMissionListResponse(listPkt.Payload)
-						}
-						if heroList != nil && len(heroList.Items) > 0 && heroList.TotalTimes > 0 {
-							slog.Info("发现可扫荡英雄副本，启动英雄副本扫荡",
-								"role_id", session.RoleID(),
-								"available_items", len(heroList.Items),
-								"total_times", heroList.TotalTimes,
-								"current_stamina", session.GetStamina(),
-							)
-							for _, item := range heroList.Items {
-								if !sweepHasStamina() || sweepSuccessRounds >= cfg.Sweep.MaxBatchTimes {
-									break
-								}
-								for t := uint8(0); t < item.Times; t++ {
-									if !sweepHasStamina() || sweepSuccessRounds >= cfg.Sweep.MaxBatchTimes {
-										break
-									}
-
-									selCtx, selCancel := context.WithTimeout(ctx, 3*time.Second)
-									_, selErr := session.Call(selCtx, protocol.BuildHeroMissionSelectPacket(item.InstanceID), protocol.ActionHeroMissionSelect)
-									selCancel()
-									if selErr != nil {
-										break
-									}
-
-									sweepCtx, sweepCancel := context.WithTimeout(ctx, 3*time.Second)
-									sweepResp, sweepErr := session.Call(sweepCtx, protocol.BuildHeroMissionSweepPacket(), protocol.ActionHeroMissionSweep)
-									sweepCancel()
-									if sweepErr != nil {
-										break
-									}
-
-									_ = session.Send(protocol.BuildHeroMissionQuickFinishPacket(item.InstanceID))
-									res, _ := protocol.ParseHeroMissionSweepResponse(sweepResp.Payload)
-									cost := powerPerSweep
-									if res != nil && res.CostPower > 0 && res.CostPower <= 5 {
-										cost = res.CostPower
-									}
-									exp := int64(3500)
-									coins := int64(15000)
-									if res != nil && res.GainExp > 0 {
-										exp = res.GainExp
-									}
-									if res != nil && res.GainCoins > 0 {
-										coins = res.GainCoins
-									}
-
-									remStamina, _ := session.ConsumeStamina(cost)
-									session.AddRewards(exp, coins)
-									totalCostStamina += cost
-									totalGainExp += exp
-									totalGainCoins += coins
-									sweepSuccessRounds++
-									slog.Info("英雄副本单次扫荡完成",
-										"role_id", session.RoleID(),
-										"instance_id", item.InstanceID,
-										"mission_id", item.MissionID,
-										"cost_stamina", cost,
-										"remaining_stamina", remStamina,
-									)
-									time.Sleep(50 * time.Millisecond)
-								}
-								// 每一类英雄副本扫荡后，若开启卖掉扫荡物则及时卖出
-								sellSweptItems()
-							}
-							sellSweptItems()
-							_ = session.Send(protocol.BuildHeroMissionClosePacket())
-							if !isExplicitPipeline {
-								break sweepLoop
-							}
+						if !isExplicitPipeline {
+							break sweepLoop
 						}
 
 					case "sweep_highest_main":
@@ -570,9 +1006,6 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						}
 
 						for round := 1; round <= cfg.Sweep.MaxBatchTimes; round++ {
-							if sweepSuccessRounds >= cfg.Sweep.MaxBatchTimes {
-								break
-							}
 							if !sweepHasStamina() {
 								break
 							}
@@ -583,8 +1016,9 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							var sweepSucceeded = false
 							var callErr error
 
-							// 若启用 PreferPracticeQuickly，使用 Module 25 秒扫荡协议
-							if cfg.Sweep.PreferPracticeQuickly {
+							// 主线扫荡统一使用官方 Module 25 (Mod_MissionPractice_Base.start_practice)。
+							// 说明: 0x00230002 实际属于英雄副本 start_practice，不能用于主线扫荡。
+							{
 								statusPkt, _ := protocol.BuildPracticeGetStatusPacket(int32(missionID), 0)
 								statusCtx, statusCancel := context.WithTimeout(ctx, 3*time.Second)
 								statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
@@ -671,76 +1105,6 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 										missionName = "浮月林道(1)"
 									}
 								}
-							}
-
-							// 普通扫荡降级
-							if !sweepSucceeded && (callErr == nil || !cfg.Sweep.PreferPracticeQuickly) {
-								enterPkt := protocol.BuildEnterMissionPacket(uint32(missionID))
-								_ = session.Send(enterPkt)
-
-								legacyReq := protocol.SweepRequest{
-									MissionID: uint32(missionID),
-									Times:     1,
-								}
-								legacyPkt, err := protocol.BuildSweepPacket(legacyReq)
-								if err != nil {
-									return fmt.Errorf("dungeon: 构造扫荡封包失败: %w", err)
-								}
-
-								legacyCtx, legacyCancel := context.WithTimeout(ctx, 3*time.Second)
-								legacyResp, legacyErr := session.Call(legacyCtx, legacyPkt, protocol.ActionMissionSweep)
-								legacyCancel()
-
-								if legacyErr != nil {
-									if sweepSuccessRounds > 0 {
-										break
-									}
-									return fmt.Errorf("dungeon: 发送扫荡指令未收到服务端回包: %w", legacyErr)
-								}
-								if legacyResp == nil {
-									if sweepSuccessRounds > 0 {
-										break
-									}
-									return errors.New("dungeon: 服务端返回空扫荡响应")
-								}
-
-								legacyRes, pErr := protocol.ParseSweepResult(legacyResp.Payload)
-								if pErr != nil {
-									if sweepSuccessRounds > 0 {
-										break
-									}
-									return fmt.Errorf("dungeon: 解析扫荡回包失败: %w", pErr)
-								}
-								if !legacyRes.Success {
-									slog.Warn("服务端返回扫荡失败", "role_id", session.RoleID(), "round", round, "message", legacyRes.Message)
-									if strings.Contains(legacyRes.Message, "体力不足") {
-										session.SetStamina(0)
-										session.SetExtraStamina(0)
-										break sweepLoop
-									}
-									if strings.Contains(legacyRes.Message, "背包已满") {
-										if sweepSuccessRounds == 0 && totalCostStamina == 0 {
-											return scheduler.ErrBagFull
-										}
-										break sweepLoop
-									}
-									if sweepSuccessRounds == 0 && totalCostStamina == 0 {
-										return fmt.Errorf("dungeon: sweep rejected by server: %s", legacyRes.Message)
-									}
-									break sweepLoop
-								}
-
-								_ = session.Send(protocol.BuildQuickFinishPacket())
-								if legacyRes.CostPower > 0 && legacyRes.CostPower <= 5 {
-									cost = legacyRes.CostPower
-								}
-								if legacyRes.GainExp > 0 {
-									exp = legacyRes.GainExp
-								}
-								if legacyRes.GainCoins > 0 {
-									coins = legacyRes.GainCoins
-								}
-								sweepSucceeded = true
 							}
 
 							if !sweepSucceeded {
@@ -1675,15 +2039,24 @@ func executeQuestCycle(
 			slog.Info("正在推进任务关卡挑战", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title, "mission_id", mid, "player_level", session.GetPlayerState().Level)
 
 			challengeSuccess := false
-			sweepPkt, _ := protocol.BuildSweepPacket(protocol.SweepRequest{MissionID: uint32(mid), Times: 1})
+			// 主线任务关卡推进统一使用官方 Module 25 扫荡协议。
+			// 注意: 0x00230002 属于英雄副本 start_practice，不能用于主线扫荡。
+			m25Req := protocol.StartPracticeRequest{
+				MissionID: int32(mid),
+				Count:     1,
+				AutoSale:  1,
+			}
+			m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
 			enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
-			enterResp, enterErr := session.Call(enterCtx, sweepPkt, protocol.ActionMissionSweep)
+			enterResp, enterErr := session.Call(enterCtx, m25Pkt, protocol.ActionIDPracticeStart)
 			enterCancel()
 
 			if enterErr == nil && enterResp != nil {
-				if res, pErr := protocol.ParseSweepResult(enterResp.Payload); pErr == nil && res != nil && res.Success {
+				if res, pErr := protocol.ParseStartPracticeResult(enterResp.Payload); pErr == nil && res != nil && res.Result == protocol.PracticeResultSuccess {
 					challengeSuccess = true
-					_ = session.Send(protocol.BuildQuickFinishPacket())
+					if quickPkt, qErr := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0}); qErr == nil {
+						_ = session.Send(quickPkt)
+					}
 				}
 			}
 

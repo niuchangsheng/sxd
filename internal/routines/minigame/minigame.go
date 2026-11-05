@@ -1175,8 +1175,6 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 // 仅使用剩余免费次数，不主动消耗元宝或感悟道具备用次数；
 // 服务端返回的业务失败码全部解析并按语义熔断。
 func NewWuFaRoutine() scheduler.ActivityRoutine {
-	// 未开放的悟法领域服务端不会回包，标记当日不可用以避免同日重复等待超时。
-	var unavailable scheduler.DailySkipCache
 	return scheduler.NewBaseRoutine(
 		"wufa_field",
 		"minigame",
@@ -1187,12 +1185,22 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 			if session == nil {
 				return client.ErrNotConnected
 			}
-			if unavailable.ShouldSkip(session.RoleID(), time.Now()) {
-				slog.Debug("悟法领域今日已确认未开放，跳过", "role_id", session.RoleID())
-				return nil
-			}
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
+			}
+
+			// 0. 原生探测功能开放状态 (Mod_Player_Base.check_function_open)。
+			// 未解锁模块服务端会静默丢弃业务请求，先查询可避免空等超时。
+			chkCtx, chkCancel := context.WithTimeout(ctx, 2*time.Second)
+			open, chkErr := session.CheckFunctionOpen(chkCtx, protocol.FunctionIDWuFaField)
+			chkCancel()
+			if chkErr != nil {
+				slog.Warn("查询悟法领域功能开放状态失败，跳过", "role_id", session.RoleID(), "err", chkErr)
+				return nil
+			}
+			if !open {
+				slog.Info("悟法领域功能未开启，跳过", "role_id", session.RoleID())
+				return nil
 			}
 			slog.Info("正在执行益智任务: 悟法领域技能感悟与领悟", "role_id", session.RoleID())
 
@@ -1203,13 +1211,7 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, infoPkt, protocol.ActionIDWuFaFieldInfo)
 			iCancel()
 			if err != nil || infoResp == nil {
-				if errors.Is(err, context.DeadlineExceeded) {
-					// 服务端对未解锁模块静默丢弃请求，超时即视为当日功能未开放。
-					unavailable.MarkUnavailable(session.RoleID(), time.Now())
-					slog.Info("悟法领域功能未开放（服务端无回包），今日跳过", "role_id", session.RoleID())
-				} else {
-					slog.Warn("查询悟法领域面板未收到回包", "role_id", session.RoleID(), "err", err)
-				}
+				slog.Warn("查询悟法领域面板未收到回包", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 
@@ -2511,6 +2513,240 @@ func NewAskFairyRoutine() scheduler.ActivityRoutine {
 			default:
 				slog.Info("问灵奖励未领取", "role_id", session.RoleID(), "result", result)
 			}
+			return nil
+		},
+	)
+}
+
+// NewGoldenTouchStoneRoutine 构造点金石任务 (Module 551, Mod_GoldenTouchStone_Base)。
+//
+// 先查询点金石状态：待初始化时初始化；待分享/帮助不足时跳过；可点化时读取面板并点化一次。
+// 不消耗元宝。
+func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
+	return scheduler.NewBaseRoutine(
+		"golden_touch_stone",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
+				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
+				defer cancel()
+				return session.Call(cCtx, pkt, act)
+			}
+
+			statusResp, err := call(protocol.BuildGoldenTouchStoneStatusPacket(), protocol.ActionIDGoldenTouchStoneStatus)
+			if err != nil || statusResp == nil || len(statusResp.Payload) == 0 {
+				slog.Info("点金石功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			status, err := protocol.ParseGoldenTouchStoneStatusResult(statusResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析点金石状态失败: %w", err)
+			}
+
+			if status == protocol.GoldenTouchStoneStatusInit {
+				initResp, iErr := call(protocol.BuildGoldenTouchStoneInitPacket(), protocol.ActionIDGoldenTouchStoneInit)
+				if iErr != nil || initResp == nil || len(initResp.Payload) == 0 {
+					slog.Warn("点金石初始化无应答", "role_id", session.RoleID(), "err", iErr)
+					return nil
+				}
+				slog.Info("点金石初始化成功", "role_id", session.RoleID())
+				statusResp, err = call(protocol.BuildGoldenTouchStoneStatusPacket(), protocol.ActionIDGoldenTouchStoneStatus)
+				if err != nil || statusResp == nil || len(statusResp.Payload) == 0 {
+					return nil
+				}
+				status, err = protocol.ParseGoldenTouchStoneStatusResult(statusResp.Payload)
+				if err != nil {
+					return nil
+				}
+			}
+
+			switch status {
+			case protocol.GoldenTouchStoneStatusShare:
+				slog.Info("点金石当前待分享/帮助，跳过（需好友协助）", "role_id", session.RoleID())
+				return nil
+			case protocol.GoldenTouchStoneStatusTouch:
+				// 继续
+			default:
+				slog.Info("点金石状态未知，跳过", "role_id", session.RoleID(), "status", status)
+				return nil
+			}
+
+			panelResp, err := call(protocol.BuildGoldenTouchStoneTouchPanelPacket(), protocol.ActionIDGoldenTouchStoneTouchPanel)
+			if err != nil || panelResp == nil {
+				slog.Info("点金石点化面板无应答，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			if panel, pErr := protocol.ParseGoldenTouchStoneTouchPanelResult(panelResp.Payload); pErr == nil {
+				slog.Info("点金石面板",
+					"role_id", session.RoleID(),
+					"level", panel.Level,
+					"exp", panel.Exp,
+					"this_week_luck", panel.ThisWeekLuckValue,
+					"today_touch_num", panel.TodayTouchNum,
+				)
+			}
+
+			touchResp, err := call(protocol.BuildGoldenTouchStoneTouchPacket(), protocol.ActionIDGoldenTouchStoneTouch)
+			if err != nil || touchResp == nil {
+				slog.Warn("点金石点化无应答", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			result, exp, luck, pErr := protocol.ParseGoldenTouchStoneTouchResult(touchResp.Payload)
+			if pErr != nil {
+				slog.Warn("解析点金石点化回包失败", "role_id", session.RoleID(), "err", pErr)
+				return nil
+			}
+			switch result {
+			case protocol.GoldenTouchStoneResultSuccess:
+				slog.Info("点金石点化成功", "role_id", session.RoleID(), "exp", exp, "luck", luck)
+			case protocol.GoldenTouchStoneResultNotEnoughHelp:
+				slog.Info("点金石帮助人数不足，跳过", "role_id", session.RoleID())
+			case protocol.GoldenTouchStoneResultNotEnoughCount:
+				slog.Info("点金石今日次数已用尽", "role_id", session.RoleID())
+			case protocol.GoldenTouchStoneResultHasHelp:
+				slog.Info("点金石已帮助过", "role_id", session.RoleID())
+			default:
+				slog.Info("点金石点化未成功", "role_id", session.RoleID(), "result", result)
+			}
+			return nil
+		},
+	)
+}
+
+// NewForbiddenBookRoutine 构造禁地之书探索任务 (Module 199, Mod_Awake_Base)。
+//
+// 优先使用各区域免费探索次数；免费次数用尽且仅需铜钱时，按铜钱兑换少量次数继续探索。
+// 永不使用元宝兑换；功能未开放/元宝付费路径直接跳过。
+func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
+	return scheduler.NewBaseRoutine(
+		"forbidden_book",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
+				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
+				defer cancel()
+				return session.Call(cCtx, pkt, act)
+			}
+			fetchInfo := func() (*protocol.ForbiddenBookInfo, error) {
+				resp, err := call(protocol.BuildForbiddenBookInfoPacket(), protocol.ActionIDForbiddenBookInfo)
+				if err != nil {
+					return nil, err
+				}
+				return protocol.ParseForbiddenBookInfoResult(resp.Payload)
+			}
+
+			info, err := fetchInfo()
+			if err != nil || info == nil || len(info.Areas) == 0 {
+				slog.Info("禁地之书功能未开放/无可用区域，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			slog.Info("禁地之书面板",
+				"role_id", session.RoleID(),
+				"areas", len(info.Areas),
+				"consum_score", info.ConsumScore,
+			)
+
+			explored := 0
+			exchanges := 0
+			for _, area := range info.Areas {
+				// 免费次数优先
+				for area.CurNumber > 0 && explored < 30 {
+					resp, eErr := call(protocol.BuildForbiddenBookExplorePacket(area.ForbiddenType, area.ExploreType), protocol.ActionIDForbiddenBookExplore)
+					if eErr != nil {
+						slog.Warn("禁地之书探索无应答", "role_id", session.RoleID(), "type", area.ForbiddenType, "err", eErr)
+						break
+					}
+					result, pErr := protocol.ParseForbiddenBookExploreResult(resp.Payload)
+					if pErr != nil {
+						slog.Warn("解析禁地之书探索回包失败", "role_id", session.RoleID(), "err", pErr)
+						break
+					}
+					if result != protocol.AwakeResultSuccess {
+						slog.Info("禁地之书探索未成功", "role_id", session.RoleID(), "type", area.ForbiddenType, "result", result)
+						break
+					}
+					explored++
+					area.CurNumber--
+					slog.Info("禁地之书探索成功", "role_id", session.RoleID(), "type", area.ForbiddenType, "remaining", area.CurNumber)
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(200 * time.Millisecond):
+					}
+				}
+
+				// 免费次数用尽：仅允许纯铜钱兑换
+				if area.CurNumber == 0 && area.CostCoin > 0 && area.CostIngot <= 0 && exchanges < 5 {
+					coins := session.GetPlayerState().Coins
+					if coins >= int64(area.CostCoin) {
+						resp, xErr := call(protocol.BuildForbiddenBookExchangePacket(area.ForbiddenType), protocol.ActionIDForbiddenBookExchange)
+						if xErr != nil {
+							slog.Warn("禁地之书铜钱兑换无应答", "role_id", session.RoleID(), "type", area.ForbiddenType, "err", xErr)
+							continue
+						}
+						result, pErr := protocol.ParseForbiddenBookExchangeResult(resp.Payload)
+						if pErr != nil || result != protocol.AwakeResultSuccess {
+							slog.Info("禁地之书铜钱兑换未成功", "role_id", session.RoleID(), "type", area.ForbiddenType, "result", result)
+							continue
+						}
+						exchanges++
+						slog.Info("禁地之书铜钱兑换成功", "role_id", session.RoleID(), "type", area.ForbiddenType, "cost_coin", area.CostCoin)
+						if refreshed, rErr := fetchInfo(); rErr == nil && refreshed != nil {
+							for _, ra := range refreshed.Areas {
+								if ra.ForbiddenType != area.ForbiddenType {
+									continue
+								}
+								if ra.CurNumber == 0 {
+									slog.Info("禁地之书兑换后仍无可用次数", "role_id", session.RoleID(), "type", ra.ForbiddenType, "explore_type", ra.ExploreType)
+								}
+								for ra.CurNumber > 0 && explored < 30 {
+									rResp, eErr := call(protocol.BuildForbiddenBookExplorePacket(ra.ForbiddenType, ra.ExploreType), protocol.ActionIDForbiddenBookExplore)
+									if eErr != nil {
+										slog.Warn("禁地之书兑换后探索无应答", "role_id", session.RoleID(), "type", ra.ForbiddenType, "err", eErr)
+										break
+									}
+									rResult, pErr := protocol.ParseForbiddenBookExploreResult(rResp.Payload)
+									if pErr != nil {
+										slog.Warn("解析禁地之书兑换后探索回包失败", "role_id", session.RoleID(), "err", pErr)
+										break
+									}
+									if rResult != protocol.AwakeResultSuccess {
+										slog.Info("禁地之书兑换后探索未成功", "role_id", session.RoleID(), "type", ra.ForbiddenType, "result", rResult)
+										break
+									}
+									explored++
+									ra.CurNumber--
+									slog.Info("禁地之书探索成功", "role_id", session.RoleID(), "type", ra.ForbiddenType, "remaining", ra.CurNumber)
+								}
+								break
+							}
+						}
+					}
+				}
+			}
+			slog.Info("禁地之书巡检完成", "role_id", session.RoleID(), "explored", explored, "coin_exchanges", exchanges)
 			return nil
 		},
 	)

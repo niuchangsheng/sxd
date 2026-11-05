@@ -76,6 +76,8 @@ stateDiagram-v2
 ### 2.1 语义智能熔断机制 (Semantic Cooling-off)
 - **拒绝无谓重试**：当执行中服务端返回特定错误码（例如：`体力不足`、`今日挑战次数已用完`、`等级未达到解锁要求`）时，该 Routine 必须立即进入 **语义智能熔断状态**。
 - **自动对齐恢复窗口**：系统将任务挂起至下一个逻辑重置时间点（如次日 `00:00`，或根据体力回复速率计算的具体时刻），而非在短时间内频繁重试消耗带宽与触发防挂检测。
+- **功能开放状态必须原生探测**：新增玩法在发业务请求前，先用 `RoleSession.CheckFunctionOpen` 调用 `Mod_Player_Base.check_function_open`（Module 0, Action 69），功能编号取自客户端 `FunctionTypeData.List`。回包 `TRUE=119` 才继续；`FALSE=120` 记 `INFO` 后跳过；未知标志位或协议异常按失败处理。禁止用“业务请求超时”反推功能未开放。若需要一次性获取全部已开放功能，可改用 `get_player_function`（Module 0, Action 6），其回包为 `[Int id, Byte isPlayed]` 列表。
+- **静默无回包的边界**：仅当原生探测本身无回包时，才按会话异常记录 `WARN` 并跳过本轮；主服只读探测必须使用独立短超时（见 `SessionConfig.SectQueryTimeout`），不得占用城镇/跨服会话的长超时预算。
 
 ### 2.2 回包解析铁律（强制）
 
@@ -117,6 +119,19 @@ stateDiagram-v2
 - **发包时序**：
   1. 发送 `Module 25, Action 1 (0x00190001)` 发起扫荡；
   2. 解析回包扣减本地体力记录。若体力不足，触发熔断挂起。
+
+#### 3.1.1 精英副本扫荡 (`sweep_elite`)
+
+- **协议归属**：精英/英雄副本属于 `Mod_HeroMission_Base`（**Module 35 / 0x0023**），与主线 `Module 25` 完全异构；旧实现的 `Module 111 / 0x006F` 与 `0x00230002` 主线降级均属误用，已移除。
+- **实机验证的严格载荷**（`test/probes/probe_hero_practice_live.go`）：
+  1. `get_hero_mission_list` (`0x00230000`)：`Uint16 town_id`，**严格 2 字节，不追加 PrevAct**；
+  2. `start_practice` (`0x00230002`)：`Uint16 town_id, UByte auto_num, UByte hero_type`，**严格 4 字节，不追加 PrevAct**；
+  3. `quickly` (`0x00230007`)：**空载荷**；
+  4. `stop_practice` (`0x00230003`)：空载荷。
+- **结果码分流**：`3=SUCCESS`、`6=BAG_FULL`、`7=NOT_ENOUGH_POWER`、`8=NO_MISSION`、`4=NOT_ENOUGH_INGOT`。收到 `4` 必须立即停止，避免误消耗元宝。
+- **城镇全量覆盖**：扫荡入口是城镇而非单个副本实例；`Pieb.db` 中 `Missions.MissionType=1` 的 `map` 去重即为全部精英副本城镇。自动化逐城镇执行 `list -> start_practice -> quickly`，**不得用 `max_batch_times` 截断城镇数量**，否则无法覆盖全部精英副本；体力与每日次数由服务端熔断。
+- **自动出售**：每个城镇结束后对比背包 `PlayerItemID -> Field5 数量` 基线，卖出新增格位；已有格位数量增加时，仅对精英副本主要掉落类型（`item.type_id=1002` 制作卷）整格出售，避免误卖玩家原有的包子/粽子/茶叶蛋等消耗品库存。刚结束扫荡时首个出售请求可能超时，需以 8 秒超时并短暂等待后重试一次。背包满时先 `stop_practice` 并卖出已结算掉落，再重试当前城镇；仍无法腾出空间才返回 `scheduler.ErrBagFull`。
+- **瞬时超时**：单个城镇的列表/扫荡请求超时需短暂退避后重试（最多 4 次），避免偶发网络抖动导致整座城镇漏扫。
 
 ### 3.2 药园农场 (`herb_garden`)
 - **调度策略**：`ScheduleLoop`，每 15 分钟巡视一次。

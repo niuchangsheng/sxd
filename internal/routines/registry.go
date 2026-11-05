@@ -86,6 +86,8 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "fishing", Name: "自动钓鱼命格", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动水域钓鱼与猎命命格吞噬融合", DefaultOn: false},
 		{ID: "scratch_card", Name: "幸运刮刮卡", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "日常免费刮刮卡福利抽取", DefaultOn: false},
 		{ID: "ask_fairy", Name: "每日问灵", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日免费问灵一次，随机奖励优先选元宝，不消耗元宝", DefaultOn: false},
+		{ID: "golden_touch_stone", Name: "点金石", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "点化金石获取经验/幸运值 (不消耗元宝)", DefaultOn: false},
+		{ID: "forbidden_book", Name: "禁地之书", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动探索禁地之书，免费次数用尽后仅用铜钱兑换", DefaultOn: false},
 		{ID: "ice_cave", Name: "一键冰窟探险", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "一键五锤最优路径通关与金币领取", DefaultOn: false},
 		{ID: "era_travel", Name: "山河纪元游历", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "山河纪元游历掷骰子与奇遇寻宝", DefaultOn: false},
 		{ID: "lingdao_practice", Name: "灵道初解修炼", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "灵道初解任务领悟与阶段进阶", DefaultOn: false},
@@ -326,6 +328,10 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewScratchCardRoutine()
 	case "ask_fairy":
 		return minigame.NewAskFairyRoutine()
+	case "golden_touch_stone":
+		return minigame.NewGoldenTouchStoneRoutine()
+	case "forbidden_book":
+		return minigame.NewForbiddenBookRoutine()
 	case "ice_cave":
 		return minigame.NewIceCaveRoutine()
 	case "era_travel":

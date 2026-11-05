@@ -65,6 +65,8 @@ scheduler:
     fishing: true                   # 自动钓鱼命格 (免费鱼钩，自动下钩)
     ice_cave: true                   # 一键冰窟探险 (未开放自动跳过)
     ask_fairy: true             # 每日问灵 (免费1次，随机奖励优先元宝)
+    golden_touch_stone: true    # 点金石 (点化获取经验/幸运值，不消耗元宝)
+    forbidden_book: true        # 禁地之书 (免费次数优先，仅用铜钱兑换次数)
     device_bind_reward: true    # 设备绑定奖励 (绑定手机后自动领首绑/月度元宝)
     faction_blessing: true      # 帮派祭神 (每日免费上香获取祝福/声望/神像灵气)
     faction_lucky_wheel: true   # 帮派转盘 (消耗青龙令自动抽奖)

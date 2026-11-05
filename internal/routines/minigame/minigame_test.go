@@ -130,6 +130,63 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 	})
 }
 
+// TestWuFaRoutine_FunctionClosedSkips 验证原生功能开放探测返回 FALSE 时，
+// 不再发送悟法领域面板等业务请求。
+func TestWuFaRoutine_FunctionClosedSkips(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	actions := make(chan uint32, 8)
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(c2)
+			if err != nil {
+				return
+			}
+			actions <- pkt.ActionID
+			if pkt.ActionID == protocol.ActionIDPlayerCheckFunctionOpen {
+				_ = protocol.WritePacket(c2, protocol.NewPacket(
+					protocol.ActionIDPlayerCheckFunctionOpen,
+					[]byte{protocol.PlayerFunctionOpenFalse},
+				))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:   "role_test_wufa_closed",
+		RoleName: "测试悟法未开放角色",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return c1, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	if err := NewWuFaRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("功能未开放时执行不应返回错误: %v", err)
+	}
+
+	select {
+	case got := <-actions:
+		if got != protocol.ActionIDPlayerCheckFunctionOpen {
+			t.Fatalf("期望先发送功能开放探测, 实际 0x%08X", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("未收到功能开放探测请求")
+	}
+	select {
+	case got := <-actions:
+		t.Fatalf("功能未开放时仍发送了业务请求 0x%08X", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestTreasureHouse_InteractiveSelection(t *testing.T) {
 	pool := &protocol.TreasureHousePool{
 		TotalCount: 45,
@@ -663,5 +720,35 @@ func TestImperialExamRoutine_Execute(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if err := NewImperialExamRoutine(nil).Execute(context.Background(), session, nil); err != nil {
 		t.Fatalf("金榜题名检测任务执行失败: %v", err)
+	}
+}
+
+// TestGoldenTouchStoneRoutine_Execute 覆盖点金石状态检测与点化路径。
+func TestGoldenTouchStoneRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_golden_stone", RoleName: "测试点金石角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := NewGoldenTouchStoneRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("点金石任务执行失败: %v", err)
+	}
+}
+
+// TestForbiddenBookRoutine_Execute 覆盖禁地之书免费探索与铜钱兑换路径。
+func TestForbiddenBookRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_forbidden_book", RoleName: "测试禁地之书角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := NewForbiddenBookRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("禁地之书任务执行失败: %v", err)
 	}
 }
