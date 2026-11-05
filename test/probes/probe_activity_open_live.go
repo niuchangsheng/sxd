@@ -117,6 +117,10 @@ func main() {
 		{0x02BA0001, "summer_themed_gift.panel_info", nil},
 		{0x033A0000, "island_fishing.panel_info", nil},
 		{0x01F70000, "ask_fairy.get_recall_info", nil},
+		{0x031E0001, "wealthy_fortune.panel_info", nil},
+		{0x03480000, "eternal_games_present.main_info", nil},
+		{0x02960001, "search_treasure_box.panel_info", nil},
+		{0x016C0000, "reward_task.info", nil},
 	} {
 		cCtx, cCancel := context.WithTimeout(ctx, 5*time.Second)
 		resp, cErr := sess.Call(cCtx, protocol.NewPacket(q.act, q.payload), q.act)
