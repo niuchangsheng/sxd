@@ -481,11 +481,13 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 				resp, err := session.Call(cCtx, pkt, protocol.ActionIDGodBlessClaim)
 				cCancel()
 
-				if err == nil && resp != nil {
-					successCount++
-				} else {
+				if err != nil || resp == nil || len(resp.Payload) == 0 {
+					if successCount == 0 {
+						slog.Info("天神赐福功能未开放/无回包数据，跳过", "role_id", session.RoleID(), "err", err)
+					}
 					break
 				}
+				successCount++
 			}
 
 			slog.Info("跨服天神赐福领取完成", "role_id", session.RoleID(), "claimed_times", successCount)
