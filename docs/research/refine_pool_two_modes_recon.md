@@ -26,6 +26,19 @@ Uint32 prevAct
 旧实现把 `target/cost/mode` 误读为 `quality/type/count`，并以已完成槽位数作为
 第 3 字节；在恰好 10 个已完成槽位时因数值碰巧等于 `ONE_KEY=10` 才被服务端受理。
 
+## 1.1 功能开放探测
+
+未解锁淬炼池的角色，服务端会**静默丢弃** `open_panel` 请求，客户端只能等到超时。
+原版提供通用探测接口 `Mod_Player_Base.check_function_open`：
+
+- Action：`0x00000045 (Mod 0, Act 69)`
+- 请求：`Int32 function_id, Uint32 prevAct`
+- 回包：`UByte`，119 = TRUE（开放）、120 = FALSE（未开放）
+- 淬炼池 `function_id = 163`（`FunctionTypeData` 中 `RefinePool`）
+
+实机验证（2026-11-06）：s1 角色返回 `0x78`（120，未开放），s0 角色返回 `0x77`
+（119，开放）。自动化应先探测再发业务请求，未开启直接跳过。
+
 ## 2. 回包结果码
 
 | result | 常量 |

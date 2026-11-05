@@ -278,6 +278,10 @@ classDiagram
    - 成功后服务端会推送 `0x005F0001 notify_enter_town` 场景数据。
 
 ### 4.7 Module 282 / 534: 粗铁淬炼池 (`Mod_RefinePool_Base`)
+- **功能开放探测**（前置，推荐）：`0x00000045 (0, 69)` `check_function_open`，
+  请求 `Int32 function_id, Uint32 prevAct`，回包 `UByte`：119 开放、120 未开放。
+  粗铁淬炼池的 `function_id = 163`（`FunctionTypeData: RefinePool`）。
+  功能未开放时服务端会静默丢弃 `open_panel`，因此应先探测再发业务请求。
 - `0x011A0000 (282, 0)`：打开淬炼池面板，请求载荷仅 `prevAct`。回包线格式：
   `Short iron_count, iron_count × [Byte seq, UByte produce_status, Int need_time, Int remain_time, Byte quality],
   Byte cur_seq, Byte level, Int exp, UByte one_key_lock_flag, Int coins_need, Byte ingot_need,
