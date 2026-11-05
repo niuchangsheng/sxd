@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,11 @@ type spiritPoolGateway struct {
 	items        []protocol.RefinePoolAwardItem
 	lingCaiItems []protocol.RefinePoolAwardItem
 	awards       int
+	// functionClosed 为 true 时模拟功能未开启, 开放状态查询返回 FALSE。
+	functionClosed bool
+
+	openCalls  atomic.Int32
+	checkCalls atomic.Int32
 
 	mu             sync.Mutex
 	refinePayloads [][]byte
@@ -140,7 +146,15 @@ func startSpiritPoolSession(t *testing.T, gw *spiritPoolGateway) (*client.RoleSe
 				}))
 			case protocol.ActionHeartbeat:
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+			case protocol.ActionIDPlayerCheckFunctionOpen:
+				gw.checkCalls.Add(1)
+				flag := protocol.PlayerFunctionOpenTrue
+				if gw.functionClosed {
+					flag = protocol.PlayerFunctionOpenFalse
+				}
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerCheckFunctionOpen, []byte{flag}))
 			case protocol.ActionIDRefinePoolOpen:
+				gw.openCalls.Add(1)
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDRefinePoolOpen, buildSpiritPoolPanelPayload()))
 			case protocol.ActionIDRefinePoolPanel:
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDRefinePoolPanel, []byte{0, 0, 0, 0, 0}))
@@ -258,6 +272,25 @@ func TestSpiritPoolRoutine_SuccessWithoutReward(t *testing.T) {
 
 	if err := executeSpiritPool(t, session, farming.DefaultSpiritPoolConfig()); err == nil {
 		t.Fatal("成功码无产出应返回错误")
+	}
+}
+
+func TestSpiritPoolRoutine_FunctionClosedSkipsOpen(t *testing.T) {
+	gw := &spiritPoolGateway{functionClosed: true}
+	session, cleanup := startSpiritPoolSession(t, gw)
+	defer cleanup()
+
+	if err := executeSpiritPool(t, session, farming.DefaultSpiritPoolConfig()); err != nil {
+		t.Fatalf("功能未开启应正常跳过, 实际: %v", err)
+	}
+	if got := gw.checkCalls.Load(); got != 1 {
+		t.Fatalf("应查询 1 次功能开放状态, 实际 %d", got)
+	}
+	if got := gw.openCalls.Load(); got != 0 {
+		t.Fatalf("功能未开启时不应发送 open_panel, 实际 %d 次", got)
+	}
+	if got := len(gw.lastRefinePayload()); got != 0 {
+		t.Fatalf("功能未开启时不应发送 refine 请求, payload_len=%d", got)
 	}
 }
 

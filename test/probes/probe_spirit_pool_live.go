@@ -1,6 +1,6 @@
 //go:build probe
 
-// 目标协议: [Module 282, Action 0] 打开淬炼池 + [Module 534, Action 5] 资源面板 + [Module 282, Action 1] 淬炼执行
+// 目标协议: [Module 0, Action 69] 功能开放查询 + [Module 282, Action 0] 打开淬炼池 + [Module 534, Action 5] 资源面板 + [Module 282, Action 1] 淬炼执行
 // 运行命令: go run -tags=probe test/probes/probe_spirit_pool_live.go
 // 可选执行: SPIRIT_POOL_EXECUTE=1 go run -tags=probe test/probes/probe_spirit_pool_live.go
 // 可选配置: SXD_CONFIG=configs/s0.yaml (默认 configs/config.yaml)
@@ -90,6 +90,28 @@ func main() {
 		return sess.Call(cCtx, pkt, expectedAct)
 	}
 
+	// 0. 先查询功能开放状态 (Mod 0, Act 69), 未开启时服务端会静默丢弃业务请求
+	chkPkt := protocol.BuildCheckFunctionOpenPacket(protocol.FunctionIDRefinePool, sess.LastActionID())
+	slog.Info("查询淬炼池功能开放状态",
+		"action", fmt.Sprintf("0x%08X", chkPkt.ActionID),
+		"payload_hex", hex.EncodeToString(chkPkt.Payload),
+	)
+	chkResp, err := callWithTimeout(chkPkt, protocol.ActionIDPlayerCheckFunctionOpen, 3*time.Second)
+	if err != nil {
+		slog.Warn("查询淬炼池功能开放状态无应答", "err", err)
+		return
+	}
+	openFlag, err := protocol.ParseCheckFunctionOpenResponse(chkResp.Payload)
+	if err != nil {
+		slog.Warn("解析淬炼池开放状态失败", "err", err)
+		return
+	}
+	if openFlag != protocol.PlayerFunctionOpenTrue {
+		slog.Info("淬炼池功能未开启, 跳过", "open_flag", openFlag)
+		return
+	}
+	slog.Info("淬炼池功能已开启", "open_flag", openFlag)
+
 	// 1. 打开淬炼池面板 (只读), 前序动作号必须与网关实际序列一致
 	openPkt := protocol.BuildRefinePoolOpenPacket(sess.LastActionID())
 	slog.Info("发送打开淬炼池面板",
@@ -98,7 +120,7 @@ func main() {
 	)
 	openResp, err := callWithTimeout(openPkt, protocol.ActionIDRefinePoolOpen, 3*time.Second)
 	if err != nil {
-		slog.Warn("淬炼池面板无应答", "err", err)
+		slog.Warn("淬炼池面板无应答（可能未解锁圣器/淬炼池，或配置角色不在目标服）", "err", err)
 		return
 	}
 	dumpPacket("淬炼池 open_panel 回包", openResp)

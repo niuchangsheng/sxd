@@ -7,6 +7,7 @@ package farming
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -1157,13 +1158,54 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				"target", targetName,
 			)
 
-			// 1. 打开淬炼池面板 (Mod 282, Act 0), 获取各铁槽生产状态
+			// 1. 探测功能是否开放 (Mod 0, Act 69)。未解锁模块服务端会静默丢弃业务请求,
+			// 先查询可避免每个周期都等待 open_panel 超时。
+			chkPkt := protocol.BuildCheckFunctionOpenPacket(protocol.FunctionIDRefinePool, session.LastActionID())
+			chkCtx, chkCancel := context.WithTimeout(ctx, callTimeout)
+			chkResp, chkErr := session.Call(chkCtx, chkPkt, protocol.ActionIDPlayerCheckFunctionOpen)
+			chkCancel()
+			if chkErr != nil {
+				if errors.Is(chkErr, context.DeadlineExceeded) {
+					slog.Info("查询粗铁淬炼池开放状态无回包, 本轮跳过",
+						"role_id", session.RoleID(),
+						"target", targetName,
+					)
+				} else {
+					slog.Warn("查询粗铁淬炼池开放状态失败, 本轮跳过",
+						"role_id", session.RoleID(),
+						"err", chkErr,
+					)
+				}
+				return nil
+			}
+			openFlag, err := protocol.ParseCheckFunctionOpenResponse(chkResp.Payload)
+			if err != nil {
+				slog.Warn("解析粗铁淬炼池开放状态失败", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			if openFlag != protocol.PlayerFunctionOpenTrue {
+				slog.Info("粗铁淬炼池功能未开启, 跳过",
+					"role_id", session.RoleID(),
+					"target", targetName,
+					"open_flag", openFlag,
+				)
+				return nil
+			}
+
+			// 2. 打开淬炼池面板 (Mod 282, Act 0), 获取各铁槽生产状态
 			openPkt := protocol.BuildRefinePoolOpenPacket(session.LastActionID())
 			oCtx, oCancel := context.WithTimeout(ctx, callTimeout)
 			openResp, err := session.Call(oCtx, openPkt, protocol.ActionIDRefinePoolOpen)
 			oCancel()
 			if err != nil {
-				slog.Warn("打开粗铁淬炼池面板失败", "role_id", session.RoleID(), "err", err)
+				if errors.Is(err, context.DeadlineExceeded) {
+					slog.Info("打开粗铁淬炼池面板无回包（开放状态已确认，可能为网关瞬断），本轮跳过",
+						"role_id", session.RoleID(),
+						"target", targetName,
+					)
+				} else {
+					slog.Warn("打开粗铁淬炼池面板失败", "role_id", session.RoleID(), "err", err)
+				}
 				return nil
 			}
 			panel, err := protocol.ParseRefinePoolOpenResponse(openResp.Payload)
@@ -1172,7 +1214,7 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 2. 查询淬炼池资源面板 (Mod 534, Act 5), 与实机抓包序列保持一致
+			// 3. 查询淬炼池资源面板 (Mod 534, Act 5), 与实机抓包序列保持一致
 			panelPkt := protocol.BuildRefinePoolPanelPacket(protocol.ActionIDRefinePoolOpen)
 			pCtx, pCancel := context.WithTimeout(ctx, callTimeout)
 			_, _ = session.Call(pCtx, panelPkt, protocol.ActionIDRefinePoolPanel)
@@ -1190,7 +1232,7 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 3. 一键操作所有已完成槽位 (固定铜钱消耗, 永不扣除元宝)
+			// 4. 一键操作所有已完成槽位 (固定铜钱消耗, 永不扣除元宝)
 			execPkt := protocol.BuildRefineExecutePacket(
 				target,
 				protocol.RefinePoolCostCoins,
