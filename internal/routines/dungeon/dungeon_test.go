@@ -2386,3 +2386,18 @@ func TestZodiacRoutine_ChallengeWithLevelCheck(t *testing.T) {
 		t.Fatalf("生肖挑战任务执行失败: %v", err)
 	}
 }
+
+// TestSpiritTrialRoutine_Execute 覆盖精灵试炼模式领奖与挑战路径。
+func TestSpiritTrialRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_spirit_trial", RoleName: "测试精灵试炼角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := dungeon.NewSpiritTrialRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("精灵试炼任务执行失败: %v", err)
+	}
+}

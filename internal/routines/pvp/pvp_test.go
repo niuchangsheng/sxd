@@ -711,3 +711,33 @@ func TestWorldBossResultName(t *testing.T) {
 		}
 	}
 }
+
+// TestGodsAndDemonsRoutine_SignUp 覆盖神魔大战报名期自动报名路径。
+func TestGodsAndDemonsRoutine_SignUp(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_god_war", RoleName: "测试神魔角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := NewGodsAndDemonsRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("神魔大战任务执行失败: %v", err)
+	}
+}
+
+// TestCrossServerLadderRoutine_Join 覆盖跨服PK开放期自动参赛路径。
+func TestCrossServerLadderRoutine_Join(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_ladder", RoleName: "测试跨服PK角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := NewCrossServerLadderRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("跨服PK任务执行失败: %v", err)
+	}
+}

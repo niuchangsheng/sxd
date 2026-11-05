@@ -411,7 +411,12 @@ func formatFateAwards(awards []protocol.FateAward) string {
 }
 
 // NewPartnerGuessRoutine 构造伙伴猜猜看趣味活动。
+// NewPartnerGuessRoutine 构造伙伴猜猜看任务 (Module 369, Mod_GuessPartner_Base)。
+//
+// 按剩余次数开局：先用完免费刮图次数，再提交候选中的第一个答案，
+// 按 RIGHT/WRONG 分流。不消耗元宝。
 func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"partner_guess",
 		"minigame",
@@ -419,7 +424,105 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行益智任务: 伙伴猜猜看自动竞猜")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			iCtx, iCancel := context.WithTimeout(ctx, callTimeout)
+			infoResp, err := session.Call(iCtx, protocol.BuildGuessPartnerInfoPacket(), protocol.ActionIDGuessPartnerInfo)
+			iCancel()
+			if err != nil {
+				slog.Info("伙伴猜猜看功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			times, err := protocol.ParseGuessPartnerInfoResult(infoResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析伙伴猜猜看次数失败: %w", err)
+			}
+			if times <= 0 {
+				slog.Info("伙伴猜猜看今日次数已用尽", "role_id", session.RoleID())
+				return nil
+			}
+			if times > 5 { // 单轮上限，避免异常次数导致长时间运行
+				times = 5
+			}
+
+			right, wrong := 0, 0
+			for round := int32(0); round < times; round++ {
+				sCtx, sCancel := context.WithTimeout(ctx, callTimeout)
+				startResp, sErr := session.Call(sCtx, protocol.BuildGuessPartnerStartPacket(), protocol.ActionIDGuessPartnerStart)
+				sCancel()
+				if sErr != nil {
+					slog.Warn("伙伴猜猜看开局无应答", "role_id", session.RoleID(), "err", sErr)
+					break
+				}
+				rd, pErr := protocol.ParseGuessPartnerStartResult(startResp.Payload)
+				if pErr != nil {
+					slog.Warn("解析伙伴猜猜看开局回包失败", "role_id", session.RoleID(), "err", pErr)
+					break
+				}
+				if rd.Result == protocol.GuessPartnerResultPackFull {
+					return scheduler.ErrBagFull
+				}
+				if rd.Result != protocol.GuessPartnerResultSuccess || len(rd.RoleIDs) == 0 {
+					slog.Info("伙伴猜猜看开局未成功", "role_id", session.RoleID(), "result", rd.Result)
+					break
+				}
+
+				// 用完免费刮图次数
+				remain := rd.RemainScrapeTimes
+				for remain > 0 {
+					scCtx, scCancel := context.WithTimeout(ctx, callTimeout)
+					scResp, scErr := session.Call(scCtx, protocol.BuildGuessPartnerScrapePacket(), protocol.ActionIDGuessPartnerScrape)
+					scCancel()
+					if scErr != nil {
+						break
+					}
+					_, next, e := protocol.ParseGuessPartnerScrapeResult(scResp.Payload)
+					if e != nil {
+						break
+					}
+					if next >= remain {
+						break
+					}
+					remain = next
+				}
+
+				gCtx, gCancel := context.WithTimeout(ctx, callTimeout)
+				gResp, gErr := session.Call(gCtx, protocol.BuildGuessPartnerGuessPacket(rd.RoleIDs[0]), protocol.ActionIDGuessPartnerGuess)
+				gCancel()
+				if gErr != nil {
+					slog.Warn("伙伴猜猜看作答无应答", "role_id", session.RoleID(), "err", gErr)
+					break
+				}
+				gr, gpErr := protocol.ParseGuessPartnerGuessResult(gResp.Payload)
+				if gpErr != nil {
+					slog.Warn("解析伙伴猜猜看作答回包失败", "role_id", session.RoleID(), "err", gpErr)
+					break
+				}
+				switch gr.Result {
+				case protocol.GuessPartnerResultRight:
+					right++
+					slog.Info("伙伴猜猜看猜对", "role_id", session.RoleID(), "role_id_guess", rd.RoleIDs[0],
+						"item_id", gr.Award.ItemID, "count", gr.Award.Count)
+					return nil // 猜对即完成本日轮次
+				case protocol.GuessPartnerResultWrong:
+					wrong++
+					slog.Info("伙伴猜猜看猜错", "role_id", session.RoleID(), "role_id_guess", rd.RoleIDs[0])
+					if gr.RemainGuessTimes <= 0 {
+						return nil
+					}
+				case protocol.GuessPartnerResultPackFull:
+					return scheduler.ErrBagFull
+				default:
+					slog.Info("伙伴猜猜看作答未成功", "role_id", session.RoleID(), "result", gr.Result)
+					return nil
+				}
+			}
+			slog.Info("伙伴猜猜看完成", "role_id", session.RoleID(), "right", right, "wrong", wrong)
 			return nil
 		},
 	)
@@ -759,7 +862,12 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 }
 
 // NewImperialExamRoutine 构造金榜题名会试自动答题任务。
+// NewImperialExamRoutine 构造金榜题名状态检测任务 (Module 237)。
+//
+// 先查询活动时间与阶段；活动未开始/已结束/已关闭时跳过。
+// 题目内容由客户端资源 SWF 提供，当前缺少可靠题库来源，因此只检测状态、不提交答案。
 func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"imperial_exam",
 		"minigame",
@@ -767,13 +875,40 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行益智任务: 金榜题名会试科举智能答题")
-			if qaEngine != nil {
-				sampleQ := "李白字什么？"
-				ans, conf, found := qaEngine.Match(sampleQ)
-				if found {
-					slog.Debug("金榜题名答题决策成功", "question", sampleQ, "answer", ans, "confidence", conf)
-				}
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			_ = qaEngine // 保留构造签名；当前无题库数据源
+
+			cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
+			resp, err := session.Call(cCtx, protocol.BuildImperialExamStatusPacket(), protocol.ActionIDImperialExamStatus)
+			cCancel()
+			if err != nil {
+				slog.Info("金榜题名功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			status, err := protocol.ParseImperialExamStatusResult(resp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析金榜题名活动状态失败: %w", err)
+			}
+			switch status.Status {
+			case protocol.ImperialExamActivityStart:
+				slog.Info("金榜题名活动进行中；缺少题库数据源，跳过作答",
+					"role_id", session.RoleID(),
+					"start_time", status.StartTime,
+					"end_time", status.EndTime,
+				)
+			case protocol.ImperialExamActivityEnd:
+				slog.Info("金榜题名活动已结束，跳过", "role_id", session.RoleID())
+			case protocol.ImperialExamActivityClose:
+				slog.Info("金榜题名活动已关闭，跳过", "role_id", session.RoleID())
+			case protocol.ImperialExamAnswerOver:
+				slog.Info("金榜题名今日答题已结束，跳过", "role_id", session.RoleID())
+			default:
+				slog.Info("金榜题名阶段未知，跳过", "role_id", session.RoleID(), "status", status.Status)
 			}
 			return nil
 		},

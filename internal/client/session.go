@@ -2434,6 +2434,71 @@ func runMockGameServer(conn net.Conn) {
 		case protocol.ActionIDScratchCardShave:
 			_ = protocol.WritePacket(conn, protocol.BuildScratchCardShaveResultPacket(protocol.ScratchCardResultIngot, 3345))
 
+		case protocol.ActionIDRuneBatchList:
+			_ = protocol.WritePacket(conn, protocol.BuildRuneBatchListResultPacket(protocol.RuneBatchInfo{
+				Field1: 600, Field2: 10, Field3: 98, Field4: 24050000,
+			}))
+
+		case protocol.ActionIDImperialExamStatus:
+			_ = protocol.WritePacket(conn, protocol.BuildImperialExamStatusResultPacket(protocol.ImperialExamStatus{
+				Status: protocol.ImperialExamActivityStart,
+			}))
+
+		case protocol.ActionIDGuessPartnerInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildGuessPartnerInfoResultPacket(1))
+
+		case protocol.ActionIDGuessPartnerStart:
+			_ = protocol.WritePacket(conn, protocol.BuildGuessPartnerStartResultPacket(protocol.GuessPartnerRound{
+				Result: protocol.GuessPartnerResultSuccess, PictureID: 1, RemainTime: 60,
+				RemainScrapeTimes: 1, RemainGuessTimes: 1, RoleIDs: []int32{1, 2},
+			}))
+
+		case protocol.ActionIDGuessPartnerScrape:
+			_ = protocol.WritePacket(conn, protocol.BuildGuessPartnerScrapeResultPacket(protocol.GuessPartnerResultSuccess, 0))
+
+		case protocol.ActionIDGuessPartnerGuess:
+			_ = protocol.WritePacket(conn, protocol.BuildGuessPartnerGuessResultPacket(protocol.GuessPartnerResultRight, 0, 5715, 1))
+
+		case protocol.ActionIDStMineInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildStMineInfoResultPacket(protocol.StMineInfo{
+				Result: protocol.StMineResultSuccess, Level: 1, CurMountain: 1,
+			}))
+
+		case protocol.ActionIDStMineEnter:
+			_ = protocol.WritePacket(conn, protocol.BuildStMineActionResultPacket(protocol.ActionIDStMineEnter, protocol.StMineResultSuccess))
+
+		case protocol.ActionIDStMineReceiveAward:
+			_ = protocol.WritePacket(conn, protocol.BuildStMineActionResultPacket(protocol.ActionIDStMineReceiveAward, protocol.StMineResultSuccess))
+
+		case protocol.ActionIDStMineLeave:
+			_ = protocol.WritePacket(conn, protocol.BuildStMineActionResultPacket(protocol.ActionIDStMineLeave, protocol.StMineResultSuccess))
+
+		case protocol.ActionIDStTrialsModeStatus:
+			_ = protocol.WritePacket(conn, protocol.BuildStTrialsModeStatusResultPacket([]protocol.StTrialsMode{
+				{ModeType: 1, RemainChallengeTimes: 1, ModeStatus: 1},
+			}))
+
+		case protocol.ActionIDStTrialsModeInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildStTrialsModeInfoResultPacket(protocol.StTrialsModeInfo{Floor: 1}))
+
+		case protocol.ActionIDStTrialsGetAward:
+			_ = protocol.WritePacket(conn, protocol.BuildStTrialsAwardResultPacket(protocol.StTrialsResultSuccess))
+
+		case protocol.ActionIDStTrialsChallenge:
+			_ = protocol.WritePacket(conn, protocol.BuildStTrialsChallengeResultPacket(protocol.StTrialsResultSuccess))
+
+		case protocol.ActionIDWorldPkStatus:
+			_ = protocol.WritePacket(conn, protocol.BuildWorldPkStatusResultPacket(protocol.WorldPkStatusOn))
+
+		case protocol.ActionIDWorldPkJoin:
+			_ = protocol.WritePacket(conn, protocol.BuildWorldPkJoinResultPacket(protocol.WorldPkResultSuccess))
+
+		case protocol.ActionIDGodWarStatus:
+			_ = protocol.WritePacket(conn, protocol.BuildGodWarStatusResultPacket(protocol.GodWarStatusSignUp, 0))
+
+		case protocol.ActionIDGodWarSignUp:
+			_ = protocol.WritePacket(conn, protocol.BuildGodWarSignUpResultPacket(protocol.GodWarResultSuccess))
+
 		case protocol.ActionIDSectOpenStatus:
 			_ = protocol.WritePacket(conn, protocol.BuildSectOpenStatusResultPacket(1))
 

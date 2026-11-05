@@ -442,3 +442,33 @@ func TestGourdRealmRoutine_Execute(t *testing.T) {
 		t.Fatalf("仙葫芦任务执行失败: %v", err)
 	}
 }
+
+// TestCrystalMineRoutine_Execute 覆盖矿山进入、领取收益与离开路径。
+func TestCrystalMineRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_mine", RoleName: "测试矿山角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := farming.NewCrystalMineRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("矿山任务执行失败: %v", err)
+	}
+}
+
+// TestRuneRefineRoutine_Execute 覆盖符文批量信息检测路径（不执行炼化）。
+func TestRuneRefineRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_rune", RoleName: "测试符文角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := farming.NewRuneRefineRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("符文检测任务执行失败: %v", err)
+	}
+}

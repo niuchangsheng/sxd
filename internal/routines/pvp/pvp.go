@@ -744,7 +744,12 @@ func findStArenaReport(reports []protocol.StArenaWarReport, playerID, targetID i
 }
 
 // NewGodsAndDemonsRoutine 构造神魔大战限时活动任务。
+// NewGodsAndDemonsRoutine 构造神魔大战自动报名任务 (Module 118)。
+//
+// 先查询大战阶段：仅报名期 (SIGN_UP) 发起报名；未开启或已进入赛程阶段时跳过。
+// 不调用清冷却/购买挑战次数等消耗元宝接口。
 func NewGodsAndDemonsRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"gods_and_demons",
 		"pvp",
@@ -752,7 +757,54 @@ func NewGodsAndDemonsRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityHigh,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行对抗任务: 神魔大战阵营自动参战")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			sCtx, sCancel := context.WithTimeout(ctx, callTimeout)
+			statusResp, err := session.Call(sCtx, protocol.BuildGodWarStatusPacket(), protocol.ActionIDGodWarStatus)
+			sCancel()
+			if err != nil {
+				slog.Info("神魔大战功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			status, err := protocol.ParseGodWarStatusResult(statusResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析神魔大战阶段失败: %w", err)
+			}
+			switch status.Status {
+			case protocol.GodWarStatusClose:
+				slog.Info("神魔大战未开启，跳过", "role_id", session.RoleID())
+				return nil
+			case protocol.GodWarStatusSignUp:
+				// 报名期，继续
+			default:
+				slog.Info("神魔大战当前非报名期，跳过",
+					"role_id", session.RoleID(),
+					"status", status.Status,
+					"race_count", status.RaceCount,
+				)
+				return nil
+			}
+
+			rCtx, rCancel := context.WithTimeout(ctx, callTimeout)
+			signResp, err := session.Call(rCtx, protocol.BuildGodWarSignUpPacket(), protocol.ActionIDGodWarSignUp)
+			rCancel()
+			if err != nil {
+				return fmt.Errorf("神魔大战报名失败: %w", err)
+			}
+			result, err := protocol.ParseGodWarSignUpResult(signResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析神魔大战报名回包失败: %w", err)
+			}
+			if result == protocol.GodWarResultSuccess {
+				slog.Info("神魔大战报名成功", "role_id", session.RoleID())
+			} else {
+				slog.Info("神魔大战报名未成功", "role_id", session.RoleID(), "result", result)
+			}
 			return nil
 		},
 	)
@@ -924,7 +976,12 @@ func worldBossResultName(result uint8) string {
 }
 
 // NewCrossServerLadderRoutine 构造跨服天梯争霸挑战任务。
+// NewCrossServerLadderRoutine 构造跨服 PK 自动参赛任务 (Module 349)。
+//
+// 先查询活动状态，仅在 ON 时加入 PK；OFF/超级城镇关闭时跳过。
+// 不购买挑战次数、不清除冷却。
 func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"cross_server_ladder",
 		"pvp",
@@ -932,7 +989,56 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行对抗任务: 跨服天梯排位挑战与段位领奖")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			sCtx, sCancel := context.WithTimeout(ctx, callTimeout)
+			statusResp, err := session.Call(sCtx, protocol.BuildWorldPkStatusPacket(), protocol.ActionIDWorldPkStatus)
+			sCancel()
+			if err != nil {
+				slog.Info("跨服PK功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			status, err := protocol.ParseWorldPkStatusResult(statusResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析跨服PK状态失败: %w", err)
+			}
+			if status.Status != protocol.WorldPkStatusOn {
+				slog.Info("跨服PK当前未开放，跳过",
+					"role_id", session.RoleID(),
+					"status", status.Status,
+				)
+				return nil
+			}
+
+			jCtx, jCancel := context.WithTimeout(ctx, callTimeout)
+			joinResp, err := session.Call(jCtx, protocol.BuildWorldPkJoinPacket(), protocol.ActionIDWorldPkJoin)
+			jCancel()
+			if err != nil {
+				return fmt.Errorf("跨服PK加入失败: %w", err)
+			}
+			result, err := protocol.ParseWorldPkJoinResult(joinResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析跨服PK加入回包失败: %w", err)
+			}
+			switch result.Result {
+			case protocol.WorldPkResultSuccess:
+				slog.Info("跨服PK加入成功", "role_id", session.RoleID())
+			case protocol.WorldPkResultLowLevel:
+				slog.Info("跨服PK等级不足", "role_id", session.RoleID())
+			case protocol.WorldPkResultTimeCD:
+				slog.Info("跨服PK冷却中", "role_id", session.RoleID())
+			case protocol.WorldPkResultTimesLimit:
+				slog.Info("跨服PK次数上限", "role_id", session.RoleID())
+			case protocol.WorldPkResultActivityNotOpen:
+				slog.Info("跨服PK活动未开放", "role_id", session.RoleID())
+			default:
+				slog.Info("跨服PK加入未成功", "role_id", session.RoleID(), "result", result.Result)
+			}
 			return nil
 		},
 	)

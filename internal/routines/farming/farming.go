@@ -976,7 +976,12 @@ func NewPilgrimageRoutine(configs ...PilgrimageConfig) scheduler.ActivityRoutine
 }
 
 // NewCrystalMineRoutine 构造仙界矿山开采任务。
+// NewCrystalMineRoutine 构造仙界矿山收益领取任务 (Module 264, Mod_StMine_Base)。
+//
+// 先查询矿山状态；未开放/超级城镇关闭时跳过。开放时进入当前矿脉、
+// 领取收益并离开。不购买抢夺次数、不清除冷却、不延长保护时间。
 func NewCrystalMineRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"crystal_mine",
 		"farming",
@@ -984,7 +989,79 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		30*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行资源任务: 仙界矿山自动开采")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			iCtx, iCancel := context.WithTimeout(ctx, callTimeout)
+			infoResp, err := session.Call(iCtx, protocol.BuildStMineInfoPacket(), protocol.ActionIDStMineInfo)
+			iCancel()
+			if err != nil {
+				slog.Info("仙界矿山不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			info, err := protocol.ParseStMineInfoResult(infoResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析矿山信息失败: %w", err)
+			}
+			slog.Info("仙界矿山状态",
+				"role_id", session.RoleID(),
+				"result", info.Result,
+				"level", info.Level,
+				"cur_mountain", info.CurMountain,
+			)
+			switch info.Result {
+			case protocol.StMineResultSuccess:
+				// 继续
+			case protocol.StMineResultFunctionUnopen, protocol.StMineResultSuperTownClosed:
+				slog.Info("仙界矿山未开放，跳过", "role_id", session.RoleID(), "result", info.Result)
+				return nil
+			default:
+				slog.Info("仙界矿山暂不可进入", "role_id", session.RoleID(), "result", info.Result)
+				return nil
+			}
+
+			// 进入当前矿脉
+			eCtx, eCancel := context.WithTimeout(ctx, 5*time.Second)
+			enterResp, err := session.Call(eCtx, protocol.BuildStMineEnterPacket(info.CurMountain), protocol.ActionIDStMineEnter)
+			eCancel()
+			if err != nil {
+				return fmt.Errorf("进入仙界矿山失败: %w", err)
+			}
+			enterResult, err := protocol.ParseStMineActionResult(enterResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析进入矿山回包失败: %w", err)
+			}
+			if enterResult != protocol.StMineResultSuccess {
+				slog.Info("进入仙界矿山未成功", "role_id", session.RoleID(), "result", enterResult)
+				return nil
+			}
+			defer func() {
+				lCtx, lCancel := context.WithTimeout(ctx, callTimeout)
+				defer lCancel()
+				_, _ = session.Call(lCtx, protocol.BuildStMineLeavePacket(), protocol.ActionIDStMineLeave)
+			}()
+
+			// 领取收益
+			rCtx, rCancel := context.WithTimeout(ctx, callTimeout)
+			rewardResp, err := session.Call(rCtx, protocol.BuildStMineReceiveAwardPacket(), protocol.ActionIDStMineReceiveAward)
+			rCancel()
+			if err != nil {
+				slog.Warn("矿山收益领取无应答", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			rewardResult, err := protocol.ParseStMineActionResult(rewardResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析矿山收益回包失败: %w", err)
+			}
+			if rewardResult == protocol.StMineResultSuccess {
+				slog.Info("仙界矿山收益领取成功", "role_id", session.RoleID())
+			} else {
+				slog.Info("仙界矿山收益未领取", "role_id", session.RoleID(), "result", rewardResult)
+			}
 			return nil
 		},
 	)
@@ -1204,7 +1281,12 @@ func NewGourdRealmRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 }
 
 // NewRuneRefineRoutine 构造符文提炼与八卦炼丹任务。
+// NewRuneRefineRoutine 构造符文批量炼化任务 (Module 16, Mod_Rune_Base)。
+//
+// 先查询批量炼化信息；字段语义依赖客户端资源 SWF，当前只做数据检测，
+// 语义对齐前不执行 batch_rune_use，避免误消耗符文/元宝。
 func NewRuneRefineRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"rune_refine",
 		"farming",
@@ -1212,7 +1294,31 @@ func NewRuneRefineRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		45*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行资源任务: 符文提炼与八卦炉炼化")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
+			resp, err := session.Call(cCtx, protocol.BuildRuneBatchListPacket(), protocol.ActionIDRuneBatchList)
+			cCancel()
+			if err != nil {
+				slog.Info("符文炼化功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			info, err := protocol.ParseRuneBatchListResult(resp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析符文批量信息失败: %w", err)
+			}
+			slog.Info("符文批量炼化信息（语义待资源 SWF 对齐，暂不执行）",
+				"role_id", session.RoleID(),
+				"field1", info.Field1,
+				"field2", info.Field2,
+				"field3", info.Field3,
+				"field4", info.Field4,
+			)
 			return nil
 		},
 	)

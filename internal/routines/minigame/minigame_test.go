@@ -635,3 +635,33 @@ func TestIceCaveRoutine_Execute(t *testing.T) {
 		t.Fatalf("冰窟任务执行失败: %v", err)
 	}
 }
+
+// TestPartnerGuessRoutine_Execute 覆盖伙伴猜猜看开局、刮图与作答路径。
+func TestPartnerGuessRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_partner_guess", RoleName: "测试猜伙伴角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := NewPartnerGuessRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("伙伴猜猜看任务执行失败: %v", err)
+	}
+}
+
+// TestImperialExamRoutine_Execute 覆盖金榜题名活动阶段检测路径。
+func TestImperialExamRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_exam", RoleName: "测试金榜角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := NewImperialExamRoutine(nil).Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("金榜题名检测任务执行失败: %v", err)
+	}
+}

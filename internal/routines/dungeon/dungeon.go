@@ -1307,7 +1307,12 @@ func NewZodiacRoutine() scheduler.ActivityRoutine {
 }
 
 // NewSpiritTrialRoutine 构造精灵试炼通关挑战任务。
+// NewSpiritTrialRoutine 构造精灵试炼任务 (Module 205, Mod_StTrials_Base)。
+//
+// 先读各模式剩余挑战次数；仅对仍有次数的模式领奖并逐次挑战。
+// 挑战失败/不可挑战/次数耗尽时立即停止该模式。全程不消耗元宝。
 func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"spirit_trial",
 		"dungeon",
@@ -1315,7 +1320,115 @@ func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行副本任务: 精灵试炼扫荡与星级奖励")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			mCtx, mCancel := context.WithTimeout(ctx, callTimeout)
+			statusResp, err := session.Call(mCtx, protocol.BuildStTrialsModeStatusPacket(), protocol.ActionIDStTrialsModeStatus)
+			mCancel()
+			if err != nil {
+				slog.Info("精灵试炼功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			modes, err := protocol.ParseStTrialsModeStatusResult(statusResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析精灵试炼模式失败: %w", err)
+			}
+
+			active := 0
+			for _, mode := range modes {
+				if mode.RemainChallengeTimes == 0 {
+					continue
+				}
+				active++
+
+				fetchInfo := func() (*protocol.StTrialsModeInfo, error) {
+					cCtx, cancel := context.WithTimeout(ctx, callTimeout)
+					resp, cErr := session.Call(cCtx, protocol.BuildStTrialsModeInfoPacket(mode.ModeType), protocol.ActionIDStTrialsModeInfo)
+					cancel()
+					if cErr != nil {
+						return nil, cErr
+					}
+					return protocol.ParseStTrialsModeInfoResult(resp.Payload)
+				}
+				claim := func(info *protocol.StTrialsModeInfo) error {
+					aCtx, aCancel := context.WithTimeout(ctx, callTimeout)
+					resp, aErr := session.Call(aCtx, protocol.BuildStTrialsGetAwardPacket(info.Floor, info.Pass, mode.ModeType), protocol.ActionIDStTrialsGetAward)
+					aCancel()
+					if aErr != nil {
+						return aErr
+					}
+					result, awards, pErr := protocol.ParseStTrialsAwardResult(resp.Payload)
+					if pErr != nil {
+						return pErr
+					}
+					switch result {
+					case protocol.StTrialsResultSuccess:
+						slog.Info("精灵试炼奖励领取成功", "role_id", session.RoleID(), "mode", mode.ModeType, "floor", info.Floor, "awards", awards)
+					case protocol.StTrialsResultIsGet:
+						// 已领取，忽略
+					case protocol.StTrialsResultItemPackFull,
+						protocol.StTrialsResultFatePackFull,
+						protocol.StTrialsResultFivePackFull:
+						return scheduler.ErrBagFull
+					default:
+						slog.Debug("精灵试炼奖励未领取", "role_id", session.RoleID(), "mode", mode.ModeType, "result", result)
+					}
+					return nil
+				}
+
+				info, iErr := fetchInfo()
+				if iErr != nil {
+					slog.Warn("查询精灵试炼模式详情失败", "role_id", session.RoleID(), "mode", mode.ModeType, "err", iErr)
+					continue
+				}
+				if err := claim(info); err != nil {
+					if errors.Is(err, scheduler.ErrBagFull) {
+						return err
+					}
+					slog.Warn("领取精灵试炼奖励失败", "role_id", session.RoleID(), "mode", mode.ModeType, "err", err)
+				}
+
+				for i := uint8(0); i < mode.RemainChallengeTimes; i++ {
+					cCtx, cCancel := context.WithTimeout(ctx, 15*time.Second) // 战报较大
+					resp, cErr := session.Call(cCtx, protocol.BuildStTrialsChallengePacket(mode.ModeType), protocol.ActionIDStTrialsChallenge)
+					cCancel()
+					if cErr != nil {
+						slog.Warn("精灵试炼挑战无应答", "role_id", session.RoleID(), "mode", mode.ModeType, "err", cErr)
+						break
+					}
+					result, pErr := protocol.ParseStTrialsChallengeResult(resp.Payload)
+					if pErr != nil {
+						slog.Warn("解析精灵试炼挑战回包失败", "role_id", session.RoleID(), "err", pErr)
+						break
+					}
+					switch result {
+					case protocol.StTrialsResultSuccess:
+						slog.Info("精灵试炼挑战成功", "role_id", session.RoleID(), "mode", mode.ModeType, "index", i+1)
+						if info, iErr = fetchInfo(); iErr == nil {
+							if cErr := claim(info); cErr != nil {
+								if errors.Is(cErr, scheduler.ErrBagFull) {
+									return cErr
+								}
+							}
+						}
+					case protocol.StTrialsResultFaild:
+						slog.Info("精灵试炼挑战失败，停止该模式", "role_id", session.RoleID(), "mode", mode.ModeType)
+						i = mode.RemainChallengeTimes
+					case protocol.StTrialsResultCannotChallenge, protocol.StTrialsResultTimeOut:
+						slog.Info("精灵试炼当前不可挑战", "role_id", session.RoleID(), "mode", mode.ModeType, "result", result)
+						i = mode.RemainChallengeTimes
+					default:
+						slog.Info("精灵试炼挑战未成功", "role_id", session.RoleID(), "mode", mode.ModeType, "result", result)
+						i = mode.RemainChallengeTimes
+					}
+				}
+			}
+			slog.Info("精灵试炼巡检完成", "role_id", session.RoleID(), "modes", len(modes), "active_modes", active)
 			return nil
 		},
 	)
