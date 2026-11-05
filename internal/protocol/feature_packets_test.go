@@ -389,3 +389,31 @@ func TestTreasureHouse_ParseResultCodeAndLottery(t *testing.T) {
 		t.Errorf("抽奖失败码期望 %d, 实际 %d", protocol.TreasureHouseResultNoItem, failed.Result)
 	}
 }
+
+// TestTreasureHouse_BuildersUseDynamicPrevAct 验证所有 594 请求都标记了 HasPrevAct。
+//
+// 实测: 交互选奖等待期间心跳会持续推进服务端 PrevAct 链，若请求沿用调用方缓存的
+// 旧 PrevAct，Act 4 set_use_free_flag 会被服务端静默丢弃（无任何回包）。标记
+// HasPrevAct 后，会话层会在发包瞬间用真实最近动作号覆盖末尾 4 字节。
+func TestTreasureHouse_BuildersUseDynamicPrevAct(t *testing.T) {
+	packets := []*protocol.Packet{
+		protocol.BuildTreasureHouseMainPanelPacket(0),
+		protocol.BuildTreasureHouseInfoPacket(0),
+		protocol.BuildTreasureHousePoolPacket(0),
+		protocol.BuildTreasureHouseGetFreeItemPacket(0),
+		protocol.BuildTreasureHouseSelectPacket([]protocol.TreasureAwardSelect{{TierID: 1, ItemID: 4}}, 0),
+		protocol.BuildTreasureHouseUseFreeFlagPacket(1, 0),
+		protocol.BuildTreasureHouseDrawPacket(0),
+	}
+	for _, p := range packets {
+		if p == nil {
+			t.Fatal("构造封包返回 nil")
+		}
+		if !p.HasPrevAct {
+			t.Errorf("action 0x%08X 未标记 HasPrevAct，心跳推进 PrevAct 链后可能被服务端静默丢弃", p.ActionID)
+		}
+		if len(p.Payload) < 4 {
+			t.Errorf("action 0x%08X 载荷长度 %d，不足以承载 PrevAct 尾部", p.ActionID, len(p.Payload))
+		}
+	}
+}

@@ -655,6 +655,19 @@ type TreasureAwardSelect struct {
 	ItemID int32
 }
 
+// newTreasureHousePrevActPacket 构造带 PrevAct 尾部的天帝宝库请求封包。
+//
+// 官方 DataBase.netCall 在每次请求末尾自动追加 4 字节前序 Module+Action；
+// Go 会话层通过 HasPrevAct 标记，在真正发包前用最近一次实际发送的 ActionID
+// 覆盖末尾 4 字节。天帝宝库的 set_use_free_flag (Act 4) 会被服务端严格校验
+// PrevAct 链：交互选奖期间心跳持续推进该链，若沿用调用方缓存的旧 PrevAct，
+// 服务端会静默丢弃该请求（无回包）。因此所有 594 请求都必须走动态 PrevAct。
+func newTreasureHousePrevActPacket(actionID uint32, payload []byte) *Packet {
+	pkt := NewPacket(actionID, payload)
+	pkt.HasPrevAct = true
+	return pkt
+}
+
 // BuildTreasureHouseInfoPacket 构造查询天帝宝库钥匙与信息封包 (Module 594, Action 2)。
 func BuildTreasureHouseInfoPacket(prevAct uint32) *Packet {
 	w := NewWriter()
@@ -662,7 +675,7 @@ func BuildTreasureHouseInfoPacket(prevAct uint32) *Packet {
 		prevAct = ActionIDTownEnter
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTreasureHouseInfo, w.Bytes())
+	return newTreasureHousePrevActPacket(ActionIDTreasureHouseInfo, w.Bytes())
 }
 
 // BuildTreasureHousePoolPacket 构造拉取天帝宝库自选奖池封包 (Module 594, Action 9)。
@@ -672,7 +685,7 @@ func BuildTreasureHousePoolPacket(prevAct uint32) *Packet {
 		prevAct = ActionIDTreasureHouseInfo
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTreasureHousePool, w.Bytes())
+	return newTreasureHousePrevActPacket(ActionIDTreasureHousePool, w.Bytes())
 }
 
 // TreasureHousePool 表示天帝宝库三档候选奖池。
@@ -984,7 +997,7 @@ func BuildTreasureHouseGetFreeItemPacket(prevAct uint32) *Packet {
 		prevAct = ActionIDTreasureHouseGetFreeItem
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTreasureHouseGetFreeItem, w.Bytes())
+	return newTreasureHousePrevActPacket(ActionIDTreasureHouseGetFreeItem, w.Bytes())
 }
 
 // BuildTreasureHouseSelectPacket 构造设定自选大奖封包 (Module 594, Action 3)。
@@ -999,7 +1012,7 @@ func BuildTreasureHouseSelectPacket(selections []TreasureAwardSelect, prevAct ui
 		prevAct = ActionIDTreasureHousePool
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTreasureHouseSelect, w.Bytes())
+	return newTreasureHousePrevActPacket(ActionIDTreasureHouseSelect, w.Bytes())
 }
 
 // BuildTreasureHouseConfirmPacket 构造锁定确认自选大奖封包 (Module 594, Action 4)。
@@ -1010,7 +1023,7 @@ func BuildTreasureHouseConfirmPacket(confirmID int32, prevAct uint32) *Packet {
 		prevAct = ActionIDTreasureHouseSelect
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTreasureHouseConfirm, w.Bytes())
+	return newTreasureHousePrevActPacket(ActionIDTreasureHouseConfirm, w.Bytes())
 }
 
 // BuildTreasureHouseRefreshPacket 构造刷新天帝宝库状态封包 (Module 594, Action 1)。
@@ -1020,7 +1033,7 @@ func BuildTreasureHouseRefreshPacket(prevAct uint32) *Packet {
 		prevAct = ActionIDTreasureHouseConfirm
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTreasureHouseRefresh, w.Bytes())
+	return newTreasureHousePrevActPacket(ActionIDTreasureHouseRefresh, w.Bytes())
 }
 
 // BuildTreasureHouseDrawPacket 构造开启天帝宝库抽奖封包 (Module 594, Action 6)。
@@ -1030,7 +1043,7 @@ func BuildTreasureHouseDrawPacket(prevAct uint32) *Packet {
 		prevAct = ActionIDTreasureHouseRefresh
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDTreasureHouseDraw, w.Bytes())
+	return newTreasureHousePrevActPacket(ActionIDTreasureHouseDraw, w.Bytes())
 }
 
 // Helper: DecompressPayloadIfNeeded 透明尝试解压 zlib 载荷

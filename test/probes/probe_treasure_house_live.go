@@ -24,6 +24,11 @@
 // 预期表现: 领取免费钥匙 -> 按当前开放候选设定三档大奖 -> 设置免费优先 -> 抽奖 N 次，
 //
 //	逐步打印 result_code 并在失败时立即停止。
+//
+// 运行命令 (复现 PrevAct 链漂移): go run -tags=probe test/probes/probe_treasure_house_live.go -routine -gap 20s -debug
+// 预期表现: 选奖阶段空闲等待 20s，心跳持续推进服务端 PrevAct 链。若 594 请求未标记
+// HasPrevAct，Act4 会因携带过期 PrevAct 被服务端静默丢弃 (context deadline exceeded)；
+// 修复后所有 594 请求在发包瞬间用真实最近动作号覆盖末尾 4 字节，Act4 正常返回结果码。
 package main
 
 import (
@@ -50,9 +55,14 @@ func main() {
 	apply := flag.Bool("apply", false, "领取免费钥匙、设定自选大奖并设置免费优先")
 	draw := flag.Int("draw", 0, "Act 6 抽奖次数 (显式指定才消耗免费钥匙，默认 0)")
 	routineMode := flag.Bool("routine", false, "直接执行生产 TreasureHouse Routine (只消耗免费钥匙)")
+	gap := flag.Duration("gap", 0, "插入空闲等待以复现心跳推进 PrevAct 链：routine 模式位于 select_panel 与 set_award 之间，普通模式位于 Act4 之前")
+	debug := flag.Bool("debug", false, "开启 DEBUG 日志，打印每一个出站/入站封包的 ActionID 与载荷")
 	flag.Parse()
 
 	slog.SetLogLoggerLevel(slog.LevelInfo)
+	if *debug {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		slog.Error("加载配置失败", "err", err)
@@ -147,6 +157,21 @@ func main() {
 			DictRepo:     dictRepo,
 			Awards:       cfg.Scheduler.TreasureHouse.ResolveSelections(),
 			MaxDrawTimes: cfg.Scheduler.TreasureHouse.MaxDrawTimes,
+		}
+		if *gap > 0 {
+			// 返回 nil 让 Routine 保留已解析的合法大奖，仅插入一段空闲等待，
+			// 复现交互选奖期间心跳持续发包导致的 PrevAct 链漂移。
+			thCfg.Selector = func(selCtx context.Context, _ *protocol.TreasureHousePool, _ dictionary.Repository) ([]protocol.TreasureAwardSelect, error) {
+				fmt.Printf("\n========== 模拟交互等待 %s (心跳持续运行) ==========\n", *gap)
+				timer := time.NewTimer(*gap)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+					return nil, nil
+				case <-selCtx.Done():
+					return nil, selCtx.Err()
+				}
+			}
 		}
 		fmt.Printf("\n========== 直接执行生产 TreasureHouse Routine ==========\n")
 		if err := minigame.NewTreasureHouseRoutine(thCfg).Execute(ctx, sess, nil); err != nil {
@@ -264,8 +289,21 @@ func main() {
 	}
 
 	// 6. Act 4: 优先使用免费次数
+	// -gap 在 Act4 前插入空闲等待，用于观察心跳持续发包后 Act4 的回包延迟。
+	if *gap > 0 {
+		fmt.Printf("\n[gap] Act4 前空闲等待 %s (心跳持续运行)...\n", *gap)
+		timer := time.NewTimer(*gap)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return
+		}
+	}
+	act4Start := time.Now()
 	flagResp := call("set_use_free_flag", protocol.ActionIDTreasureHouseSetUseFreeFlag,
 		protocol.BuildTreasureHouseUseFreeFlagPacket(1, prevAct))
+	fmt.Printf("[set_use_free_flag] elapsed=%s resp=%v\n", time.Since(act4Start), flagResp != nil)
 	if flagResp != nil {
 		printResultCode("set_use_free_flag", flagResp.Payload)
 	}
