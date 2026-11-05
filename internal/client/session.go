@@ -2434,6 +2434,47 @@ func runMockGameServer(conn net.Conn) {
 		case protocol.ActionIDScratchCardShave:
 			_ = protocol.WritePacket(conn, protocol.BuildScratchCardShaveResultPacket(protocol.ScratchCardResultIngot, 3345))
 
+		case protocol.ActionIDAskFairyInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildAskFairyInfoResultPacket(protocol.AskFairyInfo{
+				TotalLoginDay: 100,
+				Level:         300,
+				HasGainAward:  1,
+				MaxAskNum:     1,
+				HasAskNum:     0,
+				LeftDay:       10,
+				CurLevel:      6,
+				RandomAwards: []protocol.AskFairyRandomAward{
+					{AwardID: 1, ItemID: 3345, ItemCount: 20},
+					{AwardID: 2, ItemID: 1747, ItemCount: 1000000},
+				},
+			}))
+
+		case protocol.ActionIDAskFairyDo:
+			_ = protocol.WritePacket(conn, protocol.BuildAskFairyActionResultPacket(protocol.ActionIDAskFairyDo, protocol.AskFairyResultSuccess))
+
+		case protocol.ActionIDAskFairyGain:
+			_ = protocol.WritePacket(conn, protocol.BuildAskFairyActionResultPacket(protocol.ActionIDAskFairyGain, protocol.AskFairyResultSuccess))
+
+		case protocol.ActionIDAskFairyLevelAward:
+			_ = protocol.WritePacket(conn, protocol.BuildAskFairyActionResultPacket(protocol.ActionIDAskFairyLevelAward, protocol.AskFairyResultNotEnoughDay))
+
+		case protocol.ActionIDAskFairyRecallAward:
+			_ = protocol.WritePacket(conn, protocol.BuildAskFairyActionResultPacket(protocol.ActionIDAskFairyRecallAward, protocol.AskFairyResultHasGainRecall))
+
+		case protocol.ActionIDDeviceBindInfo:
+			// 响应设备绑定状态: 已绑定且已验证，首绑/月度奖励均可领取
+			_ = protocol.WritePacket(conn, protocol.BuildDeviceBindInfoResultPacket(protocol.DeviceBindInfo{
+				Result:         protocol.DeviceBindResultSuccess,
+				IsBind:         1,
+				PhoneNum:       "138****0000",
+				FirstReward:    0,
+				MonthlyReward:  0,
+				NeedVerifyBind: 0,
+			}))
+
+		case protocol.ActionIDDeviceBindFirstReward, protocol.ActionIDDeviceBindMonthlyReward:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDDeviceBindFirstReward, []byte{protocol.DeviceBindResultSuccess}))
+
 		case protocol.ActionIDEmailGetInfo:
 			// 响应邮箱面板查询 (Mod 345, Act 0)，业务侧仅用于建立 prevAct 链。
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDEmailGetInfo, []byte{0}))

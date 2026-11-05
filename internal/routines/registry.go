@@ -37,6 +37,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "vip_welfare", Name: "VIP特权与俸禄", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取VIP每日礼包与官职俸禄", DefaultOn: false},
 		{ID: "god_bless", Name: "跨服天神赐福", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领用跨服天神赐福增益点数", DefaultOn: false},
 		{ID: "online_reward", Name: "在线奖励一键领取", Domain: "daily", Schedule: scheduler.ScheduleLoop, Description: "按当日在线时长一键领取在线奖励 (含元宝档位，不消耗元宝)", DefaultOn: false},
+		{ID: "device_bind_reward", Name: "设备绑定奖励", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "手机绑定后领取首绑200元宝与月度50元宝 (不代绑定)", DefaultOn: false},
 		{ID: "town_practice", Name: "城镇打坐练功", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "上线自动结算并领取离线城镇打坐练功经验", DefaultOn: true},
 
 		// 2. Farming 领域 (6)
@@ -84,6 +85,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "partner_guess", Name: "伙伴猜猜看", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "伙伴特征自动比对竞猜", DefaultOn: false},
 		{ID: "fishing", Name: "自动钓鱼命格", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动水域钓鱼与猎命命格吞噬融合", DefaultOn: false},
 		{ID: "scratch_card", Name: "幸运刮刮卡", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "日常免费刮刮卡福利抽取", DefaultOn: false},
+		{ID: "ask_fairy", Name: "每日问灵", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日免费问灵一次，随机奖励优先选元宝，不消耗元宝", DefaultOn: false},
 		{ID: "ice_cave", Name: "一键冰窟探险", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "一键五锤最优路径通关与金币领取", DefaultOn: false},
 		{ID: "era_travel", Name: "山河纪元游历", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "山河纪元游历掷骰子与奇遇寻宝", DefaultOn: false},
 		{ID: "lingdao_practice", Name: "灵道初解修炼", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "灵道初解任务领悟与阶段进阶", DefaultOn: false},
@@ -229,6 +231,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewGodBlessRoutine()
 	case "online_reward":
 		return daily.NewOnlineRewardRoutine()
+	case "device_bind_reward":
+		return daily.NewDeviceBindRewardRoutine()
 	case "town_practice":
 		return daily.NewTownPracticeRoutine()
 
@@ -313,6 +317,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewFishingRoutine()
 	case "scratch_card":
 		return minigame.NewScratchCardRoutine()
+	case "ask_fairy":
+		return minigame.NewAskFairyRoutine()
 	case "ice_cave":
 		return minigame.NewIceCaveRoutine()
 	case "era_travel":

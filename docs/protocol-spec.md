@@ -859,3 +859,57 @@ UByte sign_state, Int repair_sign, Int cur_day
 - 次数不足/刮卡失败立即收手；背包已满返回 `ErrBagFull`。
 - **实机观察（2026-11-05 02:32 s0）**：`is_in_activity=1`，但
   `active_degree=0`、`card_times=0`，自动化直接跳过且未消耗资源。
+
+### 4.18 Module 814 (0x32E): 设备/手机绑定奖励 (`Mod_DeviceBindRewards_Base`)
+
+协议描述符采自官方 2026 客户端 `Main.swf` 的
+`com.protocols.Mod_DeviceBindRewards_Base` 与 `com.datas.DeviceBindRewardsData`。
+绑定与验证码流程涉及用户手机号，自动化**只领取奖励、不代绑定**。
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x032E0000` | `get_bind_info` | 空 | `UByte result, Byte is_bind, String phone_num, Byte first_reward, Byte monthly_reward, Int verify_cd, Byte need_verify_bind, Int start_time` |
+| 5 | `0x032E0005` | `get_first_reward` | 空 | `UByte result`（首绑 200 元宝） |
+| 6 | `0x032E0006` | `get_monthly_reward` | 空 | `UByte result`（月度 50 元宝） |
+
+- 结果码：`SUCCESS=0`、`FAILED=1`、`NOT_NEED_VERIFY=3`、`ALREADY_GET=12`、
+  `PACK_FULL=13`、`NOT_VERIFY_AND_BIND=14`、`FIRST_BIND_MONTHLY=15` 等。
+- 自动化仅在 `is_bind=1` 且 `need_verify_bind=0` 时领取；`first_reward` /
+  `monthly_reward` 为 `0` 表示未领取。
+- 静态奖励表（`DeviceBindRewardsType.ArrBinds`）：
+  `type=1` 为 200 元宝 + 4 茶叶蛋，`type=2` 为 50 元宝。
+- **实机观察（2026-11-05 11:04 s0）**：`is_bind=0`、`phone_num` 为空、
+  `need_verify_bind=1`，自动化按预期跳过（绑定需要用户本人手机验证码）。
+
+### 4.19 Module 503 (0x1F7): 每日问灵 / 回归福利 (`Mod_AskFairy_Base`)
+
+协议描述符采自官方 2026 客户端 `Main.swf` 的
+`com.protocols.Mod_AskFairy_Base` 与 `com.datas.AskFairyData`。
+每日免费问灵一次；服务端下发随机奖励候选，玩家选择一个领取。
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x01F70000` | `get_recall_info` | 空 | 见下 |
+| 1 | `0x01F70001` | `gain_recall_award` | 空 | `UByte result` |
+| 3 | `0x01F70003` | `do_ask_fairy` | 空 | `UByte result` |
+| 4 | `0x01F70004` | `gain_ask_award` | `Int award_id` | `UByte result` |
+| 7 | `0x01F70007` | `gain_ask_level_award` | 空 | `UByte result` |
+
+`get_recall_info` 回包线格式：
+
+```
+Int first_login_time, Int total_login_day, Int partner_num, Int level,
+Long fight_power, Int has_gain_award, Int is_shared, Int max_ask_num,
+Int has_ask_num, Int random_sign_id,
+[Int award_id, Int item_id, Int item_count] random_award,
+Int left_day, Int mount_count, Int title_count, Int cur_level
+```
+
+- 结果码：`SUCCESS=0`、`PACKAGE_FULL=1`、`HAS_GAIN_RECALL_AWARD=2`、`FAILED=3`、
+  `COUNT_LIMIT=4`、`HAS_ASK=5`、`CAN_NOT_CHOOSE=6`、`NOT_ENOUGH_DAY=9` 等。
+- 问灵等级较高时，随机奖励池包含元宝（`item_id=3345`，20/30 元宝）；
+  自动化在候选中优先选择元宝，否则选第一项。
+- 等级奖励在登录天数不足时返回 `NOT_ENOUGH_DAY=9`，属正常状态。
+- **实机观察（2026-11-05 11:12 s0）**：`has_gain_award=1`、
+  `max_ask_num=1`、`has_ask_num=1`、`cur_level=6`、`left_day=28`；
+  `do_ask_fairy` 返回 `HAS_ASK=5`（今日已问灵），自动化跳过且未消耗资源。

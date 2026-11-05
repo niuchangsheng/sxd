@@ -100,6 +100,7 @@ func main() {
 		{"每日签到", daily.NewSignInRoutine()},
 		{"VIP每日免费礼包", daily.NewVIPWelfareRoutine()},
 		{"在线奖励", daily.NewOnlineRewardRoutine()},
+		{"设备绑定奖励", daily.NewDeviceBindRewardRoutine()},
 	}
 	for _, r := range routines {
 		if err := r.rt.Execute(ctx, sess, nil); err != nil {

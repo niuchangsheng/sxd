@@ -90,3 +90,22 @@ func TestDailyRoutines_Execute(t *testing.T) {
 		}
 	})
 }
+
+// TestDeviceBindRewardRoutine_Execute 覆盖已绑定账号的首绑/月度奖励领取路径。
+func TestDeviceBindRewardRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_device_bind",
+		RoleName:   "测试设备绑定角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r := NewDeviceBindRewardRoutine()
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("设备绑定奖励任务执行失败: %v", err)
+	}
+}

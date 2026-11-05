@@ -48,6 +48,8 @@ scheduler:
     lucky_star: true            # 吉星高照 (个人摇骰子与免费逆天改运)
     faction_lucky_star: true    # 帮派吉星高照 (帮派成员成绩与排名奖励)
     scratch_card: true          # 幸运刮刮卡 (仅用每日免费次数，可刮出元宝)
+    ask_fairy: true             # 每日问灵 (免费1次，随机奖励优先元宝)
+    device_bind_reward: true    # 设备绑定奖励 (绑定手机后自动领首绑/月度元宝)
     faction_blessing: true      # 帮派祭神 (每日免费上香获取祝福/声望/神像灵气)
     faction_lucky_wheel: true   # 帮派转盘 (消耗青龙令自动抽奖)
     travel_event: true          # 仙旅奇缘 (世界地图每日事件，按收益权重自动抉择分支)

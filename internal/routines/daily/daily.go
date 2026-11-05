@@ -654,3 +654,93 @@ func NewOnlineRewardRoutine() scheduler.ActivityRoutine {
 		},
 	)
 }
+
+// NewDeviceBindRewardRoutine 构造设备/手机绑定奖励领取任务 (Module 814)。
+//
+// 仅当账号已完成手机绑定与验证时，领取首绑奖励 (200 元宝) 与月度奖励 (50 元宝)；
+// 不代用户发送验证码、提交手机号或执行绑定/解绑操作。
+func NewDeviceBindRewardRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"device_bind_reward",
+		"daily",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			infoResp, err := callDaily(ctx, session, protocol.BuildDeviceBindInfoPacket(), protocol.ActionIDDeviceBindInfo, 3*time.Second)
+			if err != nil {
+				return fmt.Errorf("查询设备绑定状态失败: %w", err)
+			}
+			info, err := protocol.ParseDeviceBindInfoResult(infoResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析设备绑定状态失败: %w", err)
+			}
+			slog.Info("设备绑定状态",
+				"role_id", session.RoleID(),
+				"result", info.Result,
+				"is_bind", info.IsBind,
+				"need_verify_bind", info.NeedVerifyBind,
+				"first_reward", info.FirstReward,
+				"monthly_reward", info.MonthlyReward,
+			)
+
+			if info.Result != protocol.DeviceBindResultSuccess {
+				slog.Info("设备绑定功能不可用，跳过", "role_id", session.RoleID(), "result", info.Result)
+				return nil
+			}
+			if info.IsBind == 0 || info.NeedVerifyBind == 1 {
+				slog.Info("账号未完成手机绑定/验证，跳过 (需用户手动绑定)",
+					"role_id", session.RoleID(),
+					"is_bind", info.IsBind,
+					"need_verify_bind", info.NeedVerifyBind,
+				)
+				return nil
+			}
+
+			claim := func(pkt *protocol.Packet, actionID uint32, name string) error {
+				resp, cErr := callDaily(ctx, session, pkt, actionID, 3*time.Second)
+				if cErr != nil {
+					slog.Warn(name+"无应答", "role_id", session.RoleID(), "err", cErr)
+					return nil
+				}
+				result, pErr := protocol.ParseDeviceBindRewardResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析"+name+"回包失败", "role_id", session.RoleID(), "err", pErr)
+					return nil
+				}
+				switch result {
+				case protocol.DeviceBindResultSuccess:
+					slog.Info(name+"领取成功", "role_id", session.RoleID())
+				case protocol.DeviceBindResultAlreadyGet:
+					slog.Info(name+"已领取", "role_id", session.RoleID())
+				case protocol.DeviceBindResultPackFull:
+					return scheduler.ErrBagFull
+				case protocol.DeviceBindResultNotVerifyAndBind, protocol.DeviceBindResultNotBound:
+					slog.Info(name+"未满足绑定条件", "role_id", session.RoleID(), "result", result)
+				default:
+					slog.Info(name+"未领取", "role_id", session.RoleID(), "result", result)
+				}
+				return nil
+			}
+
+			if info.FirstReward == 0 {
+				if err := claim(protocol.BuildDeviceBindFirstRewardPacket(), protocol.ActionIDDeviceBindFirstReward, "设备首绑奖励"); err != nil {
+					return err
+				}
+			}
+			if info.MonthlyReward == 0 {
+				if err := claim(protocol.BuildDeviceBindMonthlyRewardPacket(), protocol.ActionIDDeviceBindMonthlyReward, "设备月度奖励"); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	)
+}

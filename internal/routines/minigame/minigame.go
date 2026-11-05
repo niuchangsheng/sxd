@@ -1926,3 +1926,146 @@ func logFindImmortalResult(scene string, roleID string, result uint8) {
 		slog.Warn("喜从天降/五福临门操作被服务端拒绝", "role_id", roleID, "scene", scene, "result", result)
 	}
 }
+
+// NewAskFairyRoutine 构造每日问灵任务 (Module 503, Mod_AskFairy_Base)。
+//
+// 每日免费问灵一次；服务端下发随机奖励候选，优先选择元宝 (item_id=3345)，
+// 否则选第一项。同时领取可领的回归奖励与问灵等级奖励。全程不消耗元宝。
+func NewAskFairyRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
+	return scheduler.NewBaseRoutine(
+		"ask_fairy",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			fetchInfo := func() (*protocol.AskFairyInfo, error) {
+				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
+				resp, err := session.Call(cCtx, protocol.BuildAskFairyInfoPacket(), protocol.ActionIDAskFairyInfo)
+				cancel()
+				if err != nil {
+					return nil, err
+				}
+				return protocol.ParseAskFairyInfoResult(resp.Payload)
+			}
+			callAction := func(pkt *protocol.Packet, actionID uint32, name string) (uint8, error) {
+				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
+				resp, err := session.Call(cCtx, pkt, actionID)
+				cancel()
+				if err != nil {
+					return 0, err
+				}
+				result, pErr := protocol.ParseAskFairyActionResult(resp.Payload)
+				if pErr != nil {
+					return 0, pErr
+				}
+				_ = name
+				return result, nil
+			}
+
+			info, err := fetchInfo()
+			if err != nil {
+				return fmt.Errorf("查询问灵状态失败: %w", err)
+			}
+			if info.LeftDay <= 0 {
+				slog.Info("问灵活动已结束，跳过", "role_id", session.RoleID(), "left_day", info.LeftDay)
+				return nil
+			}
+			slog.Info("问灵状态",
+				"role_id", session.RoleID(),
+				"has_gain_award", info.HasGainAward,
+				"max_ask_num", info.MaxAskNum,
+				"has_ask_num", info.HasAskNum,
+				"cur_level", info.CurLevel,
+				"left_day", info.LeftDay,
+				"random_awards", info.RandomAwards,
+			)
+
+			// 回归奖励 (已领过返回 HAS_GAIN_RECALL=2)
+			if info.HasGainAward == 0 {
+				result, err := callAction(protocol.BuildAskFairyRecallAwardPacket(), protocol.ActionIDAskFairyRecallAward, "回归奖励")
+				if err != nil {
+					slog.Warn("领取回归奖励失败", "role_id", session.RoleID(), "err", err)
+				} else if result == protocol.AskFairyResultPackFull {
+					return scheduler.ErrBagFull
+				} else {
+					slog.Info("回归奖励领取结果", "role_id", session.RoleID(), "result", result)
+				}
+			}
+
+			// 问灵等级奖励 (登录天数不足返回 9，属正常)
+			if result, err := callAction(protocol.BuildAskFairyLevelAwardPacket(), protocol.ActionIDAskFairyLevelAward, "问灵等级奖励"); err != nil {
+				slog.Warn("领取问灵等级奖励失败", "role_id", session.RoleID(), "err", err)
+			} else if result == protocol.AskFairyResultSuccess {
+				slog.Info("问灵等级奖励领取成功", "role_id", session.RoleID(), "cur_level", info.CurLevel)
+			} else {
+				slog.Debug("问灵等级奖励未领取", "role_id", session.RoleID(), "result", result, "cur_level", info.CurLevel)
+			}
+
+			// 每日问灵
+			if info.HasAskNum >= info.MaxAskNum {
+				slog.Info("今日问灵次数已用尽", "role_id", session.RoleID(), "has_ask", info.HasAskNum, "max_ask", info.MaxAskNum)
+				return nil
+			}
+			result, err := callAction(protocol.BuildAskFairyDoPacket(), protocol.ActionIDAskFairyDo, "问灵")
+			if err != nil {
+				return fmt.Errorf("问灵请求失败: %w", err)
+			}
+			switch result {
+			case protocol.AskFairyResultSuccess:
+				slog.Info("问灵成功", "role_id", session.RoleID())
+			case protocol.AskFairyResultHasAsk, protocol.AskFairyResultCountLimit:
+				slog.Info("今日问灵次数已用尽", "role_id", session.RoleID(), "result", result)
+				return nil
+			case protocol.AskFairyResultPackFull, protocol.AskFairyResultLinkFatePackFull:
+				return scheduler.ErrBagFull
+			default:
+				slog.Warn("问灵失败", "role_id", session.RoleID(), "result", result)
+				return nil
+			}
+
+			// 重新拉取随机奖励候选，优先选择元宝
+			info, err = fetchInfo()
+			if err != nil {
+				return fmt.Errorf("问灵后刷新状态失败: %w", err)
+			}
+			if len(info.RandomAwards) == 0 {
+				slog.Warn("问灵后未下发随机奖励候选", "role_id", session.RoleID())
+				return nil
+			}
+			chosen := info.RandomAwards[0]
+			for _, a := range info.RandomAwards {
+				if a.ItemID == 3345 { // 元宝
+					chosen = a
+					break
+				}
+			}
+			result, err = callAction(protocol.BuildAskFairyGainPacket(chosen.AwardID), protocol.ActionIDAskFairyGain, "问灵奖励")
+			if err != nil {
+				return fmt.Errorf("领取问灵奖励失败: %w", err)
+			}
+			switch result {
+			case protocol.AskFairyResultSuccess:
+				slog.Info("问灵奖励领取成功",
+					"role_id", session.RoleID(),
+					"award_id", chosen.AwardID,
+					"item_id", chosen.ItemID,
+					"item_count", chosen.ItemCount,
+				)
+			case protocol.AskFairyResultPackFull, protocol.AskFairyResultLinkFatePackFull:
+				return scheduler.ErrBagFull
+			default:
+				slog.Info("问灵奖励未领取", "role_id", session.RoleID(), "result", result)
+			}
+			return nil
+		},
+	)
+}

@@ -578,3 +578,22 @@ func TestScratchCardRoutine_Execute(t *testing.T) {
 		t.Fatalf("刮刮卡任务执行失败: %v", err)
 	}
 }
+
+// TestAskFairyRoutine_Execute 覆盖每日问灵成功并优先选择元宝奖励的路径。
+func TestAskFairyRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_ask_fairy",
+		RoleName:   "测试问灵角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r := NewAskFairyRoutine()
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("问灵任务执行失败: %v", err)
+	}
+}

@@ -114,6 +114,9 @@ func main() {
 		{0x019B0000, "demon_invasion.get_state", nil},
 		{0x03760000, "era_repress_demon_tower.panel_info", nil},
 		{0x00180000, "world_boss.get_world_boss_list(0)", []byte{0}},
+		{0x02BA0001, "summer_themed_gift.panel_info", nil},
+		{0x033A0000, "island_fishing.panel_info", nil},
+		{0x01F70000, "ask_fairy.get_recall_info", nil},
 	} {
 		cCtx, cCancel := context.WithTimeout(ctx, 5*time.Second)
 		resp, cErr := sess.Call(cCtx, protocol.NewPacket(q.act, q.payload), q.act)
