@@ -3,6 +3,7 @@
 // 目标协议: [Module 282, Action 0] 打开淬炼池 + [Module 534, Action 5] 资源面板 + [Module 282, Action 1] 淬炼执行
 // 运行命令: go run -tags=probe test/probes/probe_spirit_pool_live.go
 // 可选执行: SPIRIT_POOL_EXECUTE=1 go run -tags=probe test/probes/probe_spirit_pool_live.go
+// 可选配置: SXD_CONFIG=configs/s0.yaml (默认 configs/config.yaml)
 // 可选参数: SPIRIT_POOL_TARGET=5(玄铁/淬炼)/6(灵材/提炼)  SPIRIT_POOL_COST=7(铜钱)/8(元宝)  SPIRIT_POOL_MODE=9(单次)/10(一键)
 // 预期表现: 默认只读打开面板并打印铁槽状态; 显式设置 SPIRIT_POOL_EXECUTE=1 后才发起淬炼写操作。
 package main
@@ -24,9 +25,13 @@ import (
 
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelDebug)
-	cfg, err := config.Load("configs/config.yaml")
+	cfgPath := os.Getenv("SXD_CONFIG")
+	if cfgPath == "" {
+		cfgPath = "configs/config.yaml"
+	}
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		slog.Error("加载配置失败", "err", err)
+		slog.Error("加载配置失败", "path", cfgPath, "err", err)
 		return
 	}
 
