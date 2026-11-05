@@ -121,6 +121,14 @@ func main() {
 		{0x03480000, "eternal_games_present.main_info", nil},
 		{0x02960001, "search_treasure_box.panel_info", nil},
 		{0x016C0000, "reward_task.info", nil},
+		{0x01890000, "ice_cave.activity_info", nil},
+		{0x024F0001, "sect_bonus.open_panel(0)", []byte{0, 0, 0, 0}},
+		{0x023C0001, "sect_utility.sect_main_info(0)", []byte{0, 0, 0, 0}},
+		{0x023F000A, "sect_login.get_player_sect_info", nil},
+		{0x023C0001, "sect_utility.sect_main_info(1)", []byte{0, 0, 0, 1}},
+		{0x024F0001, "sect_bonus.open_panel(1)", []byte{0, 0, 0, 1}},
+		{0x023C000D, "sect_worship(1)", []byte{0, 0, 0, 1}},
+		{0x023C000D, "sect_utility.sect_worship(0)", []byte{0, 0, 0, 0}},
 	} {
 		cCtx, cCancel := context.WithTimeout(ctx, 5*time.Second)
 		resp, cErr := sess.Call(cCtx, protocol.NewPacket(q.act, q.payload), q.act)

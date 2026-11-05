@@ -2366,3 +2366,23 @@ func TestDungeonSweep_GracefulShutdownStopsQuestCycle(t *testing.T) {
 		}
 	}
 }
+
+// TestZodiacRoutine_ChallengeWithLevelCheck 覆盖生肖挑战等级前置校验与挑战成功路径。
+func TestZodiacRoutine_ChallengeWithLevelCheck(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_zodiac",
+		RoleName:   "测试生肖角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	session.UpdatePlayerState(func(ps *client.PlayerState) { ps.Level = 300 })
+
+	r := dungeon.NewZodiacRoutine()
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("生肖挑战任务执行失败: %v", err)
+	}
+}

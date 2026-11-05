@@ -67,3 +67,86 @@ func TestSocialRoutines_Execute(t *testing.T) {
 		}
 	})
 }
+
+// TestFameBlessingRoutine_Execute 覆盖免费白檀香膜拜成功路径。
+func TestFameBlessingRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_fame_blessing",
+		RoleName:   "测试膜拜角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r := NewFameBlessingRoutine()
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("膜拜任务执行失败: %v", err)
+	}
+}
+
+// TestFriendshipRoutine_Execute 覆盖好友来信自动阅读并领取奖励路径。
+func TestFriendshipRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_friendship",
+		RoleName:   "测试好友来信角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r := NewFriendshipRoutine()
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("好友来信任务执行失败: %v", err)
+	}
+}
+
+// TestGuildActivitiesRoutine_Execute 覆盖仙盟开放状态与入盟检测路径。
+func TestGuildActivitiesRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_guild", RoleName: "测试仙盟角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := NewGuildActivitiesRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("仙盟任务执行失败: %v", err)
+	}
+}
+
+// TestSacredAllianceRoutine_Execute 覆盖圣盟赛季探测路径。
+func TestSacredAllianceRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_alliance", RoleName: "测试圣盟角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := NewSacredAllianceRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("圣盟任务执行失败: %v", err)
+	}
+}
+
+// TestHomesteadRoutine_Execute 覆盖住宅状态探测路径。
+func TestHomesteadRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role_test_homestead", RoleName: "测试住宅角色", ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := NewHomesteadRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("住宅任务执行失败: %v", err)
+	}
+}

@@ -597,3 +597,41 @@ func TestAskFairyRoutine_Execute(t *testing.T) {
 		t.Fatalf("问灵任务执行失败: %v", err)
 	}
 }
+
+// TestFishingRoutine_Execute 覆盖免费鱼钩自动钓鱼成功路径。
+func TestFishingRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_fishing",
+		RoleName:   "测试钓鱼角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r := NewFishingRoutine()
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("钓鱼任务执行失败: %v", err)
+	}
+}
+
+// TestIceCaveRoutine_Execute 覆盖冰窟免费锤子敲击与兑换路径。
+func TestIceCaveRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_ice_cave",
+		RoleName:   "测试冰窟角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r := NewIceCaveRoutine()
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("冰窟任务执行失败: %v", err)
+	}
+}

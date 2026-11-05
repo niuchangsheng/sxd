@@ -7,6 +7,7 @@ package social
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -537,7 +538,12 @@ func luckyWheelResultText(result uint8) string {
 }
 
 // NewGuildActivitiesRoutine 构造仙盟神兽与捐献任务。
+// NewGuildActivitiesRoutine 构造仙盟日常任务 (Module 571)。
+//
+// 先查询仙盟功能开放状态与面板信息：未开放/未加入仙盟时明确跳过，
+// 避免对不存在的关系发送业务请求。
 func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"guild_activities",
 		"social",
@@ -545,14 +551,49 @@ func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行社交任务: 仙盟捐献与神兽挑战")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			sCtx, sCancel := context.WithTimeout(ctx, callTimeout)
+			statusResp, err := session.Call(sCtx, protocol.BuildSectOpenStatusPacket(), protocol.ActionIDSectOpenStatus)
+			sCancel()
+			if err != nil {
+				slog.Info("仙盟功能不可用/未开放，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			status, pErr := protocol.ParseSectOpenStatusResult(statusResp.Payload)
+			if pErr != nil {
+				slog.Warn("解析仙盟开放状态失败", "role_id", session.RoleID(), "err", pErr)
+				return nil
+			}
+
+			pCtx, pCancel := context.WithTimeout(ctx, callTimeout)
+			panelResp, err := session.Call(pCtx, protocol.BuildSectPanelInfoPacket(), protocol.ActionIDSectPanelInfo)
+			pCancel()
+			if err != nil || panelResp == nil || len(panelResp.Payload) == 0 {
+				slog.Info("账号未加入仙盟，跳过仙盟日常", "role_id", session.RoleID(), "open_status", status)
+				return nil
+			}
+			slog.Info("仙盟功能开放且账号已入盟；具体玩法需仙盟城镇会话，待下一批接入",
+				"role_id", session.RoleID(),
+				"open_status", status,
+				"panel_len", len(panelResp.Payload),
+			)
 			return nil
 		},
 	)
 }
 
 // NewSacredAllianceRoutine 构造圣盟祭祀与幻魔塔任务。
+// NewSacredAllianceRoutine 构造圣盟日常任务 (Module 884)。
+//
+// 先查询圣盟当前赛季；无应答/赛季数据缺失时视为功能未开放并跳过。
 func NewSacredAllianceRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"sacred_alliance",
 		"social",
@@ -560,14 +601,45 @@ func NewSacredAllianceRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行社交任务: 圣盟祭祀与幻魔塔挑战")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
+			resp, err := session.Call(cCtx, protocol.BuildSectAllianceSeasonPacket(), protocol.ActionIDSectAllianceSeason)
+			cCancel()
+			if err != nil {
+				slog.Info("圣盟功能不可用/未开放，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			season, endTime, pErr := protocol.ParseSectAllianceSeasonResult(resp.Payload)
+			if pErr != nil {
+				slog.Warn("解析圣盟赛季失败", "role_id", session.RoleID(), "err", pErr)
+				return nil
+			}
+			if season <= 0 {
+				slog.Info("圣盟当前无有效赛季，跳过", "role_id", session.RoleID())
+				return nil
+			}
+			slog.Info("圣盟赛季开放；祭祀/奖励领取需仙盟城镇会话与 alliance_id，待下一批接入",
+				"role_id", session.RoleID(),
+				"season", season,
+				"end_time", endTime,
+			)
 			return nil
 		},
 	)
 }
 
 // NewHomesteadRoutine 构造住宅家具祝福与夫妻宝箱任务。
+// NewHomesteadRoutine 构造住宅日常任务 (Module 210)。
+//
+// 先查询自身住宅状态：未处于婚姻状态或功能未开放时跳过。
 func NewHomesteadRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"homestead",
 		"social",
@@ -575,14 +647,44 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行社交任务: 住宅家具祝福与夫妻宝箱领取")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
+			resp, err := session.Call(cCtx, protocol.BuildMarryHomeSelfInfoPacket(session.PlayerID()), protocol.ActionIDMarryHomeSelfInfo)
+			cCancel()
+			if err != nil {
+				slog.Info("住宅功能不可用/未开放，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			result, pErr := protocol.ParseMarryHomeSelfInfoResult(resp.Payload)
+			if pErr != nil {
+				slog.Warn("解析住宅状态失败", "role_id", session.RoleID(), "err", pErr)
+				return nil
+			}
+			if result == protocol.MarryHomeResultNonMarry {
+				slog.Info("账号未处于婚姻状态，跳过住宅玩法", "role_id", session.RoleID())
+				return nil
+			}
+			slog.Info("住宅功能开放且账号满足条件，等待玩法执行",
+				"role_id", session.RoleID(),
+				"result", result,
+			)
 			return nil
 		},
 	)
 }
 
-// NewFriendshipRoutine 构造好友结义与鲜花赠送任务。
+// NewFriendshipRoutine 构造好友来信领取任务 (Module 684, Mod_FriendsSent_Base)。
+//
+// 拉取好友来信列表，仅处理已解锁 (时间/任务条件均满足) 的来信：
+// 未读则标记已读，未领奖则领取附件奖励。不消耗元宝。
 func NewFriendshipRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"friendship",
 		"social",
@@ -590,14 +692,90 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行社交任务: 好友结义与日常送花互动")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			pCtx, pCancel := context.WithTimeout(ctx, callTimeout)
+			panelResp, err := session.Call(pCtx, protocol.BuildFriendsSentPanelPacket(), protocol.ActionIDFriendsSentPanel)
+			pCancel()
+			if err != nil {
+				slog.Info("好友来信功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			letters, err := protocol.ParseFriendsSentPanelResult(panelResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析好友来信列表失败: %w", err)
+			}
+			unlocked := 0
+			for _, l := range letters {
+				if l.IsTimeLock != 0 || l.IsMissionLock != 0 {
+					continue
+				}
+				unlocked++
+				octx, ocancel := context.WithTimeout(ctx, callTimeout)
+				openResp, oErr := session.Call(octx, protocol.BuildFriendsSentOpenPacket(l.ID), protocol.ActionIDFriendsSentOpen)
+				ocancel()
+				if oErr != nil {
+					slog.Warn("打开好友来信无应答", "role_id", session.RoleID(), "letter_id", l.ID, "err", oErr)
+					continue
+				}
+				detail, pErr := protocol.ParseFriendsSentOpenResult(openResp.Payload)
+				if pErr != nil {
+					slog.Warn("解析好友来信内容失败", "role_id", session.RoleID(), "letter_id", l.ID, "err", pErr)
+					continue
+				}
+				if detail.IsRead == 0 {
+					rctx, rcancel := context.WithTimeout(ctx, callTimeout)
+					rResp, rErr := session.Call(rctx, protocol.BuildFriendsSentReadPacket(l.ID), protocol.ActionIDFriendsSentRead)
+					rcancel()
+					if rErr == nil && rResp != nil {
+						if result, e := protocol.ParseFriendsSentActionResult(rResp.Payload); e == nil && result != protocol.FriendsSentResultSuccess {
+							slog.Debug("标记好友来信已读未成功", "role_id", session.RoleID(), "letter_id", l.ID, "result", result)
+						}
+					}
+				}
+				if detail.IsGetAward == 0 && len(detail.Awards) > 0 {
+					actx, acancel := context.WithTimeout(ctx, callTimeout)
+					aResp, aErr := session.Call(actx, protocol.BuildFriendsSentAwardPacket(l.ID), protocol.ActionIDFriendsSentAward)
+					acancel()
+					if aErr != nil {
+						slog.Warn("领取好友来信奖励无应答", "role_id", session.RoleID(), "letter_id", l.ID, "err", aErr)
+						continue
+					}
+					result, e := protocol.ParseFriendsSentActionResult(aResp.Payload)
+					if e != nil {
+						slog.Warn("解析好友来信奖励回包失败", "role_id", session.RoleID(), "letter_id", l.ID, "err", e)
+						continue
+					}
+					switch result {
+					case protocol.FriendsSentResultSuccess:
+						slog.Info("好友来信奖励领取成功", "role_id", session.RoleID(), "letter_id", l.ID, "awards", detail.Awards)
+					case protocol.FriendsSentResultItemPackFull:
+						return scheduler.ErrBagFull
+					case protocol.FriendsSentResultUnRead:
+						slog.Info("好友来信未阅读，跳过领奖", "role_id", session.RoleID(), "letter_id", l.ID)
+					default:
+						slog.Info("好友来信奖励未领取", "role_id", session.RoleID(), "letter_id", l.ID, "result", result)
+					}
+				}
+			}
+			slog.Info("好友来信处理完成", "role_id", session.RoleID(), "letters", len(letters), "unlocked", unlocked)
 			return nil
 		},
 	)
 }
 
 // NewFameBlessingRoutine 构造仙界膜拜大神与声望祝福任务。
+// NewFameBlessingRoutine 构造尊像膜拜任务 (Module 41, Mod_WorshipMars_Base)。
+//
+// 查询膜拜信息与剩余次数后，只使用免费供品 (白檀香, id=1) 上香；
+// 需要元宝的苏合香/天木香一律不调用。
 func NewFameBlessingRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"fame_blessing",
 		"social",
@@ -605,7 +783,91 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行社交任务: 膜拜大神尊像与声望领用")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			// 1. 膜拜信息：功能未开放或无数据时跳过。
+			iCtx, iCancel := context.WithTimeout(ctx, callTimeout)
+			infoResp, err := session.Call(iCtx, protocol.BuildWorshipMarsInfoPacket(), protocol.ActionIDWorshipMarsInfo)
+			iCancel()
+			if err != nil {
+				slog.Info("膜拜功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			info, err := protocol.ParseWorshipMarsInfoResult(infoResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析膜拜信息失败: %w", err)
+			}
+			slog.Info("膜拜信息",
+				"role_id", session.RoleID(),
+				"mars_level", info.MarsLevel,
+				"incense_count", info.IncenseCount,
+				"total_count", info.TotalCount,
+				"logs", info.LogEntryCount,
+			)
+
+			// 2. 剩余免费次数
+			rCtx, rCancel := context.WithTimeout(ctx, callTimeout)
+			remainResp, err := session.Call(rCtx, protocol.BuildWorshipMarsRemainPacket(), protocol.ActionIDWorshipMarsRemain)
+			rCancel()
+			if err != nil {
+				slog.Info("查询剩余膜拜次数失败，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			remain, err := protocol.ParseWorshipMarsRemainResult(remainResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析剩余膜拜次数失败: %w", err)
+			}
+			if remain <= 0 {
+				slog.Info("膜拜免费次数已用尽", "role_id", session.RoleID())
+				return nil
+			}
+
+			// 3. 使用免费供品 (白檀香) 上香，直到次数耗尽或失败。
+			done := int32(0)
+			for done < remain {
+				cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
+				resp, cErr := session.Call(cCtx, protocol.BuildWorshipMarsIncensePacket(protocol.WorshipMarsOfferingFree), protocol.ActionIDWorshipMarsIncense)
+				cCancel()
+				if cErr != nil {
+					slog.Warn("上香无应答", "role_id", session.RoleID(), "done", done, "err", cErr)
+					break
+				}
+				result, pErr := protocol.ParseWorshipMarsIncenseResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析上香回包失败", "role_id", session.RoleID(), "err", pErr)
+					break
+				}
+				switch result {
+				case protocol.WorshipMarsResultSuccess:
+					done++
+					slog.Info("免费上香成功", "role_id", session.RoleID(), "index", done)
+				case protocol.WorshipMarsResultCountUsed:
+					slog.Info("膜拜次数已用尽", "role_id", session.RoleID(), "done", done)
+					done = remain
+				case protocol.WorshipMarsResultBlessingTimes, protocol.WorshipMarsResultExpAdd:
+					slog.Info("膜拜祝福/经验加成已满", "role_id", session.RoleID(), "result", result)
+					done = remain
+				case protocol.WorshipMarsResultInsufficientIngot:
+					slog.Warn("上香提示元宝不足 (免费供品不应出现)", "role_id", session.RoleID())
+					done = remain
+				default:
+					slog.Warn("上香返回未知结果", "role_id", session.RoleID(), "result", result)
+					done = remain
+				}
+				if done < remain {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(200 * time.Millisecond):
+					}
+				}
+			}
+			slog.Info("膜拜完成", "role_id", session.RoleID(), "free_incense_done", done)
 			return nil
 		},
 	)

@@ -1102,7 +1102,12 @@ func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
 }
 
 // NewGourdRealmRoutine 构造壶中界炼丹与灵气合成任务。
+// NewGourdRealmRoutine 构造仙葫芦收益领取任务 (Module 220, Mod_FairyGourd_Base)。
+//
+// 先读取活动时间窗，再逐日领取已累积的铜钱/经验收益；
+// 活动未开始/已结束或无可领日期时直接跳过。全程不消耗元宝。
 func NewGourdRealmRoutine(dictRepo dictionary.Repository) scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"gourd_realm",
 		"farming",
@@ -1110,13 +1115,89 @@ func NewGourdRealmRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 		scheduler.PriorityNormal,
 		30*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行资源任务: 壶中界灵气合成与材料提炼")
-			if dictRepo != nil {
-				// 通过数据字典校验基础合成丹药道具 (如气血包 ID 7)
-				if item, err := dictRepo.GetItem(7); err == nil && item != nil {
-					slog.Debug("壶中界数据字典校验就绪", "sample_item", item.Name)
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			_ = dictRepo // 保留构造签名，当前领取流程不依赖静态字典
+
+			// 1. 活动时间窗检测
+			dCtx, dCancel := context.WithTimeout(ctx, callTimeout)
+			dateResp, err := session.Call(dCtx, protocol.BuildFairyGourdDatePacket(), protocol.ActionIDFairyGourdDate)
+			dCancel()
+			if err != nil {
+				slog.Info("仙葫芦功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			date, err := protocol.ParseFairyGourdDateResult(dateResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析仙葫芦活动时间失败: %w", err)
+			}
+			now := time.Now().Unix()
+			if date.StartTime > 0 && now < int64(date.StartTime) {
+				slog.Info("仙葫芦活动尚未开始，跳过", "role_id", session.RoleID(), "start_time", date.StartTime)
+				return nil
+			}
+			if date.EndTime > 0 && now > int64(date.EndTime) {
+				slog.Info("仙葫芦活动已结束，跳过", "role_id", session.RoleID(), "end_time", date.EndTime)
+				return nil
+			}
+
+			// 2. 收益列表
+			lCtx, lCancel := context.WithTimeout(ctx, callTimeout)
+			listResp, err := session.Call(lCtx, protocol.BuildFairyGourdListPacket(), protocol.ActionIDFairyGourdList)
+			lCancel()
+			if err != nil {
+				return fmt.Errorf("查询仙葫芦收益列表失败: %w", err)
+			}
+			entries, err := protocol.ParseFairyGourdListResult(listResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析仙葫芦收益列表失败: %w", err)
+			}
+			if len(entries) == 0 {
+				slog.Info("仙葫芦暂无可领取收益", "role_id", session.RoleID())
+				return nil
+			}
+
+			// 3. 逐日领取
+			claimed := 0
+			for _, entry := range entries {
+				cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
+				resp, cErr := session.Call(cCtx, protocol.BuildFairyGourdClaimPacket(entry.Date), protocol.ActionIDFairyGourdClaim)
+				cCancel()
+				if cErr != nil {
+					slog.Warn("仙葫芦领取无应答", "role_id", session.RoleID(), "date", entry.Date, "err", cErr)
+					break
+				}
+				result, pErr := protocol.ParseFairyGourdClaimResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析仙葫芦领取回包失败", "role_id", session.RoleID(), "err", pErr)
+					break
+				}
+				switch result {
+				case protocol.FairyGourdResultSuccess:
+					claimed++
+					slog.Info("仙葫芦收益领取成功",
+						"role_id", session.RoleID(),
+						"date", entry.Date,
+						"coin", entry.Coin,
+						"exp", entry.Exp,
+					)
+				case protocol.FairyGourdResultAlreadyGet:
+					continue
+				case protocol.FairyGourdResultNoGrid:
+					return scheduler.ErrBagFull
+				case protocol.FairyGourdResultTimeError:
+					slog.Info("仙葫芦领取时间不符，结束本轮", "role_id", session.RoleID(), "date", entry.Date)
+					return nil
+				default:
+					slog.Warn("仙葫芦领取失败", "role_id", session.RoleID(), "date", entry.Date, "result", result)
+					return nil
 				}
 			}
+			slog.Info("仙葫芦收益领取完成", "role_id", session.RoleID(), "claimed", claimed)
 			return nil
 		},
 	)

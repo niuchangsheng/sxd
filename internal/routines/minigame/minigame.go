@@ -426,7 +426,13 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 }
 
 // NewFishingRoutine 构造自动钓鱼与命格整理任务。
+// NewFishingRoutine 构造自动钓鱼任务 (Module 217, Mod_Fish_Base)。
+//
+// 先查询鱼钩数量，再逐个下钩直到鱼钩耗尽或背包/命格位不足；
+// 只使用免费鱼钩，不消耗元宝。
 func NewFishingRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
+	const fishInterval = 200 * time.Millisecond
 	return scheduler.NewBaseRoutine(
 		"fishing",
 		"minigame",
@@ -434,7 +440,77 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行益智任务: 自动钓鱼与命格吸收融合")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			// 1. 查询鱼钩数量；为 0 时说明免费次数已用尽。
+			hCtx, hCancel := context.WithTimeout(ctx, callTimeout)
+			hooksResp, err := session.Call(hCtx, protocol.BuildFishHooksPacket(), protocol.ActionIDFishHooks)
+			hCancel()
+			if err != nil {
+				return fmt.Errorf("查询鱼钩数量失败: %w", err)
+			}
+			hooks, err := protocol.ParseFishHooksResult(hooksResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析鱼钩数量失败: %w", err)
+			}
+			if hooks <= 0 {
+				slog.Info("今日鱼钩已用尽，跳过钓鱼", "role_id", session.RoleID())
+				return nil
+			}
+			slog.Info("开始自动钓鱼", "role_id", session.RoleID(), "fishhooks", hooks)
+
+			caught := 0
+			for i := int32(0); i < hooks; i++ {
+				fCtx, fCancel := context.WithTimeout(ctx, callTimeout)
+				resp, cErr := session.Call(fCtx, protocol.BuildFishDoPacket(), protocol.ActionIDFishDo)
+				fCancel()
+				if cErr != nil {
+					slog.Warn("钓鱼无应答", "role_id", session.RoleID(), "index", i+1, "err", cErr)
+					break
+				}
+				result, pErr := protocol.ParseFishDoResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析钓鱼回包失败", "role_id", session.RoleID(), "err", pErr)
+					break
+				}
+				switch result.Result {
+				case protocol.FishResultSuccess:
+					caught++
+					slog.Info("钓鱼成功",
+						"role_id", session.RoleID(),
+						"index", i+1,
+						"item_id", result.ItemID,
+						"number", result.Number,
+					)
+				case protocol.FishResultNotEnoughFishhook:
+					slog.Info("鱼钩已用尽", "role_id", session.RoleID(), "caught", caught)
+					i = hooks
+				case protocol.FishResultNotEnoughFateGrid,
+					protocol.FishResultItemPackFull,
+					protocol.FishResultFiveElementsPackFull,
+					protocol.FishResultDragonballNoFreeGrid,
+					protocol.FishResultCanJuanPackFull:
+					slog.Warn("钓鱼奖励因背包/命格位不足未能领取",
+						"role_id", session.RoleID(), "result", result.Result)
+					i = hooks
+				default:
+					slog.Warn("钓鱼返回未知结果", "role_id", session.RoleID(), "result", result.Result)
+					i = hooks
+				}
+				if i+1 < hooks {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(fishInterval):
+					}
+				}
+			}
+			slog.Info("自动钓鱼完成", "role_id", session.RoleID(), "caught", caught)
 			return nil
 		},
 	)
@@ -549,7 +625,13 @@ func NewScratchCardRoutine() scheduler.ActivityRoutine {
 }
 
 // NewIceCaveRoutine 构造一键冰窟探险任务。
+// NewIceCaveRoutine 构造一键冰窟探险任务 (Module 393, Mod_IceCaveTreasure_Base)。
+//
+// 先查询活动面板：无应答/未开放时安全跳过；开放时按剩余免费锤子逐块敲击，
+// 活跃度不足/完成/背包满时停止；最后在冰晶足够时兑换奖励。
+// 不调用 buy_hammer (消耗元宝)。
 func NewIceCaveRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"ice_cave",
 		"minigame",
@@ -557,7 +639,120 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行益智任务: 一键冰窟最优通关")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			// 1. 活动/功能检测：无应答视为未开放。
+			iCtx, iCancel := context.WithTimeout(ctx, callTimeout)
+			infoResp, err := session.Call(iCtx, protocol.BuildIceCaveInfoPacket(), protocol.ActionIDIceCaveInfo)
+			iCancel()
+			if err != nil {
+				slog.Info("冰窟探险当前不可用/未开放，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			info, err := protocol.ParseIceCaveInfoResult(infoResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析冰窟面板失败: %w", err)
+			}
+			slog.Info("冰窟探险状态",
+				"role_id", session.RoleID(),
+				"slots", len(info.Slots),
+				"hammers", info.HammerNum,
+				"active_num", info.ActiveNum,
+				"active_limit", info.ActiveLimit,
+				"gold", info.GoldNum,
+				"gift_count", info.GiftCount,
+				"gift_limit", info.GiftLimit,
+			)
+			if info.HammerNum <= 0 {
+				slog.Info("冰窟锤子已用尽，跳过", "role_id", session.RoleID())
+				return nil
+			}
+			if info.ActiveLimit > 0 && info.ActiveNum < info.ActiveLimit {
+				slog.Info("活跃度不足，跳过冰窟探险",
+					"role_id", session.RoleID(),
+					"active_num", info.ActiveNum,
+					"active_limit", info.ActiveLimit,
+				)
+				return nil
+			}
+
+			// 2. 逐块敲击未开启的冰面。
+			hits := int32(0)
+			for _, slot := range info.Slots {
+				if hits >= info.HammerNum {
+					break
+				}
+				if slot.State != 0 {
+					continue
+				}
+				hCtx, hCancel := context.WithTimeout(ctx, callTimeout)
+				resp, cErr := session.Call(hCtx, protocol.BuildIceCaveHitPacket(slot.Ice, slot.IsIron), protocol.ActionIDIceCaveHit)
+				hCancel()
+				if cErr != nil {
+					slog.Warn("冰窟敲击无应答", "role_id", session.RoleID(), "ice", slot.Ice, "err", cErr)
+					break
+				}
+				result, pErr := protocol.ParseIceCaveHitResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析冰窟敲击回包失败", "role_id", session.RoleID(), "err", pErr)
+					break
+				}
+				switch result.Result {
+				case protocol.IceCaveResultSuccess:
+					hits++
+					slog.Info("冰窟敲击成功", "role_id", session.RoleID(), "ice", slot.Ice, "awards", result.AwardItems)
+				case protocol.IceCaveResultCompleted:
+					slog.Info("冰窟探险已完成", "role_id", session.RoleID(), "completed_awards", result.CompletedItems)
+					hits = info.HammerNum
+				case protocol.IceCaveResultItemPackFull:
+					return scheduler.ErrBagFull
+				case protocol.IceCaveResultNotEnoughActive:
+					slog.Info("冰窟活跃度不足，结束敲击", "role_id", session.RoleID())
+					hits = info.HammerNum
+				case protocol.IceCaveResultFuncNotOpen,
+					protocol.IceCaveResultNonActivityTime,
+					protocol.IceCaveResultNotActivityTime:
+					slog.Info("冰窟活动未开放/非活动时间，结束", "role_id", session.RoleID(), "result", result.Result)
+					hits = info.HammerNum
+				default:
+					slog.Warn("冰窟敲击返回未知结果", "role_id", session.RoleID(), "result", result.Result)
+					hits = info.HammerNum
+				}
+			}
+			slog.Info("冰窟敲击完成", "role_id", session.RoleID(), "hits", hits)
+
+			// 3. 冰晶足够时兑换奖励。
+			if info.GiftGold > 0 && info.GoldNum >= info.GiftGold && info.GiftCount < info.GiftLimit {
+				gCtx, gCancel := context.WithTimeout(ctx, callTimeout)
+				gResp, gErr := session.Call(gCtx, protocol.BuildIceCaveGetGiftPacket(), protocol.ActionIDIceCaveGetGift)
+				gCancel()
+				if gErr != nil {
+					slog.Warn("冰窟奖励兑换无应答", "role_id", session.RoleID(), "err", gErr)
+					return nil
+				}
+				result, pErr := protocol.ParseIceCaveGiftResult(gResp.Payload)
+				if pErr != nil {
+					slog.Warn("解析冰窟兑换回包失败", "role_id", session.RoleID(), "err", pErr)
+					return nil
+				}
+				switch result {
+				case protocol.IceCaveResultSuccess:
+					slog.Info("冰窟奖励兑换成功", "role_id", session.RoleID(), "item_id", info.GiftItem)
+				case protocol.IceCaveResultItemPackFull:
+					return scheduler.ErrBagFull
+				case protocol.IceCaveResultAlreadyGet:
+					slog.Info("冰窟奖励已兑换", "role_id", session.RoleID())
+				case protocol.IceCaveResultNotEnoughGold:
+					slog.Info("冰晶不足，跳过兑换", "role_id", session.RoleID(), "gold", info.GoldNum)
+				default:
+					slog.Info("冰窟奖励未兑换", "role_id", session.RoleID(), "result", result)
+				}
+			}
 			return nil
 		},
 	)

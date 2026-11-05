@@ -913,3 +913,50 @@ Int left_day, Int mount_count, Int title_count, Int cur_level
 - **实机观察（2026-11-05 11:12 s0）**：`has_gain_award=1`、
   `max_ask_num=1`、`has_ask_num=1`、`cur_level=6`、`left_day=28`；
   `do_ask_fairy` 返回 `HAS_ASK=5`（今日已问灵），自动化跳过且未消耗资源。
+
+### 4.20 Module 217 (0xD9): 自动钓鱼 (`Mod_Fish_Base`)
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00D90000` | `get_player_fishhook` | 空 | `Int fishhook_number` |
+| 1 | `0x00D90001` | `do_fishing` | 空 | `UByte result, Int item_id, Int number` |
+
+- 结果码：`SUCCESS=0`、`NOT_ENOUGH_FISHHOOK=1`、`NOT_ENOUGH_FATE_GRID=2`、
+  `ITEM_PACK_FULL=3`、`FIVE_ELEMENTS_PACK_FULL=4`、`DRAGONBALL_NO_FREE_GRID=5`、
+  `CAN_JUAN_PACK_FULL=6`。
+- 自动化先查鱼钩数量，为 0 时跳过；逐次下钩直到失败/背包不足。
+
+### 4.21 Module 41 (0x29): 尊像膜拜 (`Mod_WorshipMars_Base`)
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00290000` | `mars_info` | 空 | `Int mars_level, Int mars_exp, Int require_exp, Int incense_count, Int total_count, Byte is_cover, [Int player_id, String name, Int incense_id, Int exp, Int time] log` |
+| 1 | `0x00290001` | `incense` | `Int offering_id` | `UByte result` |
+| 4 | `0x00290004` | `get_remain_incense_times` | 空 | `Int remain_incense_times` |
+
+- 供品 1（白檀香）免费，2/3 分别消耗 30/90 元宝；自动化只用供品 1。
+- 结果码：`SUCCESS=0`、`COUNT_USED=2`、`INSUFFICIENT_INGOT=3`、`BLESSING_TIMES=6` 等。
+- 自动化先查剩余次数，为 0 直接跳过。
+
+### 4.22 Module 44 (0x2C): 生肖挑战 (`Mod_Zodiac_Base`)
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x002C0000` | `zodiac_info` | 空 | `Byte now_level, Byte now_barrier, Byte next_level, Byte next_barrier, Int require_level, Int gold_oil_id, Byte heaven` |
+| 1 | `0x002C0001` | `challenge` | 空 | `UByte result, Byte zodiac_level, Byte barrier, Int gold_oil_id` + 战报 |
+| 2 | `0x002C0002` | `exchange_stone` | `Int` | `UByte result` |
+
+- 挑战前置条件：角色等级 ≥ `require_level`；已通关/冷却/境界点不足时服务端返回对应结果码，
+  自动化在挑战前校验等级，并对 `TOP_HEAVEN=2`、`NOT_ENOUGH_PLAYER_LEVEL=3`、
+  `CD_TIME=5`、`NO_ENOUGH_STATE_POINT=6`、`LOCK=7` 分别分流。
+
+### 4.23 Module 220 (0xDC): 仙葫芦 (`Mod_FairyGourd_Base`)
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00DC0000` | `get_date` | 空 | `Int start_time, Int end_time, Int get_time` |
+| 1 | `0x00DC0001` | `get_fairy_gourd_list` | 空 | `[Long coin, Long exp, Int date]` |
+| 2 | `0x00DC0002` | `get_fairy_gourd` | `Int date` | `UByte result` |
+
+- 自动化先按 `start_time/end_time` 判断活动是否开始/结束，再逐日领取；
+  `ALREADY_GET=3` 跳过，`NO_GRID=2` 返回 `ErrBagFull`。

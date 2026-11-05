@@ -315,12 +315,12 @@ func TestPilgrimageRoutine_FullBusinessFlow(t *testing.T) {
 				openCalls.Add(1)
 				w := protocol.NewWriter()
 				w.WriteInt32(1)
-				w.WriteUint8(2)  // CanTakeTimes = 2
+				w.WriteUint8(2) // CanTakeTimes = 2
 				w.WriteInt32(0)
-				w.WriteInt32(0)  // CD = 0
+				w.WriteInt32(0) // CD = 0
 				w.WriteUint16(0)
-				w.WriteUint8(2)  // ProtectTimes = 2
-				w.WriteUint8(3)  // RobTimes = 3
+				w.WriteUint8(2) // ProtectTimes = 2
+				w.WriteUint8(3) // RobTimes = 3
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDTakeBibleOpen, w.Bytes()))
 
 			case protocol.ActionIDTakeBibleGetInfo:
@@ -328,7 +328,7 @@ func TestPilgrimageRoutine_FullBusinessFlow(t *testing.T) {
 				w := protocol.NewWriter()
 				w.WriteUint8(protocol.TakeBibleSuccess)
 				w.WriteInt8(protocol.TakeBibleShaWuJing) // 沙悟净 (可刷新)
-				w.WriteInt32(0)                         // ProtectPlayerID = 0 (未保护)
+				w.WriteInt32(0)                          // ProtectPlayerID = 0 (未保护)
 				w.WriteInt16(0)
 				// 1 个在线空闲好友
 				w.WriteUint16(1)
@@ -422,4 +422,23 @@ func TestPilgrimageRoutine_FullBusinessFlow(t *testing.T) {
 	c1.Close()
 	c2.Close()
 	serverWg.Wait()
+}
+
+// TestGourdRealmRoutine_Execute 覆盖仙葫芦按日领取成功路径。
+func TestGourdRealmRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_gourd",
+		RoleName:   "测试仙葫芦角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r := farming.NewGourdRealmRoutine(nil)
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("仙葫芦任务执行失败: %v", err)
+	}
 }

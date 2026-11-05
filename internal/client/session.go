@@ -2434,6 +2434,89 @@ func runMockGameServer(conn net.Conn) {
 		case protocol.ActionIDScratchCardShave:
 			_ = protocol.WritePacket(conn, protocol.BuildScratchCardShaveResultPacket(protocol.ScratchCardResultIngot, 3345))
 
+		case protocol.ActionIDSectOpenStatus:
+			_ = protocol.WritePacket(conn, protocol.BuildSectOpenStatusResultPacket(1))
+
+		case protocol.ActionIDSectPanelInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDSectPanelInfo, []byte{0, 0, 0, 0}))
+
+		case protocol.ActionIDSectAllianceSeason:
+			_ = protocol.WritePacket(conn, protocol.BuildSectAllianceSeasonResultPacket(1, 0))
+
+		case protocol.ActionIDMarryHomeSelfInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildMarryHomeSelfInfoResultPacket(0))
+
+		case protocol.ActionIDFriendsSentPanel:
+			_ = protocol.WritePacket(conn, protocol.BuildFriendsSentPanelResultPacket([]protocol.FriendsSentLetter{
+				{ID: 1},
+			}))
+
+		case protocol.ActionIDFriendsSentOpen:
+			_ = protocol.WritePacket(conn, protocol.BuildFriendsSentOpenResultPacket(protocol.FriendsSentOpenResult{
+				IsRead: 0, IsGetAward: 0, ID: 1, Awards: [][2]int32{{5715, 1}},
+			}))
+
+		case protocol.ActionIDFriendsSentRead:
+			_ = protocol.WritePacket(conn, protocol.BuildFriendsSentActionResultPacket(protocol.ActionIDFriendsSentRead, protocol.FriendsSentResultSuccess))
+
+		case protocol.ActionIDFriendsSentAward:
+			_ = protocol.WritePacket(conn, protocol.BuildFriendsSentActionResultPacket(protocol.ActionIDFriendsSentAward, protocol.FriendsSentResultSuccess))
+
+		case protocol.ActionIDIceCaveInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildIceCaveInfoResultPacket(protocol.IceCaveInfo{
+				Slots:       []protocol.IceCaveSlot{{Ice: 1, State: 0, IsIron: 0}},
+				ActiveNum:   100,
+				ActiveLimit: 10,
+				HammerNum:   1,
+			}))
+
+		case protocol.ActionIDIceCaveHit:
+			_ = protocol.WritePacket(conn, protocol.BuildIceCaveHitResultPacket(protocol.IceCaveResultSuccess))
+
+		case protocol.ActionIDIceCaveGetGift:
+			_ = protocol.WritePacket(conn, protocol.BuildIceCaveGiftResultPacket(protocol.IceCaveResultSuccess))
+
+		case protocol.ActionIDFairyGourdDate:
+			now := time.Now().Unix()
+			_ = protocol.WritePacket(conn, protocol.BuildFairyGourdDateResultPacket(protocol.FairyGourdDate{
+				StartTime: int32(now - 100), EndTime: int32(now + 3600),
+			}))
+
+		case protocol.ActionIDFairyGourdList:
+			_ = protocol.WritePacket(conn, protocol.BuildFairyGourdListResultPacket([]protocol.FairyGourdEntry{
+				{Coin: 100000, Exp: 500, Date: 20261105},
+			}))
+
+		case protocol.ActionIDFairyGourdClaim:
+			_ = protocol.WritePacket(conn, protocol.BuildFairyGourdClaimResultPacket(protocol.FairyGourdResultSuccess))
+
+		case protocol.ActionIDZodiacInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildZodiacInfoResultPacket(protocol.ZodiacInfo{
+				NowZodiacLevel: 1, NowBarrier: 3, NextZodiacLevel: 1, NextBarrier: 4,
+				RequireLevel: 100, GoldOilID: 0, Heaven: 1,
+			}))
+
+		case protocol.ActionIDZodiacChallenge:
+			_ = protocol.WritePacket(conn, protocol.BuildZodiacChallengeResultPacket(
+				protocol.ZodiacResultSuccess, 1, 4, 0))
+
+		case protocol.ActionIDWorshipMarsInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildWorshipMarsInfoResultPacket(protocol.WorshipMarsInfo{
+				MarsLevel: 1, IncenseCount: 0, TotalCount: 3,
+			}))
+
+		case protocol.ActionIDWorshipMarsRemain:
+			_ = protocol.WritePacket(conn, protocol.BuildWorshipMarsRemainResultPacket(1))
+
+		case protocol.ActionIDWorshipMarsIncense:
+			_ = protocol.WritePacket(conn, protocol.BuildWorshipMarsIncenseResultPacket(protocol.WorshipMarsResultSuccess))
+
+		case protocol.ActionIDFishHooks:
+			_ = protocol.WritePacket(conn, protocol.BuildFishHooksResultPacket(2))
+
+		case protocol.ActionIDFishDo:
+			_ = protocol.WritePacket(conn, protocol.BuildFishDoResultPacket(protocol.FishResultSuccess, 5715, 1))
+
 		case protocol.ActionIDAskFairyInfo:
 			_ = protocol.WritePacket(conn, protocol.BuildAskFairyInfoResultPacket(protocol.AskFairyInfo{
 				TotalLoginDay: 100,
