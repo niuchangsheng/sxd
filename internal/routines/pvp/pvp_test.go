@@ -678,3 +678,36 @@ func TestCelestialArenaRoutine_NotInListReloadsPanel(t *testing.T) {
 		t.Errorf("NOT_IN_LIST 应按最大重试次数重拉面板后退出, 期望 %d 次挑战, 实际 %d 次", want, got)
 	}
 }
+
+// TestWorldBossRoutine_Executes 覆盖世界 Boss 巡检与开战参战成功路径。
+func TestWorldBossRoutine_Executes(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_world_boss",
+		RoleName:   "测试世界Boss角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	routine := NewWorldBossRoutine()
+	if err := routine.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("世界Boss任务执行失败: %v", err)
+	}
+}
+
+func TestWorldBossResultName(t *testing.T) {
+	cases := map[uint8]string{
+		protocol.WorldBossResultNotBegin:       "未到开战时间",
+		protocol.WorldBossResultBossDead:       "Boss已被击杀",
+		protocol.WorldBossResultMaxTimes:       "今日参战次数已满",
+		protocol.WorldBossResultNotEnoughSkill: "技能点不足",
+	}
+	for code, want := range cases {
+		if got := worldBossResultName(code); got != want {
+			t.Errorf("结果码 %d 描述期望 %q, got %q", code, want, got)
+		}
+	}
+}

@@ -440,8 +440,13 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewScratchCardRoutine 构造刮刮卡福利任务。
+// NewScratchCardRoutine 构造幸运刮刮卡福利任务 (Module 185, Mod_ScratchCard_Base)。
+//
+// 只使用每日免费刮卡次数；结果可能为积分/元宝/形象卡/普通道具。
+// 次数不足、背包已满、刮卡失败时立即收手，不消耗任何元宝。
 func NewScratchCardRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 3 * time.Second
+	const shaveInterval = 300 * time.Millisecond
 	return scheduler.NewBaseRoutine(
 		"scratch_card",
 		"minigame",
@@ -449,7 +454,95 @@ func NewScratchCardRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityLow,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行益智任务: 幸运刮刮卡福利抽取")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			// 1. 查询活动状态与剩余免费次数
+			iCtx, iCancel := context.WithTimeout(ctx, callTimeout)
+			infoResp, err := session.Call(iCtx, protocol.BuildScratchCardInfoPacket(), protocol.ActionIDScratchCardInfo)
+			iCancel()
+			if err != nil {
+				return fmt.Errorf("查询刮刮卡状态失败: %w", err)
+			}
+			info, err := protocol.ParseScratchCardInfoResult(infoResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析刮刮卡状态失败: %w", err)
+			}
+			if info.InActivity == 0 || info.CardTimes == 0 {
+				slog.Info("刮刮卡活动未开放或次数已用尽，跳过",
+					"role_id", session.RoleID(),
+					"in_activity", info.InActivity,
+					"active_degree", info.ActiveDegree,
+					"card_times", info.CardTimes,
+				)
+				return nil
+			}
+			slog.Info("开始刮刮卡",
+				"role_id", session.RoleID(),
+				"card_times", info.CardTimes,
+				"active_degree", info.ActiveDegree,
+			)
+
+			// 2. 用完全部免费次数
+			shaved, ingotHits := 0, 0
+			for i := 0; i < int(info.CardTimes); i++ {
+				sCtx, sCancel := context.WithTimeout(ctx, callTimeout)
+				resp, cErr := session.Call(sCtx, protocol.BuildScratchCardShavePacket(), protocol.ActionIDScratchCardShave)
+				sCancel()
+				if cErr != nil {
+					slog.Warn("刮卡无应答", "role_id", session.RoleID(), "index", i+1, "err", cErr)
+					break
+				}
+				result, pErr := protocol.ParseScratchCardShaveResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析刮卡回包失败", "role_id", session.RoleID(), "index", i+1, "err", pErr)
+					break
+				}
+				switch result.Result {
+				case protocol.ScratchCardResultSuccess,
+					protocol.ScratchCardResultPoint,
+					protocol.ScratchCardResultImage,
+					protocol.ScratchCardResultAward:
+					shaved++
+					slog.Info("刮卡成功",
+						"role_id", session.RoleID(),
+						"index", i+1,
+						"result", result.Result,
+						"item_id", result.ItemID,
+					)
+				case protocol.ScratchCardResultIngot:
+					shaved++
+					ingotHits++
+					slog.Info("刮出元宝", "role_id", session.RoleID(), "index", i+1, "item_id", result.ItemID)
+				case protocol.ScratchCardResultPackFull,
+					protocol.ScratchCardResultItemPackFull,
+					protocol.ScratchCardResultFatePackFull:
+					slog.Warn("刮卡奖励因背包已满未能领取", "role_id", session.RoleID(), "result", result.Result)
+					return scheduler.ErrBagFull
+				case protocol.ScratchCardResultNotEnoughTimes:
+					slog.Info("刮卡次数已用尽", "role_id", session.RoleID(), "index", i+1)
+					i = int(info.CardTimes)
+				case protocol.ScratchCardResultFailed,
+					protocol.ScratchCardResultNotExistCard:
+					slog.Warn("刮卡失败", "role_id", session.RoleID(), "result", result.Result)
+					i = int(info.CardTimes)
+				default:
+					slog.Warn("刮卡返回未知结果", "role_id", session.RoleID(), "result", result.Result)
+					i = int(info.CardTimes)
+				}
+				if i+1 < int(info.CardTimes) {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(shaveInterval):
+					}
+				}
+			}
+			slog.Info("刮刮卡任务完成", "role_id", session.RoleID(), "shaved", shaved, "ingot_hits", ingotHits)
 			return nil
 		},
 	)

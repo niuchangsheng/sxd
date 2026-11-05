@@ -559,3 +559,22 @@ func TestTreasureHouseAwardResolution(t *testing.T) {
 		}
 	}
 }
+
+// TestScratchCardRoutine_Execute 覆盖刮刮卡免费次数刮卡成功路径 (mock 返回元宝)。
+func TestScratchCardRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_scratch_card",
+		RoleName:   "测试刮刮卡角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r := NewScratchCardRoutine()
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("刮刮卡任务执行失败: %v", err)
+	}
+}

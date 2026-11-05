@@ -36,6 +36,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "online_gift", Name: "在线礼包与终结礼包", Domain: "daily", Schedule: scheduler.ScheduleLoop, Description: "领取在线时长福利，以及吉星高照/喜从天降/灵脉/拜关公/聚灵等功能终结礼包", DefaultOn: false},
 		{ID: "vip_welfare", Name: "VIP特权与俸禄", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取VIP每日礼包与官职俸禄", DefaultOn: false},
 		{ID: "god_bless", Name: "跨服天神赐福", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领用跨服天神赐福增益点数", DefaultOn: false},
+		{ID: "online_reward", Name: "在线奖励一键领取", Domain: "daily", Schedule: scheduler.ScheduleLoop, Description: "按当日在线时长一键领取在线奖励 (含元宝档位，不消耗元宝)", DefaultOn: false},
 		{ID: "town_practice", Name: "城镇打坐练功", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "上线自动结算并领取离线城镇打坐练功经验", DefaultOn: true},
 
 		// 2. Farming 领域 (6)
@@ -226,6 +227,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewVIPWelfareRoutine()
 	case "god_bless":
 		return daily.NewGodBlessRoutine()
+	case "online_reward":
+		return daily.NewOnlineRewardRoutine()
 	case "town_practice":
 		return daily.NewTownPracticeRoutine()
 

@@ -812,19 +812,115 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewWorldBossRoutine 构造世界Boss击杀争夺任务。
+// NewWorldBossRoutine 构造世界 Boss 自动参战任务 (Module 24, Mod_WorldBoss_Base)。
+//
+// 每 5 分钟巡检一次 Boss 列表，仅在 state=1 (开战中) 时发起一次免费战斗；
+// 战斗回包携带完整战报，只解析首个结果码。永不调用
+// clear_death_cd / reset_death_cd / strengthen_combat 等消耗元宝的接口。
 func NewWorldBossRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 5 * time.Second
+	const fightTimeout = 15 * time.Second
 	return scheduler.NewBaseRoutine(
 		"world_boss",
 		"pvp",
-		scheduler.ScheduleCron,
+		scheduler.ScheduleLoop,
 		scheduler.PriorityHigh,
-		0,
+		5*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行对抗任务: 世界Boss准时参战与鼓舞输出")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if session.State() != client.StateActive {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			// 1. 查询世界 Boss 列表
+			lCtx, lCancel := context.WithTimeout(ctx, callTimeout)
+			listResp, err := session.Call(lCtx, protocol.BuildWorldBossListPacket(), protocol.ActionIDWorldBossList)
+			lCancel()
+			if err != nil {
+				return fmt.Errorf("查询世界Boss列表失败: %w", err)
+			}
+			bosses, err := protocol.ParseWorldBossListResult(listResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析世界Boss列表失败: %w", err)
+			}
+
+			var open *protocol.WorldBossEntry
+			for i := range bosses {
+				if bosses[i].State == protocol.WorldBossStateOpen {
+					open = &bosses[i]
+					break
+				}
+			}
+			if open == nil {
+				slog.Debug("世界Boss当前未开战", "role_id", session.RoleID(), "bosses", len(bosses))
+				return nil
+			}
+
+			// 2. 发起一次免费战斗
+			slog.Info("世界Boss开战中，发起参战",
+				"role_id", session.RoleID(),
+				"boss_id", open.BossID,
+				"boss_level", open.Level,
+				"map_id", open.MapID,
+			)
+			fCtx, fCancel := context.WithTimeout(ctx, fightTimeout)
+			fightResp, err := session.Call(fCtx, protocol.BuildWorldBossFightPacket(open.BossID), protocol.ActionIDWorldBossFight)
+			fCancel()
+			if err != nil {
+				return fmt.Errorf("世界Boss战斗请求失败: %w", err)
+			}
+			result, err := protocol.ParseWorldBossFightResult(fightResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析世界Boss战斗回包失败: %w", err)
+			}
+			switch result {
+			case protocol.WorldBossResultSuccess:
+				slog.Info("世界Boss参战成功", "role_id", session.RoleID(), "boss_id", open.BossID)
+			case protocol.WorldBossResultNotEnoughIngot:
+				slog.Warn("世界Boss参战提示元宝不足 (自动化不主动消耗元宝)",
+					"role_id", session.RoleID(), "boss_id", open.BossID)
+			default:
+				slog.Info("世界Boss参战未成功",
+					"role_id", session.RoleID(),
+					"boss_id", open.BossID,
+					"result", result,
+					"reason", worldBossResultName(result),
+				)
+			}
 			return nil
 		},
 	)
+}
+
+// worldBossResultName 返回世界 Boss 战斗结果码的中文描述。
+func worldBossResultName(result uint8) string {
+	switch result {
+	case protocol.WorldBossResultFailed:
+		return "战斗失败"
+	case protocol.WorldBossResultNotBegin:
+		return "未到开战时间"
+	case protocol.WorldBossResultMissionOver:
+		return "活动已结束"
+	case protocol.WorldBossResultBossDead:
+		return "Boss已被击杀"
+	case protocol.WorldBossResultDeathStatus:
+		return "角色处于死亡状态"
+	case protocol.WorldBossResultNotEnoughIngot:
+		return "元宝不足"
+	case protocol.WorldBossResultMaxTimes:
+		return "今日参战次数已满"
+	case protocol.WorldBossResultNotEnoughSkill:
+		return "技能点不足"
+	case protocol.WorldBossResultCombatLimit:
+		return "战力不足"
+	default:
+		return "未知结果"
+	}
 }
 
 // NewCrossServerLadderRoutine 构造跨服天梯争霸挑战任务。

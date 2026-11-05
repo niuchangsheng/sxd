@@ -2070,6 +2070,35 @@ func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
 
 // runMockGameServer 为离线调试、沙箱环境与单元测试提供轻量级虚拟游戏协议服务端。
 // writeFindImmortalAwardMock 写入一份随品阶增长的龙鱼奖励 mock 数据。
+// buildMockOnlineRewardPanel 构造在线奖励面板 mock 回包：
+// 活动进行中，今日在线 400 秒，前两档 (300/900 秒) 中第一档可领。
+func buildMockOnlineRewardPanel() []byte {
+	w := protocol.NewWriter()
+	now := time.Now().Unix()
+	w.WriteInt32(int32(now - 100))
+	w.WriteInt32(int32(now + 3600))
+	w.WriteUint8(1)
+	w.WriteUint16(2)
+	// 档位 1: 元宝 x100, 已解锁未领取
+	w.WriteInt32(1)
+	w.WriteUint16(1)
+	w.WriteInt32(3345)
+	w.WriteInt64(100)
+	w.WriteUint8(1)
+	w.WriteUint8(0)
+	w.WriteInt32(300)
+	// 档位 2: 铜钱 x200000, 未解锁
+	w.WriteInt32(2)
+	w.WriteUint16(1)
+	w.WriteInt32(1747)
+	w.WriteInt64(200000)
+	w.WriteUint8(0)
+	w.WriteUint8(0)
+	w.WriteInt32(900)
+	w.WriteInt32(400)
+	return w.Bytes()
+}
+
 func writeFindImmortalAwardMock(w *protocol.Writer, state int8) {
 	w.WriteInt16(int16(100 + int(state)*20))  // fame
 	w.WriteInt32(int32(500 + int(state)*100)) // skill
@@ -2326,17 +2355,84 @@ func runMockGameServer(conn net.Conn) {
 				_ = protocol.WritePacket(conn, resPkt)
 			}
 
-		case protocol.ActionIDDailySignIn:
-			// 响应每日签到请求
-			resPkt := protocol.BuildDailySignInResultPacket(protocol.DailySignInResult{
-				Success:       true,
-				AlreadySigned: false,
-				SignedDays:    1,
-				RewardCoins:   50000,
-				RewardIngots:  20,
-				Message:       "签到成功，获得5万铜钱与20元宝！",
-			})
-			_ = protocol.WritePacket(conn, resPkt)
+		case protocol.ActionIDSignInStatus:
+			// 响应签到活动状态: 活动开启、有奖、状态正常
+			_ = protocol.WritePacket(conn, protocol.BuildSignInStatusResultPacket(1, 1, 1))
+
+		case protocol.ActionIDSignInInfo:
+			// 响应签到详情: 今日未签到、无连签奖励、5 个累计档位均可领取
+			_ = protocol.WritePacket(conn, protocol.BuildSignInInfoResultPacket(protocol.SignInInfo{
+				ContinueState: protocol.SignInStateAlreadyGet,
+				ContinueDay:   1,
+				TotalInfo: []protocol.SignInTier{
+					{Tier: 2, State: protocol.SignInStateCanGet},
+					{Tier: 3, State: protocol.SignInStateCanGet},
+				},
+				TotalDay:  0,
+				SignState: protocol.SignInStateNoSignIn,
+				CurDay:    1,
+			}))
+
+		case protocol.ActionIDSignInPlayer:
+			// 响应签到成功 (SI_SUCCESS)
+			_ = protocol.WritePacket(conn, protocol.BuildSignInActionResultPacket(protocol.SignInActionResult{
+				Result:   protocol.SignInResultOK,
+				TotalDay: 1,
+			}, false))
+
+		case protocol.ActionIDSignInContinue:
+			_ = protocol.WritePacket(conn, protocol.BuildSignInContinueResultPacket(protocol.SignInResultSuccess, 1))
+
+		case protocol.ActionIDSignInTotalAward:
+			_ = protocol.WritePacket(conn, protocol.BuildSignInTotalAwardResultPacket(protocol.SignInActionResult{
+				Result:   protocol.SignInResultSuccess,
+				TotalDay: 1,
+			}))
+
+		case protocol.ActionIDVIPInfo:
+			// 响应 VIP 信息: VIP 2, 等级 1 已领取、等级 2 可领取
+			_ = protocol.WritePacket(conn, protocol.BuildVIPInfoResultPacket(protocol.VIPInfo{
+				VIPLevel:         2,
+				MoneyToNextLevel: 1000,
+				Gifts: []protocol.VIPGiftState{
+					{Level: 1, SendGiftGot: 1},
+					{Level: 2, SendGiftGot: 0},
+					{Level: 3, SendGiftGot: 0},
+				},
+			}))
+
+		case protocol.ActionIDVIPSendGift:
+			_ = protocol.WritePacket(conn, protocol.BuildVIPGiftResultPacket(protocol.VIPResultSuccess))
+
+		case protocol.ActionIDOnlineRewardPanel:
+			// 响应在线奖励面板: 活动进行中, 在线 400 秒, 档位 1/2 可领
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDOnlineRewardPanel, buildMockOnlineRewardPanel()))
+
+		case protocol.ActionIDOnlineRewardOneKey:
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.OnlineRewardResultSuccess)
+			w.WriteUint16(1)
+			w.WriteInt32(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDOnlineRewardOneKey, w.Bytes()))
+
+		case protocol.ActionIDWorldBossList:
+			// 响应世界 Boss 列表: 1 个 Boss 处于开战中
+			_ = protocol.WritePacket(conn, protocol.BuildWorldBossListResultPacket([]protocol.WorldBossEntry{
+				{BossID: 1, MapID: 11, Level: 280, State: protocol.WorldBossStateOpen},
+			}))
+
+		case protocol.ActionIDWorldBossFight:
+			_ = protocol.WritePacket(conn, protocol.BuildWorldBossFightResultPacket(protocol.WorldBossResultSuccess))
+
+		case protocol.ActionIDScratchCardInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildScratchCardInfoResultPacket(protocol.ScratchCardInfo{
+				InActivity:   1,
+				ActiveDegree: 20,
+				CardTimes:    1,
+			}))
+
+		case protocol.ActionIDScratchCardShave:
+			_ = protocol.WritePacket(conn, protocol.BuildScratchCardShaveResultPacket(protocol.ScratchCardResultIngot, 3345))
 
 		case protocol.ActionIDEmailGetInfo:
 			// 响应邮箱面板查询 (Mod 345, Act 0)，业务侧仅用于建立 prevAct 链。

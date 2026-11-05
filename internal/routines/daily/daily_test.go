@@ -42,9 +42,19 @@ func TestDailyRoutines_Execute(t *testing.T) {
 		if err := r1.Execute(context.Background(), session, nil); err != nil {
 			t.Fatalf("签到任务执行失败: %v", err)
 		}
-		state := session.GetPlayerState()
-		if state.Coins <= 0 || state.Ingots <= 0 {
-			t.Errorf("签到后未获得铜钱或元宝奖励: coins=%d, ingots=%d", state.Coins, state.Ingots)
+	})
+
+	t.Run("VIP每日免费礼包", func(t *testing.T) {
+		r := NewVIPWelfareRoutine()
+		if err := r.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("VIP礼包任务执行失败: %v", err)
+		}
+	})
+
+	t.Run("在线奖励一键领取", func(t *testing.T) {
+		r := NewOnlineRewardRoutine()
+		if err := r.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("在线奖励任务执行失败: %v", err)
 		}
 	})
 

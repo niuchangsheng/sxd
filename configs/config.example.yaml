@@ -36,6 +36,10 @@ scheduler:
   routines:
     # 基础自动化模块
     dungeon: true               # 副本推图与扫荡 (统一命名为 dungeon)
+    daily_sign_in: true         # 每日签到 (Module 89，仅活动开启时领取，不消耗元宝)
+    vip_welfare: true           # VIP每日免费礼包 (仅领免费档，永不购买付费礼包)
+    online_reward: true         # 在线奖励一键领取 (按在线时长解锁，含元宝档位)
+    world_boss: true            # 世界Boss自动参战 (仅开战期免费战斗，不消耗元宝)
     mail_collect: true          # 邮件一键收取 (打开邮箱面板后一键领取全部邮件附件)
     six_realms: true            # 六道轮回爬塔与灵件处理 (每日免费重置/自动爬塔/蓝装自动出售)
     town_practice: true         # 城镇打坐练功 (上线自动结算并领取离线经验)
@@ -43,6 +47,7 @@ scheduler:
     training_room: true         # 仙界练功房 (领取累积经验并维持最佳空闲席位)
     lucky_star: true            # 吉星高照 (个人摇骰子与免费逆天改运)
     faction_lucky_star: true    # 帮派吉星高照 (帮派成员成绩与排名奖励)
+    scratch_card: true          # 幸运刮刮卡 (仅用每日免费次数，可刮出元宝)
     faction_blessing: true      # 帮派祭神 (每日免费上香获取祝福/声望/神像灵气)
     faction_lucky_wheel: true   # 帮派转盘 (消耗青龙令自动抽奖)
     travel_event: true          # 仙旅奇缘 (世界地图每日事件，按收益权重自动抉择分支)

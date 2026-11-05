@@ -748,3 +748,114 @@ Long attack_power, Int level, UByte enemy_flag, Int supreme_vip_prefix
    按对手战力升序选择最弱目标发起 `rob_the_seat`，且每次争夺后重新
    `get_rooms` 确认席位归属；
 6. 永不主动调用 `buy_rob_time` / `clean_rob_cd_time`，不消耗元宝。
+
+### 4.15 日常福利模块：签到 / VIP 礼包 / 在线奖励
+
+以下三组协议均采自官方 2026 客户端 `Main.swf` 反编译产物，并已在 s0 实机验证。
+请求均为**主服**协议，空请求或单字节业务载荷，**不追加 PrevAct**。
+
+#### 4.15.1 Module 89 (0x59): 每日签到 (`Mod_SignIn_Base`)
+
+> 旧实现曾误用 `0x00000049`（Module 0, Action 73），实机无任何回包，已废弃。
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00590000` | `get_sign_in_info` | 空 | 见下 |
+| 1 | `0x00590001` | `get_continue_award` | 空 | `UByte result, Int continue_day` |
+| 2 | `0x00590002` | `player_sign_in` | 空 | `UByte result, [Int total_sign_in], [UByte tier, UByte state], Int total_day` |
+| 3 | `0x00590003` | `repair_sign_in` | 空 | 补签（消耗元宝，自动化不调用） |
+| 4 | `0x00590004` | `get_total_award` | `UByte tier` | 同 `player_sign_in`，尾部追加 `UByte sign_state, Int cur_day` |
+| 5 | `0x00590005` | `get_sign_in_status` | 空 | `Byte a, Byte b, Byte c` |
+
+`get_sign_in_info` 回包线格式：
+
+```
+UByte continue_state, Int continue_day,
+[Int total_sign_in], [UByte tier, UByte state], Int total_day,
+UByte sign_state, Int repair_sign, Int cur_day
+```
+
+- `get_sign_in_status`：官方 `SignInData` 判定活动开启为
+  `(a == 1 || b == 1) && c == 1`，`b == 1` 表示有可领取奖励。
+- `sign_state`：`8` 今日未签到、`9` 今日已签到。
+- `tier`：`2..6` 对应累计 5/15/25/35/45 天档位；`state`：`0` 可领、`1` 不可领、`7` 已领。
+- 结果码：`SUCCESS=10` / `FAILED=11`（连签与累计档位）；
+  `SI_SUCCESS=12` / `SI_FAILED=13` / `SI_FULL=14`（背包满）/ `SI_NO_INGOT=15`（补签元宝不足）。
+- **实机观察（2026-11-05 s0）**：`get_sign_in_status` 返回 `000001`（活动未开放），
+  `player_sign_in` 返回 `13`（SI_FAILED）。自动化据此在活动未开启时直接跳过。
+
+#### 4.15.2 Module 18 (0x12): VIP 每日礼包 (`Mod_Vip_Base`)
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00120000` | `get_player_vip_info` | 空 | `Int vip_level, Int money_to_next_level, [Byte vip_level, Byte send_gift_is_get, Byte buy_gift_is_get]` |
+| 1 | `0x00120001` | `get_send_gift` | `Byte vip_level` | `UByte result`（免费礼包） |
+| 2 | `0x00120002` | `buy_send_gift` | `Byte vip_level` | `UByte result`（消耗元宝，自动化不调用） |
+
+- `send_gift_is_get`：`0` 可领取、`1` 已领取；免费礼包每日重置。
+- 结果码：`SUCCESS=0`、`NO_ENOUGH_VIP_LEVEL=1`、`FAILD=2`、`ITEM_PACK_FULL=3`、
+  `NO_ENOUGH_INGOT=4`。
+- 自动化仅领取 `send_gift_is_get=0` 且 `vip_level <= 当前VIP等级` 的免费档位，
+  背包满时返回 `ErrBagFull`。
+- **实机观察（2026-11-05 s0）**：VIP 12，等级 1–12 的免费礼包均为已领取（`1`），
+  等级 13–15 为 `0` 但超过当前 VIP 等级，必须跳过。
+
+#### 4.15.3 Module 712 (0x2C8): 在线奖励 (`Mod_OnlineReward_Base`)
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x02C80000` | `main_panel` | 空 | `Int start_time, Int end_time, Byte day, [Int award_id, [Int item_id, Long item_num, Byte is_big_award], Byte is_get, Int need_online_time], Int online_time` |
+| 1 | `0x02C80001` | `one_key_get` | 空 | `UByte result, [Int award_id]` |
+
+- 官方 `OnlineRewardView.showBtnBack` 仅在服务端时间处于
+  `[start_time, end_time]` 内展示入口；自动化同样先做该判断，避免对过期活动发请求。
+- `need_online_time` 单位为秒；`is_get` 为 `0` 表示未领取。
+- 结果码：`SUCCESS=0`、`FAILED=1`、`ITEM_PACK_FULL=2`。
+- 实机奖励配置（s0 2026-11-05）最高档为 **道具 `3345` = 元宝 ×100**，
+  其余档位为铜钱、境界点、仙令、声望、包子与制作卷礼包。
+- **实机观察**：该活动在 s0 返回 2012 年的历史时间窗
+  （`start_time=1335456000`、`end_time=1335715199`），`one_key_get` 返回 `1`（FAILED）；
+  自动化按时间窗判断为已结束，不再发起领取。
+
+### 4.16 Module 24 (0x18): 世界 Boss (`Mod_WorldBoss_Base`)
+
+协议描述符采自官方 2026 客户端 `Main.swf` 的 `com.protocols.Mod_WorldBoss_Base`
+与 `com.datas.WorldBossData`。自动化只做开战期免费参战，永不调用
+`clear_death_cd` / `reset_death_cd` / `strengthen_combat` 等消耗元宝的接口。
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00180000` | `get_world_boss_list` | `Byte 0` | `Uint16 count, count × (Byte boss_id, Byte map_id, Int level, Byte state, Byte can_set, Int start_time, Int end_time, Byte can_auto, Byte auto, Int robot_coin, Int robot_fame)` |
+| 1 | `0x00180001` | `get_world_boss_data` | 空 | 当前 Boss 详细状态 |
+| 2 | `0x00180002` | `fight_world_boss` | `Byte boss_id` | `Byte result` + 完整战斗数据 |
+| 3 | `0x00180003` | `clear_death_cd` | 空 | 消耗元宝，自动化不调用 |
+| 7 | `0x00180007` | `strengthen_combat` | `Byte` | 消耗元宝鼓舞，自动化不调用 |
+
+- `get_world_boss_list` 请求必须携带 **单字节 0**；实机发送空载荷会被静默丢弃
+  （`context deadline exceeded`）。
+- `state`：`0` 未开始、`1` 开战中、`2` 已结束、`3` 已击杀；自动化仅对 `state=1` 发起战斗。
+- 战斗结果码：`SUCCESS=0`、`FAILED=1`、`NOT_BEGIN=2`、`MISSION_OVER=3`、
+  `WORLD_BOSS_DEAD=4`、`DEATH_STATUS=5`、`NOT_ENOUGH_INGOT=6`、`MAX_TIMES=7`、
+  `NOT_ENOUGH_SKILL=8`、`COMBAT_LIMIT=9`。
+- 自动化每 5 分钟巡检一次，开战期每次最多发起一场战斗；战报体积大，等待预算 15s。
+- **实机观察（2026-11-05 02:11 s0）**：仅 1 个 Boss（`boss_id=2` 赤炎兽，
+  `lv=280`，`state=0` 未开始），Routine 直接跳过且未消耗任何资源。
+
+### 4.17 Module 185 (0xB9): 幸运刮刮卡 (`Mod_ScratchCard_Base`)
+
+协议描述符采自官方 2026 客户端 `Main.swf` 的
+`com.protocols.Mod_ScratchCard_Base` 与 `com.datas.ScratchCardData`。
+自动化只使用每日免费刮卡次数，不消耗元宝。
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00B90000` | `scratch_card_info` | 空 | `UByte is_in_activity, Int end_time, Short active_degree, Byte card_times` |
+| 1 | `0x00B90001` | `shave_card` | 空 | `UByte result, Int item_id` |
+
+- `card_times` 为剩余免费刮卡次数；自动化在 `is_in_activity=0` 或 `card_times=0` 时直接跳过。
+- 结果码：`SUCCESS=2`、`NOT_ENOUGH_TIMES=3`、`PACK_FULL=4`、`FAILED=5`、
+  `POINT=6`、`INGOT=7`（刮出元宝）、`IMAGE=8`、`AWARD=9`、`ITEM_PACK_FULL=12`、
+  `FATE_PACK_FULL=13`、`NOT_EXIST_CARD=14`；`INGOT` 奖励对应道具 `3345`（元宝）。
+- 次数不足/刮卡失败立即收手；背包已满返回 `ErrBagFull`。
+- **实机观察（2026-11-05 02:32 s0）**：`is_in_activity=1`，但
+  `active_degree=0`、`card_times=0`，自动化直接跳过且未消耗资源。

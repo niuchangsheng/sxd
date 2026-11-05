@@ -17,7 +17,11 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
-// NewSignInRoutine 构造每日签到与更新福利任务。
+// NewSignInRoutine 构造每日签到任务 (Module 89, Mod_SignIn_Base)。
+//
+// 官方流程：get_sign_in_status 确认活动开启 → get_sign_in_info 读取签到状态
+// → player_sign_in 签到 → get_continue_award 领连签奖励 → get_total_award
+// 领取累计签到档位奖励。全部请求均为空载荷，不消耗元宝。
 func NewSignInRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"daily_sign_in",
@@ -35,56 +39,124 @@ func NewSignInRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			slog.Info("正在执行日常任务: 每日签到与在线福利领取", "role_id", session.RoleID())
+			slog.Info("正在执行日常任务: 每日签到", "role_id", session.RoleID())
 
-			// 2. 发起每日签到请求
-			reqPkt := protocol.BuildDailySignInPacket(protocol.DailySignInRequest{
-				PrevAct: protocol.ActionIDPlayerGetInfo,
-			})
-
-			callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-
-			respPkt, err := session.Call(callCtx, reqPkt, protocol.ActionIDDailySignIn)
+			// 2. 活动状态：未开启时官方客户端不展示签到入口，直接跳过。
+			statusResp, err := callDaily(ctx, session, protocol.BuildSignInStatusPacket(), protocol.ActionIDSignInStatus, 2*time.Second)
 			if err != nil {
-				return fmt.Errorf("每日签到请求超时或失败: %w", err)
+				return fmt.Errorf("查询签到活动状态失败: %w", err)
 			}
-
-			// 3. 解析签到回包与收益
-			res, err := protocol.ParseDailySignInResult(respPkt.Payload)
+			status, err := protocol.ParseSignInStatusResult(statusResp.Payload)
 			if err != nil {
-				return fmt.Errorf("解析每日签到回包失败: %w", err)
+				return fmt.Errorf("解析签到活动状态失败: %w", err)
 			}
-
-			if res.AlreadySigned {
-				slog.Info("今日已完成签到，无需重复执行",
+			if !status.ActivityOpen {
+				slog.Info("签到活动当前未开放，跳过",
 					"role_id", session.RoleID(),
-					"signed_days", res.SignedDays,
+					"has_award", status.HasAward,
+					"raw", []uint8{status.RawA, status.RawB, status.RawC},
 				)
 				return nil
 			}
 
-			if res.Success {
-				slog.Info("每日签到成功",
-					"role_id", session.RoleID(),
-					"signed_days", res.SignedDays,
-					"reward_coins", res.RewardCoins,
-					"reward_ingots", res.RewardIngots,
-					"message", res.Message,
-				)
+			// 3. 签到详情
+			infoResp, err := callDaily(ctx, session, protocol.BuildSignInInfoPacket(), protocol.ActionIDSignInInfo, 2*time.Second)
+			if err != nil {
+				return fmt.Errorf("查询签到详情失败: %w", err)
+			}
+			info, err := protocol.ParseSignInInfoResult(infoResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析签到详情失败: %w", err)
+			}
+			slog.Info("签到活动详情",
+				"role_id", session.RoleID(),
+				"continue_state", info.ContinueState,
+				"continue_day", info.ContinueDay,
+				"total_day", info.TotalDay,
+				"sign_state", info.SignState,
+				"cur_day", info.CurDay,
+				"repair_sign", info.RepairSign,
+				"tiers", info.TotalInfo,
+			)
 
-				// 同步更新本地资产快照
-				if res.RewardCoins > 0 || res.RewardIngots > 0 {
-					session.UpdatePlayerState(func(ps *client.PlayerState) {
-						ps.Coins += res.RewardCoins
-						ps.Ingots += int64(res.RewardIngots)
-					})
+			// 4. 执行签到
+			if info.SignState != protocol.SignInStateAlreadySignIn {
+				actResp, err := callDaily(ctx, session, protocol.BuildSignInPlayerPacket(), protocol.ActionIDSignInPlayer, 2*time.Second)
+				if err != nil {
+					return fmt.Errorf("每日签到请求失败: %w", err)
+				}
+				act, err := protocol.ParseSignInActionResult(actResp.Payload)
+				if err != nil {
+					return fmt.Errorf("解析每日签到回包失败: %w", err)
+				}
+				switch act.Result {
+				case protocol.SignInResultOK:
+					slog.Info("每日签到成功", "role_id", session.RoleID(), "total_day", act.TotalDay)
+				case protocol.SignInStateAlreadySignIn:
+					slog.Info("今日已签到", "role_id", session.RoleID(), "total_day", act.TotalDay)
+				case protocol.SignInResultFail:
+					slog.Warn("每日签到失败", "role_id", session.RoleID(), "result", act.Result)
+				case protocol.SignInResultPackFull:
+					return scheduler.ErrBagFull
+				case protocol.SignInResultNoIngot:
+					slog.Warn("补签元宝不足，跳过", "role_id", session.RoleID(), "result", act.Result)
+				default:
+					slog.Warn("每日签到返回未知结果", "role_id", session.RoleID(), "result", act.Result)
+				}
+			} else {
+				slog.Info("今日已完成签到，无需重复执行", "role_id", session.RoleID(), "total_day", info.TotalDay)
+			}
+
+			// 5. 连签奖励 (state=0 才可领)
+			if info.ContinueState == protocol.SignInStateCanGet {
+				resp, err := callDaily(ctx, session, protocol.BuildSignInContinuePacket(), protocol.ActionIDSignInContinue, 2*time.Second)
+				if err != nil {
+					slog.Warn("领取连签奖励无应答", "role_id", session.RoleID(), "err", err)
+				} else if result, day, pErr := protocol.ParseSignInContinueResult(resp.Payload); pErr != nil {
+					slog.Warn("解析连签奖励回包失败", "role_id", session.RoleID(), "err", pErr)
+				} else if result == protocol.SignInResultSuccess {
+					slog.Info("连签奖励领取成功", "role_id", session.RoleID(), "continue_day", day)
+				} else {
+					slog.Info("连签奖励未领取", "role_id", session.RoleID(), "result", result, "continue_day", day)
+				}
+			}
+
+			// 6. 累计签到档位奖励 (state=0 才可领)
+			for _, tier := range info.TotalInfo {
+				if tier.State != protocol.SignInStateCanGet {
+					continue
+				}
+				resp, err := callDaily(ctx, session, protocol.BuildSignInTotalAwardPacket(tier.Tier), protocol.ActionIDSignInTotalAward, 2*time.Second)
+				if err != nil {
+					slog.Warn("领取累计签到奖励无应答", "role_id", session.RoleID(), "tier", tier.Tier, "err", err)
+					continue
+				}
+				act, pErr := protocol.ParseSignInActionResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析累计签到奖励回包失败", "role_id", session.RoleID(), "tier", tier.Tier, "err", pErr)
+					continue
+				}
+				switch act.Result {
+				case protocol.SignInResultSuccess:
+					slog.Info("累计签到奖励领取成功", "role_id", session.RoleID(), "tier", tier.Tier)
+				case protocol.SignInResultPackFull:
+					return scheduler.ErrBagFull
+				default:
+					slog.Info("累计签到奖励未领取",
+						"role_id", session.RoleID(), "tier", tier.Tier, "result", act.Result)
 				}
 			}
 
 			return nil
 		},
 	)
+}
+
+// callDaily 发送一条日常协议请求并在超时内等待对应回包。
+func callDaily(ctx context.Context, session *client.RoleSession, pkt *protocol.Packet, actionID uint32, timeout time.Duration) (*protocol.Packet, error) {
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return session.Call(callCtx, pkt, actionID)
 }
 
 // NewDailyQuestRoutine 构造每日日常活跃度与小助手领奖任务 (Feature 3: 领取日活跃奖励)。
@@ -422,7 +494,10 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewVIPWelfareRoutine 构造VIP福利与每日俸禄领用任务。
+// NewVIPWelfareRoutine 构造VIP每日免费礼包领取任务 (Module 18, Mod_Vip_Base)。
+//
+// 只领取 send_gift_is_get=0 且 vip_level <= 当前VIP等级的免费礼包；
+// 付费礼包 buy_send_gift 会消耗元宝，本任务永不调用。
 func NewVIPWelfareRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"vip_welfare",
@@ -431,7 +506,150 @@ func NewVIPWelfareRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行日常任务: VIP等级特权礼包与俸禄领取")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+			slog.Info("正在执行日常任务: VIP每日免费礼包领取", "role_id", session.RoleID())
+
+			infoResp, err := callDaily(ctx, session, protocol.BuildVIPInfoPacket(), protocol.ActionIDVIPInfo, 3*time.Second)
+			if err != nil {
+				return fmt.Errorf("查询VIP信息失败: %w", err)
+			}
+			info, err := protocol.ParseVIPInfoResult(infoResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析VIP信息失败: %w", err)
+			}
+			slog.Info("VIP信息",
+				"role_id", session.RoleID(),
+				"vip_level", info.VIPLevel,
+				"money_to_next_level", info.MoneyToNextLevel,
+				"gift_levels", len(info.Gifts),
+			)
+
+			claimed := 0
+			for _, gift := range info.Gifts {
+				if int32(gift.Level) > info.VIPLevel || !gift.SendGiftClaimable() {
+					continue
+				}
+				resp, cErr := callDaily(ctx, session, protocol.BuildVIPSendGiftPacket(gift.Level), protocol.ActionIDVIPSendGift, 3*time.Second)
+				if cErr != nil {
+					slog.Warn("VIP礼包领取无应答", "role_id", session.RoleID(), "level", gift.Level, "err", cErr)
+					continue
+				}
+				result, pErr := protocol.ParseVIPGiftResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析VIP礼包回包失败", "role_id", session.RoleID(), "level", gift.Level, "err", pErr)
+					continue
+				}
+				switch result {
+				case protocol.VIPResultSuccess:
+					claimed++
+					slog.Info("VIP免费礼包领取成功", "role_id", session.RoleID(), "level", gift.Level)
+				case protocol.VIPResultPackFull:
+					return scheduler.ErrBagFull
+				case protocol.VIPResultNotEnoughLevel:
+					slog.Debug("VIP等级不足，跳过该档礼包", "role_id", session.RoleID(), "level", gift.Level)
+				case protocol.VIPResultNoIngot:
+					slog.Warn("VIP礼包返回元宝不足 (免费礼包不应出现)", "role_id", session.RoleID(), "level", gift.Level)
+				default:
+					slog.Info("VIP免费礼包未领取",
+						"role_id", session.RoleID(), "level", gift.Level, "result", result)
+				}
+			}
+			slog.Info("VIP每日礼包领取完成", "role_id", session.RoleID(), "claimed", claimed)
+			return nil
+		},
+	)
+}
+
+// NewOnlineRewardRoutine 构造在线奖励一键领取任务 (Module 712, Mod_OnlineReward_Base)。
+//
+// 官方客户端先查询 main_panel，再按当日在线时长解锁各档奖励并一键领取；
+// 领取本身不消耗元宝。最高档实机配置为元宝 ×100。
+func NewOnlineRewardRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"online_reward",
+		"daily",
+		scheduler.ScheduleLoop,
+		scheduler.PriorityNormal,
+		10*time.Minute,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			if session == nil {
+				return client.ErrNotConnected
+			}
+			if session.State() != client.StateActive {
+				return client.ErrNotConnected
+			}
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			panelResp, err := callDaily(ctx, session, protocol.BuildOnlineRewardPanelPacket(), protocol.ActionIDOnlineRewardPanel, 3*time.Second)
+			if err != nil {
+				return fmt.Errorf("查询在线奖励面板失败: %w", err)
+			}
+			panel, err := protocol.ParseOnlineRewardPanelResult(panelResp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析在线奖励面板失败: %w", err)
+			}
+			// 官方 showBtnBack 仅在服务端时间处于 [start_time, end_time] 内展示入口。
+			now := time.Now().Unix()
+			if panel.StartTime == 0 || panel.EndTime == 0 ||
+				now < int64(panel.StartTime) || now > int64(panel.EndTime) {
+				slog.Debug("在线奖励活动未开放或已结束，跳过",
+					"role_id", session.RoleID(),
+					"start_time", panel.StartTime,
+					"end_time", panel.EndTime,
+				)
+				return nil
+			}
+
+			claimable := make([]int32, 0, len(panel.Tiers))
+			for _, tier := range panel.Tiers {
+				if tier.IsGet == 0 && panel.OnlineTime >= tier.NeedOnlineTime {
+					claimable = append(claimable, tier.AwardID)
+				}
+			}
+			if len(claimable) == 0 {
+				var next int32 = -1
+				for _, tier := range panel.Tiers {
+					if tier.IsGet == 0 && (next < 0 || tier.NeedOnlineTime < next) {
+						next = tier.NeedOnlineTime
+					}
+				}
+				slog.Info("在线奖励暂无可领取档位",
+					"role_id", session.RoleID(),
+					"online_time", panel.OnlineTime,
+					"next_need", next,
+				)
+				return nil
+			}
+
+			resp, err := callDaily(ctx, session, protocol.BuildOnlineRewardOneKeyPacket(), protocol.ActionIDOnlineRewardOneKey, 5*time.Second)
+			if err != nil {
+				return fmt.Errorf("在线奖励一键领取失败: %w", err)
+			}
+			result, awards, err := protocol.ParseOnlineRewardOneKeyResult(resp.Payload)
+			if err != nil {
+				return fmt.Errorf("解析在线奖励领取回包失败: %w", err)
+			}
+			switch result {
+			case protocol.OnlineRewardResultSuccess:
+				slog.Info("在线奖励领取成功",
+					"role_id", session.RoleID(),
+					"award_ids", awards,
+					"online_time", panel.OnlineTime,
+				)
+			case protocol.OnlineRewardResultPackFull:
+				return scheduler.ErrBagFull
+			case protocol.OnlineRewardResultFailed:
+				slog.Info("在线奖励领取失败", "role_id", session.RoleID(), "result", result)
+			default:
+				slog.Warn("在线奖励领取返回未知结果", "role_id", session.RoleID(), "result", result)
+			}
 			return nil
 		},
 	)
