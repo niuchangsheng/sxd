@@ -258,3 +258,42 @@ scheduler:
 			cfg.Scheduler.Pilgrimage.MaxRobAttempts, cfg.Scheduler.Pilgrimage.MaxProbeTargets)
 	}
 }
+
+func TestConfig_SpiritPoolDefaultsAndOverride(t *testing.T) {
+	minimalYaml := `
+server:
+  port: 9090
+`
+	tmpFile := filepath.Join(t.TempDir(), "spirit_pool_default.yaml")
+	if err := os.WriteFile(tmpFile, []byte(minimalYaml), 0644); err != nil {
+		t.Fatalf("write tmpFile failed: %v", err)
+	}
+	cfg, err := config.Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load minimal config failed: %v", err)
+	}
+	if cfg.Scheduler.SpiritPool.RefineTarget != "xuantie" {
+		t.Errorf("expected spirit_pool.refine_target default xuantie, got %q",
+			cfg.Scheduler.SpiritPool.RefineTarget)
+	}
+
+	overrideYaml := `
+server:
+  port: 9090
+scheduler:
+  spirit_pool:
+    refine_target: "lingcai"
+`
+	overrideFile := filepath.Join(t.TempDir(), "spirit_pool_override.yaml")
+	if err := os.WriteFile(overrideFile, []byte(overrideYaml), 0644); err != nil {
+		t.Fatalf("write overrideFile failed: %v", err)
+	}
+	cfg, err = config.Load(overrideFile)
+	if err != nil {
+		t.Fatalf("Load override config failed: %v", err)
+	}
+	if cfg.Scheduler.SpiritPool.RefineTarget != "lingcai" {
+		t.Errorf("expected spirit_pool.refine_target override lingcai, got %q",
+			cfg.Scheduler.SpiritPool.RefineTarget)
+	}
+}

@@ -111,6 +111,7 @@ type RegistryFactory struct {
 	treasureCfg   minigame.TreasureHouseConfig
 	luckyCfg      minigame.LuckyStarConfig
 	pilgrimageCfg farming.PilgrimageConfig
+	spiritPoolCfg farming.SpiritPoolConfig
 	onlineGiftCfg daily.OnlineGiftConfig
 }
 
@@ -130,6 +131,7 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 		treasureCfg:   minigame.DefaultTreasureHouseConfig(),
 		luckyCfg:      minigame.DefaultLuckyStarConfig(),
 		pilgrimageCfg: farming.DefaultPilgrimageConfig(),
+		spiritPoolCfg: farming.DefaultSpiritPoolConfig(),
 		onlineGiftCfg: daily.DefaultOnlineGiftConfig(),
 	}
 }
@@ -185,6 +187,11 @@ func (f *RegistryFactory) SetOnlineGiftConfig(cfg daily.OnlineGiftConfig) {
 // SetPilgrimageConfig 设置西天取经护送与打劫策略配置。
 func (f *RegistryFactory) SetPilgrimageConfig(cfg farming.PilgrimageConfig) {
 	f.pilgrimageCfg = cfg
+}
+
+// SetSpiritPoolConfig 设置粗铁淬炼池产出目标配置 (玄铁/灵材)。
+func (f *RegistryFactory) SetSpiritPoolConfig(cfg farming.SpiritPoolConfig) {
+	f.spiritPoolCfg = cfg
 }
 
 // RegisterAll 根据配置开关，向角色调度器装配全量活动玩法。
@@ -244,7 +251,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "crystal_mine":
 		return farming.NewCrystalMineRoutine()
 	case "spirit_pool":
-		return farming.NewSpiritPoolRoutine()
+		return farming.NewSpiritPoolRoutine(f.spiritPoolCfg)
 	case "gourd_realm":
 		return farming.NewGourdRealmRoutine(f.dictRepo)
 	case "rune_refine":

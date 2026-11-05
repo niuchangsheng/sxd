@@ -3,7 +3,7 @@
 // 目标协议: [Module 282, Action 0] 打开淬炼池 + [Module 534, Action 5] 资源面板 + [Module 282, Action 1] 淬炼执行
 // 运行命令: go run -tags=probe test/probes/probe_spirit_pool_live.go
 // 可选执行: SPIRIT_POOL_EXECUTE=1 go run -tags=probe test/probes/probe_spirit_pool_live.go
-// 可选参数: SPIRIT_POOL_QUALITY=5(铜钱)/6(元宝)  SPIRIT_POOL_TYPE=7(普通)/8(一键)  SPIRIT_POOL_COUNT=槽位数量
+// 可选参数: SPIRIT_POOL_TARGET=5(玄铁/淬炼)/6(灵材/提炼)  SPIRIT_POOL_COST=7(铜钱)/8(元宝)  SPIRIT_POOL_MODE=9(单次)/10(一键)
 // 预期表现: 默认只读打开面板并打印铁槽状态; 显式设置 SPIRIT_POOL_EXECUTE=1 后才发起淬炼写操作。
 package main
 
@@ -129,15 +129,15 @@ func main() {
 		return
 	}
 
-	quality := envByte("SPIRIT_POOL_QUALITY", protocol.RefinePoolQualityCoins)
-	refineType := envByte("SPIRIT_POOL_TYPE", protocol.RefinePoolTypeOneKey)
-	count := envByte("SPIRIT_POOL_COUNT", uint8(done))
-	execPkt := protocol.BuildRefineExecutePacket(quality, refineType, count, protocol.ActionIDRefinePoolPanel)
+	target := envByte("SPIRIT_POOL_TARGET", protocol.RefinePoolTargetXuanTie)
+	cost := envByte("SPIRIT_POOL_COST", protocol.RefinePoolCostCoins)
+	mode := envByte("SPIRIT_POOL_MODE", protocol.RefinePoolTypeOneKey)
+	execPkt := protocol.BuildRefineExecutePacket(target, cost, mode, protocol.ActionIDRefinePoolPanel)
 	slog.Info("发送淬炼执行",
 		"action", fmt.Sprintf("0x%08X", execPkt.ActionID),
-		"quality", quality,
-		"refine_type", refineType,
-		"count", count,
+		"target", target,
+		"cost", cost,
+		"mode", mode,
 		"payload_hex", hex.EncodeToString(execPkt.Payload),
 	)
 	execResp, err := callWithTimeout(execPkt, protocol.ActionIDRefineExecute, 5*time.Second)
@@ -186,8 +186,8 @@ func printRefineResult(result *protocol.RefinePoolRefineResult) {
 		result.Result, result.Level, result.Exp, result.OneKeyLockFlag, result.LianQiJingHua, result.XuanTie)
 	fmt.Printf("Awards: %d\n", len(result.Awards))
 	for _, award := range result.Awards {
-		fmt.Printf("  slot=%2d result=%d quality=%d exp=%d items=%v extra=%v\n",
-			award.Seq, award.Result, award.Quality, award.Exp, award.Items, award.ExtraItems)
+		fmt.Printf("  slot=%2d result=%d quality=%d exp=%d items=%v lingcai=%v\n",
+			award.Seq, award.Result, award.Quality, award.Exp, award.Items, award.LingCaiItems)
 	}
 	fmt.Println("==============================")
 }

@@ -21,28 +21,39 @@ const (
 	RefinePoolProduceUnlock uint8 = 4 // 已解锁
 )
 
-// 淬炼消耗类型 (refine_quality)
+// 淬炼目标 (refine request 第 1 字节, 对应 Mod_RefinePool_Base.REFINE_1/REFINE_2)
 const (
-	RefinePoolQualityCoins uint8 = 5 // 铜钱淬炼
-	RefinePoolQualityIngot uint8 = 6 // 元宝淬炼
+	RefinePoolTargetXuanTie uint8 = 5 // REFINE_1: 淬炼, 产出玄铁与炼器精华
+	RefinePoolTargetLingCai uint8 = 6 // REFINE_2: 提炼, 产出灵材
 )
 
-// 淬炼方式 (refine_type)
+// 淬炼消耗类型 (refine request 第 2 字节, Mod_RefinePool_Base.COINS/INGOT)
 const (
-	RefinePoolTypeNormal uint8 = 7 // 单次淬炼
-	RefinePoolTypeOneKey uint8 = 8 // 一键淬炼 (提炼所有已完成的铁槽)
+	RefinePoolCostCoins uint8 = 7 // 铜钱淬炼
+	RefinePoolCostIngot uint8 = 8 // 元宝淬炼
+)
+
+// 淬炼方式 (refine request 第 3 字节, Mod_RefinePool_Base.NORMAL/ONE_KEY)
+const (
+	RefinePoolTypeNormal uint8 = 9  // 单次淬炼
+	RefinePoolTypeOneKey uint8 = 10 // 一键淬炼 (服务端对该角色全部已完成槽位生效)
 )
 
 // 淬炼结果 (refine response result)
 const (
-	RefinePoolResultSuccess     uint8 = 9  // 成功
-	RefinePoolResultLackOfCoins uint8 = 10 // 铜钱不足
-	RefinePoolResultLackOfIngot uint8 = 11 // 元宝不足
-	RefinePoolResultFailed      uint8 = 12 // 失败
+	RefinePoolResultSuccess     uint8 = 11 // 成功
+	RefinePoolResultLackOfCoins uint8 = 12 // 铜钱不足
+	RefinePoolResultLackOfIngot uint8 = 13 // 元宝不足
+	RefinePoolResultFailed      uint8 = 14 // 失败
 )
 
-// ItemRefineEssence 炼器精华道具 ID (用于圣器升级, 来源 Pieb.db)
-const ItemRefineEssence int32 = 4759
+// 道具 ID (来源 Pieb.db)
+const (
+	// ItemRefineEssence 炼器精华, 用于圣器升级。
+	ItemRefineEssence int32 = 4759
+	// ItemXuanTie 玄铁, 用于圣器锻造与进阶。
+	ItemXuanTie int32 = 4760
+)
 
 // RefinePoolIron 代表单个粗铁槽位的生产信息。
 //
@@ -72,10 +83,12 @@ type RefinePoolAwardItem struct {
 // RefinePoolAward 代表单个铁槽的淬炼产出。
 //
 // 线格式 (大端序): Byte seq, UByte result, Byte quality, Short exp,
-// [Int,Int] award_info, [Int,Int] extra_award_info
+// [Int,Int] award_info, [Int,Int] lingcai_info
 //
 // 注: haha.pcapng 实机回包在 award_info 之后还存在第二个奖励列表 (多数槽位为空,
 // 暴击槽位携带额外奖励), 反编译的旧版协议仅声明一个列表, 此处以实机线格式为准。
+// 客户端数据层将该列表命名为 lingcai_info, 其中的 Int 对为「灵材编号 + 数量」,
+// 灵材编号对应 LingCaiType, 并非 Pieb.db item 表主键。
 type RefinePoolAward struct {
 	// Seq 槽位序号
 	Seq int8
@@ -85,10 +98,10 @@ type RefinePoolAward struct {
 	Quality int8
 	// Exp 增加的淬炼池经验
 	Exp int16
-	// Items 主奖励列表
+	// Items 主奖励列表 (award_info, 道具 ID + 数量)
 	Items []RefinePoolAwardItem
-	// ExtraItems 追加奖励列表 (暴击等额外产出)
-	ExtraItems []RefinePoolAwardItem
+	// LingCaiItems 灵材奖励列表 (lingcai_info, 灵材编号 + 数量)
+	LingCaiItems []RefinePoolAwardItem
 }
 
 // RefinePoolPanel 代表 open_panel 回包中的淬炼池状态。
@@ -176,14 +189,15 @@ func BuildRefinePoolPanelPacket(prevAct uint32) *Packet {
 
 // BuildRefineExecutePacket 构造淬炼执行封包 (Module 282, Action 1)。
 //
-// quality 为 RefinePoolQualityCoins/RefinePoolQualityIngot, refineType 为
-// RefinePoolTypeNormal/RefinePoolTypeOneKey; count 为本次淬炼的槽位数量
-// (一键淬炼传入已完成槽位数)。实机抓包中该字段紧随 quality/refineType 之后。
-func BuildRefineExecutePacket(quality, refineType, count uint8, prevAct uint32) *Packet {
+// target 为 RefinePoolTargetXuanTie/RefinePoolTargetLingCai, cost 为
+// RefinePoolCostCoins/RefinePoolCostIngot, mode 为 RefinePoolTypeNormal/RefinePoolTypeOneKey。
+// 请求线格式: UByte target, UByte cost, UByte mode, prevAct。
+// 请求本身不携带槽位数量; 服务端在 OneKey 模式下自动处理全部已完成槽位。
+func BuildRefineExecutePacket(target, cost, mode uint8, prevAct uint32) *Packet {
 	w := NewWriter()
-	w.WriteUint8(quality)
-	w.WriteUint8(refineType)
-	w.WriteUint8(count)
+	w.WriteUint8(target)
+	w.WriteUint8(cost)
+	w.WriteUint8(mode)
 	if prevAct == 0 {
 		prevAct = ActionIDRefinePoolPanel
 	}
@@ -325,8 +339,8 @@ func ParseRefineExecuteResponse(payload []byte) (*RefinePoolRefineResult, error)
 		if award.Items, err = readRefinePoolAwardItems(r); err != nil {
 			return nil, fmt.Errorf("refine pool: read award[%d] items: %w", i, err)
 		}
-		if award.ExtraItems, err = readRefinePoolAwardItems(r); err != nil {
-			return nil, fmt.Errorf("refine pool: read award[%d] extra items: %w", i, err)
+		if award.LingCaiItems, err = readRefinePoolAwardItems(r); err != nil {
+			return nil, fmt.Errorf("refine pool: read award[%d] lingcai items: %w", i, err)
 		}
 		res.Awards = append(res.Awards, award)
 	}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -300,6 +301,51 @@ const (
 	// crossTakeBibleRobCDTimeout 打劫冷却查询超时 (也用于超时后的受理复核)。
 	crossTakeBibleRobCDTimeout = 3 * time.Second
 )
+
+// SpiritPoolRefineTarget 粗铁淬炼池一键操作的产出目标。
+type SpiritPoolRefineTarget int
+
+const (
+	// SpiritPoolRefineXuanTie 淬炼玄铁 (协议 REFINE_1)。
+	SpiritPoolRefineXuanTie SpiritPoolRefineTarget = iota + 1
+	// SpiritPoolRefineLingCai 提炼灵材 (协议 REFINE_2)。
+	SpiritPoolRefineLingCai
+)
+
+// SpiritPoolConfig 粗铁淬炼池策略配置。
+//
+// 无论选择玄铁还是灵材, 均固定使用铜钱消耗, 永不消耗元宝。
+type SpiritPoolConfig struct {
+	// Target 一键操作的产出目标: 玄铁 (默认) 或灵材。
+	Target SpiritPoolRefineTarget
+}
+
+// DefaultSpiritPoolConfig 返回默认淬炼池策略: 一键淬炼玄铁。
+func DefaultSpiritPoolConfig() SpiritPoolConfig {
+	return SpiritPoolConfig{Target: SpiritPoolRefineXuanTie}
+}
+
+// ParseSpiritPoolRefineTarget 解析配置中的淬炼目标文案。
+// 支持 xuantie / xuan_tie / 玄铁 / iron 与 lingcai / ling_cai / 灵材;
+// 空值按默认玄铁处理, 无法识别时返回 false。
+func ParseSpiritPoolRefineTarget(raw string) (SpiritPoolRefineTarget, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "xuantie", "xuan_tie", "玄铁", "iron":
+		return SpiritPoolRefineXuanTie, true
+	case "lingcai", "ling_cai", "灵材":
+		return SpiritPoolRefineLingCai, true
+	default:
+		return 0, false
+	}
+}
+
+// normalizeSpiritPoolConfig 将淬炼池策略收敛到合法取值。
+func normalizeSpiritPoolConfig(cfg SpiritPoolConfig) SpiritPoolConfig {
+	if cfg.Target != SpiritPoolRefineXuanTie && cfg.Target != SpiritPoolRefineLingCai {
+		cfg.Target = SpiritPoolRefineXuanTie
+	}
+	return cfg
+}
 
 // PilgrimageConfig 西天取经护送与打劫自动化策略配置。
 type PilgrimageConfig struct {
@@ -1072,8 +1118,22 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 // 交互序列与实机抓包 (haha.pcapng) 对齐:
 //  1. Module 282, Action 0 打开淬炼池面板, 回包携带全部铁槽生产状态;
 //  2. Module 534, Action 5 查询淬炼池资源面板;
-//  3. Module 282, Action 1 以“一键淬炼”方式提炼所有已完成槽位。
-func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
+//  3. Module 282, Action 1 一键执行淬炼 (玄铁) 或提炼 (灵材)。
+//
+// 请求第 1 字节为产出目标 (5 玄铁 / 6 灵材), 第 2 字节为消耗类型 (固定铜钱 7),
+// 第 3 字节为操作方式 (一键 10); 服务端自动处理全部已完成槽位, 请求不携带槽位数量。
+// 协议基准为原版 Mod_RefinePool_Base 反编译常量, 追踪 issue #1。
+func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
+	cfg := DefaultSpiritPoolConfig()
+	if len(cfgs) > 0 {
+		cfg = normalizeSpiritPoolConfig(cfgs[0])
+	}
+	target := protocol.RefinePoolTargetXuanTie
+	targetName := "玄铁"
+	if cfg.Target == SpiritPoolRefineLingCai {
+		target = protocol.RefinePoolTargetLingCai
+		targetName = "灵材"
+	}
 	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
 		"spirit_pool",
@@ -1088,7 +1148,10 @@ func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			slog.Info("正在执行资源任务: 粗铁淬炼池一键淬炼", "role_id", session.RoleID())
+			slog.Info("正在执行资源任务: 粗铁淬炼池一键操作",
+				"role_id", session.RoleID(),
+				"target", targetName,
+			)
 
 			// 1. 打开淬炼池面板 (Mod 282, Act 0), 获取各铁槽生产状态
 			openPkt := protocol.BuildRefinePoolOpenPacket(session.LastActionID())
@@ -1113,8 +1176,9 @@ func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
 
 			done := panel.DoneCount()
 			if done == 0 {
-				slog.Info("淬炼池暂无已完成的粗铁, 跳过一键淬炼",
+				slog.Info("淬炼池暂无已完成的粗铁, 跳过一键操作",
 					"role_id", session.RoleID(),
+					"target", targetName,
 					"iron_count", len(panel.Irons),
 					"level", panel.Level,
 					"lian_qi_jing_hua", panel.LianQiJingHua,
@@ -1122,21 +1186,18 @@ func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// TODO(spirit_pool): 面板上应有两个「一键淬炼」入口, 分别对应两种产出 (追踪: #1)。
-			// 当前实现的是铜钱一键淬炼 (产出玄铁 + 炼器精华), 另一种产出尚未确认,
-			// 待后续实机验证后补充对应的消耗类型/产物解析。
-			// 3. 一键淬炼所有已完成槽位 (铜钱消耗, 避免扣除元宝)
+			// 3. 一键操作所有已完成槽位 (固定铜钱消耗, 永不扣除元宝)
 			execPkt := protocol.BuildRefineExecutePacket(
-				protocol.RefinePoolQualityCoins,
+				target,
+				protocol.RefinePoolCostCoins,
 				protocol.RefinePoolTypeOneKey,
-				uint8(done),
 				protocol.ActionIDRefinePoolPanel,
 			)
 			eCtx, eCancel := context.WithTimeout(ctx, callTimeout)
 			resp, err := session.Call(eCtx, execPkt, protocol.ActionIDRefineExecute)
 			eCancel()
 			if err != nil {
-				slog.Warn("粗铁淬炼执行失败", "role_id", session.RoleID(), "done_slots", done, "err", err)
+				slog.Warn("粗铁淬炼执行失败", "role_id", session.RoleID(), "target", targetName, "done_slots", done, "err", err)
 				return nil
 			}
 
@@ -1145,35 +1206,59 @@ func NewSpiritPoolRoutine() scheduler.ActivityRoutine {
 				slog.Warn("解析粗铁淬炼回包失败", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
-			var essence int32
+			var essence, xuantie, lingcai, awardItems int32
 			for _, award := range result.Awards {
 				for _, item := range award.Items {
-					if item.ItemID == protocol.ItemRefineEssence {
+					awardItems += item.Count
+					switch item.ItemID {
+					case protocol.ItemRefineEssence:
 						essence += item.Count
+					case protocol.ItemXuanTie:
+						xuantie += item.Count
 					}
 				}
-				for _, item := range award.ExtraItems {
-					if item.ItemID == protocol.ItemRefineEssence {
-						essence += item.Count
-					}
+				for _, item := range award.LingCaiItems {
+					lingcai += item.Count
 				}
 			}
-			// 实测服务端在批量淬炼成功时也可能回传非 SUCCESS 的结果码,
-			// 因此以是否实际产出炼器精华作为成功判据, 避免误报失败。
 			attrs := []any{
 				"role_id", session.RoleID(),
+				"target", targetName,
 				"result", result.Result,
 				"refined_slots", len(result.Awards),
+				"xuantie_gained", xuantie,
 				"essence_gained", essence,
+				"lingcai_gained", lingcai,
 				"lian_qi_jing_hua", result.LianQiJingHua,
 				"level", result.Level,
 			}
-			if result.Result == protocol.RefinePoolResultSuccess || essence > 0 {
-				slog.Info("粗铁一键淬炼完成", attrs...)
-			} else {
-				slog.Warn("粗铁一键淬炼未产出炼器精华", attrs...)
+
+			switch result.Result {
+			case protocol.RefinePoolResultSuccess:
+				produced := awardItems > 0 || lingcai > 0 || result.XuanTie > panel.XuanTie
+				if cfg.Target == SpiritPoolRefineXuanTie {
+					produced = xuantie > 0 || essence > 0 || result.XuanTie > panel.XuanTie
+				}
+				if produced {
+					slog.Info("粗铁一键淬炼完成", attrs...)
+					return nil
+				}
+				slog.Warn("粗铁一键淬炼返回成功码但未产出目标奖励", attrs...)
+				return fmt.Errorf("粗铁%s成功码无产出", targetName)
+			case protocol.RefinePoolResultLackOfCoins:
+				slog.Warn("粗铁淬炼铜钱不足, 本轮跳过", attrs...)
+				return scheduler.ErrConditionNotMet
+			case protocol.RefinePoolResultLackOfIngot:
+				// 本任务固定使用铜钱, 出现元宝不足通常意味着协议字段错位。
+				slog.Warn("粗铁淬炼返回元宝不足, 疑似协议字段错位", attrs...)
+				return scheduler.ErrConditionNotMet
+			case protocol.RefinePoolResultFailed:
+				slog.Warn("粗铁淬炼失败", attrs...)
+				return fmt.Errorf("粗铁%s失败 (result=%d)", targetName, result.Result)
+			default:
+				slog.Warn("粗铁淬炼返回未知结果码", attrs...)
+				return fmt.Errorf("粗铁%s返回未知结果码 %d", targetName, result.Result)
 			}
-			return nil
 		},
 	)
 }

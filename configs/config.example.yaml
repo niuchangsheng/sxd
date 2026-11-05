@@ -122,6 +122,10 @@ scheduler:
     max_rob_attempts: 5         # 单轮最多尝试打劫次数 (1-5，默认 5)
     max_probe_targets: 8        # 单轮最多探测的目标队伍数量 (1-50，默认 8)
 
+  # 粗铁淬炼池一键操作策略配置 (固定铜钱消耗，永不消耗元宝)
+  spirit_pool:
+    refine_target: "xuantie"    # xuantie=淬炼玄铁 (默认) / lingcai=提炼灵材
+
   # 魔王试炼自动化策略配置
   beelzebub_trials:
     prefer_boss_id: 0           # 优先挑战的魔王编号 (0 表示自动选择最高难度魔王；如指定 72 为魔掌门神识)

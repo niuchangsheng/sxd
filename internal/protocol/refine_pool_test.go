@@ -27,18 +27,29 @@ func TestRefinePoolBuilders(t *testing.T) {
 		t.Fatalf("panel payload = %s, want %s", got, want)
 	}
 
-	// 一键淬炼: 铜钱消耗 + 10 个已完成槽位。
+	// 一键淬炼玄铁: 铜钱消耗 + 一键模式。
 	exec := protocol.BuildRefineExecutePacket(
-		protocol.RefinePoolQualityCoins,
+		protocol.RefinePoolTargetXuanTie,
+		protocol.RefinePoolCostCoins,
 		protocol.RefinePoolTypeOneKey,
-		10,
 		protocol.ActionIDRefinePoolPanel,
 	)
 	if exec.ActionID != protocol.ActionIDRefineExecute {
 		t.Fatalf("exec ActionID = 0x%08X, want 0x%08X", exec.ActionID, protocol.ActionIDRefineExecute)
 	}
-	if got, want := hex.EncodeToString(exec.Payload), "05080a02160005"; got != want {
+	if got, want := hex.EncodeToString(exec.Payload), "05070a02160005"; got != want {
 		t.Fatalf("exec payload = %s, want %s", got, want)
+	}
+
+	// 一键提炼灵材: 同样固定铜钱消耗, 仅目标字节不同。
+	lingCai := protocol.BuildRefineExecutePacket(
+		protocol.RefinePoolTargetLingCai,
+		protocol.RefinePoolCostCoins,
+		protocol.RefinePoolTypeOneKey,
+		protocol.ActionIDRefinePoolPanel,
+	)
+	if got, want := hex.EncodeToString(lingCai.Payload), "06070a02160005"; got != want {
+		t.Fatalf("lingcai exec payload = %s, want %s", got, want)
 	}
 }
 
@@ -74,29 +85,33 @@ func TestParseRefineExecuteResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse refine response: %v", err)
 	}
+	if res.Result != protocol.RefinePoolResultSuccess {
+		t.Fatalf("result = %d, want SUCCESS (%d)", res.Result, protocol.RefinePoolResultSuccess)
+	}
 	if len(res.Awards) != 10 {
 		t.Fatalf("awards = %d, want 10", len(res.Awards))
 	}
-	var essence int32
+	var essence, lingcai int32
 	for _, award := range res.Awards {
 		for _, item := range award.Items {
 			if item.ItemID == protocol.ItemRefineEssence {
 				essence += item.Count
 			}
 		}
-		for _, item := range award.ExtraItems {
-			if item.ItemID == protocol.ItemRefineEssence {
-				essence += item.Count
-			}
+		for _, item := range award.LingCaiItems {
+			lingcai += item.Count
 		}
 	}
 	if essence != 110 {
 		t.Fatalf("essence gained = %d, want 110", essence)
 	}
+	if lingcai != 1 {
+		t.Fatalf("lingcai gained = %d, want 1", lingcai)
+	}
 	if got := res.LianQiJingHua - 41270; got != essence {
 		t.Fatalf("lianqi delta = %d, want %d", got, essence)
 	}
-	if len(res.Awards[5].ExtraItems) != 1 || res.Awards[5].ExtraItems[0].ItemID != 14 {
-		t.Fatalf("crit extra reward mismatch: %+v", res.Awards[5].ExtraItems)
+	if len(res.Awards[5].LingCaiItems) != 1 || res.Awards[5].LingCaiItems[0].ItemID != 14 {
+		t.Fatalf("crit lingcai reward mismatch: %+v", res.Awards[5].LingCaiItems)
 	}
 }

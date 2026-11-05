@@ -436,6 +436,17 @@ func run(ctx context.Context, args []string) error {
 	}
 	factory.SetPilgrimageConfig(pCfg)
 
+	// 粗铁淬炼池策略配置 (默认淬炼玄铁; 可切换提炼灵材, 两者均只消耗铜钱)
+	spCfg := farming.DefaultSpiritPoolConfig()
+	if target, ok := farming.ParseSpiritPoolRefineTarget(cfg.Scheduler.SpiritPool.RefineTarget); ok {
+		spCfg.Target = target
+	} else {
+		slog.Warn("粗铁淬炼池目标配置无法识别, 回退为玄铁",
+			"refine_target", cfg.Scheduler.SpiritPool.RefineTarget,
+		)
+	}
+	factory.SetSpiritPoolConfig(spCfg)
+
 	routineMgr := &routineManager{
 		enabledMap: make(map[string]bool),
 	}

@@ -104,6 +104,7 @@ type SchedulerConfig struct {
 	Dungeon         DungeonConfig          `yaml:"dungeon"`
 	SixRealms       SixRealmsConfig        `yaml:"six_realms"`
 	Pilgrimage      PilgrimageConfig       `yaml:"pilgrimage"`
+	SpiritPool      SpiritPoolConfig       `yaml:"spirit_pool"`
 	BeelzebubTrials BeelzebubTrialsConfig  `yaml:"beelzebub_trials"`
 	TrainingRoom    TrainingRoomConfig     `yaml:"training_room"`
 	JieYuanBox      JieYuanBoxConfig       `yaml:"jieyuan_box"`
@@ -178,6 +179,13 @@ type PilgrimageConfig struct {
 	MaxRobAttempts int `yaml:"max_rob_attempts"`
 	// MaxProbeTargets 单轮最多探测的目标队伍数量 (1-50，默认 8)
 	MaxProbeTargets int `yaml:"max_probe_targets"`
+}
+
+// SpiritPoolConfig 粗铁淬炼池策略配置。
+type SpiritPoolConfig struct {
+	// RefineTarget 一键操作产出目标: xuantie=玄铁 (默认) / lingcai=灵材。
+	// 两种目标均固定使用铜钱消耗, 永不消耗元宝。
+	RefineTarget string `yaml:"refine_target"`
 }
 
 // TreasureAwardConfig 天帝宝库自选大奖条目
@@ -423,6 +431,11 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Scheduler.Pilgrimage.MaxProbeTargets > 50 {
 		cfg.Scheduler.Pilgrimage.MaxProbeTargets = 50
+	}
+
+	// 粗铁淬炼池默认淬炼玄铁; 可显式指定 lingcai 提炼灵材。
+	if cfg.Scheduler.SpiritPool.RefineTarget == "" {
+		cfg.Scheduler.SpiritPool.RefineTarget = "xuantie"
 	}
 
 	// BeelzebubTrials 默认等级门槛 0 (由服务端资格检查自动决定)

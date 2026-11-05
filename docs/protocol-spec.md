@@ -284,19 +284,30 @@ classDiagram
   Int lian_qi_jing_hua, Short xuan_tie`。
   `produce_status`：0 空闲、1 生产中、2 已完成（可淬炼）、3 锁定、4 解锁。
 - `0x02160005 (534, 5)`：查询淬炼池资源面板，请求载荷 `Uint32(4) + prevAct`，回包固定 5 字节。
-- `0x011A0001 (282, 1)`：执行淬炼，请求载荷 `UByte refine_quality, UByte refine_type, UByte count, prevAct`。
-  `refine_quality`：5 铜钱、6 元宝；`refine_type`：7 普通、8 一键；`count` 为本次淬炼槽位数
-  （实机一键淬炼回包中 10 个已完成槽位均重新进入生产）。回包线格式：
+- `0x011A0001 (282, 1)`：执行淬炼/提炼，请求载荷 `UByte target, UByte cost, UByte mode, prevAct`。
+  - `target`：5 淬炼（玄铁）、6 提炼（灵材）。
+  - `cost`：7 铜钱、8 元宝。
+  - `mode`：9 单次、10 一键；一键模式由服务端对全部已完成槽位生效，**请求不携带槽位数量**。
+  - 以上取值来自原版 `Mod_RefinePool_Base` 反编译常量：`REFINE_1=5`、`REFINE_2=6`、
+    `COINS=7`、`INGOT=8`、`NORMAL=9`、`ONE_KEY=10`。
+  - 回包线格式：
   `UByte result, Short iron_count, iron_count × iron, Byte cur_seq,
-  Short award_count, award_count × [Byte seq, UByte result, Byte quality, Short exp, [Int,Int] award_info, [Int,Int] extra_award_info],
+  Short award_count, award_count × [Byte seq, UByte result, Byte quality, Short exp,
+  [Int,Int] award_info, [Int,Int] lingcai_info],
   Byte level, Int exp, UByte one_key_lock_flag, Int lian_qi_jing_hua, Short xuan_tie`。
-  主奖励为炼器精华（道具 4759）；`extra_award_info` 为实机新版本追加的暴击奖励列表，旧版协议未声明。
+  - `result`：11 SUCCESS、12 LACK_OF_COINS、13 LACK_OF_INGOT、14 FAILED。
+  - `award_info` 为道具奖励（道具 ID + 数量，主产物为炼器精华 4759）；
+    `lingcai_info` 为灵材奖励（灵材编号 + 数量，对应 `LingCaiType`，**不是** item 表主键）。
 - 采集自 `haha.pcapng`：`0x011A0000 → 0x02160005 → 0x011A0001` 三步链路，任一步缺失都会导致后续请求无回包。
-- s0 实测（2026-11-02，5 级淬炼池、10 个已完成槽位）：请求 `05 08 0a`（铜钱 + 一键 + 10 槽）
-  被服务端受理，回包 378 字节，每槽产出 `玄铁 4760 ×1 + 炼器精华 4759 ×40`，
-  共 10 玄铁 / 400 炼器精华，炼器精华总量由 41400 增至 41800。服务端在成功回包中
-  首字节仍为 `0x0B`，与旧版反编译的 LACK_OF_INGOT 常量不一致，因此业务侧以是否实际
-  产出炼器精华判定成功，不要仅凭首字节判断。
+- s0 实测（2026-11-02，5 级淬炼池、10 个已完成槽位）：请求 `05 08 0a` 被服务端受理。
+  按反编译常量复核，该载荷实为 **淬炼玄铁 (target=5) + 元宝消耗 (cost=8) + 一键 (mode=10)**；
+  旧文档将第 2、3 字节误读为「一键/槽位数」。当前实现固定使用铜钱 (`cost=7`)，
+  请求为 `05 07 0a`（玄铁）或 `06 07 0a`（灵材）。
+- `haha.pcapng` 回包样本（378 字节）：10 个槽位的 `award_info` 合计炼器精华 4759 ×110
+  （按槽位品质 5/10/15/20 发放），1 个暴击槽位在 `lingcai_info` 额外掉落灵材 14 ×1，
+  `xuan_tie` 总量不变；服务端成功回包首字节为 `0x0B`（11 = SUCCESS）。
+  另一轮 s0 实测曾记录每槽 `玄铁 4760 ×1 + 炼器精华 4759 ×40`、合计 400 精华 + 10 玄铁，
+  说明高品级槽位会产出玄铁；业务侧仍需校验实际产出，避免“成功码无产出”。
 
 ### 4.8 Module 114 (0x72): 西天取经 (`Mod_StTakeBible_Base`)
 
