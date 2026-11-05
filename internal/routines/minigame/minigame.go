@@ -1038,8 +1038,8 @@ func NewEraTravelRoutine() scheduler.ActivityRoutine {
 			resp, err := session.Call(sCtx, statePkt, protocol.ActionIDEraTravelGetState)
 			sCancel()
 
-			if err != nil || resp == nil {
-				slog.Warn("查询山河游历状态超时", "err", err)
+			if err != nil || resp == nil || len(resp.Payload) == 0 {
+				slog.Info("山河游历功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 
@@ -1084,8 +1084,8 @@ func NewLingDaoRoutine() scheduler.ActivityRoutine {
 			resp, err := session.Call(sCtx, statusPkt, protocol.ActionIDLingDaoGetStatus)
 			sCancel()
 
-			if err != nil || resp == nil {
-				slog.Warn("查询灵道状态超时", "err", err)
+			if err != nil || resp == nil || len(resp.Payload) == 0 {
+				slog.Info("灵道初解功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 
@@ -1121,8 +1121,12 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			// 1. 查询幻兽面板 (Mod 701, Act 0)
 			panelPkt := protocol.BuildHuanshouPanelPacket(protocol.ActionIDTownEnter)
 			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
-			_, _ = session.Call(pCtx, panelPkt, protocol.ActionIDHuanshouPanel)
+			panelResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDHuanshouPanel)
 			pCancel()
+			if pErr != nil || panelResp == nil || len(panelResp.Payload) == 0 {
+				slog.Info("山海幻兽功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", pErr)
+				return nil
+			}
 
 			// 2. 选定入侵章节并挑战 (Mod 696, Act 1 & 2)
 			chapPkt := protocol.NewPacket(protocol.ActionIDHuanshouInvadeChapter, protocol.NewWriter().WriteUint32(protocol.ActionIDHuanshouPanel).Bytes())
@@ -1374,8 +1378,8 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 			resp, err := session.Call(pCtx, panelPkt, protocol.ActionIDMasterPracticePanel)
 			pCancel()
 
-			if err != nil || resp == nil {
-				slog.Warn("查询宗师修行状态超时", "err", err)
+			if err != nil || resp == nil || len(resp.Payload) == 0 {
+				slog.Info("宗师修行功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 

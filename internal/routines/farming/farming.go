@@ -72,6 +72,10 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				return fmt.Errorf("farming: 解析药园土地列表失败: %w", err)
 			}
 			slog.Debug("药园基础土地开垦信息同步完成", "fields_count", len(infoRes.Fields), "hex", hex.EncodeToString(respPkt.Payload))
+			if len(infoRes.Fields) == 0 {
+				slog.Info("药园功能未开放/当前无土地，跳过", "role_id", session.RoleID())
+				return nil
+			}
 
 			prevAct := protocol.ActionIDFarmGetInfo
 

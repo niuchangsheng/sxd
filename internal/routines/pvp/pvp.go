@@ -833,8 +833,8 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 			resp, err := session.Call(callCtx, listPkt, protocol.ActionIDCaravanGetList)
 			cancel()
 
-			if err != nil || resp == nil {
-				slog.Warn("获取劫镖队伍列表超时或无可用目标", "err", err)
+			if err != nil || resp == nil || len(resp.Payload) < 2 {
+				slog.Info("劫镖功能未开放/暂无可劫目标，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 

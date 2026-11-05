@@ -233,12 +233,12 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 			infoCtx, infoCancel := context.WithTimeout(ctx, 3*time.Second)
 			infoResp, infoErr := session.Call(infoCtx, infoPkt, protocol.ActionIDEmailGetInfo)
 			infoCancel()
-			if infoErr != nil || infoResp == nil {
-				slog.Warn("邮箱面板同步失败，继续尝试一键收取", "role_id", session.RoleID(), "err", infoErr)
-			} else {
-				prevAct = protocol.ActionIDEmailGetInfo
-				slog.Info("邮箱面板已同步", "role_id", session.RoleID())
+			if infoErr != nil || infoResp == nil || len(infoResp.Payload) == 0 {
+				slog.Info("邮箱功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", infoErr)
+				return nil
 			}
+			prevAct = protocol.ActionIDEmailGetInfo
+			slog.Info("邮箱面板已同步", "role_id", session.RoleID())
 
 			// 4. 一键领取全部邮件附件 (Mod 345, Act 6)
 			collectPkt := protocol.BuildEmailOneKeyGetAwardPacket(prevAct)

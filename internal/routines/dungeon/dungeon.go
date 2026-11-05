@@ -1055,13 +1055,15 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
 			panelResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDHuanshouPanel)
 			pCancel()
-			if pErr == nil && panelResp != nil {
-				if l, t, err := protocol.ParseDemonTowerPanelResult(panelResp.Payload); err == nil {
-					layer = l
-					trialID = t
-				}
-				prevAct = protocol.ActionIDHuanshouPanel
+			if pErr != nil || panelResp == nil || len(panelResp.Payload) == 0 {
+				slog.Info("锁妖塔功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", pErr)
+				return nil
 			}
+			if l, t, err := protocol.ParseDemonTowerPanelResult(panelResp.Payload); err == nil {
+				layer = l
+				trialID = t
+			}
+			prevAct = protocol.ActionIDHuanshouPanel
 
 			// 2. 发送进入锁妖塔当前层指令 (Mod 701, Act 1)
 			enterPkt := protocol.BuildDemonTowerEnterPacket(layer, trialID, prevAct)
@@ -1122,8 +1124,12 @@ func NewQiMenRoutine() scheduler.ActivityRoutine {
 			// 1. 查询法阵信息 (Mod 486, Act 7)
 			arrayPkt := protocol.BuildQiMenArrayInfoPacket(protocol.ActionIDTownEnter)
 			aCtx, aCancel := context.WithTimeout(ctx, 2*time.Second)
-			_, _ = session.Call(aCtx, arrayPkt, protocol.ActionIDQiMenArrayInfo)
+			arrayResp, aErr := session.Call(aCtx, arrayPkt, protocol.ActionIDQiMenArrayInfo)
 			aCancel()
+			if aErr != nil || arrayResp == nil || len(arrayResp.Payload) == 0 {
+				slog.Info("奇门遁甲功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", aErr)
+				return nil
+			}
 
 			// 2. 查询阵眼傀儡 (Mod 485, Act 0)
 			puppetPkt := protocol.BuildQiMenPuppetInfoPacket(protocol.ActionIDQiMenArrayInfo)
@@ -1177,8 +1183,8 @@ func NewXunXianRoutine() scheduler.ActivityRoutine {
 			resp, err := session.Call(pCtx, progPkt, protocol.ActionIDXunXianGetProgress)
 			pCancel()
 
-			if err != nil || resp == nil {
-				slog.Warn("查询寻仙之路进度超时", "err", err)
+			if err != nil || resp == nil || len(resp.Payload) == 0 {
+				slog.Info("寻仙之路功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 

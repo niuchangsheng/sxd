@@ -72,7 +72,11 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 
 			boxes, err := protocol.ParseJieYuanBoxListResult(resp.Payload)
 			if err != nil {
-				slog.Warn("解析结缘宝箱列表失败", "err", err)
+				slog.Warn("解析结缘宝箱列表失败", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			if len(boxes) == 0 {
+				slog.Info("结缘宝箱功能未开放/背包无可开宝箱，跳过", "role_id", session.RoleID())
 				return nil
 			}
 
@@ -566,6 +570,8 @@ func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 			if err != nil {
 				if errors.Is(err, client.ErrNotInSect) {
 					slog.Info("账号未加入仙盟，跳过仙盟日常", "role_id", session.RoleID())
+				} else if errors.Is(err, context.DeadlineExceeded) {
+					slog.Info("仙盟面板无回包，判定未入盟或仙盟功能未开放，跳过仙盟日常", "role_id", session.RoleID())
 				} else {
 					slog.Info("仙盟城镇会话不可用，跳过仙盟日常", "role_id", session.RoleID(), "err", err)
 				}
@@ -864,6 +870,8 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 // 需要元宝的苏合香/天木香一律不调用。
 func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 3 * time.Second
+	// 未开放的膜拜模块服务端不会回包，标记当日不可用以避免同日重复等待超时。
+	var unavailable scheduler.DailySkipCache
 	return scheduler.NewBaseRoutine(
 		"fame_blessing",
 		"social",
@@ -874,6 +882,10 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 			if session == nil {
 				return client.ErrNotConnected
 			}
+			if unavailable.ShouldSkip(session.RoleID(), time.Now()) {
+				slog.Debug("膜拜功能今日已确认未开放，跳过", "role_id", session.RoleID())
+				return nil
+			}
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
@@ -883,7 +895,13 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildWorshipMarsInfoPacket(), protocol.ActionIDWorshipMarsInfo)
 			iCancel()
 			if err != nil {
-				slog.Info("膜拜功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				if errors.Is(err, context.DeadlineExceeded) {
+					// 服务端对未解锁模块静默丢弃请求，超时即视为当日功能未开放。
+					unavailable.MarkUnavailable(session.RoleID(), time.Now())
+					slog.Info("膜拜功能未开放（服务端无回包），今日跳过", "role_id", session.RoleID())
+				} else {
+					slog.Warn("查询膜拜信息失败，跳过", "role_id", session.RoleID(), "err", err)
+				}
 				return nil
 			}
 			info, err := protocol.ParseWorshipMarsInfoResult(infoResp.Payload)
