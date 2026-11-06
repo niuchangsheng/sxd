@@ -38,6 +38,11 @@ const (
 const (
 	// ActionIDItemGetPackList 获取玩家主背包与仓库物品列表 (Module 2, Action 41 -> 0x00020029)
 	ActionIDItemGetPackList uint32 = 0x00020029
+	// ActionIDItemGetTheItemNum 查询指定道具的实际持有数量 (Module 2, Action 107 -> 0x0002006B)
+	//
+	// 注意: get_player_pack_item_list 只返回主背包/仓库中的实体物品，
+	// 灵珠、鸿蒙紫气等以系统货币形式存储的资源不会出现在背包列表中。
+	ActionIDItemGetTheItemNum uint32 = 0x0002006B
 	// ActionIDItemUseGrid 使用背包指定格位物品 (Module 2, Action 53 -> 0x00020035)
 	ActionIDItemUseGrid uint32 = 0x00020035
 	// ActionIDItemSell 出售背包指定格位物品 (Module 2, Action 73 -> 0x00020049, Mod_Item_Base.player_sell_item)

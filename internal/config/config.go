@@ -196,6 +196,10 @@ type TreasureAwardConfig struct {
 
 // TreasureHouseConfig 天帝宝库配置
 type TreasureHouseConfig struct {
+	// SelectionMode 非交互模式选奖策略: rarity(默认, 按稀有度自动选)|explicit(使用下方指定奖励)
+	SelectionMode string `yaml:"selection_mode"`
+	// PreferAwards 优先奖励条目 ID 列表 (按顺序匹配当前开放候选，命中即选)
+	PreferAwards []int32 `yaml:"prefer_awards"`
 	// Interactive 是否开启终端交互式输入自选大奖
 	Interactive bool `yaml:"interactive"`
 	// Awards 三档自选大奖列表

@@ -200,6 +200,30 @@ func ParsePackItemListResponse(payload []byte) (*PackItemListResponse, error) {
 	return &resp, nil
 }
 
+// BuildGetItemNumPacket 构造查询指定道具持有数量封包 (Mod 2, Act 107)。
+// 官方 request 为 [Int itemID]，netCall 末尾追加 4 字节前序动作号。
+func BuildGetItemNumPacket(itemID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(itemID)
+	if prevAct == 0 {
+		prevAct = ActionIDItemGetPackList
+	}
+	w.WriteUint32(prevAct)
+	pkt := NewPacket(ActionIDItemGetTheItemNum, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// ParseGetItemNumResponse 解析道具持有数量回包: Int32 count。
+func ParseGetItemNumResponse(payload []byte) (int32, error) {
+	r := NewReader(payload)
+	count, err := r.ReadInt32()
+	if err != nil {
+		return 0, fmt.Errorf("protocol/item: read item num: %w", err)
+	}
+	return count, nil
+}
+
 // BuildUseGridItemPacket 构造使用背包指定格位物品封包 (Mod 2, Act 53)。
 func BuildUseGridItemPacket(gridID int16) (*Packet, error) {
 	buf := new(bytes.Buffer)

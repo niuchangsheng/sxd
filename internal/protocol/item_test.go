@@ -148,3 +148,31 @@ func TestItemProtocol_SellItem(t *testing.T) {
 		t.Error("expected error for empty payload")
 	}
 }
+
+// TestItemProtocol_GetItemNumCodec 验证道具持有数量查询封包与回包解析。
+func TestItemProtocol_GetItemNumCodec(t *testing.T) {
+	pkt := protocol.BuildGetItemNumPacket(3783, 0x00000002) // 灵珠
+	if pkt.ActionID != protocol.ActionIDItemGetTheItemNum {
+		t.Fatalf("expected action 0x%08X, got 0x%08X", protocol.ActionIDItemGetTheItemNum, pkt.ActionID)
+	}
+	if !pkt.HasPrevAct {
+		t.Fatal("道具数量查询必须标记 HasPrevAct")
+	}
+	if len(pkt.Payload) != 8 {
+		t.Fatalf("expected 8-byte payload (itemID+prevAct), got %d", len(pkt.Payload))
+	}
+	if got := int32(pkt.Payload[0])<<24 | int32(pkt.Payload[1])<<16 | int32(pkt.Payload[2])<<8 | int32(pkt.Payload[3]); got != 3783 {
+		t.Fatalf("expected itemID 3783, got %d", got)
+	}
+
+	count, err := protocol.ParseGetItemNumResponse([]byte{0x00, 0x00, 0x13, 0x71})
+	if err != nil {
+		t.Fatalf("parse item num failed: %v", err)
+	}
+	if count != 4977 {
+		t.Fatalf("expected count 4977, got %d", count)
+	}
+	if _, err := protocol.ParseGetItemNumResponse([]byte{0x01}); err == nil {
+		t.Fatal("expected error for truncated item num payload")
+	}
+}

@@ -161,11 +161,14 @@ scheduler:
 
   # 天帝宝库自选三档大奖配置
   treasure_house:
+    selection_mode: rarity      # 非交互选奖: rarity(默认, 按稀有度自动选)|explicit(使用下方指定奖励)
+    # 优先奖励条目 ID 列表 (按顺序匹配当前开放候选; 用于优先补齐账号最缺资源, 如鸿蒙紫气 26)
+    prefer_awards: []
     interactive: true           # 开启交互式选奖：先向服务端拉取刷新候选奖池，并在控制台提示交互输入选择
-    # 自选三档大奖默认道具ID (非交互模式或交互直接回车时的预设值)
-    tier1_item_id: 50           # 一档自选大奖道具ID (默认 50)
-    tier2_item_id: 25           # 二档自选大奖道具ID (默认 25)
-    tier3_item_id: 42           # 三档自选大奖道具ID (默认 42)
+    # 自选三档大奖默认奖励条目ID (explicit 模式或交互直接回车时的预设值)
+    tier1_item_id: 50           # 一档自选大奖条目ID (默认 50)
+    tier2_item_id: 25           # 二档自选大奖条目ID (默认 25)
+    tier3_item_id: 42           # 三档自选大奖条目ID (默认 42)
     max_draw_times: 10          # 单次最大连续抽奖轮数 (钥匙耗尽自动退出)
 
   # 个人吉星高照自动化策略配置 (仅使用免费逆天改运次数，永不消耗元宝)

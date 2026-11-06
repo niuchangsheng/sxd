@@ -7,6 +7,7 @@ package minigame
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"sync"
@@ -750,5 +751,146 @@ func TestForbiddenBookRoutine_Execute(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if err := NewForbiddenBookRoutine().Execute(context.Background(), session, nil); err != nil {
 		t.Fatalf("禁地之书任务执行失败: %v", err)
+	}
+}
+
+// TestSelectTreasureAwardsByRarity 验证方案 A:
+// 道具稀有度 > 自选包/材料/货币/宝石包/令牌 价值序 > 数量 > 官方 sort > 奖励 id。
+func TestSelectTreasureAwardsByRarity(t *testing.T) {
+	pool := &protocol.TreasureHousePool{
+		Tier1Items: []int32{4, 6, 10, 12, 15, 8},
+		Tier2Items: []int32{23, 51, 27, 21, 20},
+		Tier3Items: []int32{33, 43, 31, 40, 42, 34},
+	}
+	items := map[int32]*dictionary.Item{
+		6651: {ID: 6651, Name: "伙伴碎片自选包", TypeID: 42100, Quality: 5},
+		7697: {ID: 7697, Name: "修为资源自选包", TypeID: 42100, Quality: 5},
+		5183: {ID: 5183, Name: "命宫碎片", TypeID: 31000, Quality: 5},
+		4954: {ID: 4954, Name: "血魂石", TypeID: 31000, Quality: 5},
+		5117: {ID: 5117, Name: "兽魂碎片", TypeID: 31000, Quality: 5},
+		6910: {ID: 6910, Name: "八卦阵碎片", TypeID: 31000, Quality: 5},
+		6909: {ID: 6909, Name: "大法力石", TypeID: 31000, Quality: 5},
+		9212: {ID: 9212, Name: "1阶宝石随机包", TypeID: 10011, Quality: 5},
+		5822: {ID: 5822, Name: "炼器宝箱", TypeID: 42100, Quality: 5},
+		347:  {ID: 347, Name: "黄玉牌", TypeID: 10006, Quality: 5},
+		2343: {ID: 2343, Name: "橙装碎片", TypeID: 31000, Quality: 5},
+		2471: {ID: 2471, Name: "高级灵石", TypeID: 31000, Quality: 4},
+		4975: {ID: 4975, Name: "黄金圣水", TypeID: 31000, Quality: 5},
+		2395: {ID: 2395, Name: "内丹", TypeID: 31000, Quality: 4},
+		2403: {ID: 2403, Name: "道缘", TypeID: 31000, Quality: 3},
+		1740: {ID: 1740, Name: "境界点", TypeID: 28000, Quality: 5},
+		5397: {ID: 5397, Name: "普通进阶丹", TypeID: 31000, Quality: 4},
+	}
+	lookup := func(id int32) (*dictionary.Item, error) {
+		if it, ok := items[id]; ok {
+			return it, nil
+		}
+		return nil, errors.New("not found")
+	}
+
+	got := SelectTreasureAwardsByRarity(pool, lookup, nil, nil)
+	want := []int32{6, 27, 43}
+	if len(got) != len(want) {
+		t.Fatalf("期望 %d 档, 实际 %d", len(want), len(got))
+	}
+	for i, id := range want {
+		if got[i].TierID != int32(i+1) || got[i].ItemID != id {
+			t.Errorf("第 %d 档期望 award=%d, 实际 %+v", i+1, id, got[i])
+		}
+	}
+}
+
+// TestSelectTreasureAwardsByRarity_TieBreakAndFallback 验证同级候选的稳定排序与官方表缺失兜底。
+func TestSelectTreasureAwardsByRarity_TieBreakAndFallback(t *testing.T) {
+	// 8 与 46 同为品质5/类型209对应材料，数量 3 vs 3，按 sort 升序: 8(sort=1) 优先。
+	pool := &protocol.TreasureHousePool{Tier1Items: []int32{46, 8, 999}}
+	lookup := func(id int32) (*dictionary.Item, error) {
+		return &dictionary.Item{ID: int(id), TypeID: 31000, Quality: 5}, nil
+	}
+	got := SelectTreasureAwardsByRarity(pool, lookup, nil, nil)
+	if len(got) != 1 || got[0].ItemID != 8 {
+		t.Fatalf("期望按官方 sort 选中 award=8, 实际 %+v", got)
+	}
+
+	// 全部候选都不在官方表时，退回服务端首个开放候选。
+	fallback := SelectTreasureAwardsByRarity(&protocol.TreasureHousePool{Tier2Items: []int32{999, 998}}, lookup, nil, nil)
+	if len(fallback) != 1 || fallback[0].ItemID != 999 {
+		t.Fatalf("官方表缺失时应退回首个候选, 实际 %+v", fallback)
+	}
+}
+
+// TestSelectTreasureAwardsByRarity_FiltersClosedFunctions 验证所属功能未开放的候选会被跳过，
+// 以及整档候选都被过滤时按稀有度兜底。
+func TestSelectTreasureAwardsByRarity_FiltersClosedFunctions(t *testing.T) {
+	pool := &protocol.TreasureHousePool{
+		// 51 属山海幻兽(256, 未开放)，21 为通用黄玉牌；即使 51 道具更稀有也应选 21。
+		Tier2Items: []int32{51, 21},
+		// 整档都指向未开放功能，应兜底选稀有度最高者。
+		Tier3Items: []int32{40, 33},
+	}
+	items := map[int32]*dictionary.Item{
+		9212: {ID: 9212, Name: "1阶宝石随机包", TypeID: 10011, Quality: 7},
+		347:  {ID: 347, Name: "黄玉牌", TypeID: 10006, Quality: 5},
+		2403: {ID: 2403, Name: "道缘", TypeID: 31000, Quality: 3},
+		2471: {ID: 2471, Name: "高级灵石", TypeID: 31000, Quality: 5},
+	}
+	lookup := func(id int32) (*dictionary.Item, error) {
+		if it, ok := items[id]; ok {
+			return it, nil
+		}
+		return nil, errors.New("not found")
+	}
+	open := map[int32]bool{ // 仅通用与封灵开放
+		protocol.FunctionIDTravelEvent: true,
+		48:                             true,
+	}
+	isOpen := func(id int32) bool { return open[id] }
+
+	got := SelectTreasureAwardsByRarity(pool, lookup, isOpen, nil)
+	// 第1档无候选不产出；第2档跳过未开放的 51 选 21；第3档全部未开放时兜底选品质更高的 33。
+	want := map[int32]int32{2: 21, 3: 33}
+	if len(got) != len(want) {
+		t.Fatalf("期望 %d 档结果, 实际 %+v", len(want), got)
+	}
+	for _, sel := range got {
+		if wantID, ok := want[sel.TierID]; !ok || sel.ItemID != wantID {
+			t.Errorf("第 %d 档期望 award=%d, 实际 %+v", sel.TierID, wantID, sel)
+		}
+	}
+}
+
+// TestSelectTreasureAwardsByRarity_PreferenceWins 验证优先清单命中时覆盖稀有度选择，
+// 未命中时回退到常规稀有度/开放过滤逻辑。
+func TestSelectTreasureAwardsByRarity_PreferenceWins(t *testing.T) {
+	pool := &protocol.TreasureHousePool{
+		Tier1Items: []int32{4},
+		Tier2Items: []int32{51, 21},
+		Tier3Items: []int32{33},
+	}
+	items := map[int32]*dictionary.Item{
+		6651: {ID: 6651, Name: "伙伴碎片自选包", TypeID: 42100, Quality: 5},
+		9212: {ID: 9212, Name: "1阶宝石随机包", TypeID: 10011, Quality: 5},
+		347:  {ID: 347, Name: "黄玉牌", TypeID: 10006, Quality: 5},
+		2471: {ID: 2471, Name: "高级灵石", TypeID: 31000, Quality: 5},
+		2397: {ID: 2397, Name: "鸿蒙紫气", TypeID: 31000, Quality: 5},
+	}
+	lookup := func(id int32) (*dictionary.Item, error) {
+		if it, ok := items[id]; ok {
+			return it, nil
+		}
+		return nil, errors.New("not found")
+	}
+	isOpen := func(id int32) bool { return true }
+
+	// 26(鸿蒙紫气) 不在当前候选，命中 51(幻兽宝石包)，优先于通用黄玉牌。
+	got := SelectTreasureAwardsByRarity(pool, lookup, isOpen, []int32{26, 51})
+	if got[1].TierID != 2 || got[1].ItemID != 51 {
+		t.Fatalf("期望第二档命中优先清单 award=51, 实际 %+v", got[1])
+	}
+
+	// 优先清单全部不在候选时回退稀有度: 第二档选 51(类型10011) 而非 21(类型10006)。
+	got = SelectTreasureAwardsByRarity(pool, lookup, isOpen, []int32{26})
+	if got[1].ItemID != 51 {
+		t.Fatalf("优先清单未命中时应回退稀有度选择, 实际 %+v", got[1])
 	}
 }

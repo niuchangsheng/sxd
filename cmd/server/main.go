@@ -366,10 +366,12 @@ func run(ctx context.Context, args []string) error {
 
 	// 天帝宝库自选三档大奖配置
 	thCfg := minigame.TreasureHouseConfig{
-		DictRepo:     dictRepo,
-		Interactive:  cfg.Scheduler.TreasureHouse.Interactive,
-		Awards:       cfg.Scheduler.TreasureHouse.ResolveSelections(),
-		MaxDrawTimes: cfg.Scheduler.TreasureHouse.MaxDrawTimes,
+		DictRepo:      dictRepo,
+		SelectionMode: cfg.Scheduler.TreasureHouse.SelectionMode,
+		PreferAwards:  cfg.Scheduler.TreasureHouse.PreferAwards,
+		Interactive:   cfg.Scheduler.TreasureHouse.Interactive,
+		Awards:        cfg.Scheduler.TreasureHouse.ResolveSelections(),
+		MaxDrawTimes:  cfg.Scheduler.TreasureHouse.MaxDrawTimes,
 	}
 	factory.SetTreasureHouseConfig(thCfg)
 

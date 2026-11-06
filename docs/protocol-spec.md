@@ -665,6 +665,25 @@ Action 6 只下发**当前角色已开放**的功能条目（客户端 `Function
 在角色处于城镇时正常返回；若本轮先执行过魔王试炼 `create_team`（即使随即 `exit_team`），
 服务端会保留战场上下文并静默丢弃 Act 4，连 `enter_town (1,0)` 也会被丢弃。
 因此天帝宝库 Routine 使用高于 `PriorityHigh` 的优先级（110），在每日任务批次最前执行。
+
+**天帝宝库自选奖励元数据（2026-11-06 校正）**：`select_panel` 只下发档位 quality
+与奖励 id，奖励 id → 实际道具/数量/档位品质/官方展示 sort 必须查官方
+`com.assist.server.source.TreasureHouseTypeData.objHouseAward`（49 条，id 1~51）。
+仓库内 `Pieb.db.wishpoolaward` 为老版本数据（仅 35 条、缺 36~51，且 id→道具映射
+与现行客户端不一致，例如 id 12 在库中为鸿蒙紫气、官方表为血魂石），不得用于奖励解析。
+非交互模式按「道具品质 > 自选包/稀有材料/货币/宝石包/令牌 > 数量 > 官方 sort」
+自动选奖，并先用 `get_player_function` 的开放集合过滤所属功能未开放的奖励
+（`FuncID != 0` 且不在开放集合时跳过；整档均未开放则按稀有度兜底）。
+`prefer_awards` 可配置账号级优先奖励条目（如鸿蒙紫气 26），出现在当前候选时
+优先命中，否则回退上述规则。实现见 `protocol/treasure_awards.go` 与
+`minigame.SelectTreasureAwardsByRarity`；只读演练探针为
+`probe_treasure_house_select.go`。
+
+**库存探测注意**：`get_player_pack_item_list (2,41)` 只返回主背包/仓库中的实体物品；
+灵珠、鸿蒙紫气、星魂等以系统货币形式存储的资源不会出现在该列表中。判断这些资源
+的持有量必须调用 `get_the_item_num (2,107)`（`Int32 itemID` → `Int32 count`），
+只读探针为 `probe_item_counts.go`。按背包列表推断“零库存”会误判。
+
 另注：`Mod_Player_Base` Action 72 实际是 `get_player_mission_loading_interface_id`，
 并非“城镇场景初始化”；角色真实城镇编号取自 `get_player_info` 的 `townMapId` 字段。
 
