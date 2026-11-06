@@ -543,3 +543,31 @@ func TestMasterPracticeDeployInfoRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected deploy grids: %+v", got.Grids)
 	}
 }
+
+func TestDragonballSacrificeProtocol(t *testing.T) {
+	res, err := protocol.ParseDragonballSacrificeResult(protocol.BuildDragonballSacrificeResultPacket(protocol.DragonballSacrificeResult{
+		Result:      protocol.DragonballResultSuccess,
+		Alerts:      []protocol.DragonballAlert{{ItemID: 1655, Num: 1, Flag: 1}},
+		RemainTimes: 19,
+		Score:       50,
+		TotalScore:  1234,
+	}).Payload)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.Result != protocol.DragonballResultSuccess || res.RemainTimes != 19 || len(res.Alerts) != 1 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	for _, code := range []uint8{
+		protocol.DragonballResultTimesUseUp,
+		protocol.DragonballResultNoEnoughCoin,
+		protocol.DragonballResultPackageFull,
+		protocol.DragonballResultFunctionNoOpen,
+	} {
+		got, err := protocol.ParseDragonballSacrificeResult(
+			protocol.BuildDragonballSacrificeResultPacket(protocol.DragonballSacrificeResult{Result: code}).Payload)
+		if err != nil || got.Result != code {
+			t.Fatalf("code %d: %+v %v", code, got, err)
+		}
+	}
+}

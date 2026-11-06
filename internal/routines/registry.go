@@ -42,6 +42,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "destiny_sword", Name: "飞剑", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动一键淬炼飞剑剑意 (不消耗元宝)", DefaultOn: false},
 		{ID: "daily_gifts", Name: "每日免费礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "领取每日俸禄、每日灵石与 PC 微端礼包 (仅免费档)", DefaultOn: false},
 		{ID: "saint_practice", Name: "圣域修炼替身", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "圣域开启时进入免费修炼房并领取累积经验 (不消耗元宝)", DefaultOn: false},
+		{ID: "dragonball_offer", Name: "神龙普通上供", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "每日普通上供获取活跃度与龙珠经验 (仅消耗铜钱)", DefaultOn: false},
 
 		// 2. Farming 领域 (6)
 		{ID: "herb_garden", Name: "药园种植巡检", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动药园播种、施肥、除草与成熟采摘", DefaultOn: true},
@@ -261,6 +262,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewDailyGiftsRoutine()
 	case "saint_practice":
 		return daily.NewSaintPracticeRoutine()
+	case "dragonball_offer":
+		return daily.NewDragonballOfferRoutine()
 
 	// 2. Farming
 	case "herb_garden":

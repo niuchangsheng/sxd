@@ -100,6 +100,7 @@ scheduler:
     duobao_mountain: true       # 22. 多宝山 (每日免费挖掘次数，不用元宝)
     collection_booklets: true   # 23. 神仙收藏册 (领取声望档位奖励并拜访好友)
     npc_friendship: true        # 24. NPC结交 (赠送铜钱伴手礼，不用元宝)
+    dragonball_offer: true        # 神龙普通上供 (铜钱获取活跃度，不消耗元宝)
     destiny_sword: true         # 25. 飞剑 (一键淬炼剑意，不用元宝)
     daily_gifts: true           # 26. 每日免费礼包 (俸禄/灵石/PC微端礼包)
     eudemons: true              # 27. 幻兽经脉 (自动激活经脉，不用元宝)
