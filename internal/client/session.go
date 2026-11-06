@@ -153,6 +153,11 @@ type RoleSession struct {
 	// 服务端对未加入帮派角色的帮派类请求会静默丢弃（无任何回包），
 	// 由首个超时的帮派任务置位，供其余帮派玩法直接跳过，避免重复空等。
 	factionUnavailable atomic.Bool
+
+	// functionMu 保护已开放功能列表缓存 (Mod_Player_Base.get_player_function)。
+	functionMu   sync.RWMutex
+	functionOpen map[int32]bool
+	functionAt   time.Time
 }
 
 // NewRoleSession 构造一个新的角色会话实例。
@@ -2343,6 +2348,37 @@ func runMockGameServer(conn net.Conn) {
 			upw.WriteUint8(protocol.PlayerPropPower)
 			upw.WriteInt32(201)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerUpdateData, upw.Bytes()))
+
+		case protocol.ActionIDPlayerGetFunctions:
+			// 参与自动化功能门槛的玩法在 Mock 下一律视为已开放，避免单测因
+			// 功能开放查询无回包而整轮跳过。
+			ids := []int32{
+				protocol.FunctionIDZodiac,
+				protocol.FunctionIDBeelzebubTrials,
+				protocol.FunctionIDMiracleFighters,
+				protocol.FunctionIDRepressDemonTower,
+				protocol.FunctionIDShanhaiWorld,
+				protocol.FunctionIDEudemons,
+				protocol.FunctionIDDestinySword,
+				protocol.FunctionIDLinkFate,
+				protocol.FunctionIDPartnerLink,
+				protocol.FunctionIDSaintArea,
+				protocol.FunctionIDFaction,
+				protocol.FunctionIDTreasureHouse,
+				protocol.FunctionIDStTrials,
+				protocol.FunctionIDStPracticeRoom,
+				protocol.FunctionIDTravelEvent,
+				protocol.FunctionIDRollCake,
+				protocol.FunctionIDFindImmortal,
+				protocol.FunctionIDFishing,
+			}
+			w := protocol.NewWriter()
+			w.WriteUint16(uint16(len(ids)))
+			for _, id := range ids {
+				w.WriteInt32(id)
+				w.WriteUint8(1)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerGetFunctions, w.Bytes()))
 
 		case protocol.ActionHeartbeat:
 			// 响应心跳包

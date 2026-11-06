@@ -635,6 +635,39 @@ Int32 lucky_item_num
 2026-11-04 曾把第三列 `0` 误读为“已通关/无剩余次数”，导致面板全为 `0`（新的一天）
 时整轮被跳过；该误读已在 `BeelzebubBossStatus` 中修正。
 
+### 4.12.1 功能开放前置检测（Module 0, Action 6 / 69）
+
+未开放或条件不满足的玩法，服务端通常对业务请求**静默不回包**。自动化不应靠
+“发一个业务包等超时”来探测，应使用官方功能开放接口：
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 6 | `0x00000006` | 已开放功能列表 | 空 + PrevAct | `Uint16 count, count × (Int32 functionID, Byte isPlayed)` |
+| 69 | `0x00000045` | 单功能开放状态 | `Int32 functionID, Uint32 prevAct` | `UByte`（`119`=已开放，`120`=未开放） |
+
+Action 6 只下发**当前角色已开放**的功能条目（客户端 `FunctionType.updateOpenedList`
+即据此维护开放集合），因此“不在列表中”即视为未开放。`isPlayed` 仅表示是否体验过，
+与开放判定无关。功能编号取自客户端 `com.assist.server.source.FunctionTypeData.List`：
+
+| 功能 | ID | 功能 | ID |
+| :--- | :---: | :--- | :---: |
+| 十二生肖 | 58 | 魔王试炼 | 68 |
+| 奇门遁甲 | 152 | 锁妖塔 | 257 |
+| 山海九界（通天塔） | 243 | 山海幻兽（多宝山/幻兽） | 256 |
+| 本命飞剑 | 289 | 天缘/灵结 | 166 |
+| 圣域 | 165 | 仙盟 | 119 |
+| 天帝宝库 | 231 | 仙界练功房 | 94 |
+
+自动化在发起业务请求前调用 `RoleSession.IsFunctionOpen(functionID)`（会话内缓存 5 分钟，
+一次 Action 6 即可覆盖整轮日常）。
+
+**天帝宝库 Act 4 的城镇上下文约束（2026-11-06 实机）**：`set_use_free_flag (594,4)`
+在角色处于城镇时正常返回；若本轮先执行过魔王试炼 `create_team`（即使随即 `exit_team`），
+服务端会保留战场上下文并静默丢弃 Act 4，连 `enter_town (1,0)` 也会被丢弃。
+因此天帝宝库 Routine 使用高于 `PriorityHigh` 的优先级（110），在每日任务批次最前执行。
+另注：`Mod_Player_Base` Action 72 实际是 `get_player_mission_loading_interface_id`，
+并非“城镇场景初始化”；角色真实城镇编号取自 `get_player_info` 的 `townMapId` 字段。
+
 ### 4.13 Module 10 (0x000A) / 69 (0x0045): 帮派祭神与帮派转盘
 
 > **实采结论（2026-11-04 线上验证）**：角色**未加入帮派**时，服务端对

@@ -111,3 +111,26 @@ func TestTongTianTowerRoutine_NotEnoughPowerBranchesToCircuitBreaker(t *testing.
 		t.Fatalf("expected ErrStaminaDepleted, got %v", err)
 	}
 }
+
+// TestTongTianTowerRoutine_SkipsWhenFunctionClosed 验证功能开放列表未包含通天塔所属
+// 山海九界时不发送 panel 请求，而是直接安全跳过。
+func TestTongTianTowerRoutine_SkipsWhenFunctionClosed(t *testing.T) {
+	sess, srvConn := createTestSession(t, 5000)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var panelCalls atomic.Int32
+	startMockDungeonServerWithFunctions(srvConn, nil, func(pkt *protocol.Packet) bool {
+		if pkt.ActionID == protocol.ActionIDTongTianTowerPanel {
+			panelCalls.Add(1)
+		}
+		return false
+	})
+
+	if err := dungeon.NewTongTianTowerRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("功能未开放时应安全跳过, got %v", err)
+	}
+	if got := panelCalls.Load(); got != 0 {
+		t.Fatalf("功能未开放时不应发送 panel 请求, 实际 %d 次", got)
+	}
+}

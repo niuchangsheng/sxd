@@ -41,6 +41,17 @@ func NewDuobaoMountainRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行益智任务: 多宝山挖掘", "role_id", session.RoleID())
 
+			// 多宝山属于山海幻兽玩法，先查功能开放列表，未开放时不发送业务请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEudemons)
+			if fErr != nil {
+				slog.Info("多宝山功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("多宝山功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDEudemons)
+				return nil
+			}
+
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
 				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				defer cancel()

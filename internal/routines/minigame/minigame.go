@@ -1118,6 +1118,17 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行益智任务: 山海幻兽入侵推图与扫荡", "role_id", session.RoleID())
 
+			// 0. 先通过官方功能开放列表判定门槛，未开放时不再发送会被静默丢弃的业务请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEudemons)
+			if fErr != nil {
+				slog.Info("山海幻兽功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("山海幻兽功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDEudemons)
+				return nil
+			}
+
 			// 1. 查询幻兽面板 (Mod 701, Act 0)
 			panelPkt := protocol.BuildHuanshouPanelPacket(protocol.ActionIDTownEnter)
 			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
@@ -1493,6 +1504,10 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 // AwardSelectorFunc 允许注入自定义交互选择器（例如命令行交互、Web交互回调或自动化测试桩）。
 type AwardSelectorFunc func(ctx context.Context, pool *protocol.TreasureHousePool, dict dictionary.Repository) ([]protocol.TreasureAwardSelect, error)
 
+// treasureHousePriority 天帝宝库调度优先级：高于 PriorityHigh (100)，
+// 必须在本轮任何会产生队伍/战场上下文的玩法之前执行。
+const treasureHousePriority scheduler.RoutinePriority = 110
+
 // TreasureHouseConfig 天帝宝库自选大奖与开启抽奖配置。
 type TreasureHouseConfig struct {
 	// DictRepo 静态数据库字典仓储 (用于解析大奖条目道具名及说明)
@@ -1719,7 +1734,11 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 		"treasure_house",
 		"minigame",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 天帝宝库的 set_use_free_flag (Act 4) 会严格校验角色的城镇上下文：
+		// 若本轮先执行过魔王试炼等会创建队伍/战场的玩法，服务端会保留战场状态并
+		// 静默丢弃 Act 4（实机 2026-11-06）。因此把宝库安排在每日任务批次最前，
+		// 高于 PriorityHigh，确保设置免费标记与抽奖链路安全。
+		treasureHousePriority,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -1734,6 +1753,17 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				"awards_count", len(cfg.Awards),
 				"max_draw_times", cfg.MaxDrawTimes,
 			)
+
+			// 先查功能开放列表；未开放时不再发送会被静默丢弃的 594 业务请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDTreasureHouse)
+			if fErr != nil {
+				slog.Info("天帝宝库功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("天帝宝库功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDTreasureHouse)
+				return nil
+			}
 
 			prevAct := session.LastActionID()
 			if prevAct == 0 {

@@ -1407,6 +1407,17 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行副本任务: 锁妖塔挑战与试炼推图", "role_id", session.RoleID())
 
+			// 0. 先通过官方功能开放列表判定门槛，未开放时不再发送会被静默丢弃的业务请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDRepressDemonTower)
+			if fErr != nil {
+				slog.Info("锁妖塔功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("锁妖塔功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDRepressDemonTower)
+				return nil
+			}
+
 			// 1. 查询锁妖塔当前进度与层级 (Mod 701, Act 0)
 			layer := int32(3)
 			trialID := int32(31)
@@ -1481,6 +1492,17 @@ func NewQiMenRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			slog.Info("正在执行玩法任务: 奇门遁甲法阵巡检与星图注灵", "role_id", session.RoleID())
+
+			// 0. 先通过官方功能开放列表判定门槛，未开放时不再发送会被静默丢弃的业务请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDMiracleFighters)
+			if fErr != nil {
+				slog.Info("奇门遁甲功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("奇门遁甲功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDMiracleFighters)
+				return nil
+			}
 
 			// 1. 查询法阵信息 (Mod 486, Act 7)
 			arrayPkt := protocol.BuildQiMenArrayInfoPacket(protocol.ActionIDTownEnter)
@@ -1594,6 +1616,17 @@ func NewZodiacRoutine() scheduler.ActivityRoutine {
 			}
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
+			}
+
+			// 0. 先通过官方功能开放列表判定门槛，未开放时不再发送业务请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDZodiac)
+			if fErr != nil {
+				slog.Info("生肖挑战功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("生肖挑战功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDZodiac)
+				return nil
 			}
 
 			iCtx, iCancel := context.WithTimeout(ctx, callTimeout)

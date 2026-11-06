@@ -564,6 +564,17 @@ func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			// 先查功能开放列表；仙盟未开放时不再申请跨服城镇会话并等待超时。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDFaction)
+			if fErr != nil {
+				slog.Info("仙盟功能开放状态查询失败，跳过仙盟日常", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("仙盟功能未开放，跳过仙盟日常", "role_id", session.RoleID(), "function_id", protocol.FunctionIDFaction)
+				return nil
+			}
+
 			townCtx, townCancel := context.WithTimeout(ctx, townCtxTimeout)
 			defer townCancel()
 			town, err := session.OpenSectTownSession(townCtx)

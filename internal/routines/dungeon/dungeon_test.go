@@ -48,12 +48,35 @@ func createTestSession(t *testing.T, initialStamina int) (*client.RoleSession, n
 	return sess, c2
 }
 
+// dungeonAutomationFunctionIDs Mock 环境视为已开放的玩法功能编号。
+var dungeonAutomationFunctionIDs = []int32{
+	protocol.FunctionIDZodiac, protocol.FunctionIDBeelzebubTrials,
+	protocol.FunctionIDMiracleFighters, protocol.FunctionIDRepressDemonTower,
+	protocol.FunctionIDShanhaiWorld, protocol.FunctionIDEudemons,
+	protocol.FunctionIDDestinySword, protocol.FunctionIDLinkFate,
+	protocol.FunctionIDPartnerLink, protocol.FunctionIDSaintArea,
+	protocol.FunctionIDFaction, protocol.FunctionIDTreasureHouse,
+	protocol.FunctionIDStTrials, protocol.FunctionIDStPracticeRoom,
+	protocol.FunctionIDTravelEvent, protocol.FunctionIDRollCake,
+	protocol.FunctionIDFindImmortal, protocol.FunctionIDFishing,
+}
+
 func startMockDungeonServer(srvConn net.Conn, handler func(pkt *protocol.Packet) bool) {
+	startMockDungeonServerWithFunctions(srvConn, dungeonAutomationFunctionIDs, handler)
+}
+
+// startMockDungeonServerWithFunctions 允许指定已开放功能列表，用于验证功能门槛跳过路径。
+func startMockDungeonServerWithFunctions(srvConn net.Conn, functionIDs []int32, handler func(pkt *protocol.Packet) bool) {
 	go func() {
 		for {
 			pkt, err := protocol.ReadPacket(srvConn)
 			if err != nil {
 				return
+			}
+			// 参与自动化功能门槛的玩法在 Mock 下一律视为已开放。
+			if pkt.ActionID == protocol.ActionIDPlayerGetFunctions {
+				_ = protocol.WritePacket(srvConn, protocol.BuildPlayerFunctionsResultPacket(functionIDs))
+				continue
 			}
 			if handler != nil && handler(pkt) {
 				continue

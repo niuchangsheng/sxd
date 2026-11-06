@@ -43,6 +43,17 @@ func NewDestinySwordRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行日常任务: 飞剑一键淬炼", "role_id", session.RoleID())
 
+			// 先查功能开放列表；未开放时不再发送会被静默丢弃的飞剑面板请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDDestinySword)
+			if fErr != nil {
+				slog.Info("飞剑功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("飞剑功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDDestinySword)
+				return nil
+			}
+
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
 				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				defer cancel()

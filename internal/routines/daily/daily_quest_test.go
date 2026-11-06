@@ -12,6 +12,19 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
+// dailyAutomationFunctionIDs Mock 环境视为已开放的玩法功能编号。
+var dailyAutomationFunctionIDs = []int32{
+	protocol.FunctionIDZodiac, protocol.FunctionIDBeelzebubTrials,
+	protocol.FunctionIDMiracleFighters, protocol.FunctionIDRepressDemonTower,
+	protocol.FunctionIDShanhaiWorld, protocol.FunctionIDEudemons,
+	protocol.FunctionIDDestinySword, protocol.FunctionIDLinkFate,
+	protocol.FunctionIDPartnerLink, protocol.FunctionIDSaintArea,
+	protocol.FunctionIDFaction, protocol.FunctionIDTreasureHouse,
+	protocol.FunctionIDStTrials, protocol.FunctionIDStPracticeRoom,
+	protocol.FunctionIDTravelEvent, protocol.FunctionIDRollCake,
+	protocol.FunctionIDFindImmortal, protocol.FunctionIDFishing,
+}
+
 func newDailyMockSession(t *testing.T, handler func(net.Conn, *protocol.Packet)) *client.RoleSession {
 	t.Helper()
 	serverConn, clientConn := net.Pipe()
@@ -24,6 +37,11 @@ func newDailyMockSession(t *testing.T, handler func(net.Conn, *protocol.Packet))
 			pkt, err := protocol.ReadPacket(serverConn)
 			if err != nil {
 				return
+			}
+			// 参与自动化功能门槛的玩法在 Mock 下一律视为已开放。
+			if pkt.ActionID == protocol.ActionIDPlayerGetFunctions {
+				_ = protocol.WritePacket(serverConn, protocol.BuildPlayerFunctionsResultPacket(dailyAutomationFunctionIDs))
+				continue
 			}
 			handler(serverConn, pkt)
 		}

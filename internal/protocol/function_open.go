@@ -21,6 +21,42 @@ const (
 	FunctionIDWorshipMars int32 = 55
 	// FunctionIDWuFaField 悟法领域功能编号 (FunctionTypeData: WuFaField)
 	FunctionIDWuFaField int32 = 245
+	// FunctionIDZodiac 十二生肖功能编号 (FunctionTypeData: Zodiac)
+	FunctionIDZodiac int32 = 58
+	// FunctionIDBeelzebubTrials 魔王试炼功能编号 (FunctionTypeData: BeelzebubTrials)
+	FunctionIDBeelzebubTrials int32 = 68
+	// FunctionIDMiracleFighters 奇门遁甲功能编号 (FunctionTypeData: MiracleFighters)
+	FunctionIDMiracleFighters int32 = 152
+	// FunctionIDRepressDemonTower 锁妖塔功能编号 (FunctionTypeData: RepressDemonTower)
+	FunctionIDRepressDemonTower int32 = 257
+	// FunctionIDShanhaiWorld 山海九界功能编号 (FunctionTypeData: ShanhaiWorld，通天塔等玩法归属该功能)
+	FunctionIDShanhaiWorld int32 = 243
+	// FunctionIDEudemons 山海幻兽功能编号 (FunctionTypeData: Eudemons，含多宝山/异界入侵)
+	FunctionIDEudemons int32 = 256
+	// FunctionIDDestinySword 本命飞剑功能编号 (FunctionTypeData: DestinySword)
+	FunctionIDDestinySword int32 = 289
+	// FunctionIDLinkFate 结缘功能编号 (FunctionTypeData: LinkFate)
+	FunctionIDLinkFate int32 = 140
+	// FunctionIDPartnerLink 天缘/灵结功能编号 (FunctionTypeData: PartnerLink)
+	FunctionIDPartnerLink int32 = 166
+	// FunctionIDSaintArea 圣域功能编号 (FunctionTypeData: SaintArea)
+	FunctionIDSaintArea int32 = 165
+	// FunctionIDFaction 帮派功能编号 (FunctionTypeData: Faction)
+	FunctionIDFaction int32 = 119
+	// FunctionIDTreasureHouse 天帝宝库功能编号 (FunctionTypeData: TreasureHouse)
+	FunctionIDTreasureHouse int32 = 231
+	// FunctionIDStTrials 秘境探宝功能编号 (FunctionTypeData: StTrials)
+	FunctionIDStTrials int32 = 128
+	// FunctionIDStPracticeRoom 仙界练功房功能编号 (FunctionTypeData: StPracticeRoom)
+	FunctionIDStPracticeRoom int32 = 94
+	// FunctionIDTravelEvent 仙旅奇缘功能编号 (FunctionTypeData: TravelEvent)
+	FunctionIDTravelEvent int32 = 34
+	// FunctionIDRollCake 吉星高照功能编号 (FunctionTypeData: RollCake)
+	FunctionIDRollCake int32 = 54
+	// FunctionIDFindImmortal 喜从天降功能编号 (FunctionTypeData: FindImmortal)
+	FunctionIDFindImmortal int32 = 70
+	// FunctionIDFishing 钓鱼功能编号 (FunctionTypeData: Fishing)
+	FunctionIDFishing int32 = 134
 )
 
 // BuildCheckFunctionOpenPacket 构造功能开放状态查询封包。

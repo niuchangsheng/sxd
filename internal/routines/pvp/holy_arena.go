@@ -41,6 +41,17 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行对抗任务: 圣域竞技场", "role_id", session.RoleID())
 
+			// 圣域竞技场隶属圣域玩法，先查功能开放列表；未开放时不发送业务请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDSaintArea)
+			if fErr != nil {
+				slog.Info("圣域竞技场功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("圣域竞技场功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDSaintArea)
+				return nil
+			}
+
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
 				cCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()

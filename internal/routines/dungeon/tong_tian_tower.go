@@ -43,6 +43,17 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行副本任务: 通天塔自动挑战", "role_id", session.RoleID())
 
+			// 通天塔隶属山海九界玩法，先查功能开放列表；未开放时不发送业务请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDShanhaiWorld)
+			if fErr != nil {
+				slog.Info("通天塔功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("通天塔功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDShanhaiWorld)
+				return nil
+			}
+
 			fetchPanel := func() (*protocol.TongTianTowerPanel, error) {
 				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				defer cancel()
