@@ -35,24 +35,6 @@ func DefaultOnlineGiftConfig() OnlineGiftConfig {
 // functionEndClaimInterval 连续领取同一礼包之间的拟人延迟。
 const functionEndClaimInterval = 200 * time.Millisecond
 
-// functionEndRollIsFree 判断本次摇奖结果是否免元宝。
-//
-// 线上实测 (s0-niuchangsheng, 2026-11-05): random_award 回包的 ingot 字段是
-// 本次奖励的领取价格，领取时会按该值扣除元宝。只有 ingot == 0 才是真正免费。
-func functionEndRollIsFree(preview *protocol.FunctionEndRandomAward) bool {
-	return preview != nil && preview.Ingot <= 0
-}
-
-// functionEndGiftHasPendingRoll 判断礼包列表记录是否已经携带摇奖结果。
-//
-// 线上实测: 已摇奖记录的奖励字段会被服务端回填，此时 ingot 字段是本次奖励的
-// 领取价格。对已摇奖记录再次 random_award 会按该价格扣元宝，因此绝不能重摇。
-func functionEndGiftHasPendingRoll(gift protocol.FunctionEndGift) bool {
-	return gift.StatePoint != 0 || gift.Skill != 0 || gift.XianLing != 0 ||
-		gift.Fame != 0 || gift.Nimbus != 0 || gift.CoinBuff != 0 ||
-		gift.ExpBuff != 0 || gift.JuLing != 0
-}
-
 // claimFunctionEndGifts 查询并领取当前所有可领取的功能终结礼包。
 //
 // 协议依据原版客户端 com.views.GetAwardView:
@@ -106,60 +88,26 @@ func claimFunctionEndGifts(ctx context.Context, session *client.RoleSession, cfg
 }
 
 // claimFunctionEndGift 领取单个终结礼包；is_have_next 为 true 时按客户端语义继续领取。
+//
+// 官方客户端 GetAwardView.onGetAward 对 flag=1 的终结礼包直接调用
+// get_game_function_end_gift(gift_id)，这是「免费领取」按钮；列表记录里的
+// ingot 字段只是「随机奖励」按钮的价格，不能据此跳过免费领取。
 func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift protocol.FunctionEndGift, cfg OnlineGiftConfig) error {
 	maxClaims := cfg.MaxClaimsPerGift
 	if maxClaims <= 0 {
 		maxClaims = 20
 	}
 
-	// pending 表示列表记录已经携带摇奖结果，此时不能再调用 random_award，
-	// 否则服务端会按该结果的价格再次扣除元宝。
-	pending := functionEndGiftHasPendingRoll(gift)
-	for attempt := 1; attempt <= maxClaims; attempt++ {
-		if pending {
-			// 已摇奖: 只按列表中的价格判断，价格 > 0 直接放弃，绝不重摇。
-			if gift.IngotCost > 0 {
-				slog.Info("跳过需要消耗元宝的功能终结礼包",
-					"role_id", session.RoleID(),
-					"gift_id", gift.GiftID,
-					"ingot_cost", gift.IngotCost,
-					"attempt", attempt,
-					"already_rolled", true,
-				)
-				return nil
-			}
-		} else {
-			// 官方客户端 GetAwardView 在领取前必须先 random_award 摇出本份奖励；
-			// 直接调用 get_game_function_end_gift 会返回全 0 奖励且 is_have_next 持续为真。
-			preview, err := rollFunctionEndGift(ctx, session, gift.GiftID)
-			if err != nil {
-				return fmt.Errorf("roll gift %d: %w", gift.GiftID, err)
-			}
-			// 铁律: 自动化永不消耗元宝。摇奖回包的 ingot 是领取价格，>0 一律放弃。
-			if !functionEndRollIsFree(preview) {
-				slog.Info("跳过需要消耗元宝的功能终结礼包",
-					"role_id", session.RoleID(),
-					"gift_id", gift.GiftID,
-					"ingot_cost", preview.Ingot,
-					"attempt", attempt,
-				)
-				return nil
-			}
-			slog.Debug("功能终结礼包摇奖完成",
-				"role_id", session.RoleID(),
-				"gift_id", gift.GiftID,
-				"attempt", attempt,
-				"state_point", preview.StatePoint,
-				"skill", preview.Skill,
-				"xian_ling", preview.XianLing,
-				"fame", preview.Fame,
-				"nimbus", preview.Nimbus,
-				"exp_buff", preview.ExpBuff,
-				"ingot", preview.Ingot,
-				"juling", preview.JuLing,
-			)
-		}
+	// 仅作诊断：列表中的 ingot 是随机奖励按钮价格，与免费领取按钮无关。
+	if gift.IngotCost > 0 {
+		slog.Debug("功能终结礼包随机奖励按钮价格 (免费领取不受影响)",
+			"role_id", session.RoleID(),
+			"gift_id", gift.GiftID,
+			"random_ingot_price", gift.IngotCost,
+		)
+	}
 
+	for attempt := 1; attempt <= maxClaims; attempt++ {
 		cCtx, cCancel := context.WithTimeout(ctx, 5*time.Second)
 		resp, err := session.Call(cCtx, protocol.BuildGetFunctionEndGiftPacket(gift.GiftID), protocol.ActionIDGetGameFunctionEndGift)
 		cCancel()
@@ -177,7 +125,7 @@ func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift
 
 		switch claim.Result {
 		case protocol.FunctionEndSuccess:
-			slog.Info("功能终结礼包领取成功",
+			slog.Info("功能终结礼包免费领取成功",
 				"role_id", session.RoleID(),
 				"gift_id", gift.GiftID,
 				"attempt", attempt,
@@ -194,8 +142,6 @@ func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift
 			if !claim.IsHaveNext {
 				return nil
 			}
-			// 本次奖励已领取，摇奖结果已消费，下一份需要重新摇奖。
-			pending = false
 			if attempt == maxClaims {
 				break
 			}
@@ -210,7 +156,8 @@ func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift
 			)
 			return scheduler.ErrBagFull
 		case protocol.FunctionEndNoIngot:
-			slog.Warn("功能终结礼包领取失败: 元宝不足",
+			// 免费领取不应出现元宝不足；若服务端仍返回该码，立刻停止，绝不重试付费路径。
+			slog.Warn("功能终结礼包免费领取返回元宝不足，停止该礼包",
 				"role_id", session.RoleID(),
 				"gift_id", gift.GiftID,
 				"result", claim.Result,
@@ -240,20 +187,6 @@ func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift
 		"max_claims", maxClaims,
 	)
 	return nil
-}
-
-// rollFunctionEndGift 调用 Mod_FunctionEnd_Base.random_award 为指定礼包摇出本份奖励。
-func rollFunctionEndGift(ctx context.Context, session *client.RoleSession, giftID int16) (*protocol.FunctionEndRandomAward, error) {
-	rCtx, rCancel := context.WithTimeout(ctx, 5*time.Second)
-	resp, err := session.Call(rCtx, protocol.BuildFunctionEndRandomAwardPacket(giftID), protocol.ActionIDFunctionEndRandomAward)
-	rCancel()
-	if err != nil {
-		return nil, err
-	}
-	if resp == nil {
-		return nil, errors.New("empty response")
-	}
-	return protocol.ParseFunctionEndRandomAwardResult(resp.Payload)
 }
 
 func waitFunctionEndClaim(ctx context.Context) error {

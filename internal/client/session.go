@@ -2252,13 +2252,12 @@ func runMockGameServer(conn net.Conn) {
 
 	// 功能终结礼包 mock 状态: 每个礼包的剩余可领取次数与元宝消耗。
 	// 1 = 免费礼包(可连续领取 2 次), 4 = 吉星高照(消耗 50 元宝), 16 = 免费礼包。
-	// functionEndRolled 记录已通过 random_award 摇出的待领取奖励；
-	// 未摇奖直接领取时服务端只返回空奖励且 is_have_next=1。
+	// functionEndRolled 记录已通过 random_award 摇出的结果，仅用于列表展示；
+// 普通领取 get_game_function_end_gift 不依赖摇奖状态，也不扣除元宝。
 	functionEndGiftIDs := []int16{1, 4, 16}
 	functionEndRemaining := map[int16]int{1: 2, 4: 1, 16: 1}
 	functionEndCost := map[int16]int32{1: 0, 4: 50, 16: 0}
 	functionEndRolled := map[int16]bool{}
-	mockIngots := int64(1000)
 
 	// 喜从天降 mock 状态: 持有 2 枚龙鱼令、1 次五福祈福机会
 	findImmortalTokens := int16(2)
@@ -3357,35 +3356,27 @@ func runMockGameServer(conn net.Conn) {
 
 		case protocol.ActionIDGetGameFunctionEndGift:
 			// 响应领取功能终结礼包。
-			// 对齐线上行为: 未先 random_award 时返回空奖励且 is_have_next=1，
-			// 先摇奖才会发放对应奖励。
+			// 官方客户端 GetAwardView 的普通「领取」按钮直接调用本动作，
+			// 不依赖 random_award，也不扣除元宝；random_award 只是付费随机按钮。
 			gr := protocol.NewReader(pkt.Payload)
 			giftID, gerr := gr.ReadInt16()
 			result := protocol.FunctionEndSuccess
 			isHaveNext := false
-			rolled := functionEndRolled[giftID]
 			switch {
 			case gerr != nil:
-				isHaveNext = true
-			case !rolled:
-				// 未摇奖: 空奖励 + is_have_next，复现线上空转行为。
-				isHaveNext = true
-			case functionEndRemaining[giftID] <= 0:
-				// 无剩余次数: 按成功但无后续处理
+				result = protocol.FunctionEndNoIngot
 			case os.Getenv("SXD_MOCK_FUNCTION_END_PACK_FULL") == "1":
 				result = protocol.FunctionEndItemPackFull
-			case int64(functionEndCost[giftID]) > mockIngots:
-				result = protocol.FunctionEndNoIngot
+			case functionEndRemaining[giftID] <= 0:
+				// 无剩余次数: 成功但无后续
 			default:
-				delete(functionEndRolled, giftID)
-				mockIngots -= int64(functionEndCost[giftID])
 				functionEndRemaining[giftID]--
 				isHaveNext = functionEndRemaining[giftID] > 0
 			}
 			cw := protocol.NewWriter()
 			cw.WriteUint8(result)
-			if !rolled {
-				// 空奖励占位，字段长度与正常回包一致。
+			if result != protocol.FunctionEndSuccess {
+				// 失败回包保持字段长度一致。
 				cw.WriteInt16(0)
 				cw.WriteInt32(0)
 				cw.WriteInt32(0)
@@ -3393,7 +3384,7 @@ func runMockGameServer(conn net.Conn) {
 				cw.WriteInt32(0)
 				cw.WriteInt16(0)
 				cw.WriteInt16(0)
-				cw.WriteUint8(1)
+				cw.WriteUint8(0)
 				cw.WriteInt32(0)
 			} else {
 				writeMockFunctionEndClaimRewards(cw, giftID, isHaveNext)

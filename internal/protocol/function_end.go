@@ -49,8 +49,8 @@ type FunctionEndStatus struct {
 // giftId, state_point, skill, xian_ling, fame, nimbus, coin_buff, exp_buff,
 // ingot, bei, juling。
 //
-// 其中 IngotCost 是领取该礼包需要消耗的元宝 (0 表示免费)；
-// 其余奖励字段仅作为诊断信息，实际奖励最终以领取回包或属性推送为准。
+// 其中 IngotCost 是「随机奖励」按钮的价格，不是普通领取按钮的费用；
+// 普通领取 get_game_function_end_gift 免费，不扣除元宝。
 type FunctionEndGift struct {
 	GiftID     int16 // 礼包编号
 	StatePoint int32 // 境界点
@@ -60,7 +60,7 @@ type FunctionEndGift struct {
 	Nimbus     int32 // 灵脉
 	CoinBuff   int32 // 铜钱加成
 	ExpBuff    int32 // 经验加成
-	IngotCost  int32 // 领取消耗元宝 (0 表示免费)
+	IngotCost  int32 // 随机奖励按钮价格 (普通领取免费)
 	Bei        uint8 // 倍数
 	JuLing     int32 // 聚灵/灵尘
 }

@@ -54,50 +54,37 @@ func fetchFunctionEndGiftIDs(t *testing.T, session *client.RoleSession) []int16 
 
 func TestOnlineGiftRoutine_ClaimsFreeFunctionEndGifts(t *testing.T) {
 	session := startFunctionEndTestSession(t, "role_test_function_end_free")
+	before := session.GetPlayerState().Ingots
 	if err := NewOnlineGiftRoutine(DefaultOnlineGiftConfig()).Execute(context.Background(), session, nil); err != nil {
 		t.Fatalf("在线礼包任务执行失败: %v", err)
 	}
 
-	// mock 中只有 gift 1 摇奖价格为 0，可领 2 次；
-	// gift 4（50 元宝）与 gift 16（60 元宝）摇奖后必须跳过。
+	// 免费领取按钮直接调用 get_game_function_end_gift，不依赖 random_award；
+	// 列表中的 ingot 只是随机奖励按钮价格，不应阻止领取。
 	ids := fetchFunctionEndGiftIDs(t, session)
-	if len(ids) != 2 || ids[0] != 4 || ids[1] != 16 {
-		t.Fatalf("期望仅剩需要元宝的 gift 4/16, 实际剩余 %v", ids)
+	if len(ids) != 0 {
+		t.Fatalf("期望全部免费礼包已领取, 实际剩余 %v", ids)
+	}
+	if after := session.GetPlayerState().Ingots; after != before {
+		t.Fatalf("免费领取不应消耗元宝: before=%d after=%d", before, after)
 	}
 }
 
-func TestOnlineGiftRoutine_AlwaysSkipsIngotCostGift(t *testing.T) {
-	// 铁律: 自动化永不消耗元宝。摇奖价格为 0 的 gift 1 可领，
-	// 价格为 50/60 的 gift 4/16 绝不能被领取。
+func TestOnlineGiftRoutine_ClaimsGiftsWithPaidRandomPrice(t *testing.T) {
+	// 礼包 4/16 的随机奖励按钮标价 50/60 元宝，但普通领取按钮仍免费；
+	// 自动化必须全部领取，且元宝不得变化。
 	session := startFunctionEndTestSession(t, "role_test_function_end_no_ingot")
+	before := session.GetPlayerState().Ingots
 	for i := 0; i < 2; i++ {
 		if err := NewOnlineGiftRoutine(DefaultOnlineGiftConfig()).Execute(context.Background(), session, nil); err != nil {
 			t.Fatalf("第 %d 轮在线礼包任务执行失败: %v", i+1, err)
 		}
-		if ids := fetchFunctionEndGiftIDs(t, session); len(ids) != 2 || ids[0] != 4 || ids[1] != 16 {
-			t.Fatalf("第 %d 轮后期望仅剩需要元宝的 gift 4/16, 实际剩余 %v", i+1, ids)
-		}
 	}
-}
-
-func TestFunctionEndGiftHasPendingRoll(t *testing.T) {
-	if functionEndGiftHasPendingRoll(protocol.FunctionEndGift{GiftID: 16}) {
-		t.Fatal("空记录不应判定为已摇奖")
+	if ids := fetchFunctionEndGiftIDs(t, session); len(ids) != 0 {
+		t.Fatalf("期望全部礼包已领取, 实际剩余 %v", ids)
 	}
-	if !functionEndGiftHasPendingRoll(protocol.FunctionEndGift{GiftID: 16, Nimbus: 43}) {
-		t.Fatal("带奖励字段的记录应判定为已摇奖")
-	}
-}
-
-func TestFunctionEndRollIsFree(t *testing.T) {
-	if !functionEndRollIsFree(&protocol.FunctionEndRandomAward{Ingot: 0}) {
-		t.Fatal("ingot=0 应判定为免费")
-	}
-	if functionEndRollIsFree(&protocol.FunctionEndRandomAward{Ingot: 50}) {
-		t.Fatal("ingot=50 应判定为付费")
-	}
-	if functionEndRollIsFree(nil) {
-		t.Fatal("nil 预览应判定为不可领取")
+	if after := session.GetPlayerState().Ingots; after != before {
+		t.Fatalf("领取功能终结礼包不应消耗元宝: before=%d after=%d", before, after)
 	}
 }
 
@@ -136,7 +123,7 @@ func TestOnlineGiftRoutine_PreservesOnlineGiftStateMachine(t *testing.T) {
 	if err := NewOnlineGiftRoutine(DefaultOnlineGiftConfig()).Execute(context.Background(), session, nil); err != nil {
 		t.Fatalf("在线礼包不可领取时任务不应失败: %v", err)
 	}
-	if ids := fetchFunctionEndGiftIDs(t, session); len(ids) != 2 || ids[0] != 4 || ids[1] != 16 {
-		t.Fatalf("功能终结礼包领取结果异常, 剩余 %v", ids)
+	if ids := fetchFunctionEndGiftIDs(t, session); len(ids) != 0 {
+		t.Fatalf("免费功能终结礼包应全部领取, 剩余 %v", ids)
 	}
 }
