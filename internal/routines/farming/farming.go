@@ -285,8 +285,65 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 	)
 }
 
-// crossTakeBibleCallFunc 仙界跨服取经协议调用函数签名。
+// crossTakeBibleCallFunc 跨服取经协议调用函数签名。
 type crossTakeBibleCallFunc func(pkt *protocol.Packet, expectedAct uint32, d time.Duration) (*protocol.Packet, error)
+
+// moduleSaTakeBibleBase 圣域取经模块基址 (Mod_SaTakeBible_Base, Module 395 / 0x018B)。
+//
+// 圣域取经与跨服取经 (Mod_StTakeBible_Base, Module 114 / 0x0072) 的报文结构完全一致，
+// 仅模块号不同；因此可复用同一套请求构造与回包解析，只把 ActionID 的模块段替换为 0x018B。
+const moduleSaTakeBibleBase uint32 = 0x018B0000
+
+// saTakeBibleAction 将跨服取经 ActionID 映射为圣域取经 ActionID (低 16 位动作号不变)。
+func saTakeBibleAction(stAction uint32) uint32 {
+	return moduleSaTakeBibleBase | (stAction & 0xFFFF)
+}
+
+// normalizeSaTakeBibleMsg 将圣域取经结果码映射为跨服取经结果码。
+//
+// 两套协议的报文结构一致，但 Mod_SaTakeBible_Base 的业务结果码整体后移：
+// 例如 SUCCESS 在圣域是 11、仙界是 9；FULL_TAKE_BIBLE_TIMES 是 20/18。
+// 复用仙界解析器后，需要在业务判断前统一归一化，避免把成功误判为失败。
+func normalizeSaTakeBibleMsg(msg uint8) uint8 {
+	switch msg {
+	case 11:
+		return 9 // SUCCESS
+	case 12:
+		return 10 // INVALID_PLAYER_ID
+	case 13:
+		return 11 // FULL_PROTECT_TIMES
+	case 14:
+		return 12 // NOT_ONLINE
+	case 15:
+		return 13 // TAKE_BIBLE_STATUS
+	case 16:
+		return 14 // CANCEL_APPLY
+	case 17:
+		return 15 // PROTECT_STATUS
+	case 18:
+		return 16 // NOT_ENOUGH_INGOT
+	case 19:
+		return 17 // REQUEST_VIP
+	case 20:
+		return 18 // FULL_TAKE_BIBLE_TIMES
+	case 21:
+		return 19 // REROB
+	case 22:
+		return 20 // PROTECT_TIME
+	case 23:
+		return 21 // FULL_ROB_TIMES
+	case 24:
+		return 22 // HAVE_CD_TIME
+	case 25:
+		return 23 // BE_ROB_ALL
+	case 26:
+		return 24 // INVALID_SEQUENCE_ID
+	case 40:
+		return 38 // FAILED
+	default:
+		return msg
+	}
+}
 
 const (
 	// crossTakeBibleRobMaxProbes 单轮打劫最多探测的目标数量，避免遍历整条取经路。
@@ -402,30 +459,70 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 	crossCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	// 1. 先以短超时申请凭据：单机/测试环境无此模块时应快速回退，不阻塞传统链路。
-	credCtx, credCancel := context.WithTimeout(crossCtx, 2*time.Second)
-	cred, err := session.FetchCrossServerCredentials(credCtx)
-	credCancel()
-	if err != nil {
-		slog.Debug("仙界跨服取经不可用，回退传统取经协议", "role_id", session.RoleID(), "error", err)
-		return false
+	var (
+		cross  *client.RoleSession
+		isSa   bool
+		origin string
+	)
+
+	// 1. 优先走圣域取经 (Mod_SaTakeBible_Base, Module 395)。
+	// 当前区服已将西天取经迁移至圣域，跨服取经入口可能关闭。
+	statusCtx, statusCancel := context.WithTimeout(crossCtx, time.Second)
+	statusResp, statusErr := session.Call(statusCtx, protocol.BuildSaintAreaStatusPacket(), protocol.ActionIDSaintAreaStatus)
+	statusCancel()
+	if statusErr == nil && statusResp != nil {
+		if st, pErr := protocol.ParseSaintAreaStatusResult(statusResp.Payload); pErr == nil && st.Status == protocol.SaintAreaStatusOpen {
+			// 注意: 不能给 OpenSaintAreaSession 传入带 cancel 的子 context，
+			// 该 context 会作为圣域会话的内部生命周期 context，提前 cancel 会立刻关闭连接。
+			sa, openErr := session.OpenSaintAreaSession(crossCtx)
+			if openErr == nil {
+				cross = sa
+				isSa = true
+				origin = "圣域"
+				defer cross.Close()
+			} else {
+				slog.Warn("圣域会话建立失败，尝试跨服取经入口",
+					"role_id", session.RoleID(), "error", openErr)
+			}
+		}
 	}
 
-	// 2. 建立仙界跨服会话并调用 Mod 114。
-	cross, err := session.OpenCrossServerSessionWithInfo(crossCtx, cred)
-	if err != nil {
-		slog.Warn("仙界跨服会话建立失败，回退传统取经协议", "role_id", session.RoleID(), "error", err)
-		return false
+	// 2. 圣域不可用时回退仙界跨服取经 (Mod 114)，兼容仍开放跨服取经的区服。
+	if cross == nil {
+		credCtx, credCancel := context.WithTimeout(crossCtx, 2*time.Second)
+		cred, err := session.FetchCrossServerCredentials(credCtx)
+		credCancel()
+		if err != nil {
+			slog.Debug("仙界跨服取经不可用，回退传统取经协议", "role_id", session.RoleID(), "error", err)
+			return false
+		}
+		st, err := session.OpenCrossServerSessionWithInfo(crossCtx, cred)
+		if err != nil {
+			slog.Warn("仙界跨服会话建立失败，回退传统取经协议", "role_id", session.RoleID(), "error", err)
+			return false
+		}
+		cross = st
+		origin = "仙界"
+		defer cross.Close()
 	}
-	defer cross.Close()
 
 	crossCall := func(pkt *protocol.Packet, expectedAct uint32, d time.Duration) (*protocol.Packet, error) {
+		act := expectedAct
+		if isSa {
+			act = saTakeBibleAction(expectedAct)
+			pkt = protocol.NewPacket(act, pkt.Payload)
+		}
 		cCtx, cCancel := context.WithTimeout(crossCtx, d)
 		defer cCancel()
-		return cross.Call(cCtx, pkt, expectedAct)
+		return cross.Call(cCtx, pkt, act)
 	}
 
-	crossPilgrimageEscort(ctx, session, crossCall)
+	slog.Info("取经链路已建立", "role_id", session.RoleID(), "channel", origin)
+	normalizeMsg := func(msg uint8) uint8 { return msg }
+	if isSa {
+		normalizeMsg = normalizeSaTakeBibleMsg
+	}
+	crossPilgrimageEscort(ctx, session, crossCall, normalizeMsg)
 	if cfg.AutoRob {
 		// 路况队伍与战报中的玩家 ID 均为跨服 ID 空间，必须使用跨服会话的身份
 		// 判断“自己发起的队伍”与打劫胜负，不能混用主服 PlayerID。
@@ -433,26 +530,30 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 		if selfID <= 0 {
 			selfID = session.PlayerID()
 		}
-		crossPilgrimageRob(ctx, session, selfID, crossCall, cfg)
+		if isSa {
+			crossPilgrimageRob(ctx, session, selfID, crossCall, normalizeMsg, cfg, protocol.ParseSaTakeBibleRoadResult)
+		} else {
+			crossPilgrimageRob(ctx, session, selfID, crossCall, normalizeMsg, cfg)
+		}
 	} else {
-		slog.Debug("仙界取经自动打劫已关闭，仅执行护送巡检", "role_id", session.RoleID())
+		slog.Debug("取经自动打劫已关闭，仅执行护送巡检", "role_id", session.RoleID())
 	}
 	return true
 }
 
 // crossPilgrimageEscort 在仙界跨服连接上完成一次取经使者巡检与启程。
-func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, crossCall crossTakeBibleCallFunc) {
+func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, crossCall crossTakeBibleCallFunc, normalize func(uint8) uint8) {
 	infoResp, err := crossCall(protocol.BuildStTakeBibleCrossGetInfoPacket(), protocol.ActionIDStTakeBibleCrossGetInfo, 3*time.Second)
 	if err != nil {
-		slog.Warn("仙界取经详情无应答", "role_id", session.RoleID(), "error", err)
+		slog.Warn("跨服取经详情无应答", "role_id", session.RoleID(), "error", err)
 		return
 	}
 	info, err := protocol.ParseStTakeBibleCrossInfoResult(infoResp.Payload)
 	if err != nil {
-		slog.Warn("解析仙界取经详情失败", "role_id", session.RoleID(), "error", err)
+		slog.Warn("解析跨服取经详情失败", "role_id", session.RoleID(), "error", err)
 		return
 	}
-	slog.Info("仙界取经准备详情",
+	slog.Info("跨服取经准备详情",
 		"role_id", session.RoleID(),
 		"take_times", info.TakeBibleTimes,
 		"total_times", info.TotalTakeBibleTimes,
@@ -466,7 +567,7 @@ func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, cro
 
 	// 每日护送上限 (3 次) 已用满时无需再启程。
 	if info.TotalTakeBibleTimes <= 0 || info.TakeBibleTimes >= uint8(info.TotalTakeBibleTimes) {
-		slog.Info("仙界取经今日护送次数已用满，无需启程",
+		slog.Info("跨服取经今日护送次数已用满，无需启程",
 			"role_id", session.RoleID(),
 			"take_times", info.TakeBibleTimes,
 			"total_times", info.TotalTakeBibleTimes,
@@ -474,56 +575,66 @@ func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, cro
 		return
 	}
 
-	// 使者非最高品质时尝试刷新一次 (与原 Mod 30 策略保持一致，刷新消耗元宝)。
+	// 使者非最高品质时尝试刷新一次，但仅在本次刷新免费 (refresh_price=0) 时执行；
+	// 任何需要元宝的刷新都严格跳过，符合“自动化永不消耗元宝”的铁律。
 	protection := info.CanProtection
 	if protection < protocol.StTakeBibleCrossProtectionTangSeng {
-		refreshResp, rErr := crossCall(protocol.BuildStTakeBibleCrossRefreshPacket(), protocol.ActionIDStTakeBibleCrossRefresh, 2*time.Second)
-		if rErr == nil && refreshResp != nil {
-			msg, newProtection, nextPrice, pErr := protocol.ParseStTakeBibleCrossRefreshResult(refreshResp.Payload)
-			if pErr == nil && msg == protocol.StTakeBibleCrossMsgSuccess {
-				slog.Info("仙界取经使者刷新成功",
-					"role_id", session.RoleID(),
-					"old_protection", protocol.StTakeBibleCrossProtectionName(protection),
-					"new_protection", protocol.StTakeBibleCrossProtectionName(newProtection),
-					"next_price", nextPrice,
-				)
-				protection = newProtection
+		if info.RefreshPrice > 0 {
+			slog.Info("取经使者刷新需要元宝，跳过刷新",
+				"role_id", session.RoleID(), "refresh_price", info.RefreshPrice)
+		} else {
+			refreshResp, rErr := crossCall(protocol.BuildStTakeBibleCrossRefreshPacket(), protocol.ActionIDStTakeBibleCrossRefresh, 2*time.Second)
+			if rErr == nil && refreshResp != nil {
+				msg, newProtection, nextPrice, pErr := protocol.ParseStTakeBibleCrossRefreshResult(refreshResp.Payload)
+				if pErr == nil {
+					msg = normalize(msg)
+				}
+				if pErr == nil && msg == protocol.StTakeBibleCrossMsgSuccess {
+					slog.Info("跨服取经使者刷新成功",
+						"role_id", session.RoleID(),
+						"old_protection", protocol.StTakeBibleCrossProtectionName(protection),
+						"new_protection", protocol.StTakeBibleCrossProtectionName(newProtection),
+						"next_price", nextPrice,
+					)
+					protection = newProtection
+				}
 			}
 		}
 	}
 
 	startResp, err := crossCall(protocol.BuildStTakeBibleCrossStartPacket(), protocol.ActionIDStTakeBibleCrossStart, 3*time.Second)
 	if err != nil {
-		slog.Warn("仙界取经启程无应答", "role_id", session.RoleID(), "error", err)
+		slog.Warn("跨服取经启程无应答", "role_id", session.RoleID(), "error", err)
 		return
 	}
 	startMsg, itemID, err := protocol.ParseStTakeBibleCrossStartResult(startResp.Payload)
 	if err != nil {
-		slog.Warn("解析仙界取经启程回包失败", "role_id", session.RoleID(), "error", err)
+		slog.Warn("解析跨服取经启程回包失败", "role_id", session.RoleID(), "error", err)
 		return
 	}
+	startMsg = normalize(startMsg)
 
 	switch startMsg {
 	case protocol.StTakeBibleCrossMsgSuccess:
-		slog.Info("仙界西天取经队伍已顺利启程护送",
+		slog.Info("跨服取经队伍已顺利启程护送",
 			"role_id", session.RoleID(),
 			"protection", protocol.StTakeBibleCrossProtectionName(protection),
 			"item_id", itemID,
 		)
 	case protocol.StTakeBibleCrossMsgTakeBibleStatus:
-		slog.Info("仙界西天取经队伍正在护送途中，无需重复启程", "role_id", session.RoleID())
+		slog.Info("跨服取经队伍正在护送途中，无需重复启程", "role_id", session.RoleID())
 	case protocol.StTakeBibleCrossMsgFullTakeBibleTimes:
-		slog.Info("仙界西天取经今日护送次数已用满", "role_id", session.RoleID(), "total_times", info.TotalTakeBibleTimes)
+		slog.Info("跨服取经今日护送次数已用满", "role_id", session.RoleID(), "total_times", info.TotalTakeBibleTimes)
 	case protocol.StTakeBibleCrossMsgProtectTime:
-		slog.Info("仙界西天取经当前处于护送保护时间", "role_id", session.RoleID())
+		slog.Info("跨服取经当前处于护送保护时间", "role_id", session.RoleID())
 	case protocol.StTakeBibleCrossMsgNotEnoughIngot:
-		slog.Info("仙界西天取经刷新元宝不足", "role_id", session.RoleID())
+		slog.Info("跨服取经刷新元宝不足", "role_id", session.RoleID())
 	default:
-		slog.Info("仙界西天取经完成巡检", "role_id", session.RoleID(), "status_code", startMsg)
+		slog.Info("跨服取经完成巡检", "role_id", session.RoleID(), "status_code", startMsg)
 	}
 }
 
-// crossPilgrimageRob 在仙界取经路上执行一轮打劫。
+// crossPilgrimageRob 在跨服取经路上执行一轮打劫。
 //
 // 官方客户端流程：open_take_bible 取得路况队伍列表 → get_rob_take_bible_cd_time
 // 确认冷却 → get_player_take_bible 校验目标是否可劫 → rob(player_id, sequence_id)。
@@ -532,31 +643,35 @@ func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, cro
 // 本流程仅使用免费次数，不消耗元宝清冷却或购买额外打劫次数。
 //
 // selfID 为跨服会话玩家 ID：路况队伍、战报胜负位与 stageServer 均使用跨服 ID 空间。
-func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID int32, crossCall crossTakeBibleCallFunc, cfg PilgrimageConfig) {
+func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID int32, crossCall crossTakeBibleCallFunc, normalize func(uint8) uint8, cfg PilgrimageConfig, roadParsers ...func([]byte) (*protocol.StTakeBibleCrossRoadInfo, error)) {
+	parseRoad := protocol.ParseStTakeBibleCrossRoadResult
+	if len(roadParsers) > 0 && roadParsers[0] != nil {
+		parseRoad = roadParsers[0]
+	}
 	openResp, err := crossCall(protocol.BuildStTakeBibleCrossOpenPacket(), protocol.ActionIDStTakeBibleCrossOpen, 3*time.Second)
 	if err != nil {
-		slog.Warn("仙界取经路况查询无应答", "role_id", session.RoleID(), "error", err)
+		slog.Warn("跨服取经路况查询无应答", "role_id", session.RoleID(), "error", err)
 		return
 	}
-	road, err := protocol.ParseStTakeBibleCrossRoadResult(openResp.Payload)
+	road, err := parseRoad(openResp.Payload)
 	if err != nil {
-		slog.Warn("解析仙界取经路况失败", "role_id", session.RoleID(), "error", err)
+		slog.Warn("解析跨服取经路况失败", "role_id", session.RoleID(), "error", err)
 		return
 	}
 	defer func() {
 		if _, cErr := crossCall(protocol.BuildStTakeBibleCrossClosePacket(), protocol.ActionIDStTakeBibleCrossClose, time.Second); cErr != nil {
-			slog.Debug("关闭仙界取经路况面板失败", "role_id", session.RoleID(), "error", cErr)
+			slog.Debug("关闭跨服取经路况面板失败", "role_id", session.RoleID(), "error", cErr)
 		}
 	}()
 
-	slog.Info("仙界取经路况同步完成",
+	slog.Info("跨服取经路况同步完成",
 		"role_id", session.RoleID(),
 		"road_teams", len(road.Teams),
 		"can_rob_times", road.CanRobTimes,
 		"last_robs", len(road.LastRobs),
 	)
 	if road.CanRobTimes <= 0 {
-		slog.Info("仙界取经今日打劫次数已用尽", "role_id", session.RoleID())
+		slog.Info("跨服取经今日打劫次数已用尽", "role_id", session.RoleID())
 		return
 	}
 
@@ -565,7 +680,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		return
 	}
 	if cd.CDSeconds > 0 {
-		slog.Info("仙界取经当前处于打劫冷却中", "role_id", session.RoleID(), "cooldown_sec", cd.CDSeconds)
+		slog.Info("跨服取经当前处于打劫冷却中", "role_id", session.RoleID(), "cooldown_sec", cd.CDSeconds)
 		return
 	}
 
@@ -578,7 +693,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		candidates = append(candidates, team)
 	}
 	if len(candidates) == 0 {
-		slog.Info("仙界取经路上暂无可打劫队伍", "role_id", session.RoleID())
+		slog.Info("跨服取经路上暂无可打劫队伍", "role_id", session.RoleID())
 		return
 	}
 
@@ -615,12 +730,12 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		)
 		if cErr != nil {
 			probeFailed++
-			slog.Debug("仙界取经目标详情无应答", "role_id", session.RoleID(), "player_id", team.PlayerID, "error", cErr)
+			slog.Debug("跨服取经目标详情无应答", "role_id", session.RoleID(), "player_id", team.PlayerID, "error", cErr)
 			continue
 		}
 		info, pErr := protocol.ParseStTakeBibleCrossPlayerInfoResult(infoResp.Payload)
 		if pErr != nil {
-			slog.Debug("解析仙界取经目标详情失败", "role_id", session.RoleID(), "player_id", team.PlayerID, "error", pErr)
+			slog.Debug("解析跨服取经目标详情失败", "role_id", session.RoleID(), "player_id", team.PlayerID, "error", pErr)
 			continue
 		}
 		// 已打劫过、目标已被抢光或处于保护时间时跳过。
@@ -655,7 +770,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 	// 探测超时会被静默跳过；聚合到一条 Info 日志，便于区分“路上没人可劫”
 	// 与“跨服节点繁忙/丢包”，避免线上只能看到打劫无应答而缺少上下文。
 	if probeFailed > 0 {
-		slog.Info("仙界取经目标探测存在无应答",
+		slog.Info("跨服取经目标探测存在无应答",
 			"role_id", session.RoleID(),
 			"probes", probeCount,
 			"failed", probeFailed,
@@ -671,7 +786,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		attempts = len(targets)
 	}
 	if attempts <= 0 {
-		slog.Info("仙界取经路上暂无可打劫目标", "role_id", session.RoleID(), "candidates", len(candidates))
+		slog.Info("跨服取经路上暂无可打劫目标", "role_id", session.RoleID(), "candidates", len(candidates))
 		return
 	}
 
@@ -689,7 +804,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		if sequenceID == 0 {
 			sequenceID = target.team.SequenceID
 		}
-		slog.Info("仙界取经发起打劫",
+		slog.Info("跨服取经发起打劫",
 			"role_id", session.RoleID(),
 			"target_player_id", target.team.PlayerID,
 			"target_nickname", target.info.NickName,
@@ -717,7 +832,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 			// 冷却仍为 0 才说明请求确实未被受理，可安全尝试下一个目标。
 			accepted, known := crossTakeBibleRobReconcile(session, crossCall)
 			if !known {
-				slog.Warn("仙界取经打劫无应答且冷却复核失败，保守结束本轮打劫",
+				slog.Warn("跨服取经打劫无应答且冷却复核失败，保守结束本轮打劫",
 					"role_id", session.RoleID(),
 					"target_player_id", target.team.PlayerID,
 					"error", cErr,
@@ -725,14 +840,14 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 				break
 			}
 			if accepted {
-				slog.Warn("仙界取经打劫无应答但服务端已进入冷却，按已受理结束本轮打劫",
+				slog.Warn("跨服取经打劫无应答但服务端已进入冷却，按已受理结束本轮打劫",
 					"role_id", session.RoleID(),
 					"target_player_id", target.team.PlayerID,
 					"error", cErr,
 				)
 				break
 			}
-			slog.Warn("仙界取经打劫无应答且服务端未进入冷却，跳过该目标",
+			slog.Warn("跨服取经打劫无应答且服务端未进入冷却，跳过该目标",
 				"role_id", session.RoleID(),
 				"target_player_id", target.team.PlayerID,
 				"error", cErr,
@@ -747,10 +862,13 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 			continue
 		}
 		result, pErr := protocol.ParseStTakeBibleCrossRobResult(robResp.Payload)
+		if pErr == nil {
+			result.Msg = normalize(result.Msg)
+		}
 		won := false
 		switch {
 		case pErr != nil:
-			slog.Warn("解析仙界取经打劫回包失败", "role_id", session.RoleID(), "target_player_id", target.team.PlayerID, "error", pErr)
+			slog.Warn("解析跨服取经打劫回包失败", "role_id", session.RoleID(), "target_player_id", target.team.PlayerID, "error", pErr)
 		case result.Msg == protocol.StTakeBibleCrossMsgSuccess:
 			// msg=SUCCESS 只代表战斗已完成结算，不代表打劫获胜。服务端只有在
 			// 战胜目标时才会扣减每日打劫次数并发放奖励；战败时 rob_coin/fame/exp
@@ -766,7 +884,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 				totalFame += int64(result.RobFame)
 				totalStExp += int64(result.RobStExp)
 				session.AddRewards(int64(result.RobStExp), int64(result.RobCoin))
-				slog.Info("仙界取经打劫获胜",
+				slog.Info("跨服取经打劫获胜",
 					"role_id", session.RoleID(),
 					"target_player_id", result.TargetPlayerID,
 					"target_nickname", result.TargetNickName,
@@ -779,7 +897,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 					"war_report_id", result.WarReportID,
 				)
 			} else {
-				slog.Warn("仙界取经打劫战斗失败，未消耗每日打劫次数",
+				slog.Warn("跨服取经打劫战斗失败，未消耗每日打劫次数",
 					"role_id", session.RoleID(),
 					"target_player_id", target.team.PlayerID,
 					"target_nickname", target.info.NickName,
@@ -791,7 +909,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 				)
 			}
 		default:
-			slog.Info("仙界取经打劫未成功",
+			slog.Info("跨服取经打劫未成功",
 				"role_id", session.RoleID(),
 				"target_player_id", target.team.PlayerID,
 				"msg", result.Msg,
@@ -806,7 +924,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 			break
 		}
 		if cd.CDSeconds > 0 {
-			slog.Info("仙界取经打劫进入冷却，结束本轮打劫", "role_id", session.RoleID(), "cooldown_sec", cd.CDSeconds)
+			slog.Info("跨服取经打劫进入冷却，结束本轮打劫", "role_id", session.RoleID(), "cooldown_sec", cd.CDSeconds)
 			break
 		}
 		if pErr != nil {
@@ -821,13 +939,13 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		// 打劫失败不会扣减每日次数，以服务端下发的剩余次数为准决定是否继续，
 		// 避免仅凭路况快照把“未消耗次数”误当成“还有次数”。
 		if update, uErr := crossTakeBibleRobTimes(session, crossCall); uErr == nil {
-			slog.Info("仙界取经打劫后剩余次数同步",
+			slog.Info("跨服取经打劫后剩余次数同步",
 				"role_id", session.RoleID(),
 				"remain_rob_times", update.CanRobTimes,
 				"remain_take_times", update.CanTakeBibleTimes,
 			)
 			if update.CanRobTimes <= 0 {
-				slog.Info("仙界取经今日打劫次数已用尽", "role_id", session.RoleID())
+				slog.Info("跨服取经今日打劫次数已用尽", "role_id", session.RoleID())
 				break
 			}
 		}
@@ -840,7 +958,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		}
 	}
 
-	slog.Info("仙界取经打劫巡检完成",
+	slog.Info("跨服取经打劫巡检完成",
 		"role_id", session.RoleID(),
 		"robbed", robbed,
 		"rob_coin", totalCoin,
@@ -849,31 +967,31 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 	)
 }
 
-// crossTakeBibleRobCD 查询仙界取经打劫冷却。
+// crossTakeBibleRobCD 查询跨服取经打劫冷却。
 func crossTakeBibleRobCD(session *client.RoleSession, crossCall crossTakeBibleCallFunc) (*protocol.StTakeBibleCrossRobCD, bool) {
 	resp, err := crossCall(protocol.BuildStTakeBibleCrossGetRobCDPacket(), protocol.ActionIDStTakeBibleCrossGetRobCD, crossTakeBibleRobCDTimeout)
 	if err != nil {
-		slog.Warn("仙界取经打劫冷却查询无应答", "role_id", session.RoleID(), "error", err)
+		slog.Warn("跨服取经打劫冷却查询无应答", "role_id", session.RoleID(), "error", err)
 		return nil, false
 	}
 	cd, err := protocol.ParseStTakeBibleCrossRobCDResult(resp.Payload)
 	if err != nil {
-		slog.Warn("解析仙界取经打劫冷却失败", "role_id", session.RoleID(), "error", err)
+		slog.Warn("解析跨服取经打劫冷却失败", "role_id", session.RoleID(), "error", err)
 		return nil, false
 	}
 	return cd, true
 }
 
-// crossTakeBibleRobTimes 查询仙界取经今日剩余护送/打劫次数。
+// crossTakeBibleRobTimes 查询跨服取经今日剩余护送/打劫次数。
 func crossTakeBibleRobTimes(session *client.RoleSession, crossCall crossTakeBibleCallFunc) (*protocol.StTakeBibleCrossUpdateData, error) {
 	resp, err := crossCall(protocol.BuildStTakeBibleCrossUpdateDataPacket(), protocol.ActionIDStTakeBibleCrossUpdateData, crossTakeBibleRobCDTimeout)
 	if err != nil {
-		slog.Warn("仙界取经剩余次数查询无应答", "role_id", session.RoleID(), "error", err)
+		slog.Warn("跨服取经剩余次数查询无应答", "role_id", session.RoleID(), "error", err)
 		return nil, err
 	}
 	update, err := protocol.ParseStTakeBibleCrossUpdateDataResult(resp.Payload)
 	if err != nil {
-		slog.Warn("解析仙界取经剩余次数失败", "role_id", session.RoleID(), "error", err)
+		slog.Warn("解析跨服取经剩余次数失败", "role_id", session.RoleID(), "error", err)
 		return nil, err
 	}
 	return update, nil

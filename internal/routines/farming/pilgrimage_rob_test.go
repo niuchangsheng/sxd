@@ -154,7 +154,7 @@ func TestCrossPilgrimageRob_SuccessThenCooldown(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if openCalls != 1 || cdCalls != 2 || playerCalls != 1 || robCalls != 1 || closeCalls != 1 {
 		t.Fatalf("unexpected call counts: open=%d cd=%d player=%d rob=%d close=%d",
@@ -188,7 +188,7 @@ func TestCrossPilgrimageRob_SkipsWhenCoolingDown(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if playerCalls != 0 || robCalls != 0 {
 		t.Errorf("expected no player probe/rob while cooling down, got player=%d rob=%d", playerCalls, robCalls)
@@ -250,7 +250,7 @@ func TestCrossPilgrimageRob_FailedRobEntersCooldown(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if robCalls != 1 {
 		t.Errorf("expected to stop after failed rob cooldown, got %d rob calls", robCalls)
@@ -297,7 +297,7 @@ func TestCrossPilgrimageRob_SkipsRobbedAndExhaustedTargets(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if playerCalls != 3 {
 		t.Errorf("expected 3 probes, got %d", playerCalls)
@@ -354,7 +354,7 @@ func TestCrossPilgrimageRob_TimeoutThenCooldownTreatedAsSettled(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if robCalls != 1 {
 		t.Errorf("expected exactly 1 rob attempt after timeout, got %d", robCalls)
@@ -415,7 +415,7 @@ func TestCrossPilgrimageRob_TimeoutThenNoCooldownSkipsTarget(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if robCalls != 2 {
 		t.Errorf("expected to skip timed-out target and rob the next one, got %d rob calls", robCalls)
@@ -466,7 +466,7 @@ func TestCrossPilgrimageRob_TimeoutThenReconcileFailsStops(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if robCalls != 1 {
 		t.Errorf("expected to stop after unknown settlement state, got %d rob calls", robCalls)
@@ -534,7 +534,7 @@ func TestCrossPilgrimageRob_PrefersLowestLevelTarget(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if len(robOrder) != 2 || robOrder[0] != 1002 || robOrder[1] != 1001 {
 		t.Fatalf("expected softest target first (1002 then 1001), got %v", robOrder)
@@ -586,7 +586,7 @@ func TestCrossPilgrimageRob_LossDoesNotCreditOrConsume(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if robCalls != 1 || cdCalls != 2 {
 		t.Fatalf("expected 1 rob and 2 cooldown checks, got rob=%d cd=%d", robCalls, cdCalls)
@@ -655,7 +655,7 @@ func TestCrossPilgrimageRob_UsesFiveDailyAttempts(t *testing.T) {
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if robCalls != 5 {
 		t.Fatalf("expected 5 daily rob attempts, got %d", robCalls)
@@ -713,7 +713,7 @@ func TestCrossPilgrimageRob_StopsWhenServerReportsNoRemainingTimes(t *testing.T)
 		return nil, context.DeadlineExceeded
 	}
 
-	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, DefaultPilgrimageConfig())
+	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
 	if robCalls != 1 {
 		t.Fatalf("expected to stop after server reports 0 remaining times, got %d rob calls", robCalls)
