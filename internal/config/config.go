@@ -136,7 +136,7 @@ type SchedulerConfig struct {
 // 当前方向满星后，自动切到下一个职业的已激活绝技并重整阵容。
 type MasterPracticeConfig struct {
 	// PracticeOrder 期望修行的职业 JobId 顺序 (如 [15, 3, 1])。
-	// 当前职业累计星数满后会切换到下一个职业的宗师绝技继续修行。
+	// 当前职业累计星数满后会切换到下一个职业的神器绝技继续修行。
 	// 留空时默认只修行主角当前 JobId 对应的方向。
 	PracticeOrder []int32 `yaml:"practice_order"`
 	// MaxStarsPerJob 单方向累计星数上限 (默认 30)。
@@ -145,7 +145,7 @@ type MasterPracticeConfig struct {
 	// AutoNormalizeDeploy 是否自动调整宗师修行阵容：
 	// 下阵异职业伙伴、上阵同职业伙伴，使整队满足服务端同职业要求 (默认 true)。
 	AutoNormalizeDeploy *bool `yaml:"auto_normalize_deploy"`
-	// AllowSwitchStunt 是否允许通过切换主角宗师绝技来转换职业 (默认 true)。
+	// AllowSwitchStunt 是否允许通过切换主角神器绝技来转换职业 (默认 true)。
 	// 切换绝技会改变主角当前 role_id/职业，是官方支持的职业切换途径。
 	AllowSwitchStunt *bool `yaml:"allow_switch_stunt"`
 	// AllowStepUp 是否在挑战后自动升阶 (默认 true)。

@@ -204,7 +204,7 @@ scheduler:
     practice_order: []           # 期望修行的职业 JobId 顺序，如 [15, 3, 1]；留空=主角当前职业
     max_stars_per_job: 30        # 单方向累计星数上限；服务端 MAX_STARS 会提前视为满星
     auto_normalize_deploy: true  # 自动下阵异职业伙伴、上阵同职业伙伴，使整队满足服务端要求
-    allow_switch_stunt: true     # 是否允许通过切换主角宗师绝技转换职业
+    allow_switch_stunt: true     # 是否允许通过切换主角神器绝技转换职业
     allow_step_up: true          # 挑战后是否自动尝试境界突破
     # 注意：切换绝技会改写主角当前职业，可能影响竞技场等其它队伍；
     # 建议把希望最终保留的职业放在 practice_order 最后。

@@ -27,6 +27,13 @@ func TestBuildLibraryUseStuntSkillPacketLayout(t *testing.T) {
 	}
 }
 
+func TestBuildLibraryArtifactStuntInfoPacket(t *testing.T) {
+	pkt := protocol.BuildLibraryArtifactStuntInfoPacket()
+	if pkt.ActionID != 0x00550005 {
+		t.Fatalf("unexpected artifact stunt action: 0x%08X", pkt.ActionID)
+	}
+}
+
 func TestParseLibraryMasterPracticeStuntInfoResult(t *testing.T) {
 	infos := []protocol.LibraryStuntInfo{
 		{RoleJobID: 1, RoleStuntID: 1234, NextRoleStuntID: 1235, IsActive: 1},

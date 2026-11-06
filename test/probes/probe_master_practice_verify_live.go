@@ -6,7 +6,7 @@
 //   - 665/4 deploy [player_role_id Int32, grid_type_id UByte]
 //   - 665/5 start_challenge [job_id Int32, battle_stars Int32]
 //   - 665/8 step_up
-//   - 85/7  get_master_practice_stunt_info
+//   - 85/5  get_artifact_stunt_info (职业 -> 已激活神器绝技)
 //   - 85/3  use_stunt_skill [stunt_id Short]  (切换主角职业)
 //
 // 基准对齐: 官方 com.protocols.Mod_MasterPractice_Base / Mod_Library_Base,
@@ -105,7 +105,8 @@ func main() {
 		ServerID:             role.ServerID,
 		Platform:             acc.Platform,
 		Authenticator:        client.DefaultAuthenticator,
-		MaxReconnectAttempts: 1,
+		MaxReconnectAttempts: 3,
+		ReconnectInterval:    5 * time.Second,
 	}
 	client.ApplyTicket(&roleCfg, ticket)
 

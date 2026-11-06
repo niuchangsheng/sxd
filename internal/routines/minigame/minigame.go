@@ -1458,7 +1458,7 @@ type MasterPracticeConfig struct {
 	MaxStarsPerJob int32
 	// AutoNormalizeDeploy 是否自动下阵异职业伙伴、上阵同职业伙伴 (默认 true)。
 	AutoNormalizeDeploy bool
-	// AllowSwitchStunt 是否允许通过切换主角宗师绝技来转换职业 (默认 true)。
+	// AllowSwitchStunt 是否允许通过切换主角神器绝技来转换职业 (默认 true)。
 	AllowSwitchStunt bool
 	// AllowStepUp 是否在挑战后自动升阶 (默认 true)。
 	AllowStepUp bool
@@ -1528,7 +1528,7 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 			// 2. 查询神器绝技映射 (职业 -> 已激活绝技) 与当前布阵。
 			//   主角通过切换神器绝技转换职业 (Mod 85 Act 3)，映射来自 Mod 85 Act 5；
 			//   Mod 85 Act 7 的未激活宗师绝技会被服务端静默丢弃，不能用于切换。
-			stunts, stErr := masterPracticeFetchStunts(call)
+			stunts, stErr := masterPracticeFetchArtifactStunts(call)
 			if stErr != nil {
 				slog.Warn("宗师修行绝技映射查询失败，跳过", "role_id", session.RoleID(), "err", stErr)
 				return nil
@@ -1600,7 +1600,7 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 					return nil
 				}
 
-				// 3. 切换主角宗师绝技 (职业)。成功后服务端会改写主角 role_id。
+				// 3. 切换主角神器绝技 (职业)。成功后服务端会改写主角 role_id。
 				switched, swErr := masterPracticeEnsureStunt(ctx, currentJob, requestedJob, stunts, cfg, session.RoleID(), call)
 				if swErr != nil {
 					slog.Warn("宗师修行切换主角绝技失败，跳过该职业",
@@ -1677,19 +1677,19 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 			if totalChallenged == 0 && !switchedAny {
 				slog.Info("宗师修行本轮没有可执行方向",
 					"role_id", session.RoleID(), "order", order,
-					"reason", "全部方向已满星、今日已完成，或未学习对应宗师绝技")
+					"reason", "全部方向已满星、今日已完成，或未激活对应神器绝技")
 			}
 			return nil
 		},
 	)
 }
 
-// masterPracticeFetchStunts 查询职业 -> 已激活神器绝技映射 (Mod 85 Act 5)。
+// masterPracticeFetchArtifactStunts 查询职业 -> 已激活神器绝技映射 (Mod 85 Act 5)。
 //
 // 注意: Mod 85 Act 7 的“宗师绝技”列表在未激活时 role_stunt_id=0/is_active=0，
 // 服务端会静默丢弃这类 use_stunt_skill 请求。切换主角职业必须使用
 // Mod 85 Act 5 返回的已激活神器绝技 ID。
-func masterPracticeFetchStunts(call func(*protocol.Packet, uint32) (*protocol.Packet, error)) ([]protocol.LibraryStuntInfo, error) {
+func masterPracticeFetchArtifactStunts(call func(*protocol.Packet, uint32) (*protocol.Packet, error)) ([]protocol.LibraryStuntInfo, error) {
 	resp, err := call(protocol.BuildLibraryArtifactStuntInfoPacket(), protocol.ActionIDLibraryArtifactStuntInfo)
 	if err != nil {
 		return nil, fmt.Errorf("查询神器绝技映射无回包: %w", err)
@@ -1732,7 +1732,7 @@ func masterPracticeFindStunt(stunts []protocol.LibraryStuntInfo, jobID int32) (i
 	return 0, false
 }
 
-// masterPracticeEnsureStunt 通过切换主角宗师绝技把职业转换为 targetJob。
+// masterPracticeEnsureStunt 通过切换主角神器绝技把职业转换为 targetJob。
 // 返回 switched=true 表示已发送切换请求并成功。
 func masterPracticeEnsureStunt(
 	ctx context.Context,
@@ -1750,7 +1750,7 @@ func masterPracticeEnsureStunt(
 	}
 	stuntID, ok := masterPracticeFindStunt(stunts, targetJob)
 	if !ok {
-		return false, fmt.Errorf("职业 %d 没有已激活的宗师绝技 (请先学习对应绝技)", targetJob)
+		return false, fmt.Errorf("职业 %d 没有已激活的神器绝技 (请先学习对应绝技)", targetJob)
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -1761,16 +1761,16 @@ func masterPracticeEnsureStunt(
 	}
 	resp, err := call(pkt, protocol.ActionIDLibraryUseStuntSkill)
 	if err != nil || resp == nil {
-		return false, fmt.Errorf("切换宗师绝技无回包: %w", err)
+		return false, fmt.Errorf("切换神器绝技无回包: %w", err)
 	}
 	result, curRoleID, curStuntID, pErr := protocol.ParseLibraryUseStuntSkillResult(resp.Payload)
 	if pErr != nil {
 		return false, pErr
 	}
 	if result != protocol.LibraryResultSuccess {
-		return false, fmt.Errorf("切换宗师绝技失败: %s (result=%d)", protocol.LibraryUseStuntResultText(result), result)
+		return false, fmt.Errorf("切换神器绝技失败: %s (result=%d)", protocol.LibraryUseStuntResultText(result), result)
 	}
-	slog.Info("已切换主角宗师绝技",
+	slog.Info("已切换主角神器绝技",
 		"role_id", roleID,
 		"target_job", targetJob,
 		"stunt_id", stuntID,

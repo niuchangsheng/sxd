@@ -235,6 +235,9 @@ func (f *fakeMasterPracticeCall) call(pkt *protocol.Packet, act uint32) (*protoc
 		f.nextDeploy++
 		return protocol.BuildMasterPracticeActionCodePacket(act, code), nil
 	case protocol.ActionIDLibraryUseStuntSkill:
+		if len(pkt.Payload) != 2 {
+			return nil, fmt.Errorf("use_stunt_skill payload must be Short(2B), got %d bytes", len(pkt.Payload))
+		}
 		r := protocol.NewReader(pkt.Payload)
 		stuntID, err := r.ReadInt16()
 		if err != nil {
