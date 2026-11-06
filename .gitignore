@@ -37,9 +37,11 @@ logs/
 .env
 .env.*
 !.env.example
-# 各服本地运行配置可能包含平台账号/Cookie，仅保留脱敏示例
-configs/*.yaml
-!configs/config.example.yaml
+# 本地运行配置可能包含平台账号/Cookie，禁止提交 (新增本地配置请在此追加)
+configs/config.yaml
+configs/s0.yaml
+configs/s1.yaml
+configs/niuchangsheng.yaml
 
 # ==============================================================================
 # Node.js / 前端

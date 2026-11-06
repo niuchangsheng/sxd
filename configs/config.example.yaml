@@ -1,11 +1,12 @@
-# 神仙道助手 (sxd-pie-ng) 示例配置文件
-# 详见 docs/ 了解具体配置项说明
+# 神仙道助手 (sxd-pie-ng) 脱敏示例配置
+# 由实际运行配置同步生成；账号、密码、Cookie、角色名均已替换为占位符。
+# 复制为 configs/config.yaml 并填写真实凭据后即可运行。
 
 server:
   port: 8080
   host: "127.0.0.1"
 
-# 本地文件日志配置 (按大小与时间双维度自动轮转，每次启动也会归档一次旧日志，默认保存 INFO 及以上级别日志)
+# 本地文件日志配置 (按大小与时间双维度自动轮转，每次启动也会归档一次旧日志)
 log:
   enabled: true                 # 是否启用本地文件日志 (默认 true)
   dir: "logs"                   # 日志存放目录
@@ -21,220 +22,194 @@ accounts:
   - platform: "xindong"
     username: "YOUR_PLATFORM_USERNAME"
     password: "${PLATFORM_PASSWORD}"
-    # 心动平台通行证 Cookie (可选，用于绕过图形验证码风控并实现全自动进服与掉线重连)
-    # 格式例如: "A1=xxxxxx; A2=yyyyyy"
+    # 填入您在 Chrome 中登录后控制台/Cookie 中的 A1、A2 值
+    # 示例: "A1=xxxxxx; A2=yyyyyy" (可绕过图形验证码风控，长效数周自动重连)
     cookie: ""
     roles:
-      - server_id: "s0"        # 区服ID，如测试1服为 "s0"，双线1区为 "s1"
+      - server_id: "s0"        # 测试1服
         role_name: "YOUR_ROLE_NAME"
         auto_login: true
-      # 同一账号可继续追加多个区服角色：每个角色拥有独立会话、心跳与调度器，
-      # 换票阶段会按 startup.ticket_*_interval_seconds 串行拉开间隔。
-      # - server_id: "s1"
-      #   role_name: "YOUR_SECOND_ROLE_NAME"
-      #   auto_login: true
+      - server_id: "s1"        # 正式1服
+        role_name: "YOUR_SECOND_ROLE_NAME"
+        auto_login: true
 
 scheduler:
+  # ── 基础调度 ────────────────────────────────────────────────
   jitter:
     min_seconds: 1.0
     max_seconds: 3.0
-  routines:
-    # 基础自动化模块
-    dungeon: true               # 副本推图与扫荡 (统一命名为 dungeon)
-    daily_sign_in: true         # 每日签到 (Module 89，仅活动开启时领取，不消耗元宝)
-    vip_welfare: true           # VIP每日免费礼包 (仅领免费档，永不购买付费礼包)
-    online_reward: true         # 在线奖励一键领取 (按在线时长解锁，含元宝档位)
-    world_boss: true            # 世界Boss自动参战 (仅开战期免费战斗，不消耗元宝)
-    mail_collect: true          # 邮件一键收取 (打开邮箱面板后一键领取全部邮件附件)
-    six_realms: true            # 六道轮回爬塔与灵件处理 (每日免费重置/自动爬塔/蓝装自动出售)
-    town_practice: true         # 城镇打坐练功 (上线自动结算并领取离线经验)
-    beelzebub_trials: true      # 魔王试炼 (自建队伍、招募助战镜像、挑战每日魔王并领道行奖励)
-    training_room: true         # 仙界练功房 (领取累积经验并维持最佳空闲席位)
-    lucky_star: true            # 吉星高照 (个人摇骰子与免费逆天改运)
-    faction_lucky_star: true    # 帮派吉星高照 (帮派成员成绩与排名奖励)
-    scratch_card: true          # 幸运刮刮卡 (仅用每日免费次数，可刮出元宝)
-    crystal_mine: true                   # 仙界矿山 (进入当前矿脉领取收益)
-    gourd_realm: true                   # 壶中界仙葫芦 (按日领取累积收益)
-    rune_refine: true                   # 符文批量 (仅检测数据，语义未对齐不执行)
-    guild_activities: true                   # 仙盟日常 (先探测开放/入盟状态)
-    sacred_alliance: true                   # 圣盟日常 (先探测赛季/开放状态)
-    homestead: true                   # 住宅玩法 (先探测婚姻/开放状态)
-    friendship: true                   # 好友来信 (已解锁自动阅读并领奖)
-    fame_blessing: true                   # 仙界尊像膜拜 (仅用免费白檀香)
-    zodiac_challenge: true                   # 生肖挑战 (挑战前校验等级)
-    spirit_trial: true                   # 精灵试炼 (按剩余次数领奖+挑战)
-    gods_and_demons: true                   # 神魔大战 (仅报名期自动报名)
-    cross_server_ladder: true                   # 跨服PK (仅开放期自动参赛)
-    imperial_exam: true                   # 金榜题名 (仅检测活动阶段)
-    partner_guess: true                   # 伙伴猜猜看 (免费刮图+作答)
-    fishing: true                   # 自动钓鱼命格 (免费鱼钩，自动下钩)
-    ice_cave: true                   # 一键冰窟探险 (未开放自动跳过)
-    ask_fairy: true             # 每日问灵 (免费1次，随机奖励优先元宝)
-    golden_touch_stone: true    # 点金石 (点化获取经验/幸运值，不消耗元宝)
-    forbidden_book: true        # 禁地之书 (免费次数优先，仅用铜钱兑换次数)
-    device_bind_reward: true    # 设备绑定奖励 (绑定手机后自动领首绑/月度元宝)
-    faction_blessing: true      # 帮派祭神 (每日免费上香获取祝福/声望/神像灵气)
-    faction_lucky_wheel: true   # 帮派转盘 (消耗青龙令自动抽奖)
-    travel_event: true          # 仙旅奇缘 (世界地图每日事件，按收益权重自动抉择分支)
-    pilgrimage: true            # 取经/护送/打劫
-    arena: true                 # 本服竞技场
-    celestial_arena: true       # 仙界竞技场 (跨服积分赛自动挑战，不消耗元宝)
 
-    # 18项抓包与日常核心功能
-    online_gift: true           # 1. 领取奖励 (在线礼包 + 全部功能终结礼包)
-    jieyuan_box: true           # 2. 结缘宝箱 (除了传说，其他都开)
-    daily_quest: true           # 3. 领取日活跃奖励
-    qimen_dunjia: true          # 4. 奇门遁甲
-    spirit_pool: true           # 5. 淬炼粗铁 / 洗灵
-    god_bless: true             # 6. 天神赐福
-    caravan_hijack: true        # 7. 劫镖
-    xunxian_road: true          # 8. 寻仙之路
-    demon_tower: true           # 9. 锁妖塔
-    era_travel: true            # 10. 山河游历
-    lingdao_practice: true      # 11. 灵道初解
-    huanshou_invade: true       # 12. 山海幻兽
-    herb_garden: true           # 13. 药园种植
-    wufa_field: true            # 14. 悟法领域 (按面板免费次数抽卡，不消耗元宝)
-    master_practice: true       # 15. 宗师修行
-    treasure_house: true        # 16. 天帝宝库
-    find_immortal: true         # 17. 喜从天降 (画龙鱼，只走免费流程)
-    five_blessings: true        # 18. 五福临门 (每日免费祈福，只走免费流程)
-    tong_tian_tower: true       # 19. 通天塔 (逐层挑战并按需突破重天，不消耗元宝)
-    holy_arena: true            # 20. 圣域竞技场 (抢占空席位/最弱对手，不消耗元宝)
-    find_beast: true            # 21. 寻找异兽 (每日免费寻找次数，不用元宝)
-    duobao_mountain: true       # 22. 多宝山 (每日免费挖掘次数，不用元宝)
-    collection_booklets: true   # 23. 神仙收藏册 (领取声望档位奖励并拜访好友)
-    npc_friendship: true        # 24. NPC结交 (赠送铜钱伴手礼，不用元宝)
-    dragonball_offer: true        # 神龙普通上供 (铜钱获取活跃度，不消耗元宝)
-    fate_hunt: true               # 免费猎命 + 命宫碎片兑换 (铜钱获取活跃度，不消耗元宝)
-    destiny_sword: true         # 25. 飞剑 (一键淬炼剑意，不用元宝)
-    daily_gifts: true           # 26. 每日免费礼包 (俸禄/灵石/PC微端礼包)
-    eudemons: true              # 27. 幻兽经脉 (自动激活经脉，不用元宝)
-    partner_link: true          # 28. 灵结 (仅激活灵结，不用元宝)
-    saint_practice: true        # 29. 圣域修炼替身 (圣域开启时进入免费修炼房)
-
-  # 副本与推图自动化策略配置 (包含推图与扫荡两大核心功能)
-  dungeon:
-    # 功能一：剧情推图 (循环接任务/做任务/交任务直至无任务可做)
-    quest_cycle:
-      enabled: true             # 启用任务闭环推图
-      auto_replenish_stamina: true  # 自动吃药补充体力 (仅作用于推图)
-      max_replenish_stamina: 200    # 单次推图最大补充体力上限 (点数，仅作用于推图；包子5/粽子10/茶叶蛋50)
-
-    # 功能二：关卡扫荡 (扫荡每日精英副本)
-    sweep:
-      enabled: true             # 启用关卡扫荡
-      pipeline:                 # 扫荡策略流水线 (仅 sweep_elite)
-        - "sweep_elite"         # 1. 扫荡精英 (清空每日可用英雄/精英副本)
-      sell_swept_items: true    # 扫荡后是否自动卖掉扫荡物 (默认 true)
-      max_batch_times: 10       # 单次批处理最大扫荡次数 (仅作用于扫荡)
-      prefer_practice_quickly: true # 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
-
-  # 六道轮回爬塔与封灵灵件自动化策略配置
-  six_realms:
-    auto_reset: true            # 当前道全通后是否自动消耗每日免费次数重置 (默认 true)
-    auto_sell_blue: true        # 挑战关卡获胜后是否自动卖出蓝色灵件 (默认 true)
-    auto_sell_purple: false     # 挑战关卡获胜后是否自动卖出紫色灵件 (默认 false，保留紫色封灵灵件)
-
-  # 西天取经护送与打劫策略配置 (仅使用免费次数，不消耗元宝)
-  pilgrimage:
-    auto_rob: true              # 启程护送后是否自动打劫取经路上其他玩家队伍 (默认 true)
-    max_rob_attempts: 5         # 单轮最多尝试打劫次数 (1-5，默认 5)
-    max_probe_targets: 8        # 单轮最多探测的目标队伍数量 (1-50，默认 8)
-
-  # 粗铁淬炼池一键操作策略配置 (固定铜钱消耗，永不消耗元宝)
-  spirit_pool:
-    refine_target: "xuantie"    # xuantie=淬炼玄铁 (默认) / lingcai=提炼灵材
-
-  # 魔王试炼自动化策略配置
-  beelzebub_trials:
-    prefer_boss_id: 0           # 优先挑战的魔王编号 (0 表示自动选择最高难度魔王；如指定 72 为魔掌门神识)
-    auto_moral_award: true      # 战斗后自动查询并领取道行等级宝箱奖励
-    min_level: 0                # 开启等级门槛 (0 表示由服务端资格检查自动决定，不设客户端硬编码限制)
-
-  # 仙界练功房挂机收益维护配置 (跨服玩法，仅使用免费争夺次数)
-  training_room:
-    allow_rob_seat: false       # 是否抢夺已满员的高星席位 (默认 false，只占空闲席位)
-    max_rob_attempts: 1         # 单轮巡检最多争夺次数 (仅 allow_rob_seat=true 时生效)
-
-  # 结缘宝箱配置 (每批最多10个，除了传说其他都开)
-  jieyuan_box:
-    max_batch_size: 10          # 每批最多开启数量 (上限 10 个)
-
-  # 帮派祭神上香配置
-  faction_blessing:
-    offering_id: 1              # 供品编号 (1 白檀香免费 / 2 苏合香30元宝 / 3 天木香90元宝)
-    allow_cover: false          # 剩余祝福次数高于本次上香收益时是否允许覆盖 (默认 false，避免浪费)
-
-  # 天帝宝库自选三档大奖配置
-  treasure_house:
-    selection_mode: auto        # 非交互选奖: auto(按账号养成进度动态计算需求分)|rarity(按稀有度)|explicit(使用下方指定奖励)
-    # 优先奖励条目 ID 列表 (按顺序匹配当前开放候选; 用于优先补齐账号最缺资源, 如鸿蒙紫气 26)
-    prefer_awards: []
-    interactive: true           # 开启交互式选奖：先向服务端拉取刷新候选奖池，并在控制台提示交互输入选择
-    # 自选三档大奖默认奖励条目ID (explicit 模式或交互直接回车时的预设值)
-    tier1_item_id: 50           # 一档自选大奖条目ID (默认 50)
-    tier2_item_id: 25           # 二档自选大奖条目ID (默认 25)
-    tier3_item_id: 42           # 三档自选大奖条目ID (默认 42)
-    max_draw_times: 10          # 单次最大连续抽奖轮数 (钥匙耗尽自动退出)
-
-  # 个人吉星高照自动化策略配置 (仅使用免费逆天改运次数，永不消耗元宝)
-  lucky_star:
-    max_rerolls_per_roll: 9     # 每次投掷最大逆天改运次数 (客户端上限 9)
-
-  # 在线礼包与功能终结礼包配置
-  # 功能终结礼包: 吉星高照、喜从天降(龙鱼仙令/境界点)、灵脉、拜关公、聚灵等
-  # 玩法达到等级上限终结后转为每日领取的补偿礼包 (Mod_FunctionEnd, Module 127)
-  online_gift:
-    claim_function_end_gifts: true  # 是否领取功能终结礼包 (默认 true)
-    max_claims_per_gift: 20         # 单个礼包连续领取次数上限 (默认 20)
-    # 注意: 服务端标记需要消耗元宝的终结礼包 (如吉星高照) 一律跳过，不提供花元宝开关。
-
-  # 喜从天降与五福临门均无策略参数，也不会消耗元宝：
-  # - 喜从天降：查询龙鱼令数量后串行召唤并领奖，直到龙鱼令耗尽；
-  # - 五福临门：只使用每日免费祈福次数并立即领奖。
-
-  # 宗师修行策略
-  # 服务端要求宗师修行阵容中所有已上阵角色 (含不可下阵的主角) 与挑战方向同职业；
-  # 错误码 11 的官方文案是“请上阵相同职业的角色”。
-  # 主角通过切换“神器绝技”(Mod 85 Act 3 use_stunt_skill) 转换职业：
-  # 职业 -> 已激活绝技的映射来自 Mod 85 Act 5 get_artifact_stunt_info；
-  # 切换成功后服务端会改写主角当前 role_id，因此可依次修行 practice_order 中的职业。
-  master_practice:
-    practice_order: []           # 期望修行的职业 JobId 顺序，如 [15, 3, 1]；留空=主角当前职业
-    max_stars_per_job: 30        # 单方向累计星数上限；服务端 MAX_STARS 会提前视为满星
-    auto_normalize_deploy: true  # 自动下阵异职业伙伴、上阵同职业伙伴，使整队满足服务端要求
-    allow_switch_stunt: true     # 是否允许通过切换主角神器绝技转换职业
-    allow_step_up: true          # 挑战后是否自动尝试境界突破
-    # 注意：切换绝技会改写主角当前职业，可能影响竞技场等其它队伍；
-    # 建议把希望最终保留的职业放在 practice_order 最后。
-
-  # 多区服启动编排：相邻两次平台换票之间的随机间隔 (秒)。
-  # 平台 Web 登录对同一账号存在频控，多区服必须串行换票并拉开间隔。
-  # 显式设置为 0 可关闭延迟。
+  # 多区服换票串行间隔 (秒)，避免同一账号短时间多次 Web 登录触发风控
   startup:
     ticket_min_interval_seconds: 2
     ticket_max_interval_seconds: 5
 
-  # 按区服覆盖全局调度策略 (可选)。
-  # 合并语义：映射逐键合并、标量整体替换、列表整体替换；未列出的字段继承全局。
-  # 下方示例让 s0 开启天帝宝库并走 auto 选奖，s1 仍继承全局设置。
-  # server_overrides:
-  #   s0:
-  #     routines:
-  #       treasure_house: true
-  #     treasure_house:
-  #       selection_mode: auto
+  # ── 玩法开关 ────────────────────────────────────────────────
+  # 按六大领域分组；true=启用，false=停用。未列出的玩法按默认开关执行。
+  routines:
+    # 【日常 daily】签到、日常、邮件、福利、打坐
+    daily_sign_in: true           # 每日签到与更新福利礼包
+    daily_quest: true             # 小助手日常活跃度与常规跑环
+    mail_collect: true            # 邮件/好友信件附件一键领取
+    online_gift: true             # 在线礼包 + 功能终结礼包
+    vip_welfare: true             # VIP每日免费礼包与官职俸禄
+    god_bless: true               # 跨服天神赐福
+    online_reward: true           # 在线时长奖励一键领取
+    device_bind_reward: true      # 手机绑定首绑/月度奖励
+    town_practice: true           # 城镇打坐离线经验结算
+    destiny_sword: true           # 飞剑剑意淬炼
+    daily_gifts: true             # 每日俸禄/灵石/PC微端礼包
+    saint_practice: true          # 圣域免费修炼房
+    dragonball_offer: true        # 神龙普通上供 (铜钱)
+    fate_hunt: true               # 免费猎命 + 命宫碎片兑换
+    children_daily: true          # 孩子上学 + 孩子任务奖励 (培养金)
+
+    # 【农场 farming】药园、取经、矿山、淬炼、壶中界、符文
+    herb_garden: true             # 药园播种/施肥/除草/采摘
+    pilgrimage: true              # 西天取经护送与打劫
+    crystal_mine: true            # 仙界矿山开采与守护
+    spirit_pool: true             # 异兽喂养与淬炼池提炼
+    gourd_realm: true             # 壶中界灵气转化/炼丹/融合
+    rune_refine: true             # 符文淬炼与八卦炉提纯
+
+    # 【社交 social】仙盟、圣盟、住宅、好友、帮派
+    guild_activities: true        # 仙盟捐献/神兽/魔神
+    sacred_alliance: true         # 圣盟祭祀/幻魔塔/商店
+    homestead: true               # 住宅家具祝福/夫妻宝箱
+    friendship: true              # 好友送花/结义羁绊
+    fame_blessing: true           # 仙界尊像膜拜
+    jieyuan_box: true             # 结缘宝箱批量开启
+    faction_blessing: true        # 帮派祭神上香 (免费白檀香)
+    faction_lucky_wheel: true     # 帮派转盘 (青龙令)
+    collection_booklets: true     # 神仙收藏册声望奖励
+    npc_friendship: true          # NPC结交与铜钱伴手礼
+
+    # 【副本 dungeon】推图、扫荡、爬塔、练功房、试炼
+    dungeon: true                 # 剧情推图 + 精英副本扫荡
+    six_realms: true              # 六道轮回爬塔与灵件处理
+    demon_tower: true             # 伏魔锁妖塔挑战
+    training_room: true           # 仙界练功房挂机收益
+    zodiac_challenge: true        # 生肖挑战与金油炼化
+    spirit_trial: true            # 精灵试炼扫荡
+    qimen_dunjia: true            # 奇门遁甲法阵注灵
+    xunxian_road: false           # 寻仙之路推图 (当前关闭)
+    beelzebub_trials: true        # 魔王试炼与道行奖励
+    tong_tian_tower: true         # 通天塔逐层挑战/突破
+
+    # 【竞技 pvp】竞技场、阵营、Boss、天梯
+    arena: true                   # 本服竞技场
+    celestial_arena: true         # 仙界竞技场
+    holy_arena: true              # 圣域竞技场 (免费席位)
+    gods_and_demons: true         # 神魔大战阵营参战
+    caravan_hijack: true          # 阵营劫镖拦截
+    world_boss: true              # 世界Boss准点参战
+    cross_server_ladder: true     # 跨服天梯排位
+
+    # 【小游戏 minigame】摇奖、答题、钓鱼、免费福利
+    lucky_star: true              # 个人吉星高照 (免费改运)
+    faction_lucky_star: true      # 帮派吉星高照
+    travel_event: true            # 仙旅奇缘事件抉择
+    imperial_exam: true           # 金榜题名智能答题
+    partner_guess: true           # 伙伴猜猜看
+    fishing: true                 # 自动钓鱼与命格融合
+    scratch_card: true            # 幸运刮刮卡免费次数
+    ask_fairy: true               # 每日问灵 (优先元宝)
+    golden_touch_stone: true      # 点金石
+    forbidden_book: true          # 禁地之书 (免费优先)
+    ice_cave: true                # 一键冰窟探险
+    era_travel: true              # 山河纪元游历
+    lingdao_practice: true        # 灵道初解修炼
+    huanshou_invade: true         # 山海幻兽入侵
+    wufa_field: true              # 悟法领域感悟
+    master_practice: true         # 宗师修行 (神器绝技切换职业)
+    treasure_house: true          # 天帝宝库自选大奖
+    find_immortal: true           # 喜从天降 (免费龙鱼令)
+    five_blessings: true          # 五福临门免费祈福
+    find_beast: true              # 寻找异兽免费次数
+    duobao_mountain: true         # 多宝山免费挖掘
+    eudemons: true                # 幻兽经脉激活
+    partner_link: true            # 灵结激活
+
+  # ── 副本 / 挑战策略 ─────────────────────────────────────────
+  dungeon:
+    # 剧情推图：循环接任务/做任务/交任务，直至无任务可做
+    quest_cycle:
+      enabled: true
+      auto_replenish_stamina: true    # 推图体力不足时自动吃药
+      max_replenish_stamina: 200      # 单次推图最大补体力 (包子5/粽子10/茶叶蛋50)
+    # 关卡扫荡：精英/英雄副本按城镇全量扫荡
+    sweep:
+      enabled: true                   # true=开启扫荡；只测剧情推图时可改为 false
+      pipeline:
+        - "sweep_elite"               # 扫荡精英副本
+      sell_swept_items: true          # 扫荡后自动出售扫荡物
+      max_batch_times: 6              # 主线扫荡最大轮数；精英副本按城镇全量扫荡
+      prefer_practice_quickly: true   # 优先使用秒完成协议
+
+  six_realms:
+    auto_reset: true                  # 通关后自动用免费次数重置
+    auto_sell_blue: true              # 自动出售蓝色灵件
+    auto_sell_purple: true            # 自动出售紫色灵件 (false=保留)
+    max_floor_retries: 3              # 每层最大重试次数
+
+  # 魔王试炼自动化策略
+  beelzebub_trials:
+    prefer_boss_id: 0                 # 0=自动选择最高难度；可指定魔王编号
+    auto_moral_award: true            # 自动领取道行等级宝箱
+    min_level: 0                      # 0=由服务端资格检查决定
+
+  # ── 农场 / 取经策略 ─────────────────────────────────────────
+  # 西天取经护送与打劫 (仅使用免费次数，不消耗元宝)
+  pilgrimage:
+    auto_rob: true                    # 启程后自动打劫其他玩家队伍
+    max_rob_attempts: 5               # 单轮最多打劫次数 (1-5)
+    max_probe_targets: 8              # 单轮最多探测目标数 (1-50)
+
+  # 粗铁淬炼池 (固定铜钱消耗，永不消耗元宝)
+  spirit_pool:
+    refine_target: "xuantie"          # xuantie=淬炼玄铁 / lingcai=提炼灵材
+
+  # ── 社交 / 帮派策略 ─────────────────────────────────────────
+  # 结缘宝箱 (每批最多 10 个，除传说外全部开启)
+  jieyuan_box:
+    max_batch_size: 10
+
+  # 帮派祭神上香
+  faction_blessing:
+    offering_id: 1                    # 1=白檀香免费 / 2=苏合香30元宝 / 3=天木香90元宝
+    allow_cover: false                # 剩余祝福更高时是否仍覆盖 (默认 false)
+
+  # ── 小游戏 / 福利策略 ───────────────────────────────────────
+  # 天帝宝库三档自选大奖
+  treasure_house:
+    # auto: 按账号养成进度动态计算需求分；prefer_awards 为采集失败时的兜底顺序
+    # 条目: 9 永恒灵宝 / 12 血魂石 / 26 鸿蒙紫气 / 23 大法力石
+    #       18 超级火龙珠 / 51 1阶宝石随机包 / 34 普通进阶丹 / 42 境界点
+    selection_mode: auto
+    interactive: false
+    prefer_awards: [9, 12, 26, 23, 18, 51, 34, 42]
+    max_draw_times: 10                # 单次最大抽奖轮数
+
+  # 个人吉星高照 (仅使用免费逆天改运次数)
+  lucky_star:
+    max_rerolls_per_roll: 9           # 每次投掷最大改运次数 (客户端上限 9)
+
+  # 在线礼包 + 功能终结礼包；消耗元宝的终结礼包一律跳过
+  online_gift:
+    claim_function_end_gifts: true    # 领取功能终结礼包
+    max_claims_per_gift: 20           # 单个礼包连续领取上限
+
+  # 说明: 喜从天降、五福临门无策略参数，仅使用免费次数，不消耗元宝。
+
+  # ── 多区服覆盖 ──────────────────────────────────────────────
+  # s0/s1 当前均继承全局配置。如需按区服覆盖，可填写：
   #   s1:
-  #     routines:
-  #       treasure_house: true
+  #     dungeon:
+  #       sweep:
+  #         enabled: false
   #     treasure_house:
   #       selection_mode: explicit
   #       award_ids: [4, 21, 33]
-  #
-  # 还可覆盖 cron_times / dungeon / pilgrimage / spirit_pool 等任意 scheduler 子项，例如：
-  #   s0:
-  #     cron_times: ["00:00", "12:00", "20:01"]
-  #     dungeon:
-  #       sweep:
-  #         max_batch_times: 3
+  server_overrides:
+    s0:
+    s1:

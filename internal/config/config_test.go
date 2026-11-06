@@ -40,8 +40,11 @@ func TestConfig_LoadExample(t *testing.T) {
 	if acc.Password != "secret123456" {
 		t.Errorf("expected password to be expanded from env, got %s", acc.Password)
 	}
-	if len(acc.Roles) != 1 {
-		t.Fatalf("expected 1 role, got %d", len(acc.Roles))
+	if len(acc.Roles) != 2 {
+		t.Fatalf("expected 2 roles, got %d", len(acc.Roles))
+	}
+	if acc.Roles[0].ServerID != "s0" || acc.Roles[1].ServerID != "s1" {
+		t.Errorf("unexpected role server ids: %s / %s", acc.Roles[0].ServerID, acc.Roles[1].ServerID)
 	}
 
 	if cfg.Scheduler.Jitter.MinSeconds != 1.0 || cfg.Scheduler.Jitter.MaxSeconds != 3.0 {
@@ -63,7 +66,7 @@ func TestConfig_LoadExample(t *testing.T) {
 	if !cfg.Scheduler.Routines["six_realms"] {
 		t.Errorf("expected six_realms to be enabled")
 	}
-	if !cfg.Scheduler.SixRealms.AutoReset || !cfg.Scheduler.SixRealms.AutoSellBlue || cfg.Scheduler.SixRealms.AutoSellPurple {
+	if !cfg.Scheduler.SixRealms.AutoReset || !cfg.Scheduler.SixRealms.AutoSellBlue || !cfg.Scheduler.SixRealms.AutoSellPurple {
 		t.Errorf("unexpected six_realms config: %+v", cfg.Scheduler.SixRealms)
 	}
 
