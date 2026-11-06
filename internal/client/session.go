@@ -95,16 +95,18 @@ type SessionConfig struct {
 
 // PlayerState 纳管角色在游戏世界中的动态属性与资源状态。
 type PlayerState struct {
-	Level          int               `json:"level"`
-	VIP            int               `json:"vip"`
-	Stamina        int               `json:"stamina"`
-	MaxStamina     int               `json:"max_stamina"`
-	ExtraStamina   int               `json:"extra_stamina"`
-	Coins          int64             `json:"coins"`
-	Ingots         int64             `json:"ingots"`
-	StateSource    int64             `json:"state_source"`
-	BagCapacity    int               `json:"bag_capacity"`
-	TownID         int               `json:"town_id"`
+	Level        int   `json:"level"`
+	VIP          int   `json:"vip"`
+	Stamina      int   `json:"stamina"`
+	MaxStamina   int   `json:"max_stamina"`
+	ExtraStamina int   `json:"extra_stamina"`
+	Coins        int64 `json:"coins"`
+	Ingots       int64 `json:"ingots"`
+	StateSource  int64 `json:"state_source"`
+	BagCapacity  int   `json:"bag_capacity"`
+	TownID       int   `json:"town_id"`
+	// TownMapID 角色当前所在城镇地图编号 (Mod_Town_Base.enter_town 入参)。
+	TownMapID      int               `json:"town_map_id"`
 	Quests         map[uint32]uint32 `json:"quests"`
 	IsPracticing   bool              `json:"is_practicing"`
 	PracticeExp    int64             `json:"practice_exp"`
@@ -855,6 +857,9 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 				if infoRes.MaxExperience > 0 {
 					ps.MaxExperience = infoRes.MaxExperience
 				}
+				if infoRes.TownMapID > 0 {
+					ps.TownMapID = int(infoRes.TownMapID)
+				}
 			})
 			remainingExp := int64(0)
 			if infoRes.MaxExperience > infoRes.Experience {
@@ -929,9 +934,38 @@ func (s *RoleSession) FetchLatestPlayerInfo(ctx context.Context) (*protocol.Play
 		if infoRes.MaxExperience > 0 {
 			ps.MaxExperience = infoRes.MaxExperience
 		}
+		if infoRes.TownMapID > 0 {
+			ps.TownMapID = int(infoRes.TownMapID)
+		}
 	})
 
 	return infoRes, nil
+}
+
+// EnterTown 切换/复位角色当前城镇场景 (Module 1, Action 0)。
+//
+// 官方客户端在离开副本/试炼/战场地图后调用 townMap.gotoTownAtId(ctrlPlayer.townMapId)
+// 重新进入城镇；服务端据此清除角色的战场上下文。缺少该步骤时，角色会残留在
+// 特殊地图状态，后续部分模块的写操作会被静默丢弃。
+//
+// 返回服务端结果码 (0=成功)。
+func (s *RoleSession) EnterTown(ctx context.Context, townID int32) (uint8, error) {
+	pkt := protocol.BuildEnterTownPacket(townID, s.LastActionID())
+	timeout := 3 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDTownEnter)
+	if err != nil {
+		return 0, fmt.Errorf("enter town %d: %w", townID, err)
+	}
+	if resp == nil || len(resp.Payload) == 0 {
+		return 0, errors.New("empty enter town response")
+	}
+	return resp.Payload[0], nil
 }
 
 // SyncQuests 主动向服务端发送 Mod 3, Act 9 协议全量拉取当前已接任务列表并同步至内存状态快照。

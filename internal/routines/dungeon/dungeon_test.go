@@ -2471,19 +2471,16 @@ func TestDungeonSweep_QuestAcceptLostResponseRecovery(t *testing.T) {
 	if !strings.Contains(joined, "accept_quest") {
 		t.Fatalf("未发送 accept_quest, events=%v", events)
 	}
-	// 官方 NPCDialogView 流程要求接取前先以 npc_info_by_npcid 打开 NPC 对话，
-	// 否则 2026 网关会因缺少 PrevAct 前置链静默丢弃 accept_quest。
-	npcIdx, acceptIdx := -1, -1
+	// 直接接取优先：NPC 对话仅作为无回包时的兜底，不应出现在正常路径中。
+	// 服务端已受理但回包丢失时，应通过任务列表复核确认接取生效。
+	firstAcceptIdx := -1
 	for i, evt := range events {
-		if evt == "get_npc_quests" && npcIdx == -1 {
-			npcIdx = i
-		}
-		if evt == "accept_quest" && acceptIdx == -1 {
-			acceptIdx = i
+		if evt == "accept_quest" && firstAcceptIdx == -1 {
+			firstAcceptIdx = i
 		}
 	}
-	if npcIdx == -1 || acceptIdx == -1 || npcIdx > acceptIdx {
-		t.Fatalf("accept_quest 前未先打开 NPC 对话, events=%v", events)
+	if firstAcceptIdx == -1 {
+		t.Fatalf("未发送 accept_quest, events=%v", events)
 	}
 	if !strings.Contains(joined, "plot_enter:456") {
 		t.Fatalf("接取回包丢失后未继续推进剧情副本, events=%v", events)
@@ -2493,19 +2490,6 @@ func TestDungeonSweep_QuestAcceptLostResponseRecovery(t *testing.T) {
 	}
 	if !strings.Contains(joined, "complete_quest") {
 		t.Fatalf("接取回包丢失后未继续交付任务, events=%v", events)
-	}
-	// 交付前同样必须先打开 NPC 对话，建立 complete_quest 的 PrevAct 前置链。
-	dialogIdx, completeIdx := -1, -1
-	for i, evt := range events {
-		if evt == "get_npc_quests" {
-			dialogIdx = i
-		}
-		if evt == "complete_quest" && completeIdx == -1 {
-			completeIdx = i
-		}
-	}
-	if dialogIdx == -1 || completeIdx == -1 || dialogIdx > completeIdx {
-		t.Fatalf("complete_quest 前未先打开 NPC 对话, events=%v", events)
 	}
 }
 
@@ -2701,5 +2685,145 @@ func TestDungeonSweep_EliteSweep_NotCappedByMaxBatchTimes(t *testing.T) {
 	}
 	if got := heroSweepCount.Load(); got != 22 {
 		t.Fatalf("期望扫荡全部 22 个精英城镇, 实际 %d 个", got)
+	}
+}
+
+// TestDungeonSweep_QuestAcceptFallsBackToNPCDialog 验证接取任务时优先直接发送
+// accept_quest；仅当直接接取无回包且服务端任务列表仍未生效时，才补发
+// npc_info_by_npcid 建立官方 NPC 对话前置链并重试。
+//
+// 背景（2026-11-06 实机）：任务 NPC 位于仙界时，主世界会话的
+// npc_info_by_npcid 会被服务端静默丢弃；若仍坚持对话优先，
+// 会连续超时并阻塞整轮任务循环。
+func TestDungeonSweep_QuestAcceptFallsBackToNPCDialog(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	sess.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.Level = 80
+	})
+
+	repo := &mockQuestDungeonRepo{
+		quests: map[int]*dictionary.Quest{
+			145: {
+				ID:         145,
+				Type:       1,
+				Level:      1,
+				Title:      "蚕丝",
+				BeginNPCID: 48,
+				EndNPCID:   48,
+				MissionID:  9999, // 字典中不存在，接取后即可结束循环
+			},
+		},
+	}
+
+	var events []string
+	var eventsMu sync.Mutex
+	recordEvent := func(evt string) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, evt)
+	}
+
+	var accepted atomic.Bool
+	var acceptCalls atomic.Int32
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDQuestList:
+			recordEvent("quest_list")
+			w := protocol.NewWriter()
+			w.WriteUint16(1)
+			w.WriteInt32(145)
+			if accepted.Load() {
+				w.WriteInt32(1) // Accepted
+			} else {
+				w.WriteInt32(0) // Acceptable
+			}
+			w.WriteUint8(0)
+			w.WriteUint16(1)
+			w.WriteInt32(1)
+			w.WriteInt32(0)
+			w.WriteInt32(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+			return true
+
+		case protocol.ActionIDQuestAccept:
+			recordEvent("accept_quest")
+			// 第一次无回包且不置为已接取，逼迫走 NPC 对话兜底路径。
+			if acceptCalls.Add(1) == 1 {
+				return true
+			}
+			accepted.Store(true)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x05}))
+			return true
+
+		case protocol.ActionIDQuestGetNPCQuests:
+			recordEvent("get_npc_quests")
+			w := protocol.NewWriter()
+			w.WriteUint16(1)
+			w.WriteInt32(145)
+			w.WriteUint8(0) // 可接取
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestGetNPCQuests, w.Bytes()))
+			return true
+		}
+		return false
+	})
+
+	routine := dungeon.NewDungeonSweepRoutine(repo, dungeon.SweepConfig{
+		Pipeline: []string{"quest_cycle"},
+	})
+	if err := routine.Execute(context.Background(), sess, nil); err != nil &&
+		!errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("任务接取兜底流程执行失败: %v", err)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	joined := strings.Join(events, ",")
+	firstAccept := strings.Index(joined, "accept_quest")
+	dialog := strings.Index(joined, "get_npc_quests")
+	secondAccept := -1
+	if firstAccept >= 0 && dialog > firstAccept {
+		if rel := strings.Index(joined[dialog:], "accept_quest"); rel >= 0 {
+			secondAccept = dialog + rel
+		}
+	}
+	if firstAccept < 0 || dialog < 0 || secondAccept < 0 || !(firstAccept < dialog && dialog < secondAccept) {
+		t.Fatalf("期望顺序 accept_quest -> get_npc_quests -> accept_quest, 实际 events=%v", events)
+	}
+	if !accepted.Load() {
+		t.Fatalf("兜底重试后服务端仍未收到 accept_quest, events=%v", events)
+	}
+}
+
+// TestZodiacRoutine_SkipsWhenPanelEmpty 验证生肖面板全 0（功能未开放/未解锁）时
+// 不再发送 challenge 请求，避免服务端静默丢弃后把任务标记为执行异常。
+func TestZodiacRoutine_SkipsWhenPanelEmpty(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var challengeCalls atomic.Int32
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDZodiacInfo:
+			payload := make([]byte, 13) // 全 0 面板
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDZodiacInfo, payload))
+			return true
+		case protocol.ActionIDZodiacChallenge:
+			challengeCalls.Add(1)
+			return true
+		}
+		return false
+	})
+
+	routine := dungeon.NewZodiacRoutine()
+	if err := routine.Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("生肖面板为空时应安全跳过, got %v", err)
+	}
+	if got := challengeCalls.Load(); got != 0 {
+		t.Fatalf("面板为空时不应发送 challenge, 实际 %d 次", got)
 	}
 }

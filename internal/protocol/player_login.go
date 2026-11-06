@@ -71,6 +71,8 @@ type PlayerLoginResult struct {
 	Experience int64
 	// MaxExperience 角色当前等级升级所需总经验 (满级为 uint64 最大值或 0)
 	MaxExperience int64
+	// TownMapID 角色当前所在城镇地图编号 (Mod_Town_Base.enter_town 使用的 townMapId)
+	TownMapID int32
 	// ExtraStamina 当前存储/额外/赠送体力点数 (Offset 116)
 	ExtraStamina int32
 	// MaxStamina 最大基础体力上限
@@ -233,8 +235,15 @@ func ParsePlayerLoginResult(payload []byte) (*PlayerLoginResult, error) {
 		res.MaxExperience = int64(binary.BigEndian.Uint64(body[pos+44 : pos+52]))
 	}
 
+	// 官方 get_player_info 字段顺序 (Mod_Player_Base, Action 2):
+	// level, ingot, coins, health, maxHealth, power, experience, maxExperience,
+	// townMapId, bossMapId, jihuisuoId, mounts, mountsCD, vipLevel, ...
 	if pos+56 <= len(body) {
-		res.VIP = int32(binary.BigEndian.Uint32(body[pos+52 : pos+56]))
+		res.TownMapID = int32(binary.BigEndian.Uint32(body[pos+52 : pos+56]))
+	}
+
+	if pos+76 <= len(body) {
+		res.VIP = int32(binary.BigEndian.Uint32(body[pos+72 : pos+76]))
 	}
 
 	if pos+109 <= len(body) {
@@ -418,5 +427,3 @@ func BuildPlayerServerTimePacket(param int32) *Packet {
 	w.WriteInt32(param)
 	return NewPacket(ActionIDPlayerServerTime, w.Bytes())
 }
-
-

@@ -1619,6 +1619,12 @@ func NewZodiacRoutine() scheduler.ActivityRoutine {
 				"heaven", info.Heaven,
 			)
 
+			// 面板全 0 表示生肖挑战尚未开放/未解锁；此时服务端会静默丢弃 challenge 请求。
+			if info.NowZodiacLevel == 0 && info.NextZodiacLevel == 0 && info.RequireLevel <= 0 && info.Heaven == 0 {
+				slog.Info("生肖挑战面板为空，功能未开放/未解锁，跳过", "role_id", session.RoleID())
+				return nil
+			}
+
 			// 挑战前置校验：角色等级必须达到 require_level。
 			if info.RequireLevel > int32(level) {
 				slog.Info("角色等级不足，跳过生肖挑战",
@@ -1638,7 +1644,13 @@ func NewZodiacRoutine() scheduler.ActivityRoutine {
 			resp, err := session.Call(cCtx, protocol.BuildZodiacChallengePacket(), protocol.ActionIDZodiacChallenge)
 			cCancel()
 			if err != nil {
-				return fmt.Errorf("生肖挑战请求失败: %w", err)
+				if errSessionTerminated(ctx, err) {
+					return fmt.Errorf("生肖挑战请求失败: %w", err)
+				}
+				// 功能未开放/未解锁时服务端对 challenge 静默不回包，按不可用跳过而非报错。
+				slog.Info("生肖挑战请求无回包，判定功能未开放/不可用，跳过",
+					"role_id", session.RoleID(), "err", err)
+				return nil
 			}
 			result, err := protocol.ParseZodiacChallengeResult(resp.Payload)
 			if err != nil {
@@ -2162,66 +2174,100 @@ func queryNPCQuestState(ctx context.Context, session *client.RoleSession, npcID,
 	return nil, nil
 }
 
-// acceptQuestWithRecovery 按官方客户端 NPCDialogView 的对话前置流程接取任务：
-// 先以 npc_info_by_npcid (Module 3, Action 1) 打开 NPC 对话，再发送 accept_quest
-// (Module 3, Action 3)。2026 网关按 PrevAct 原子链校验业务时序，若 accept_quest 直接
-// 紧接 town_quest_show 发送，会因缺少 NPC 对话前置被静默丢弃 (无任何回包)。
-// 回包超时后再复核服务端任务列表，覆盖「服务端已受理、仅回包丢失」的情况。
+// tryAcceptQuest 发送一次 accept_quest (Module 3, Action 3) 并解析结果。
+// 返回 (是否成功, 服务端明确失败码, 通信错误)；err != nil 且 resCode == 0 表示无回包。
+func tryAcceptQuest(ctx context.Context, session *client.RoleSession, questID int32) (bool, uint8, error) {
+	accPkt, _ := protocol.BuildAcceptQuestPacket(protocol.AcceptQuestRequest{
+		QuestID: questID,
+		PrevAct: session.LastActionID(),
+	})
+	accCtx, accCancel := context.WithTimeout(ctx, 3*time.Second)
+	accResp, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
+	accCancel()
+
+	// Mod_Quest_Base.SUCCEED == 5 (兼容单测 0 / 1)
+	if accErr == nil && accResp != nil &&
+		(len(accResp.Payload) == 0 || accResp.Payload[0] == 5 || accResp.Payload[0] == 1 || accResp.Payload[0] == 0) {
+		return true, 0, nil
+	}
+	// 服务端已明确回包拒绝（如背包已满、任务已存在），无需重试。
+	if accResp != nil && len(accResp.Payload) > 0 {
+		return false, accResp.Payload[0], nil
+	}
+	return false, 0, accErr
+}
+
+// questAcceptedOnServer 复核服务端任务列表，覆盖「服务端已受理、仅回包丢失」的情况。
+func questAcceptedOnServer(ctx context.Context, session *client.RoleSession, questID int32) bool {
+	items, syncErr := session.SyncQuests(ctx)
+	if syncErr != nil {
+		return false
+	}
+	for _, it := range items {
+		if it.QuestID == questID && (it.State == 1 || it.State == 2) {
+			slog.Info("接取任务回包超时，但服务端任务列表已确认接取生效",
+				"role_id", session.RoleID(), "quest_id", questID, "state", it.State)
+			return true
+		}
+	}
+	return false
+}
+
+// acceptQuestWithRecovery 接取任务。
+//
+// 优先直接发送 accept_quest：服务端接受该请求时并不强制要求先打开 NPC 对话。
+// 任务 NPC 不在角色当前城镇时（例如任务起始 NPC 位于仙界），
+// npc_info_by_npcid 会被服务端静默丢弃；此时若仍以该动作为前置链接取，
+// 会连续超时并阻塞整轮任务循环（实机 2026-11-06：任务 355 螳螂妖魔）。
+//
+// 因此 NPC 对话改为兜底路径：仅当直接接取无回包且服务端任务列表仍未生效时，
+// 才按官方 NPCDialogView 流程补发 npc_info_by_npcid 建立前置链并重试。
 // 返回 (是否接取成功, 服务端结果码, 最后一次通信错误)。
 func acceptQuestWithRecovery(ctx context.Context, session *client.RoleSession, questID, beginNPCID int32) (bool, uint8, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 2; attempt++ {
-		// 0. 打开 NPC 对话并复核任务状态，建立服务端要求的 PrevAct 前置链。
-		if beginNPCID > 0 {
-			npcState, npcErr := queryNPCQuestState(ctx, session, beginNPCID, questID)
-			if npcErr != nil {
-				if errSessionTerminated(ctx, npcErr) {
-					return false, 0, npcErr
-				}
-				// NPC 对话查询失败不直接阻断接取: 保留旧路径，交由服务端裁决。
-				slog.Warn("打开 NPC 任务对话失败，仍尝试直接接取",
-					"role_id", session.RoleID(), "quest_id", questID, "npc_id", beginNPCID, "err", npcErr)
-			} else if npcState != nil {
-				// QuestType.Accepted(1) / Completed(2): 服务端已受理，幂等返回成功。
-				if *npcState == 1 || *npcState == 2 {
-					slog.Info("NPC 对话已确认任务处于已接取状态，跳过重复接取",
-						"role_id", session.RoleID(), "quest_id", questID,
-						"npc_id", beginNPCID, "state", *npcState)
-					return true, 0, nil
-				}
-			}
-		}
-
-		accPkt, _ := protocol.BuildAcceptQuestPacket(protocol.AcceptQuestRequest{
-			QuestID: questID,
-			PrevAct: session.LastActionID(),
-		})
-		accCtx, accCancel := context.WithTimeout(ctx, 3*time.Second)
-		accResp, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
-		accCancel()
-
-		// Mod_Quest_Base.SUCCEED == 5 (兼容单测 0 / 1)
-		if accErr == nil && accResp != nil &&
-			(len(accResp.Payload) == 0 || accResp.Payload[0] == 5 || accResp.Payload[0] == 1 || accResp.Payload[0] == 0) {
+		accepted, resCode, accErr := tryAcceptQuest(ctx, session, questID)
+		if accepted {
 			return true, 0, nil
 		}
-		// 服务端已明确回包拒绝（如背包已满、任务已存在），无需重试。
-		if accResp != nil && len(accResp.Payload) > 0 {
-			return false, accResp.Payload[0], nil
+		if resCode != 0 {
+			return false, resCode, nil
 		}
-
 		lastErr = accErr
 		if errSessionTerminated(ctx, accErr) {
 			return false, 0, lastErr
 		}
 
-		// 未收到任何回包：网关可能丢包或连接半开。先复核服务端任务状态，
-		// 覆盖「服务端已处理成功、仅回包丢失」的情况。
-		if items, syncErr := session.SyncQuests(ctx); syncErr == nil {
-			for _, it := range items {
-				if it.QuestID == questID && (it.State == 1 || it.State == 2) {
-					slog.Info("接取任务回包超时，但服务端任务列表已确认接取生效",
-						"role_id", session.RoleID(), "quest_id", questID, "state", it.State)
+		// 未收到任何回包：先复核服务端任务状态，覆盖「服务端已处理成功、仅回包丢失」。
+		if questAcceptedOnServer(ctx, session, questID) {
+			return true, 0, nil
+		}
+
+		// 兜底：按官方 NPCDialogView 流程打开 NPC 对话，再重试接取。
+		if attempt == 1 && beginNPCID > 0 {
+			npcState, npcErr := queryNPCQuestState(ctx, session, beginNPCID, questID)
+			if npcErr != nil {
+				if errSessionTerminated(ctx, npcErr) {
+					return false, 0, npcErr
+				}
+				slog.Warn("兜底 NPC 对话打开失败，任务接取无回包",
+					"role_id", session.RoleID(), "quest_id", questID, "npc_id", beginNPCID, "err", npcErr)
+			} else if npcState != nil && (*npcState == 1 || *npcState == 2) {
+				// QuestType.Accepted(1) / Completed(2): 服务端已受理，幂等返回成功。
+				slog.Info("NPC 对话已确认任务处于已接取状态，跳过重复接取",
+					"role_id", session.RoleID(), "quest_id", questID,
+					"npc_id", beginNPCID, "state", *npcState)
+				return true, 0, nil
+			} else if accepted, resCode, accErr = tryAcceptQuest(ctx, session, questID); accepted {
+				return true, 0, nil
+			} else if resCode != 0 {
+				return false, resCode, nil
+			} else {
+				lastErr = accErr
+				if errSessionTerminated(ctx, accErr) {
+					return false, 0, lastErr
+				}
+				if questAcceptedOnServer(ctx, session, questID) {
 					return true, 0, nil
 				}
 			}
@@ -2556,22 +2602,29 @@ func executeAuthoritativeQuestCycle(
 //   - completedState == 0 (且为 16B 完整回包): 背包已满 (NPCDialogViewLang.PackFull)
 //   - completedState == -1 (0xFF): 任务物品不足或未达成 (NPCDialogViewLang.QuestItem)
 func submitCompleteQuest(ctx context.Context, session *client.RoleSession, questID, endNPCID int32) (succeeded bool, packFull bool) {
-	// 0. 打开 NPC 交付对话，建立 PrevAct 前置链。
-	if endNPCID > 0 {
+	sendSubmit := func() (*protocol.Packet, error) {
+		subPkt := protocol.BuildSubmitCompleteQuestPacket(questID, session.LastActionID())
+		subCtx, subCancel := context.WithTimeout(ctx, 3*time.Second)
+		defer subCancel()
+		return session.Call(subCtx, subPkt, protocol.ActionIDQuestSubmitComplete)
+	}
+
+	// 0. 优先直接交付 complete_quest (0x00030005)，服务端不强制要求先打开 NPC 对话。
+	resp, err := sendSubmit()
+
+	// 无回包时兜底：若任务交付 NPC 不在当前城镇（如仙界 NPC），先补发 NPC 对话
+	// 建立官方 PrevAct 前置链，再重试一次交付。
+	if (err != nil || resp == nil || len(resp.Payload) == 0) && endNPCID > 0 {
 		if _, npcErr := queryNPCQuestState(ctx, session, endNPCID, questID); npcErr != nil {
 			if errSessionTerminated(ctx, npcErr) {
 				return false, false
 			}
-			slog.Warn("打开 NPC 交付对话失败，仍尝试直接交付",
+			slog.Warn("打开 NPC 交付对话失败，停止本次交付",
 				"role_id", session.RoleID(), "quest_id", questID, "npc_id", endNPCID, "err", npcErr)
+		} else {
+			resp, err = sendSubmit()
 		}
 	}
-
-	// 1. 发送 complete_quest (0x00030005) 真正交付任务并领取奖励
-	subPkt := protocol.BuildSubmitCompleteQuestPacket(questID, session.LastActionID())
-	subCtx, subCancel := context.WithTimeout(ctx, 3*time.Second)
-	resp, err := session.Call(subCtx, subPkt, protocol.ActionIDQuestSubmitComplete)
-	subCancel()
 	if err != nil || resp == nil || len(resp.Payload) == 0 {
 		return false, false
 	}

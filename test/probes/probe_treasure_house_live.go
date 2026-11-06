@@ -56,6 +56,7 @@ func main() {
 	draw := flag.Int("draw", 0, "Act 6 抽奖次数 (显式指定才消耗免费钥匙，默认 0)")
 	routineMode := flag.Bool("routine", false, "直接执行生产 TreasureHouse Routine (只消耗免费钥匙)")
 	gap := flag.Duration("gap", 0, "插入空闲等待以复现心跳推进 PrevAct 链：routine 模式位于 select_panel 与 set_award 之间，普通模式位于 Act4 之前")
+	preIdle := flag.Duration("pre-idle", 0, "执行 Routine 前空转指定时长，使自动心跳成为最近发送动作 (复现 PrevAct=心跳 场景)")
 	debug := flag.Bool("debug", false, "开启 DEBUG 日志，打印每一个出站/入站封包的 ActionID 与载荷")
 	flag.Parse()
 
@@ -172,6 +173,10 @@ func main() {
 					return nil, selCtx.Err()
 				}
 			}
+		}
+		if *preIdle > 0 {
+			fmt.Printf("\n========== Routine 前空转 %s (让自动心跳推进 PrevAct) ==========\n", *preIdle)
+			time.Sleep(*preIdle)
 		}
 		fmt.Printf("\n========== 直接执行生产 TreasureHouse Routine ==========\n")
 		if err := minigame.NewTreasureHouseRoutine(thCfg).Execute(ctx, sess, nil); err != nil {
