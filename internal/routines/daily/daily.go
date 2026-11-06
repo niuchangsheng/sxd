@@ -186,7 +186,7 @@ func NewDailyQuestRoutine() scheduler.ActivityRoutine {
 					return nil
 				}
 				pkt := protocol.BuildAssistantOneKeyGetAwardPacket(typeID)
-				cCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				resp, err := session.Call(cCtx, pkt, protocol.ActionIDAssistantOneKeyGetAward)
 				cancel()
 				if err != nil || resp == nil {
@@ -262,7 +262,7 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 			// 3. 打开邮箱面板并同步邮件列表 (Mod 345, Act 0)
 			prevAct := protocol.ActionIDTownEnter
 			infoPkt := protocol.BuildEmailGetInfoPacket(prevAct)
-			infoCtx, infoCancel := context.WithTimeout(ctx, 3*time.Second)
+			infoCtx, infoCancel := context.WithTimeout(ctx, 8*time.Second)
 			infoResp, infoErr := session.Call(infoCtx, infoPkt, protocol.ActionIDEmailGetInfo)
 			infoCancel()
 			if infoErr != nil || infoResp == nil || len(infoResp.Payload) == 0 {
@@ -274,7 +274,7 @@ func NewMailCollectRoutine() scheduler.ActivityRoutine {
 
 			// 4. 一键领取全部邮件附件 (Mod 345, Act 6)
 			collectPkt := protocol.BuildEmailOneKeyGetAwardPacket(prevAct)
-			callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			callCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			respPkt, err := session.Call(callCtx, collectPkt, protocol.ActionIDEmailOneKeyGetAward)
 			cancel()
 			if err != nil {
@@ -402,7 +402,7 @@ func NewOnlineGiftRoutine(cfgs ...OnlineGiftConfig) scheduler.ActivityRoutine {
 			}
 
 			// 2. 查询下一份礼包预览 (诊断与日志)
-			qCtx, qCancel := context.WithTimeout(ctx, 3*time.Second)
+			qCtx, qCancel := context.WithTimeout(ctx, 8*time.Second)
 			qResp, qErr := session.Call(qCtx, protocol.BuildOnlineGiftCurrentPacket(), protocol.ActionIDPlayerGetCurrentOnlineGift)
 			qCancel()
 			if qErr != nil {
@@ -434,7 +434,7 @@ func NewOnlineGiftRoutine(cfgs ...OnlineGiftConfig) scheduler.ActivityRoutine {
 			}
 
 			// 4. 发起领取
-			cCtx, cCancel := context.WithTimeout(ctx, 5*time.Second)
+			cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
 			resp, err := session.Call(cCtx, protocol.BuildOnlineGiftClaimPacket(), protocol.ActionIDPlayerGetOnlineGift)
 			cCancel()
 			if err != nil {
@@ -502,7 +502,7 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 			slog.Info("正在执行日常任务: 天神赐福等级奖励领取", "role_id", session.RoleID())
 
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				defer cancel()
 				return session.Call(cCtx, pkt, act)
 			}

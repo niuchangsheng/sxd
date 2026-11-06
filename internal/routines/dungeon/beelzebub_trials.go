@@ -6,6 +6,7 @@ package dungeon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -83,6 +84,11 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 			// 4. 遍历可挑战魔王列表，逐关执行组队、助战镜像配置、战斗与结算闭环
 			warResults, err := session.BeelzebubTrialsAutoChallengeAll(ctx, cfg.PreferBossID)
 			if err != nil {
+				if errors.Is(err, client.ErrBeelzebubTrialsNoResponse) {
+					// 客户端已记录具体关卡与原因；这里按业务条件跳过，避免调度器再报一次 WARN。
+					slog.Info("魔王试炼服务端连续无响应，本轮跳过", "role_id", session.RoleID(), "error", err)
+					return nil
+				}
 				return fmt.Errorf("魔王试炼自动挑战流程执行失败: %w", err)
 			}
 

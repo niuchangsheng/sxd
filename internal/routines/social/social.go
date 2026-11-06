@@ -61,7 +61,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 
 			// 1. 查询背包持有的结缘宝箱列表 (Mod 232, Act 30)
 			queryPkt := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDTownEnter)
-			callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			callCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			resp, err := session.Call(callCtx, queryPkt, protocol.ActionIDJieYuanBoxList)
 			cancel()
 
@@ -104,13 +104,13 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 
 					// 2.1 开箱前置握手 (Mod 528, Act 1)
 					prepPkt := protocol.BuildJieYuanBoxOpenContextPacket(prevAct)
-					pCtx, pCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+					pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
 					_, _ = session.Call(pCtx, prepPkt, protocol.ActionIDJieYuanBoxOpenContext)
 					pCancel()
 
 					// 2.2 发送批量开启指令 (Mod 232, Act 34: 每批最多10个)
 					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, openCount, protocol.ActionIDJieYuanBoxOpenContext)
-					oCtx, oCancel := context.WithTimeout(ctx, 2*time.Second)
+					oCtx, oCancel := context.WithTimeout(ctx, 8*time.Second)
 					openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)
 					oCancel()
 
@@ -203,7 +203,7 @@ func NewFactionBlessingRoutine(cfgs ...FactionBlessingConfig) scheduler.Activity
 
 			// 1. 查询神像信息与今日剩余上香次数 (Mod 10, Act 22)
 			infoPkt := protocol.BuildFactionGodInfoPacket(protocol.ActionIDTownEnter)
-			infoCtx, infoCancel := context.WithTimeout(ctx, 3*time.Second)
+			infoCtx, infoCancel := context.WithTimeout(ctx, 8*time.Second)
 			infoResp, infoErr := session.Call(infoCtx, infoPkt, protocol.ActionIDFactionGodInfo)
 			infoCancel()
 			if infoErr != nil || infoResp == nil {
@@ -211,7 +211,7 @@ func NewFactionBlessingRoutine(cfgs ...FactionBlessingConfig) scheduler.Activity
 					// 面板 (Act 22) 携带帮派上香成员列表，未加入帮派的角色上会被服务端静默丢弃。
 					// 用免费白檀香 (Act 23，合法供品) 探测一次上香结果码以区分“未加入帮派”和偶发丢包：
 					// MEMBER_NOT_EXIST / FACTION_NOT_EXIST 即确认无帮派；SUCCESS/COUNT_USED 说明帮派上下文正常。
-					probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
+					probeCtx, probeCancel := context.WithTimeout(ctx, 8*time.Second)
 					probeResp, probeErr := session.Call(probeCtx,
 						protocol.BuildFactionIncensePacket(protocol.FactionOfferingWhiteSandalwood),
 						protocol.ActionIDFactionIncense)
@@ -288,7 +288,7 @@ func NewFactionBlessingRoutine(cfgs ...FactionBlessingConfig) scheduler.Activity
 			// 3. 服务端提示会覆盖剩余祝福次数时，先确认当前祝福是否高于本次收益
 			if info.IsCover == 1 && !cfg.AllowCover {
 				countPkt := protocol.BuildFactionGetBlessingCountPacket(prevAct)
-				countCtx, countCancel := context.WithTimeout(ctx, 3*time.Second)
+				countCtx, countCancel := context.WithTimeout(ctx, 8*time.Second)
 				countResp, countErr := session.Call(countCtx, countPkt, protocol.ActionIDFactionGetBlessingCount)
 				countCancel()
 				if countErr != nil || countResp == nil {
@@ -323,7 +323,7 @@ func NewFactionBlessingRoutine(cfgs ...FactionBlessingConfig) scheduler.Activity
 				}
 
 				incensePkt := protocol.BuildFactionIncensePacket(offering.ID)
-				incenseCtx, incenseCancel := context.WithTimeout(ctx, 3*time.Second)
+				incenseCtx, incenseCancel := context.WithTimeout(ctx, 8*time.Second)
 				incenseResp, err := session.Call(incenseCtx, incensePkt, protocol.ActionIDFactionIncense)
 				incenseCancel()
 				if err != nil || incenseResp == nil {
@@ -419,7 +419,7 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 
 			// 1. 查询转盘状态与剩余青龙令 (Mod 69, Act 1)
 			openPkt := protocol.BuildLuckyWheelOpenPacket(protocol.ActionIDTownEnter)
-			openCtx, openCancel := context.WithTimeout(ctx, 3*time.Second)
+			openCtx, openCancel := context.WithTimeout(ctx, 8*time.Second)
 			openResp, openErr := session.Call(openCtx, openPkt, protocol.ActionIDLuckyWheelOpen)
 			openCancel()
 			if openErr != nil || openResp == nil {
@@ -472,7 +472,7 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 				}
 
 				startPkt := protocol.BuildLuckyWheelStartPacket(prevAct)
-				startCtx, startCancel := context.WithTimeout(ctx, 3*time.Second)
+				startCtx, startCancel := context.WithTimeout(ctx, 8*time.Second)
 				startResp, err := session.Call(startCtx, startPkt, protocol.ActionIDLuckyWheelStart)
 				startCancel()
 				if err != nil || startResp == nil {
@@ -549,7 +549,7 @@ func luckyWheelResultText(result uint8) string {
 // 未加入仙盟/城镇登录失败时安全跳过；不消耗元宝。
 func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 	const townCtxTimeout = 30 * time.Second
-	const callTimeout = 5 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"guild_activities",
 		"social",
@@ -698,7 +698,7 @@ func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 //
 // 先查询圣盟当前赛季；无应答/赛季数据缺失时视为功能未开放并跳过。
 func NewSacredAllianceRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"sacred_alliance",
 		"social",
@@ -744,7 +744,7 @@ func NewSacredAllianceRoutine() scheduler.ActivityRoutine {
 //
 // 先查询自身住宅状态：未处于婚姻状态或功能未开放时跳过。
 func NewHomesteadRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"homestead",
 		"social",
@@ -789,7 +789,7 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 // 拉取好友来信列表，仅处理已解锁 (时间/任务条件均满足) 的来信：
 // 未读则标记已读，未领奖则领取附件奖励。不消耗元宝。
 func NewFriendshipRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"friendship",
 		"social",
@@ -880,7 +880,7 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 // 查询膜拜信息与剩余次数后，只使用免费供品 (白檀香, id=1) 上香；
 // 需要元宝的苏合香/天木香一律不调用。
 func NewFameBlessingRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"fame_blessing",
 		"social",

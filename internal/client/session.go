@@ -619,7 +619,7 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 // 3. Module 165, Action 0 (0x00A50000) 扩展业务模块初始化 (携带前序 0x63)
 // 4. Module 0, Action 2 (0x00000002) 全量角色资产拉取 (携带前序 0x00A50000) 并更新真实资产快照
 func DefaultGatewayAuthenticator(s *RoleSession) error {
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
 	defer cancel()
 
 	// 0. 构造并发送登录握手请求包 (优先主服 0x00000000，或跨服 0x005E0000)
@@ -891,7 +891,7 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 // FetchLatestPlayerInfo 主动向服务端拉取最新全量角色资产（包括经验、体力、铜钱等）并刷新本地状态快照。
 func (s *RoleSession) FetchLatestPlayerInfo(ctx context.Context) (*protocol.PlayerLoginResult, error) {
 	pkt := protocol.BuildPlayerGetInfoPacket(0)
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -956,7 +956,7 @@ func (s *RoleSession) FetchLatestPlayerInfo(ctx context.Context) (*protocol.Play
 // 返回服务端结果码 (0=成功)。
 func (s *RoleSession) EnterTown(ctx context.Context, townID int32) (uint8, error) {
 	pkt := protocol.BuildEnterTownPacket(townID, s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -976,7 +976,7 @@ func (s *RoleSession) EnterTown(ctx context.Context, townID int32) (uint8, error
 // SyncQuests 主动向服务端发送 Mod 3, Act 9 协议全量拉取当前已接任务列表并同步至内存状态快照。
 func (s *RoleSession) SyncQuests(ctx context.Context) ([]protocol.PlayerQuestItem, error) {
 	questListPkt := protocol.BuildGetPlayerQuestListPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1010,7 +1010,7 @@ func (s *RoleSession) SyncQuests(ctx context.Context) ([]protocol.PlayerQuestIte
 // StartTownPractice 发起城镇打坐练功请求 (Mod_Player_Base.start_practice, ActionID 0x00000024)。
 func (s *RoleSession) StartTownPractice(ctx context.Context) error {
 	pkt := protocol.BuildPlayerStartPracticePacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1032,7 +1032,7 @@ func (s *RoleSession) StartTownPractice(ctx context.Context) error {
 // GetTownPracticeData 获取城镇打坐练功实时数据 (Mod_Player_Base.get_practice_data, ActionID 0x00000025)。
 func (s *RoleSession) GetTownPracticeData(ctx context.Context) (*protocol.TownPracticeData, error) {
 	pkt := protocol.BuildPlayerGetPracticeDataPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1093,7 +1093,7 @@ func (s *RoleSession) SignFinishedTownPractice(ctx context.Context) error {
 // GetNewPracticeData 获取现代新版离线打坐练功进度与累积经验 (Mod_NewPractice_Base.get_practice_info, ActionID 0x02480001)。
 func (s *RoleSession) GetNewPracticeData(ctx context.Context) (*protocol.NewPracticeInfo, error) {
 	pkt := protocol.BuildNewPracticeGetInfoPacket()
-	timeout := 5 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1117,7 +1117,7 @@ func (s *RoleSession) GetNewPracticeData(ctx context.Context) (*protocol.NewPrac
 // ClaimNewPracticeExp 一键领取现代新版打坐练功累积的经验与灵气 (Mod_NewPractice_Base.collect_all, ActionID 0x02480003)。
 func (s *RoleSession) ClaimNewPracticeExp(ctx context.Context) (*protocol.NewPracticeCollectResult, error) {
 	pkt := protocol.BuildNewPracticeCollectAllPacket()
-	timeout := 5 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1165,7 +1165,7 @@ func (s *RoleSession) ClaimTownPracticeExp(ctx context.Context) error {
 // BeelzebubTrialsCheckCanChallenge 检查今日是否可挑战魔王试炼 (Module 57, Action 20)。
 func (s *RoleSession) BeelzebubTrialsCheckCanChallenge(ctx context.Context) (bool, error) {
 	pkt := protocol.BuildBeelzebubTrialsCheckCanChallengePacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1185,7 +1185,7 @@ func (s *RoleSession) BeelzebubTrialsCheckCanChallenge(ctx context.Context) (boo
 // BeelzebubTrialsGetCanChallengeList 获取可挑战魔王编号列表 (Module 57, Action 22)。
 func (s *RoleSession) BeelzebubTrialsGetCanChallengeList(ctx context.Context) ([]int32, error) {
 	pkt := protocol.BuildBeelzebubTrialsGetCanChallengeListPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1205,7 +1205,7 @@ func (s *RoleSession) BeelzebubTrialsGetCanChallengeList(ctx context.Context) ([
 // BeelzebubTrialsOpen 打开魔王试炼面板并获取基础道行与活动信息 (Module 57, Action 1)。
 func (s *RoleSession) BeelzebubTrialsOpen(ctx context.Context) (*protocol.BeelzebubTrialsOpenData, error) {
 	pkt := protocol.BuildBeelzebubTrialsOpenPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1225,7 +1225,7 @@ func (s *RoleSession) BeelzebubTrialsOpen(ctx context.Context) (*protocol.Beelze
 // BeelzebubTrialsCreateTeam 创建指定魔王挑战队伍 (Module 57, Action 4)。
 func (s *RoleSession) BeelzebubTrialsCreateTeam(ctx context.Context, bossID int32, teamType uint8) (uint8, error) {
 	pkt := protocol.BuildBeelzebubTrialsCreateTeamPacket(bossID, teamType, s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1235,6 +1235,11 @@ func (s *RoleSession) BeelzebubTrialsCreateTeam(ctx context.Context, bossID int3
 	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsCreateTeam)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
+			// 会话已断开/重连中的超时属于网络中断，不能判定为服务端拒绝玩法；
+			// 仅当会话仍处于 Active 时才按“静默丢弃”处理。
+			if s.State() != StateActive {
+				return 0, fmt.Errorf("create beelzebub trials team: session interrupted: %w", err)
+			}
 			// 等待期内没有任何回包：服务端静默丢弃该动作，交由上层熔断本轮试炼。
 			return 0, fmt.Errorf("create beelzebub trials team: %w: %v", ErrBeelzebubTrialsNoResponse, err)
 		}
@@ -1249,7 +1254,7 @@ func (s *RoleSession) BeelzebubTrialsCreateTeam(ctx context.Context, bossID int3
 // BeelzebubTrialsJoinTeam 加入已有魔王试炼队伍 (Module 57, Action 6)。
 func (s *RoleSession) BeelzebubTrialsJoinTeam(ctx context.Context, teamID int32) (uint8, error) {
 	pkt := protocol.BuildBeelzebubTrialsJoinTeamPacket(teamID, s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1269,7 +1274,7 @@ func (s *RoleSession) BeelzebubTrialsJoinTeam(ctx context.Context, teamID int32)
 // BeelzebubTrialsGetPlayerTeamInfo 获取当前魔王试炼队伍成员状态 (Module 57, Action 3)。
 func (s *RoleSession) BeelzebubTrialsGetPlayerTeamInfo(ctx context.Context) (int32, []protocol.BeelzebubTeamMember, error) {
 	pkt := protocol.BuildBeelzebubTrialsGetPlayerTeamInfoPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1289,7 +1294,7 @@ func (s *RoleSession) BeelzebubTrialsGetPlayerTeamInfo(ctx context.Context) (int
 // BeelzebubTrialsGetHelperRoles 获取可调遣助战伙伴/镜像列表 (Module 57, Action 8)。
 func (s *RoleSession) BeelzebubTrialsGetHelperRoles(ctx context.Context) ([]protocol.BeelzebubHelperRole, error) {
 	pkt := protocol.BuildBeelzebubTrialsGetHelperRoleListPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1309,7 +1314,7 @@ func (s *RoleSession) BeelzebubTrialsGetHelperRoles(ctx context.Context) ([]prot
 // BeelzebubTrialsChooseHelper 选择助战伙伴填充队伍二号或三号空位 (Module 57, Action 9)。
 func (s *RoleSession) BeelzebubTrialsChooseHelper(ctx context.Context, roleID int32, slot uint8) (uint8, error) {
 	pkt := protocol.BuildBeelzebubTrialsChooseHelperRolePacket(roleID, slot, s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1339,7 +1344,7 @@ func (s *RoleSession) BeelzebubTrialsFight(ctx context.Context) (uint8, error) {
 // BeelzebubTrialsGetWarResult 拉取魔王试炼战报结果与奖励结算 (Module 57, Action 14)。
 func (s *RoleSession) BeelzebubTrialsGetWarResult(ctx context.Context) (*protocol.BeelzebubTrialsWarResult, error) {
 	pkt := protocol.BuildBeelzebubTrialsGetWarResultPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1366,7 +1371,7 @@ func (s *RoleSession) BeelzebubTrialsLeaveWar(ctx context.Context, warID int32) 
 // BeelzebubTrialsExitTeam 退出或解散当前队伍 (Module 57, Action 7)。
 func (s *RoleSession) BeelzebubTrialsExitTeam(ctx context.Context) error {
 	pkt := protocol.BuildBeelzebubTrialsExitTeamPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1380,7 +1385,7 @@ func (s *RoleSession) BeelzebubTrialsExitTeam(ctx context.Context) error {
 // BeelzebubTrialsOpenMoral 查询当前道行属性与等级奖励信息 (Module 57, Action 23)。
 func (s *RoleSession) BeelzebubTrialsOpenMoral(ctx context.Context) (*protocol.BeelzebubMoralInfo, error) {
 	pkt := protocol.BuildBeelzebubTrialsOpenMoralPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1400,7 +1405,7 @@ func (s *RoleSession) BeelzebubTrialsOpenMoral(ctx context.Context) (*protocol.B
 // BeelzebubTrialsGetMoralAward 领取指定道行等级奖励 (Module 57, Action 24)。
 func (s *RoleSession) BeelzebubTrialsGetMoralAward(ctx context.Context, level int32) (uint8, error) {
 	pkt := protocol.BuildBeelzebubTrialsGetMoralAwardPacket(level, s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1584,7 +1589,7 @@ func (s *RoleSession) BeelzebubTrialsAutoChallenge(ctx context.Context, preferBo
 func (s *RoleSession) GetTowerInfo(ctx context.Context) (*protocol.TowerInfo, error) {
 	// 1. 获取当前六道轮回塔面板与进度信息 (对齐前序动作号)
 	pkt := protocol.BuildTowerGetInfoPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1608,7 +1613,7 @@ func (s *RoleSession) SellItem(ctx context.Context, gridID int16) (bool, error) 
 	if err != nil {
 		return false, fmt.Errorf("build sell item packet: %w", err)
 	}
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1651,7 +1656,7 @@ func (s *RoleSession) ChallengeTower(ctx context.Context, warIdx uint8, autoSell
 // ResetTowerLayer 重置六道轮回塔层数 (Mod_Tower_Base.reset_layer, ActionID 0x00200003)。
 func (s *RoleSession) ResetTowerLayer(ctx context.Context) (*protocol.TowerResetResult, error) {
 	pkt := protocol.BuildTowerResetPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1672,7 +1677,7 @@ func (s *RoleSession) ResetTowerLayer(ctx context.Context) (*protocol.TowerReset
 // StartTowerAutoChallenge 发起六道轮回自动挑战/爬塔扫荡 (Mod_Tower_Base.start_auto_challenge, ActionID 0x00200004)。
 func (s *RoleSession) StartTowerAutoChallenge(ctx context.Context, autoSellL, autoSellZ bool) error {
 	pkt := protocol.BuildTowerStartAutoChallengePacket(autoSellL, autoSellZ, s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1695,7 +1700,7 @@ func (s *RoleSession) StartTowerAutoChallenge(ctx context.Context, autoSellL, au
 // QuicklyTowerAutoChallenge 立即加速秒完成六道轮回自动爬塔 (Mod_Tower_Base.quickly_auto_challenge, ActionID 0x00200007)。
 func (s *RoleSession) QuicklyTowerAutoChallenge(ctx context.Context, autoSellL, autoSellZ bool) error {
 	pkt := protocol.BuildTowerQuicklyAutoChallengePacket(autoSellL, autoSellZ, s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -1718,7 +1723,7 @@ func (s *RoleSession) QuicklyTowerAutoChallenge(ctx context.Context, autoSellL, 
 // StopTowerAutoChallenge 停止六道轮回自动爬塔 (Mod_Tower_Base.stop_auto_challenge, ActionID 0x00200005)。
 func (s *RoleSession) StopTowerAutoChallenge(ctx context.Context) error {
 	pkt := protocol.BuildTowerStopAutoChallengePacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -2253,7 +2258,7 @@ func runMockGameServer(conn net.Conn) {
 	// 功能终结礼包 mock 状态: 每个礼包的剩余可领取次数与元宝消耗。
 	// 1 = 免费礼包(可连续领取 2 次), 4 = 吉星高照(消耗 50 元宝), 16 = 免费礼包。
 	// functionEndRolled 记录已通过 random_award 摇出的结果，仅用于列表展示；
-// 普通领取 get_game_function_end_gift 不依赖摇奖状态，也不扣除元宝。
+	// 普通领取 get_game_function_end_gift 不依赖摇奖状态，也不扣除元宝。
 	functionEndGiftIDs := []int16{1, 4, 16}
 	functionEndRemaining := map[int16]int{1: 2, 4: 1, 16: 1}
 	functionEndCost := map[int16]int32{1: 0, 4: 50, 16: 0}

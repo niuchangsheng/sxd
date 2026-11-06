@@ -40,7 +40,7 @@ const childrenPriority scheduler.RoutinePriority = 120
 //
 // 全部动作只消耗培养金/免费次数，绝不调用任何元宝接口。
 func NewChildrenDailyRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 6 * time.Second
+	const callTimeout = 10 * time.Second
 	return scheduler.NewBaseRoutine(
 		"children_daily",
 		"daily",

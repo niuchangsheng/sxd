@@ -50,7 +50,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 			slog.Info("正在执行资源任务: 药园土地巡检、成熟采摘与播种", "role_id", session.RoleID())
 
 			callWithTimeout := func(pkt *protocol.Packet, expectedAct uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				defer cancel()
 				return session.Call(cCtx, pkt, expectedAct)
 			}
@@ -1150,7 +1150,7 @@ func NewPilgrimageRoutine(configs ...PilgrimageConfig) scheduler.ActivityRoutine
 // 先查询矿山状态；未开放/超级城镇关闭时跳过。开放时进入当前矿脉、
 // 领取收益并离开。不购买抢夺次数、不清除冷却、不延长保护时间。
 func NewCrystalMineRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"crystal_mine",
 		"farming",
@@ -1194,7 +1194,7 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 进入当前矿脉
-			eCtx, eCancel := context.WithTimeout(ctx, 5*time.Second)
+			eCtx, eCancel := context.WithTimeout(ctx, 8*time.Second)
 			enterResp, err := session.Call(eCtx, protocol.BuildStMineEnterPacket(info.CurMountain), protocol.ActionIDStMineEnter)
 			eCancel()
 			if err != nil {
@@ -1257,7 +1257,7 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 		target = protocol.RefinePoolTargetLingCai
 		targetName = "灵材"
 	}
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"spirit_pool",
 		"farming",
@@ -1426,7 +1426,7 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 // 先读取活动时间窗，再逐日领取已累积的铜钱/经验收益；
 // 活动未开始/已结束或无可领日期时直接跳过。全程不消耗元宝。
 func NewGourdRealmRoutine(dictRepo dictionary.Repository) scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"gourd_realm",
 		"farming",
@@ -1528,7 +1528,7 @@ func NewGourdRealmRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 // 先查询批量炼化信息；字段语义依赖客户端资源 SWF，当前只做数据检测，
 // 语义对齐前不执行 batch_rune_use，避免误消耗符文/元宝。
 func NewRuneRefineRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"rune_refine",
 		"farming",

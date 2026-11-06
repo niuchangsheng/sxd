@@ -117,6 +117,11 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 		if ctx.Err() != nil {
 			break
 		}
+		// 会话重连期间继续发包必然超时；直接结束本轮，等待下次调度。
+		if s.State() != StateActive {
+			slog.Warn("魔王试炼会话已断开，终止本轮", "role_id", s.RoleID(), "state", s.State().String())
+			break
+		}
 
 		// 每关开始前确认剩余挑战次数，避免次数耗尽后仍盲目发起战斗。
 		ok, cErr := s.BeelzebubTrialsCheckCanChallenge(ctx)
@@ -158,7 +163,7 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 			if errors.Is(cErr, ErrBeelzebubTrialsNoResponse) {
 				silentDrops++
 				if silentDrops >= beelzebubSilentDropThreshold {
-					slog.Error("魔王试炼建队请求连续被服务端静默丢弃，判定服务端拒绝该玩法请求，终止本轮",
+					slog.Warn("魔王试炼建队请求连续被服务端静默丢弃，判定服务端拒绝该玩法请求，终止本轮",
 						"role_id", s.RoleID(),
 						"consecutive_drops", silentDrops,
 						"boss_id", cand.id,

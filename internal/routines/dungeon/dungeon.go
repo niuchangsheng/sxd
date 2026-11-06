@@ -264,7 +264,7 @@ func packItemQuantity(it protocol.ItemRecord) int32 {
 // fetchPackItemList 拉取当前主背包物品列表。
 func fetchPackItemList(ctx context.Context, session *client.RoleSession) (*protocol.PackItemListResponse, error) {
 	pkt := protocol.BuildGetPackItemListPacket()
-	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
 	resp, err := session.Call(c, pkt, protocol.ActionIDItemGetPackList)
 	cancel()
 	if err != nil {
@@ -419,7 +419,7 @@ func isEliteSweepStackType(dictRepo dictionary.Repository, it protocol.ItemRecor
 // fetchHeroMissionList 查询指定城镇的英雄副本列表 (Module 35, Action 0)。
 func fetchHeroMissionList(ctx context.Context, session *client.RoleSession, townID int) (*protocol.HeroMissionList, error) {
 	pkt := protocol.BuildHeroMissionListPacket(uint16(townID))
-	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
 	resp, err := session.Call(c, pkt, protocol.ActionHeroMissionList)
 	cancel()
 	if err != nil {
@@ -441,7 +441,7 @@ func startHeroMissionPractice(ctx context.Context, session *client.RoleSession, 
 	if err != nil {
 		return nil, err
 	}
-	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
 	resp, callErr := session.Call(c, pkt, protocol.ActionHeroMissionStartPractice)
 	cancel()
 	if callErr != nil {
@@ -455,7 +455,7 @@ func startHeroMissionPractice(ctx context.Context, session *client.RoleSession, 
 
 // quicklyHeroMissionPractice 立即完成当前英雄副本扫荡队列 (Module 35, Action 7)。
 func quicklyHeroMissionPractice(ctx context.Context, session *client.RoleSession) (*protocol.HeroQuicklyResult, error) {
-	c, cancel := context.WithTimeout(ctx, 3*time.Second)
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
 	resp, err := session.Call(c, protocol.BuildHeroQuicklyPacket(), protocol.ActionHeroMissionQuickly)
 	cancel()
 	if err != nil {
@@ -1017,7 +1017,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							// 说明: 0x00230002 实际属于英雄副本 start_practice，不能用于主线扫荡。
 							{
 								statusPkt, _ := protocol.BuildPracticeGetStatusPacket(int32(missionID), 0)
-								statusCtx, statusCancel := context.WithTimeout(ctx, 3*time.Second)
+								statusCtx, statusCancel := context.WithTimeout(ctx, 8*time.Second)
 								statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
 								statusCancel()
 
@@ -1051,7 +1051,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 								}
 								m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
 
-								callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
+								callCtx, callCancel := context.WithTimeout(ctx, 8*time.Second)
 								var respPkt *protocol.Packet
 								respPkt, callErr = session.Call(callCtx, m25Pkt, protocol.ActionIDPracticeStart)
 								callCancel()
@@ -1091,7 +1091,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 										AutoSale:  1,
 									}
 									fbPkt, _ := protocol.BuildStartPracticePacket(fbReq)
-									fbCtx, fbCancel := context.WithTimeout(ctx, 2*time.Second)
+									fbCtx, fbCancel := context.WithTimeout(ctx, 8*time.Second)
 									fbResp, fbErr := session.Call(fbCtx, fbPkt, protocol.ActionIDPracticeStart)
 									fbCancel()
 									if fbErr == nil && fbResp != nil {
@@ -1424,7 +1424,7 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 			prevAct := protocol.ActionIDTownEnter
 
 			panelPkt := protocol.BuildHuanshouPanelPacket(prevAct)
-			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
+			pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
 			panelResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDHuanshouPanel)
 			pCancel()
 			if pErr != nil || panelResp == nil || len(panelResp.Payload) == 0 {
@@ -1439,7 +1439,7 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 
 			// 2. 发送进入锁妖塔当前层指令 (Mod 701, Act 1)
 			enterPkt := protocol.BuildDemonTowerEnterPacket(layer, trialID, prevAct)
-			callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			callCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			resp, err := session.Call(callCtx, enterPkt, protocol.ActionIDDemonTowerEnter)
 			cancel()
 
@@ -1450,19 +1450,19 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 
 			// 3. 选择战斗 Buff (Mod 705, Act 6)
 			buffPkt := protocol.BuildDemonTowerBuffPacket(1, protocol.ActionIDDemonTowerEnter)
-			bCtx, bCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			bCtx, bCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(bCtx, buffPkt, protocol.ActionIDDemonTowerBuff)
 			bCancel()
 
 			// 4. 校验并同步阵型 (Mod 312, Act 38)
 			deployPkt := protocol.NewPacket(protocol.ActionIDDemonTowerDeploy, protocol.NewWriter().WriteUint32(protocol.ActionIDDemonTowerBuff).Bytes())
-			dCtx, dCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			dCtx, dCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(dCtx, deployPkt, protocol.ActionIDDemonTowerDeploy)
 			dCancel()
 
 			// 5. 触发实际战斗结算 (Mod 705, Act 1: 依据抓包对齐)
 			battlePkt := protocol.BuildDemonTowerBattlePacket(protocol.ActionIDDemonTowerDeploy)
-			batCtx, batCancel := context.WithTimeout(ctx, 2*time.Second)
+			batCtx, batCancel := context.WithTimeout(ctx, 8*time.Second)
 			batResp, batErr := session.Call(batCtx, battlePkt, protocol.ActionIDDemonTowerBattle)
 			batCancel()
 
@@ -1506,7 +1506,7 @@ func NewQiMenRoutine() scheduler.ActivityRoutine {
 
 			// 1. 查询法阵信息 (Mod 486, Act 7)
 			arrayPkt := protocol.BuildQiMenArrayInfoPacket(protocol.ActionIDTownEnter)
-			aCtx, aCancel := context.WithTimeout(ctx, 2*time.Second)
+			aCtx, aCancel := context.WithTimeout(ctx, 8*time.Second)
 			arrayResp, aErr := session.Call(aCtx, arrayPkt, protocol.ActionIDQiMenArrayInfo)
 			aCancel()
 			if aErr != nil || arrayResp == nil || len(arrayResp.Payload) == 0 {
@@ -1516,24 +1516,24 @@ func NewQiMenRoutine() scheduler.ActivityRoutine {
 
 			// 2. 查询阵眼傀儡 (Mod 485, Act 0)
 			puppetPkt := protocol.BuildQiMenPuppetInfoPacket(protocol.ActionIDQiMenArrayInfo)
-			pCtx, pCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(pCtx, puppetPkt, protocol.ActionIDQiMenPuppetInfo)
 			pCancel()
 
 			// 3. 升级星图注灵 (Mod 486, Act 1)
 			starPkt := protocol.BuildQiMenUpgradeStarPacket(protocol.ActionIDQiMenPuppetInfo)
-			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
+			sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(sCtx, starPkt, protocol.ActionIDQiMenUpgradeStar)
 			sCancel()
 
 			// 4. 布阵生效与确认 (Mod 584, Act 1 & 3)
 			depPkt := protocol.BuildQiMenFormationDeployPacket(protocol.ActionIDQiMenUpgradeStar)
-			dCtx, dCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			dCtx, dCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(dCtx, depPkt, protocol.ActionIDQiMenFormationDeploy)
 			dCancel()
 
 			confPkt := protocol.BuildQiMenFormationConfirmPacket(protocol.ActionIDQiMenFormationDeploy)
-			cCtx, cCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(cCtx, confPkt, protocol.ActionIDQiMenFormationConfirm)
 			cCancel()
 
@@ -1562,7 +1562,7 @@ func NewXunXianRoutine() scheduler.ActivityRoutine {
 
 			// 1. 查询当前寻仙关卡进度 (Mod 466, Act 1)
 			progPkt := protocol.BuildXunXianGetProgressPacket(protocol.ActionIDTownEnter)
-			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
+			pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
 			resp, err := session.Call(pCtx, progPkt, protocol.ActionIDXunXianGetProgress)
 			pCancel()
 
@@ -1577,14 +1577,14 @@ func NewXunXianRoutine() scheduler.ActivityRoutine {
 
 			for _, nID := range nodes {
 				chalPkt := protocol.BuildXunXianChallengePacket(nID, protocol.ActionIDXunXianGetProgress)
-				cCtx, cCancel := context.WithTimeout(ctx, 2*time.Second)
+				cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
 				cResp, cErr := session.Call(cCtx, chalPkt, protocol.ActionIDXunXianChallenge)
 				cCancel()
 
 				if cErr == nil && cResp != nil {
 					// 领取节点宝箱 (Act 13)
 					chestPkt := protocol.BuildXunXianClaimChestPacket(protocol.ActionIDXunXianChallenge)
-					chCtx, chCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+					chCtx, chCancel := context.WithTimeout(ctx, 8*time.Second)
 					_, _ = session.Call(chCtx, chestPkt, protocol.ActionIDXunXianClaimChest)
 					chCancel()
 					clearedCount++
@@ -1603,7 +1603,7 @@ func NewXunXianRoutine() scheduler.ActivityRoutine {
 // 挑战前先读取 require_level 校验角色等级；不满足或已通关/冷却时直接跳过，
 // 每次调度最多发起一次挑战。
 func NewZodiacRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"zodiac_challenge",
 		"dungeon",
@@ -1724,7 +1724,7 @@ func NewZodiacRoutine() scheduler.ActivityRoutine {
 // 先读各模式剩余挑战次数；仅对仍有次数的模式领奖并逐次挑战。
 // 挑战失败/不可挑战/次数耗尽时立即停止该模式。全程不消耗元宝。
 func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"spirit_trial",
 		"dungeon",
@@ -1916,7 +1916,7 @@ func executeQuestCycle(
 				slog.Info("正在交付已达成任务", "role_id", session.RoleID(), "quest_id", qid, "title", title)
 
 				compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: int32(qid)})
-				compCtx, compCancel := context.WithTimeout(ctx, 3*time.Second)
+				compCtx, compCancel := context.WithTimeout(ctx, 8*time.Second)
 				_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
 				compCancel()
 
@@ -1962,7 +1962,7 @@ func executeQuestCycle(
 
 		for _, npcID := range candidateNPCs {
 			npcPkt, _ := protocol.BuildGetNPCQuestsPacket(protocol.GetNPCQuestsRequest{NPCID: int32(npcID)})
-			npcCtx, npcCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			npcCtx, npcCancel := context.WithTimeout(ctx, 8*time.Second)
 			npcResp, npcErr := session.Call(npcCtx, npcPkt, protocol.ActionIDQuestGetNPCQuests)
 			npcCancel()
 
@@ -1990,7 +1990,7 @@ func executeQuestCycle(
 					}
 					slog.Info("NPC 处发现已达成任务，正在交付结算", "role_id", session.RoleID(), "npc_id", npcID, "quest_id", questID, "title", title)
 					compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: it.QuestID})
-					compCtx, compCancel := context.WithTimeout(ctx, 3*time.Second)
+					compCtx, compCancel := context.WithTimeout(ctx, 8*time.Second)
 					_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
 					compCancel()
 
@@ -2030,7 +2030,7 @@ func executeQuestCycle(
 				slog.Info("发现可接取任务，正在接受", "role_id", session.RoleID(), "npc_id", npcID, "quest_id", it.QuestID, "title", title)
 
 				accPkt, _ := protocol.BuildAcceptQuestPacket(protocol.AcceptQuestRequest{QuestID: it.QuestID})
-				accCtx, accCancel := context.WithTimeout(ctx, 3*time.Second)
+				accCtx, accCancel := context.WithTimeout(ctx, 8*time.Second)
 				_, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
 				accCancel()
 
@@ -2057,7 +2057,7 @@ func executeQuestCycle(
 			if q.MissionID == 0 {
 				slog.Info("正在交付对话剧情任务", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title)
 				compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: int32(qid)})
-				compCtx, compCancel := context.WithTimeout(ctx, 3*time.Second)
+				compCtx, compCancel := context.WithTimeout(ctx, 8*time.Second)
 				_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
 				compCancel()
 
@@ -2089,7 +2089,7 @@ func executeQuestCycle(
 				AutoSale:  1,
 			}
 			m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
-			enterCtx, enterCancel := context.WithTimeout(ctx, 3*time.Second)
+			enterCtx, enterCancel := context.WithTimeout(ctx, 8*time.Second)
 			enterResp, enterErr := session.Call(enterCtx, m25Pkt, protocol.ActionIDPracticeStart)
 			enterCancel()
 
@@ -2114,7 +2114,7 @@ func executeQuestCycle(
 				slog.Info("任务关卡推进挑战成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
 
 				compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: int32(qid)})
-				compCtx, compCancel := context.WithTimeout(ctx, 3*time.Second)
+				compCtx, compCancel := context.WithTimeout(ctx, 8*time.Second)
 				_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
 				compCancel()
 
@@ -2185,7 +2185,7 @@ func queryNPCQuestState(ctx context.Context, session *client.RoleSession, npcID,
 		NPCID:   npcID,
 		PrevAct: session.LastActionID(),
 	})
-	npcCtx, npcCancel := context.WithTimeout(ctx, 3*time.Second)
+	npcCtx, npcCancel := context.WithTimeout(ctx, 8*time.Second)
 	npcResp, npcErr := session.Call(npcCtx, npcPkt, protocol.ActionIDQuestGetNPCQuests)
 	npcCancel()
 	if npcErr != nil {
@@ -2214,7 +2214,7 @@ func tryAcceptQuest(ctx context.Context, session *client.RoleSession, questID in
 		QuestID: questID,
 		PrevAct: session.LastActionID(),
 	})
-	accCtx, accCancel := context.WithTimeout(ctx, 3*time.Second)
+	accCtx, accCancel := context.WithTimeout(ctx, 8*time.Second)
 	accResp, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
 	accCancel()
 
@@ -2569,7 +2569,7 @@ func executeAuthoritativeQuestCycle(
 			if q.MissionID == 0 || q.TalkQuest == 1 {
 				slog.Info("正在交付对话剧情任务", "role_id", session.RoleID(), "quest_id", q.ID, "title", q.Title)
 				finPkt := protocol.BuildFinishQuestPacket(it.QuestID, session.LastActionID())
-				finCtx, finCancel := context.WithTimeout(ctx, 3*time.Second)
+				finCtx, finCancel := context.WithTimeout(ctx, 8*time.Second)
 				_, _ = session.Call(finCtx, finPkt, protocol.ActionIDQuestFinish)
 				finCancel()
 
@@ -2637,7 +2637,7 @@ func executeAuthoritativeQuestCycle(
 func submitCompleteQuest(ctx context.Context, session *client.RoleSession, questID, endNPCID int32) (succeeded bool, packFull bool) {
 	sendSubmit := func() (*protocol.Packet, error) {
 		subPkt := protocol.BuildSubmitCompleteQuestPacket(questID, session.LastActionID())
-		subCtx, subCancel := context.WithTimeout(ctx, 3*time.Second)
+		subCtx, subCancel := context.WithTimeout(ctx, 8*time.Second)
 		defer subCancel()
 		return session.Call(subCtx, subPkt, protocol.ActionIDQuestSubmitComplete)
 	}
@@ -2672,12 +2672,12 @@ func submitCompleteQuest(ctx context.Context, session *client.RoleSession, quest
 
 	// 若任务尚未标记 finish (state == -1)，补发一次 finish_quest (0x00030004) 后重试 complete_quest (0x00030005)
 	finPkt := protocol.BuildFinishQuestPacket(questID, session.LastActionID())
-	finCtx, finCancel := context.WithTimeout(ctx, 2*time.Second)
+	finCtx, finCancel := context.WithTimeout(ctx, 8*time.Second)
 	_, _ = session.Call(finCtx, finPkt, protocol.ActionIDQuestFinish)
 	finCancel()
 
 	subPkt2 := protocol.BuildSubmitCompleteQuestPacket(questID, session.LastActionID())
-	subCtx2, subCancel2 := context.WithTimeout(ctx, 3*time.Second)
+	subCtx2, subCancel2 := context.WithTimeout(ctx, 8*time.Second)
 	resp2, err2 := session.Call(subCtx2, subPkt2, protocol.ActionIDQuestSubmitComplete)
 	subCancel2()
 	if err2 != nil || resp2 == nil || len(resp2.Payload) == 0 {
@@ -2791,7 +2791,7 @@ func advanceQuestMission(
 		targetInSections := false
 		if mapID > 0 {
 			secPkt := protocol.BuildMissionGetSectionsPacket(mapID, session.LastActionID())
-			secCtx, secCancel := context.WithTimeout(ctx, 5*time.Second)
+			secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
 			secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 			secCancel()
 			if secErr != nil {
@@ -2878,7 +2878,7 @@ func advanceQuestMission(
 			var prereqMission *dictionary.Mission
 			if !isEliteQuest && targetMission.MapID > 0 {
 				secPkt := protocol.BuildMissionGetSectionsPacket(int32(targetMission.MapID), session.LastActionID())
-				secCtx, secCancel := context.WithTimeout(ctx, 5*time.Second)
+				secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
 				secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 				secCancel()
 				if errSessionTerminated(ctx, secErr) {
@@ -3020,7 +3020,7 @@ func practiceMission(
 	}
 	m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
 
-	callCtx, callCancel := context.WithTimeout(ctx, 5*time.Second)
+	callCtx, callCancel := context.WithTimeout(ctx, 8*time.Second)
 	respPkt, callErr := session.Call(callCtx, m25Pkt, protocol.ActionIDPracticeStart)
 	callCancel()
 
@@ -3041,7 +3041,7 @@ func practiceMission(
 	case protocol.PracticeResultSuccess:
 		// 快速完成扫荡 (ActionIDPracticeQuickly: 0x00190003，服务端主动推送 0x00190004 结算通知)
 		quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
-		qCtx, qCancel := context.WithTimeout(ctx, 2*time.Second)
+		qCtx, qCancel := context.WithTimeout(ctx, 8*time.Second)
 		_, _ = session.Call(qCtx, quickPkt, protocol.ActionIDPracticeNotify)
 		qCancel()
 
@@ -3162,7 +3162,7 @@ func challengeStoryMission(
 			mapID = int32(m.SectionID)
 		}
 		secPkt := protocol.BuildMissionGetSectionsPacket(mapID, session.LastActionID())
-		secCtx, secCancel := context.WithTimeout(ctx, 5*time.Second)
+		secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
 		_, _ = session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 		secCancel()
 		if ctx.Err() != nil || session.State() == client.StateClosed {
@@ -3184,7 +3184,7 @@ func challengeStoryMission(
 		"prev_act", fmt.Sprintf("0x%08X", prevAct),
 		"payload_hex", hex.EncodeToString(enterPkt.Payload),
 	)
-	enterCtx, enterCancel := context.WithTimeout(ctx, 5*time.Second)
+	enterCtx, enterCancel := context.WithTimeout(ctx, 8*time.Second)
 	enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionIDMissionPlotEnter)
 	enterCancel()
 
@@ -3209,15 +3209,15 @@ func challengeStoryMission(
 
 	enterStatus := enterResp.Payload[0]
 	if enterStatus == 20 { // AWARD_BOX_NO_OPEN: 上次通关宝箱尚未开启或拾取，先行清理再重进
-		boxCtx, boxCancel := context.WithTimeout(ctx, 2*time.Second)
+		boxCtx, boxCancel := context.WithTimeout(ctx, 8*time.Second)
 		_, _ = session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(protocol.ActionIDMissionRank), protocol.ActionIDMissionOpenBox)
 		boxCancel()
-		pickCtx, pickCancel := context.WithTimeout(ctx, 2*time.Second)
+		pickCtx, pickCancel := context.WithTimeout(ctx, 8*time.Second)
 		_, _ = session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
 		pickCancel()
 
 		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), protocol.ActionIDMissionGetSections)
-		enterCtxR, enterCancelR := context.WithTimeout(ctx, 4*time.Second)
+		enterCtxR, enterCancelR := context.WithTimeout(ctx, 8*time.Second)
 		enterResp, enterErr = session.Call(enterCtxR, enterPkt, protocol.ActionIDMissionPlotEnter)
 		enterCancelR()
 		if enterErr != nil || enterResp == nil || len(enterResp.Payload) == 0 {
@@ -3233,7 +3233,7 @@ func challengeStoryMission(
 			return false
 		}
 		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), protocol.ActionIDMissionGetSections)
-		enterCtx2, enterCancel2 := context.WithTimeout(ctx, 4*time.Second)
+		enterCtx2, enterCancel2 := context.WithTimeout(ctx, 8*time.Second)
 		enterResp, enterErr = session.Call(enterCtx2, enterPkt, protocol.ActionIDMissionPlotEnter)
 		enterCancel2()
 		if enterErr != nil || enterResp == nil || len(enterResp.Payload) == 0 {
@@ -3287,7 +3287,7 @@ func challengeStoryMission(
 		}
 
 		fightPkt := protocol.BuildMissionFightMonsterPacket(mtID, 0, 0, session.LastActionID())
-		fightCtx, fightCancel := context.WithTimeout(ctx, 3*time.Second)
+		fightCtx, fightCancel := context.WithTimeout(ctx, 8*time.Second)
 		fightResp, fightErr := session.Call(fightCtx, fightPkt, protocol.ActionIDMissionFightMonster)
 		fightCancel()
 
@@ -3330,7 +3330,7 @@ func challengeStoryMission(
 	// 3. 结算星级评价 (Mod 4, Act 3: rank_mission)
 	// 回包解析铁律: 结算三步必须持有回包并校验非空。任一步超时都说明服务端仍停留在副本态，
 	// 此时继续发起后续 Mod 4/25 请求会被网关静默丢弃，必须立即中止并交由外层重试。
-	rankCtx, rankCancel := context.WithTimeout(ctx, 3*time.Second)
+	rankCtx, rankCancel := context.WithTimeout(ctx, 8*time.Second)
 	rankResp, rankErr := session.Call(rankCtx, protocol.BuildMissionRankPacket(protocol.ActionIDMissionFightMonster), protocol.ActionIDMissionRank)
 	rankCancel()
 	if rankErr != nil || rankResp == nil {
@@ -3343,7 +3343,7 @@ func challengeStoryMission(
 	}
 
 	// 4. 开启通关宝箱 (Mod 4, Act 4: open_box)
-	boxCtx, boxCancel := context.WithTimeout(ctx, 3*time.Second)
+	boxCtx, boxCancel := context.WithTimeout(ctx, 8*time.Second)
 	boxResp, boxErr := session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(protocol.ActionIDMissionRank), protocol.ActionIDMissionOpenBox)
 	boxCancel()
 	if boxErr != nil || boxResp == nil {
@@ -3356,7 +3356,7 @@ func challengeStoryMission(
 	}
 
 	// 5. 拾取宝箱奖励 (Mod 4, Act 5: pickup_award)
-	pickCtx, pickCancel := context.WithTimeout(ctx, 3*time.Second)
+	pickCtx, pickCancel := context.WithTimeout(ctx, 8*time.Second)
 	pickResp, pickErr := session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
 	pickCancel()
 	if pickErr != nil || pickResp == nil {

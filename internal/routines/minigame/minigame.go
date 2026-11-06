@@ -59,7 +59,7 @@ func NewFactionLuckyStarRoutine() scheduler.ActivityRoutine {
 			// 战绩面板 (Act 45) 会携带帮派成员列表，无帮派角色上会被服务端静默丢弃，
 			// 因此不能把面板查询放在最前面。
 			remainPkt := protocol.BuildFactionRollCakeRemainTimesPacket(protocol.ActionIDTownEnter)
-			rCtx, rCancel := context.WithTimeout(ctx, 3*time.Second)
+			rCtx, rCancel := context.WithTimeout(ctx, 8*time.Second)
 			remainResp, remainErr := session.Call(rCtx, remainPkt, protocol.ActionIDFactionRollCakeRemainTimes)
 			rCancel()
 
@@ -84,7 +84,7 @@ func NewFactionLuckyStarRoutine() scheduler.ActivityRoutine {
 			// 2. 查询战绩面板 (Mod 10, Act 45)：仅用于日志与 44 失败时的兜底。
 			prevAct := protocol.ActionIDFactionRollCakeRemainTimes
 			infoPkt := protocol.BuildFactionRollCakeInfoPacket(protocol.ActionIDTownEnter)
-			infoCtx, infoCancel := context.WithTimeout(ctx, 3*time.Second)
+			infoCtx, infoCancel := context.WithTimeout(ctx, 8*time.Second)
 			infoResp, infoErr := session.Call(infoCtx, infoPkt, protocol.ActionIDFactionRollCakeInfo)
 			infoCancel()
 			if infoErr == nil && infoResp != nil {
@@ -135,7 +135,7 @@ func NewFactionLuckyStarRoutine() scheduler.ActivityRoutine {
 				}
 
 				rollPkt := protocol.BuildFactionRollCakePacket(prevAct)
-				rollCtx, rollCancel := context.WithTimeout(ctx, 3*time.Second)
+				rollCtx, rollCancel := context.WithTimeout(ctx, 8*time.Second)
 				rollResp, err := session.Call(rollCtx, rollPkt, protocol.ActionIDFactionRollCake)
 				rollCancel()
 				if err != nil || rollResp == nil {
@@ -229,7 +229,7 @@ func NewTravelEventRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				return fmt.Errorf("构造仙旅奇缘状态查询封包失败: %w", err)
 			}
 
-			infoCtx, infoCancel := context.WithTimeout(ctx, 3*time.Second)
+			infoCtx, infoCancel := context.WithTimeout(ctx, 8*time.Second)
 			defer infoCancel()
 
 			respInfoPkt, err := session.Call(infoCtx, infoPkt, protocol.ActionIDFateGetInfo)
@@ -274,7 +274,7 @@ func NewTravelEventRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 					return fmt.Errorf("构造仙旅奇缘题目查询封包失败: %w", err)
 				}
 
-				qCtx, qCancel := context.WithTimeout(ctx, 3*time.Second)
+				qCtx, qCancel := context.WithTimeout(ctx, 8*time.Second)
 				respQPkt, err := session.Call(qCtx, questionPkt, protocol.ActionIDFateGetQuestion)
 				qCancel()
 				if err != nil {
@@ -329,7 +329,7 @@ func NewTravelEventRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 					return fmt.Errorf("构造仙旅奇缘提交答案封包失败: %w", err)
 				}
 
-				ansCtx, ansCancel := context.WithTimeout(ctx, 5*time.Second)
+				ansCtx, ansCancel := context.WithTimeout(ctx, 8*time.Second)
 				ansRespPkt, err := session.Call(ansCtx, answerPkt, protocol.ActionIDFateAnswer)
 				ansCancel()
 				if err != nil {
@@ -416,7 +416,7 @@ func formatFateAwards(awards []protocol.FateAward) string {
 // 按剩余次数开局：先用完免费刮图次数，再提交候选中的第一个答案，
 // 按 RIGHT/WRONG 分流。不消耗元宝。
 func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"partner_guess",
 		"minigame",
@@ -534,7 +534,7 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 // 先查询鱼钩数量，再逐个下钩直到鱼钩耗尽或背包/命格位不足；
 // 只使用免费鱼钩，不消耗元宝。
 func NewFishingRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	const fishInterval = 200 * time.Millisecond
 	return scheduler.NewBaseRoutine(
 		"fishing",
@@ -624,7 +624,7 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 // 只使用每日免费刮卡次数；结果可能为积分/元宝/形象卡/普通道具。
 // 次数不足、背包已满、刮卡失败时立即收手，不消耗任何元宝。
 func NewScratchCardRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	const shaveInterval = 300 * time.Millisecond
 	return scheduler.NewBaseRoutine(
 		"scratch_card",
@@ -734,7 +734,7 @@ func NewScratchCardRoutine() scheduler.ActivityRoutine {
 // 活跃度不足/完成/背包满时停止；最后在冰晶足够时兑换奖励。
 // 不调用 buy_hammer (消耗元宝)。
 func NewIceCaveRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"ice_cave",
 		"minigame",
@@ -867,7 +867,7 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 // 先查询活动时间与阶段；活动未开始/已结束/已关闭时跳过。
 // 题目内容由客户端资源 SWF 提供，当前缺少可靠题库来源，因此只检测状态、不提交答案。
 func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"imperial_exam",
 		"minigame",
@@ -960,7 +960,7 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				idx := protocol.ChooseExamOption(options, knownAnswer)
 				seq := protocol.ImperialExamSequenceA + uint8(idx)
 
-				sCtx, sCancel := context.WithTimeout(ctx, 5*time.Second)
+				sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
 				sResp, sErr := session.Call(sCtx, protocol.BuildImperialExamSubmitPacket(q.CurAnswerSeq, seq), protocol.ActionIDImperialExamSubmit)
 				sCancel()
 				if sErr != nil {
@@ -1034,7 +1034,7 @@ func NewEraTravelRoutine() scheduler.ActivityRoutine {
 
 			// 1. 查询游历状态 (Mod 850, Act 4)
 			statePkt := protocol.BuildEraTravelGetStatePacket(protocol.ActionIDTownEnter)
-			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
+			sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
 			resp, err := session.Call(sCtx, statePkt, protocol.ActionIDEraTravelGetState)
 			sCancel()
 
@@ -1045,13 +1045,13 @@ func NewEraTravelRoutine() scheduler.ActivityRoutine {
 
 			// 2. 掷骰移动 (Mod 850, Act 0)
 			rollPkt := protocol.BuildEraTravelRollDicePacket(1, protocol.ActionIDEraTravelGetState)
-			rCtx, rCancel := context.WithTimeout(ctx, 2*time.Second)
+			rCtx, rCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(rCtx, rollPkt, protocol.ActionIDEraTravelRollDice)
 			rCancel()
 
 			// 3. 奇遇画卷事件结算 (Mod 635, Act 0)
 			eventPkt := protocol.NewPacket(protocol.ActionIDEraEventSettle, protocol.NewWriter().WriteUint32(protocol.ActionIDEraTravelRollDice).Bytes())
-			eCtx, eCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			eCtx, eCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(eCtx, eventPkt, protocol.ActionIDEraEventSettle)
 			eCancel()
 
@@ -1080,7 +1080,7 @@ func NewLingDaoRoutine() scheduler.ActivityRoutine {
 
 			// 1. 查询灵道修炼进度 (Mod 658, Act 0)
 			statusPkt := protocol.BuildLingDaoGetStatusPacket(protocol.ActionIDTownEnter)
-			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
+			sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
 			resp, err := session.Call(sCtx, statusPkt, protocol.ActionIDLingDaoGetStatus)
 			sCancel()
 
@@ -1091,7 +1091,7 @@ func NewLingDaoRoutine() scheduler.ActivityRoutine {
 
 			// 2. 提交初解任务领悟 (Mod 711, Act 0)
 			compPkt := protocol.BuildLingDaoComprehendPacket(protocol.ActionIDLingDaoGetStatus)
-			cCtx, cCancel := context.WithTimeout(ctx, 2*time.Second)
+			cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(cCtx, compPkt, protocol.ActionIDLingDaoComprehend)
 			cCancel()
 
@@ -1131,7 +1131,7 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 
 			// 1. 查询幻兽面板 (Mod 701, Act 0)
 			panelPkt := protocol.BuildHuanshouPanelPacket(protocol.ActionIDTownEnter)
-			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
+			pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
 			panelResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDHuanshouPanel)
 			pCancel()
 			if pErr != nil || panelResp == nil || len(panelResp.Payload) == 0 {
@@ -1141,18 +1141,18 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 
 			// 2. 选定入侵章节并挑战 (Mod 696, Act 1 & 2)
 			chapPkt := protocol.NewPacket(protocol.ActionIDHuanshouInvadeChapter, protocol.NewWriter().WriteUint32(protocol.ActionIDHuanshouPanel).Bytes())
-			cCtx, cCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(cCtx, chapPkt, protocol.ActionIDHuanshouInvadeChapter)
 			cCancel()
 
 			chalPkt := protocol.BuildHuanshouInvadeChallengePacket(protocol.ActionIDHuanshouInvadeChapter)
-			chCtx, chCancel := context.WithTimeout(ctx, 2*time.Second)
+			chCtx, chCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(chCtx, chalPkt, protocol.ActionIDHuanshouInvadeChallenge)
 			chCancel()
 
 			// 3. 极速秒完成扫荡 (Mod 696, Act 3)
 			sweepPkt := protocol.BuildHuanshouInvadeSweepPacket(protocol.ActionIDHuanshouInvadeChallenge)
-			swCtx, swCancel := context.WithTimeout(ctx, 2*time.Second)
+			swCtx, swCancel := context.WithTimeout(ctx, 8*time.Second)
 			_, _ = session.Call(swCtx, sweepPkt, protocol.ActionIDHuanshouInvadeSweep)
 			swCancel()
 
@@ -1161,7 +1161,7 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			var clearedNodes int
 			for nodeID := int32(1); nodeID <= 8; nodeID++ {
 				nodePkt := protocol.BuildHuanshouInvadeNodePacket(nodeID, prevAct)
-				nCtx, nCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+				nCtx, nCancel := context.WithTimeout(ctx, 8*time.Second)
 				nResp, nErr := session.Call(nCtx, nodePkt, protocol.ActionIDHuanshouInvadeSettle)
 				nCancel()
 				if nErr == nil && nResp != nil {
@@ -1360,7 +1360,7 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 const (
 	// wuFaCallTimeout 悟法领域单次协议调用超时。实测网关响应在 2s 上下波动，
 	// 过短的超时会把"功能已开放"误判为静默丢弃，导致例程整轮跳过。
-	wuFaCallTimeout = 5 * time.Second
+	wuFaCallTimeout = 8 * time.Second
 	// wuFaDailyTaskMeditation 每日活跃度任务「每日悟法领域冥想」编号
 	wuFaDailyTaskMeditation int32 = 69
 	// wuFaMeditationBookItem 冥想书卷 (入门通玄秘馆)，线上实测对应 field_type 3
@@ -2504,7 +2504,8 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				defer ccancel()
 				resp, cErr := session.Call(cctx, pkt, action)
 				if cErr != nil || resp == nil {
-					slog.Warn("天帝宝库请求无回包",
+					// 调用方会记录具体业务上下文，这里只保留 Debug 级诊断，避免重复 WARN。
+					slog.Debug("天帝宝库请求无回包",
 						"action", fmt.Sprintf("0x%08X", action), "err", cErr)
 					return nil
 				}
@@ -2514,7 +2515,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 
 			// 1. 主面板 (Mod 594, Act 1): 校验 result_code 并读取免费钥匙/当前自选
 			mainResp := call(protocol.BuildTreasureHouseMainPanelPacket(prevAct),
-				protocol.ActionIDTreasureHouseMainPanel, 2*time.Second)
+				protocol.ActionIDTreasureHouseMainPanel, 8*time.Second)
 			if mainResp == nil {
 				return nil
 			}
@@ -2540,12 +2541,17 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			// 2. 领取今日免费钥匙 (Mod 594, Act 8)
 			if mainInfo.LeftCanGetFree > 0 {
 				freeResp := call(protocol.BuildTreasureHouseGetFreeItemPacket(prevAct),
-					protocol.ActionIDTreasureHouseGetFreeItem, 2*time.Second)
+					protocol.ActionIDTreasureHouseGetFreeItem, 8*time.Second)
 				if freeResp != nil {
 					code, cErr := protocol.ParseTreasureHouseResultCode(freeResp.Payload)
 					switch {
 					case cErr != nil:
 						slog.Warn("解析领取免费钥匙回包失败", "err", cErr)
+					case code == protocol.TreasureHouseResultNoItem:
+						// 今日已无免费钥匙可领，属于正常业务状态。
+						slog.Info("领取免费钥匙: 无可用道具",
+							"result", code,
+							"meaning", protocol.TreasureHouseResultName(code))
 					case code != protocol.TreasureHouseResultSuccess:
 						slog.Warn("领取免费钥匙失败",
 							"result", code,
@@ -2553,7 +2559,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 					default:
 						slog.Info("已领取今日免费钥匙", "left_can_get_free", mainInfo.LeftCanGetFree)
 						if refresh := call(protocol.BuildTreasureHouseMainPanelPacket(prevAct),
-							protocol.ActionIDTreasureHouseMainPanel, 2*time.Second); refresh != nil {
+							protocol.ActionIDTreasureHouseMainPanel, 8*time.Second); refresh != nil {
 							if mi, e := protocol.ParseTreasureHouseMainPanelResult(refresh.Payload); e == nil && mi.Result == protocol.TreasureHouseResultSuccess {
 								mainInfo = mi
 							}
@@ -2564,7 +2570,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 
 			// 3. 自选面板 (Mod 594, Act 2): 只有 open_flag=1 的候选才能被服务端接受
 			panelResp := call(protocol.BuildTreasureHouseInfoPacket(prevAct),
-				protocol.ActionIDTreasureHouseSelectPanel, 2*time.Second)
+				protocol.ActionIDTreasureHouseSelectPanel, 8*time.Second)
 			if panelResp == nil {
 				return nil
 			}
@@ -2639,7 +2645,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 
 			// 4. 设定三档自选大奖 (Mod 594, Act 3): 必须解析 result_code
 			selResp := call(protocol.BuildTreasureHouseSelectPacket(selectedAwards, prevAct),
-				protocol.ActionIDTreasureHouseSetAward, 2*time.Second)
+				protocol.ActionIDTreasureHouseSetAward, 8*time.Second)
 			if selResp == nil {
 				return nil
 			}
@@ -2660,9 +2666,9 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			// 5. 设置优先使用免费次数 (Mod 594, Act 4)。
 			// 该标记决定抽奖是否优先消耗免费道具；设置失败时直接放弃抽奖，避免误扣元宝。
 			flagResp := call(protocol.BuildTreasureHouseUseFreeFlagPacket(1, prevAct),
-				protocol.ActionIDTreasureHouseSetUseFreeFlag, 1500*time.Millisecond)
+				protocol.ActionIDTreasureHouseSetUseFreeFlag, 8*time.Second)
 			if flagResp == nil {
-				slog.Warn("设置免费次数优先无回包，跳过抽奖以免误消耗元宝")
+				slog.Info("设置免费次数优先无回包，跳过抽奖以免误消耗元宝")
 				return nil
 			}
 			flagCode, fErr := protocol.ParseTreasureHouseResultCode(flagResp.Payload)
@@ -2692,7 +2698,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			drawCount := 0
 			for i := 0; i < drawLimit; i++ {
 				drawResp := call(protocol.BuildTreasureHouseDrawPacket(prevAct),
-					protocol.ActionIDTreasureHouseLottery, 2*time.Second)
+					protocol.ActionIDTreasureHouseLottery, 8*time.Second)
 				if drawResp == nil {
 					break
 				}
@@ -2717,7 +2723,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 
 			// 7. 抽取结束后刷新主面板同步剩余钥匙与累计次数
 			if refresh := call(protocol.BuildTreasureHouseMainPanelPacket(prevAct),
-				protocol.ActionIDTreasureHouseMainPanel, 1500*time.Millisecond); refresh != nil {
+				protocol.ActionIDTreasureHouseMainPanel, 8*time.Second); refresh != nil {
 				if mi, e := protocol.ParseTreasureHouseMainPanelResult(refresh.Payload); e == nil && mi.Result == protocol.TreasureHouseResultSuccess {
 					slog.Info("天帝宝库抽奖后状态",
 						"free_item_num", mi.FreeItemNum,
@@ -3148,7 +3154,7 @@ func executeFindImmortalFish(ctx context.Context, session *client.RoleSession, j
 
 	// 1. 查询面板，优先处理上次未收取的龙鱼 (Mod 68, Act 1)
 	panelPkt := protocol.BuildFindImmortalOpenPacket(prevAct)
-	pCtx, pCancel := context.WithTimeout(ctx, 3*time.Second)
+	pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
 	pResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDFindImmortalOpen)
 	pCancel()
 	if pErr != nil || pResp == nil {
@@ -3275,7 +3281,7 @@ func executeFindImmortalFish(ctx context.Context, session *client.RoleSession, j
 // summonFindImmortalFish 发送一次召唤龙鱼请求 (Mod 68, Act 2) 并解析业务结果码。
 func summonFindImmortalFish(ctx context.Context, session *client.RoleSession, prevAct uint32) (*protocol.FindImmortalStartResult, error) {
 	pkt := protocol.BuildFindImmortalStartPacket(prevAct)
-	sCtx, sCancel := context.WithTimeout(ctx, 3*time.Second)
+	sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
 	defer sCancel()
 
 	resp, err := session.Call(sCtx, pkt, protocol.ActionIDFindImmortalStart)
@@ -3298,7 +3304,7 @@ func pickupFindImmortal(ctx context.Context, session *client.RoleSession, prevAc
 		return
 	}
 	pickupPkt := protocol.BuildFindImmortalPickupAwardPacket(*prevAct)
-	kCtx, kCancel := context.WithTimeout(ctx, 3*time.Second)
+	kCtx, kCancel := context.WithTimeout(ctx, 8*time.Second)
 	kResp, kErr := session.Call(kCtx, pickupPkt, protocol.ActionIDFindImmortalPickupAward)
 	kCancel()
 	*prevAct = protocol.ActionIDFindImmortalPickupAward
@@ -3342,7 +3348,7 @@ func resolveFindImmortalRemain(before, refreshed int16, refreshedOK bool) (int16
 // queryFindImmortalTokens 查询龙鱼令数量 (Mod 68, Act 5)。
 func queryFindImmortalTokens(ctx context.Context, session *client.RoleSession, prevAct uint32) (int16, bool) {
 	pkt := protocol.BuildFindImmortalGetXunXianLingPacket(prevAct)
-	qCtx, qCancel := context.WithTimeout(ctx, 2*time.Second)
+	qCtx, qCancel := context.WithTimeout(ctx, 8*time.Second)
 	resp, err := session.Call(qCtx, pkt, protocol.ActionIDFindImmortalGetXunXianLing)
 	qCancel()
 	if err != nil || resp == nil {
@@ -3391,7 +3397,7 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 
 	// 1. 检查五福临门是否开启 (Mod 68, Act 14)
 	flagPkt := protocol.BuildFindImmortalIsFiveBlessingsOpenPacket(prevAct)
-	fCtx, fCancel := context.WithTimeout(ctx, 2*time.Second)
+	fCtx, fCancel := context.WithTimeout(ctx, 8*time.Second)
 	fResp, fErr := session.Call(fCtx, flagPkt, protocol.ActionIDFindImmortalIsFiveBlessingsOpen)
 	fCancel()
 	if fErr != nil || fResp == nil {
@@ -3411,7 +3417,7 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 
 	// 2. 查询祈福面板 (Mod 68, Act 10)
 	infoPkt := protocol.BuildFindImmortalOpenFiveBlessingsPacket(prevAct)
-	iCtx, iCancel := context.WithTimeout(ctx, 3*time.Second)
+	iCtx, iCancel := context.WithTimeout(ctx, 8*time.Second)
 	iResp, iErr := session.Call(iCtx, infoPkt, protocol.ActionIDFindImmortalOpenFiveBlessings)
 	iCancel()
 	if iErr != nil || iResp == nil {
@@ -3454,7 +3460,7 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 		}
 
 		startPkt := protocol.BuildFindImmortalStartBlessPacket(prevAct)
-		sCtx, sCancel := context.WithTimeout(ctx, 3*time.Second)
+		sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
 		sResp, sErr := session.Call(sCtx, startPkt, protocol.ActionIDFindImmortalStartBless)
 		sCancel()
 		prevAct = protocol.ActionIDFindImmortalStartBless
@@ -3493,7 +3499,7 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 // endFiveBlessings 结束当前祈福并领取奖励 (Mod 68, Act 13)。
 func endFiveBlessings(ctx context.Context, session *client.RoleSession, prevAct uint32, scene string) {
 	endPkt := protocol.BuildFindImmortalEndBlessPacket(prevAct)
-	eCtx, eCancel := context.WithTimeout(ctx, 3*time.Second)
+	eCtx, eCancel := context.WithTimeout(ctx, 8*time.Second)
 	eResp, eErr := session.Call(eCtx, endPkt, protocol.ActionIDFindImmortalEndBless)
 	eCancel()
 	if eErr != nil || eResp == nil {
@@ -3549,7 +3555,7 @@ func logFindImmortalResult(scene string, roleID string, result uint8) {
 // 每日免费问灵一次；服务端下发随机奖励候选，优先选择元宝 (item_id=3345)，
 // 否则选第一项。同时领取可领的回归奖励与问灵等级奖励。全程不消耗元宝。
 func NewAskFairyRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"ask_fairy",
 		"minigame",
@@ -3692,7 +3698,7 @@ func NewAskFairyRoutine() scheduler.ActivityRoutine {
 // 先查询点金石状态：待初始化时初始化；待分享/帮助不足时跳过；可点化时读取面板并点化一次。
 // 不消耗元宝。
 func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"golden_touch_stone",
 		"minigame",
@@ -3798,7 +3804,7 @@ func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
 // 优先使用各区域免费探索次数；免费次数用尽且仅需铜钱时，按铜钱兑换少量次数继续探索。
 // 永不使用元宝兑换；功能未开放/元宝付费路径直接跳过。
 func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 3 * time.Second
+	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"forbidden_book",
 		"minigame",
