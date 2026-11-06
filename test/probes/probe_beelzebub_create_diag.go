@@ -203,14 +203,14 @@ func main() {
 		} else {
 			available := 0
 			for _, b := range openData.Bosses {
-				if b.RemainTimes > 0 {
+				if !b.Finished() {
 					available++
 				}
 			}
 			slog.Info("面板关卡可用性", "total", len(openData.Bosses), "available", available,
 				"moral_exp", openData.MoralExp, "moral_lv", openData.MoralLv, "in_activity", openData.InActivity)
 			if len(openData.Bosses) > 0 && available == 0 {
-				slog.Warn("面板显示全部关卡已无剩余次数：服务端将静默丢弃 create_team，自动化应提前跳过")
+				slog.Warn("面板显示全部关卡已完成：战斗不再产出奖励，自动化应提前跳过")
 			}
 		}
 	} else {

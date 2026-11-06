@@ -117,6 +117,36 @@ func BeelzebubTrialsBossLevel(bossID int32) int32 {
 	return 0
 }
 
+// beelzebubBossMaxTimes 魔王试炼关卡累计可挑战次数 (对齐官方
+// BeelzeBubTrialsBossType.Bosses[bossID][15])。
+//
+// 面板回包第二列 (times) 达到该值后，官方客户端即把关卡标记为“已完成”；
+// 服务端仍然允许建队与战斗，但不再产出声望/铜钱/道行等奖励，自动化应跳过以免空转。
+// 神秘层关卡上限固定为 1。
+var beelzebubBossMaxTimes = map[int32]int32{
+	1: 7, 2: 7, 3: 10, 4: 10, 5: 10, 6: 10, 7: 3, 8: 3, 9: 3, 10: 3,
+	11: 3, 12: 3, 13: 5, 14: 5, 15: 5, 16: 5, 17: 5, 18: 5, 19: 5, 20: 5,
+	21: 5, 22: 5, 23: 5, 24: 5, 29: 7, 30: 7, 31: 7, 32: 7, 33: 10, 34: 10,
+	35: 10, 36: 10, 37: 10, 38: 10, 39: 10, 40: 10, 41: 1, 42: 1, 43: 1, 44: 1,
+	45: 1, 46: 1, 47: 15, 48: 15, 49: 5, 50: 5, 51: 5, 52: 5, 53: 5, 54: 5,
+	55: 5, 56: 5, 57: 5, 58: 5, 59: 5, 60: 5, 61: 3, 62: 3, 63: 3, 64: 3,
+	65: 3, 66: 3, 67: 3, 68: 3, 69: 3, 70: 3, 71: 3, 72: 3, 73: 5, 74: 5,
+	75: 5, 76: 5, 77: 5, 78: 5, 79: 5, 80: 5, 81: 5, 82: 5, 83: 5, 84: 5,
+	85: 7, 86: 7, 87: 7, 88: 7, 89: 7, 90: 7, 91: 7, 92: 7, 93: 7, 94: 7,
+	95: 7, 96: 7, 97: 10, 98: 10, 99: 10, 100: 10, 101: 10, 102: 10, 103: 10, 104: 10,
+	105: 10, 106: 10, 107: 10, 108: 10, 109: 10, 110: 10, 111: 10, 112: 10, 113: 10, 114: 10,
+	115: 10, 116: 10, 117: 10, 118: 10, 119: 10, 120: 15, 121: 15, 122: 15, 123: 15, 124: 10,
+	125: 15, 126: 15, 127: 15, 128: 15, 129: 15, 130: 15, 131: 15, 132: 15, 133: 15, 134: 15,
+	135: 15, 136: 15, 137: 1, 138: 20, 139: 20, 140: 20, 141: 20, 142: 20, 143: 20, 144: 1,
+	145: 1, 146: 1, 147: 1, 148: 1, 149: 1, 150: 1, 151: 1, 152: 1, 153: 20, 154: 20,
+	155: 20, 156: 20, 157: 20, 158: 20, 159: 1,
+}
+
+// BeelzebubTrialsBossMaxTimes 返回该魔王的累计可挑战次数；未知关卡返回 0。
+func BeelzebubTrialsBossMaxTimes(bossID int32) int32 {
+	return beelzebubBossMaxTimes[bossID]
+}
+
 // beelzebubBossSecrets 魔王试炼神秘层标记映射表 (对齐 BeelzeBubTrialsBossType.Bosses 第 10 列)。
 //
 //	0: 普通关卡
@@ -153,16 +183,38 @@ func BeelzebubTrialsBossDisplayName(bossID int32) string {
 
 // BeelzebubBossStatus 魔王试炼面板中的单个关卡状态行 (官方 AS3 `[Int, Int, Int]`)。
 //
-// 实机对照 (2026-11-04)：
-//   - s1 可挑战角色：全部关卡第三列为 1，建队正常；
-//   - s0 已通关/无剩余次数角色：全部关卡第三列为 0，服务端对 create_team 静默丢弃。
+// 语义以官方客户端 com.datas.BeelzebubTrialsData 为准：
 //
-// 因此第三列是判定“该关卡今日是否仍可挑战”的唯一可靠状态，Action 22 的
-// 可挑战列表只反映等级解锁，不反映今日剩余次数。
+//	_loc8_.times = row[1];                       // 已挑战次数 (跨天累计，每战递增)
+//	_loc8_.isTodayChallenge = row[2] == 1;       // 今日是否已挑战过该关卡
+//	_loc8_.maxTimes = BeelzeBubTrialsBossType.Bosses[bossID][15];
+//	chanllegeOverToday[bossID] = isTodayChallenge || times >= maxTimes;
+//
+// 实机验证 (2026-11-06)：
+//   - 挑战前 s1 角色 43 关全部为 `times=N, today=0`，可正常建队并战斗；
+//   - 挑战 boss 78 后该行为 `times=N+2, today=1`，道行经验同步增加；
+//   - 对 `times >= maxTimes` 的 boss 8 反复挑战服务端仍允许战斗，但道行不再增长，
+//     即“已完成”只代表不再产出奖励，并不代表服务端会拒绝建队。
+//
+// 因此“今日还能获得奖励的关卡”= 今日未挑战 且 已挑战次数 < maxTimes。
 type BeelzebubBossStatus struct {
-	BossID      int32 `json:"boss_id"`
-	Param       int32 `json:"param"`        // 第二列，语义未确认，仅保留用于诊断
-	RemainTimes int32 `json:"remain_times"` // 第三列：1=今日可挑战，0=已通关/次数用尽
+	BossID          int32 `json:"boss_id"`
+	Times           int32 `json:"times"`            // 第二列：已挑战次数 (跨天累计)
+	TodayChallenged bool  `json:"today_challenged"` // 第三列：1=今日已挑战
+}
+
+// Finished 判断该关卡是否已完成（今日已挑战或累计次数已达上限），
+// 与官方客户端的 chanllegeOverToday 判定一致。
+func (b BeelzebubBossStatus) Finished() bool {
+	if b.TodayChallenged {
+		return true
+	}
+	maxTimes, ok := beelzebubBossMaxTimes[b.BossID]
+	if !ok {
+		// 未知关卡（新版本新增内容）不做过度过滤，交由服务端裁决。
+		return false
+	}
+	return b.Times >= maxTimes
 }
 
 // BeelzebubTrialsOpenData 魔王试炼主面板数据。
@@ -302,9 +354,9 @@ func BuildBeelzebubTrialsGetMoralAwardPacket(level int32, _ uint32) *Packet {
 
 // ParseBeelzebubTrialsCheckCanChallengeResponse 解析今日是否可挑战魔王回包 (Module 57, Action 20)。
 //
-// 注意（2026-11-04 实机）：返回值 1 仅表示活动/功能可用；角色所有关卡均已无剩余次数时
-// 本动作仍返回 1。判定“今天是否还有可挑战关卡”必须读取 Open 面板的
-// BeelzebubBossStatus.RemainTimes（第三列），否则会向服务端发送必然被静默丢弃的建队请求。
+// 注意（2026-11-04 实机）：返回值 1 仅表示活动/功能可用，并不表示还有可产出奖励的关卡。
+// 判定“今天还有哪些关卡值得挑战”必须读取 Open 面板每行的
+// BeelzebubBossStatus.Times / TodayChallenged（见 BeelzebubBossStatus.Finished）。
 func ParseBeelzebubTrialsCheckCanChallengeResponse(payload []byte) (bool, error) {
 	r := NewReader(payload)
 	res, err := r.ReadUint8()
@@ -393,18 +445,18 @@ func ParseBeelzebubTrialsOpenResponse(payload []byte) (*BeelzebubTrialsOpenData,
 		if err != nil {
 			return nil, err
 		}
-		param, err := r.ReadInt32()
+		times, err := r.ReadInt32()
 		if err != nil {
 			return nil, err
 		}
-		remainTimes, err := r.ReadInt32()
+		todayFlag, err := r.ReadInt32()
 		if err != nil {
 			return nil, err
 		}
 		bosses = append(bosses, BeelzebubBossStatus{
-			BossID:      bossID,
-			Param:       param,
-			RemainTimes: remainTimes,
+			BossID:          bossID,
+			Times:           times,
+			TodayChallenged: todayFlag == 1,
 		})
 	}
 

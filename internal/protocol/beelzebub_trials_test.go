@@ -312,19 +312,19 @@ func TestBuildAndParseBeelzebubTrialsMoral(t *testing.T) {
 }
 
 // TestParseBeelzebubTrialsOpenBossStatuses 验证面板回包中每关卡的
-// [bossID, param, remainTimes] 三元组会被完整保留，供自动化提前判定
-// “今日是否还有可挑战关卡”，避免在全部通关后继续发送必然被静默丢弃的建队请求。
+// [bossID, 已挑战次数, 今日已挑战标记] 三元组会被完整保留，供自动化按
+// 官方客户端规则判定关卡是否还能产出奖励。
 func TestParseBeelzebubTrialsOpenBossStatuses(t *testing.T) {
 	w := NewWriter()
 	w.WriteUint16(0)   // teamCount
 	w.WriteInt32(8023) // 队伍列表后的附加 Int32
 	w.WriteUint16(2)   // bossCount
 	w.WriteInt32(71)   // bossID: 魔掌门元识
-	w.WriteInt32(9)    // param
-	w.WriteInt32(1)    // remainTimes: 可挑战
+	w.WriteInt32(2)    // 已挑战次数
+	w.WriteInt32(1)    // 今日已挑战
 	w.WriteInt32(72)   // bossID: 魔掌门神识
-	w.WriteInt32(0)    // param
-	w.WriteInt32(0)    // remainTimes: 已通关 / 无剩余次数
+	w.WriteInt32(0)    // 已挑战次数
+	w.WriteInt32(0)    // 今日未挑战
 	w.WriteInt32(4520) // moralExp
 	w.WriteInt32(10)   // moralLv
 	w.WriteInt32(1)    // bGet
@@ -337,10 +337,44 @@ func TestParseBeelzebubTrialsOpenBossStatuses(t *testing.T) {
 	if len(data.Bosses) != 2 {
 		t.Fatalf("expected 2 boss statuses, got %d", len(data.Bosses))
 	}
-	if data.Bosses[0] != (BeelzebubBossStatus{BossID: 71, Param: 9, RemainTimes: 1}) {
+	if data.Bosses[0] != (BeelzebubBossStatus{BossID: 71, Times: 2, TodayChallenged: true}) {
 		t.Fatalf("unexpected boss status #0: %+v", data.Bosses[0])
 	}
-	if data.Bosses[1] != (BeelzebubBossStatus{BossID: 72, Param: 0, RemainTimes: 0}) {
+	if data.Bosses[1] != (BeelzebubBossStatus{BossID: 72, Times: 0}) {
 		t.Fatalf("unexpected boss status #1: %+v", data.Bosses[1])
+	}
+}
+
+// TestBeelzebubBossStatusFinished 验证关卡完成判定与官方客户端
+// chanllegeOverToday 一致：今日已挑战或累计次数达到 maxTimes。
+func TestBeelzebubBossStatusFinished(t *testing.T) {
+	cases := []struct {
+		name   string
+		status BeelzebubBossStatus
+		want   bool
+	}{
+		{"今日已挑战", BeelzebubBossStatus{BossID: 71, Times: 0, TodayChallenged: true}, true},
+		{"次数达上限", BeelzebubBossStatus{BossID: 71, Times: BeelzebubTrialsBossMaxTimes(71)}, true},
+		{"次数超上限", BeelzebubBossStatus{BossID: 78, Times: 70}, true},
+		{"次数未达上限", BeelzebubBossStatus{BossID: 78, Times: 3}, false},
+		{"未知关卡不过滤", BeelzebubBossStatus{BossID: 999, Times: 100}, false},
+	}
+	for _, c := range cases {
+		if got := c.status.Finished(); got != c.want {
+			t.Errorf("%s: Finished()=%v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestBeelzebubTrialsBossMaxTimes 验证上限表与官方配置一致（含神秘层固定为 1）。
+func TestBeelzebubTrialsBossMaxTimes(t *testing.T) {
+	if got := BeelzebubTrialsBossMaxTimes(7); got != 3 {
+		t.Errorf("boss 7 max times = %d, want 3", got)
+	}
+	if got := BeelzebubTrialsBossMaxTimes(78); got != 5 {
+		t.Errorf("boss 78 max times = %d, want 5", got)
+	}
+	if got := BeelzebubTrialsBossMaxTimes(144); got != 1 {
+		t.Errorf("secret boss 144 max times = %d, want 1", got)
 	}
 }

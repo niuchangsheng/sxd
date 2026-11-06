@@ -87,7 +87,7 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 			}
 
 			if len(warResults) == 0 {
-				slog.Info("魔王试炼暂无可挑战关卡或今日挑战次数已耗尽", "role_id", session.RoleID())
+				slog.Info("魔王试炼暂无可获得奖励的关卡或今日挑战次数已耗尽", "role_id", session.RoleID())
 			} else {
 				succeeded := 0
 				for _, warRes := range warResults {

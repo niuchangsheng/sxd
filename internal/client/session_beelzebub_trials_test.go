@@ -451,8 +451,12 @@ func beelzebubOpenPayload(bosses []protocol.BeelzebubBossStatus) []byte {
 	w.WriteUint16(uint16(len(bosses)))
 	for _, b := range bosses {
 		w.WriteInt32(b.BossID)
-		w.WriteInt32(b.Param)
-		w.WriteInt32(b.RemainTimes)
+		w.WriteInt32(b.Times)
+		if b.TodayChallenged {
+			w.WriteInt32(1)
+		} else {
+			w.WriteInt32(0)
+		}
 	}
 	w.WriteInt32(0) // moralExp
 	w.WriteInt32(1) // moralLv
@@ -462,7 +466,7 @@ func beelzebubOpenPayload(bosses []protocol.BeelzebubBossStatus) []byte {
 }
 
 // TestRoleSession_BeelzebubTrialsAutoChallengeAll_AllBossesCleared 验证面板显示所有关卡
-// 均无剩余次数（今日已全部通关）时，自动化不再发送任何 create_team 请求。
+// 均已完成（今日已挑战或累计次数达上限）时，自动化不再发送任何 create_team 请求。
 func TestRoleSession_BeelzebubTrialsAutoChallengeAll_AllBossesCleared(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -487,9 +491,9 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll_AllBossesCleared(t *testing
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
 					protocol.ActionIDBeelzebubTrialsOpen,
 					beelzebubOpenPayload([]protocol.BeelzebubBossStatus{
-						{BossID: 71, RemainTimes: 0},
-						{BossID: 72, RemainTimes: 0},
-						{BossID: 1, RemainTimes: 0},
+						{BossID: 71, Times: 3},                        // 累计次数达上限
+						{BossID: 72, Times: 0, TodayChallenged: true}, // 今日已挑战
+						{BossID: 1, Times: 7},                         // 累计次数达上限
 					}),
 				))
 			case protocol.ActionIDBeelzebubTrialsGetCanChallengeList:
@@ -559,7 +563,7 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll_AllBossesCleared(t *testing
 }
 
 // TestRoleSession_BeelzebubTrialsAutoChallengeAll_FiltersClearedBosses 验证面板中
-// RemainTimes=0 的关卡会被跳过，而面板未收录的新解锁关卡仍然挑战。
+// 已完成的关卡会被跳过，而仍有剩余次数与面板未收录的新解锁关卡仍然挑战。
 func TestRoleSession_BeelzebubTrialsAutoChallengeAll_FiltersClearedBosses(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -581,12 +585,12 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll_FiltersClearedBosses(t *tes
 					[]byte{protocol.BeelzebubTrialsSuccess},
 				))
 			case protocol.ActionIDBeelzebubTrialsOpen:
-				// 71 已通关；72 可挑战；1 未出现在面板（视为新解锁，保持可挑战）。
+				// 71 累计次数已达上限；72 今日未挑战且次数未达上限；1 未出现在面板（视为新解锁，保持可挑战）。
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
 					protocol.ActionIDBeelzebubTrialsOpen,
 					beelzebubOpenPayload([]protocol.BeelzebubBossStatus{
-						{BossID: 71, RemainTimes: 0},
-						{BossID: 72, RemainTimes: 1},
+						{BossID: 71, Times: 3},
+						{BossID: 72, Times: 2},
 					}),
 				))
 			case protocol.ActionIDBeelzebubTrialsGetCanChallengeList:

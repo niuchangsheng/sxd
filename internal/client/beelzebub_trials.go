@@ -58,10 +58,10 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 		return nil, nil
 	}
 
-	// 预检面板关卡状态：面板第三列 (RemainTimes) 为 0 表示该关卡今日已通关/无剩余次数。
-	// 实机验证 (2026-11-04)：角色全部通关时 Action 20 仍返回可挑战、Action 22 仍返回
-	// 等级解锁的完整列表，只有该面板字段会变为 0；此时服务端对 create_team 静默丢弃。
-	panelRemain := make(map[int32]int32)
+	// 预检面板关卡状态：官方客户端以 [已挑战次数, 今日已挑战标记] 判定关卡是否完成
+	// (今日已挑战 或 累计次数 >= maxTimes)，完成后的战斗不再产出奖励。
+	// Action 20 / 22 只反映活动可用与等级解锁，无法用于判定剩余收益，故以此面板为准。
+	panelStatus := make(map[int32]protocol.BeelzebubBossStatus)
 	panelUsable := false
 	if openData, oErr := s.BeelzebubTrialsOpen(ctx); oErr != nil {
 		slog.Warn("打开魔王试炼面板失败，跳过关卡可用性预检", "role_id", s.RoleID(), "error", oErr)
@@ -69,13 +69,13 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 		panelUsable = true
 		available := 0
 		for _, b := range openData.Bosses {
-			panelRemain[b.BossID] = b.RemainTimes
-			if b.RemainTimes > 0 {
+			panelStatus[b.BossID] = b
+			if !b.Finished() {
 				available++
 			}
 		}
 		if available == 0 {
-			slog.Info("魔王试炼今日已全部通关或剩余次数为 0，跳过本轮挑战",
+			slog.Info("魔王试炼今日已全部完成或累计次数已达上限，跳过本轮挑战",
 				"role_id", s.RoleID(), "panel_boss_count", len(openData.Bosses))
 			s.claimBeelzebubMoralAward(ctx)
 			return nil, nil
@@ -95,13 +95,13 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 	}
 
 	// queue 保存已发现的全部关卡 ID；seen 记录已完成（含失败）的关卡。
-	// 面板明确标记剩余次数为 0 的关卡直接排除；面板未出现的关卡（如清关后动态解锁的
+	// 面板明确标记已完成的关卡直接排除；面板未出现的关卡（如清关后动态解锁的
 	// 神秘层）保持可挑战，避免误伤新解锁内容。
 	queue := append([]int32(nil), canList...)
-	if panelUsable && len(panelRemain) > 0 {
-		filtered := beelzebubFilterAvailableBosses(queue, panelRemain)
+	if panelUsable && len(panelStatus) > 0 {
+		filtered := beelzebubFilterAvailableBosses(queue, panelStatus)
 		if skipped := len(queue) - len(filtered); skipped > 0 {
-			slog.Info("魔王试炼跳过今日已无剩余次数的关卡",
+			slog.Info("魔王试炼跳过今日已完成或次数已达上限的关卡",
 				"role_id", s.RoleID(), "skipped", skipped, "remain_candidates", len(filtered))
 		}
 		queue = filtered
@@ -138,8 +138,8 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 				slog.Warn("刷新魔王试炼可挑战列表失败，逐关挑战结束", "role_id", s.RoleID(), "error", fErr)
 				break
 			}
-			if panelUsable && len(panelRemain) > 0 {
-				fresh = beelzebubFilterAvailableBosses(fresh, panelRemain)
+			if panelUsable && len(panelStatus) > 0 {
+				fresh = beelzebubFilterAvailableBosses(fresh, panelStatus)
 			}
 			added, newIDs := mergeBeelzebubCandidates(&queue, seen, fresh)
 			if added == 0 {
@@ -185,8 +185,8 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 
 		// 每关结束后立即刷新列表，尽早纳入新解锁的隐藏/神秘层关卡。
 		if fresh, fErr := s.BeelzebubTrialsGetCanChallengeList(ctx); fErr == nil {
-			if panelUsable && len(panelRemain) > 0 {
-				fresh = beelzebubFilterAvailableBosses(fresh, panelRemain)
+			if panelUsable && len(panelStatus) > 0 {
+				fresh = beelzebubFilterAvailableBosses(fresh, panelStatus)
 			}
 			if added, newIDs := mergeBeelzebubCandidates(&queue, seen, fresh); added > 0 {
 				slog.Info("魔王试炼检测到新解锁关卡",
@@ -214,17 +214,17 @@ func nextBeelzebubCandidate(ids []int32, seen map[int32]bool, preferBossID int32
 	return beelzebubCandidate{}, false
 }
 
-// beelzebubFilterAvailableBosses 依据面板剩余次数过滤关卡 ID。
+// beelzebubFilterAvailableBosses 依据面板关卡状态过滤关卡 ID。
 //
-// 仅剔除面板中明确标记 RemainTimes <= 0 的关卡；面板未收录的关卡保持可挑战，
-// 以保留清关后动态解锁的神秘层关卡。
-func beelzebubFilterAvailableBosses(ids []int32, remain map[int32]int32) []int32 {
-	if len(remain) == 0 {
+// 仅剔除面板中明确标记已完成（今日已挑战或累计次数达上限）的关卡；
+// 面板未收录的关卡保持可挑战，以保留清关后动态解锁的神秘层关卡。
+func beelzebubFilterAvailableBosses(ids []int32, status map[int32]protocol.BeelzebubBossStatus) []int32 {
+	if len(status) == 0 {
 		return ids
 	}
 	filtered := make([]int32, 0, len(ids))
 	for _, id := range ids {
-		if r, ok := remain[id]; ok && r <= 0 {
+		if st, ok := status[id]; ok && st.Finished() {
 			continue
 		}
 		filtered = append(filtered, id)

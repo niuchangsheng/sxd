@@ -611,18 +611,29 @@ Int32 lucky_item_num
 > 连续无回包时熔断本轮试炼（见 `client.ErrBeelzebubTrialsNoResponse`），
 > 禁止遍历全部可挑战关卡盲目重试。
 
-**可提前检查的关卡状态（`open` 回包）**：官方描述符中的 Boss 行是
-`[Int bossID, Int param, Int remainTimes]`。线上对照实验（同日 s0 / s1 双角色）：
+**关卡状态（`open` 回包）**：官方描述符中的 Boss 行是
+`[Int bossID, Int times, Int todayChallenged]`，语义以官方客户端
+`com.datas.BeelzebubTrialsData` 为准：
 
-| 角色状态 | Action 20 | Action 22 列表 | 面板 Boss 行第三列 | `create_team` |
-| :--- | :---: | :---: | :---: | :--- |
-| s1 可挑战 | `1` | 39 个 | 全部 `1` | 正常返回 `result=5` |
-| s0 全部通关/无剩余次数 | `1` | 155 个 | 全部 `0` | **静默丢弃** |
+- `times`：该关卡已挑战次数（跨天累计，每次战斗递增）；
+- `todayChallenged`：`1` 表示今日已经挑战过；
+- 官方以 `todayChallenged == 1 || times >= BeelzeBubTrialsBossType.Bosses[bossID][15]`
+  判定关卡已完成（`chanllegeOverToday` / `bOver`），神秘层关卡上限固定为 `1`。
 
-因此 `check_can_challenge` 与 `can_challenge_list` 都**不足以**判定今日是否还有可打关卡，
-必须解析 `open (1)` 面板第三列：全部为 `0` 时直接跳过本轮（此时任何建队请求都会被丢弃），
-部分为 `0` 时仅跳过这些关卡。自动化实现见
-`client.BeelzebubTrialsAutoChallengeAll` 的关卡可用性预检。
+实机验证（2026-11-06，s1 等级 73 角色）：
+
+| 观察点 | 结果 |
+| :--- | :--- |
+| 挑战前 43 关面板 | 全部 `todayChallenged=0`，`times` 为 0~70（跨天累计） |
+| 挑战 boss 78（`times=3 < 5`） | `create_team=5`、战斗胜利，道行经验 `75 -> 85` |
+| 同一行挑战后 | `times=3 -> 5`、`todayChallenged=0 -> 1` |
+| 挑战 boss 8（`times=14 >= 3`） | 服务端**仍允许**建队与战斗，但道行经验不增长 |
+
+结论：`todayChallenged=0` 表示今日尚未挑战，**不是**“无剩余次数”；服务端对已达上限的
+关卡也不会拒绝建队/战斗，只是不再产出奖励。因此自动化应以
+`Finished() = todayChallenged || times >= maxTimes` 过滤关卡，仍有收益的关卡照常挑战。
+2026-11-04 曾把第三列 `0` 误读为“已通关/无剩余次数”，导致面板全为 `0`（新的一天）
+时整轮被跳过；该误读已在 `BeelzebubBossStatus` 中修正。
 
 ### 4.13 Module 10 (0x000A) / 69 (0x0045): 帮派祭神与帮派转盘
 
