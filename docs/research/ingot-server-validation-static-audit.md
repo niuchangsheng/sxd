@@ -209,9 +209,13 @@ if(storeIngot > _ctrl.player.ingot) { 提示不足; return; }   // 唯一的客�
 
 ## 七、附录
 
-- 协议动作全量清单（JSON，6788 条）：`~/rea-sxd/audit/actions.json`
-- 货币敏感候选（615 条）：`~/rea-sxd/audit/candidates.txt`
-- 解析/筛选脚本：`~/rea-sxd/audit/parse_proto.py`、`~/rea-sxd/audit/filter_sensitive.py`
+- **协议动作全量字典（仓库内，6788 条）**：`docs/protocol/actions.json`，
+  查询与 Go 骨架生成工具：`scripts/protocol/protodict.py`，
+  用法见 `docs/protocol/README.md`。后续编写新玩法 Routine 或补
+  ADR-0015 失败码分支时可直接查表，无需重新反编译 `Main.swf`。
+- 审计会话原始产物：`~/rea-sxd/audit/actions.json`、
+  `~/rea-sxd/audit/candidates.txt`（615 条货币敏感候选）、
+  `~/rea-sxd/audit/parse_proto.py`、`~/rea-sxd/audit/filter_sensitive.py`
 - 关键源码位置：
   - `com/Config.as`（EnableProtocolHelper=false）
   - `com/assist/gm/Debug.as`、`com/assist/gm/GmDebug.as`、
