@@ -39,8 +39,12 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 			slog.Info("正在执行日常任务: 神龙普通上供", "role_id", session.RoleID())
 
 			// collectTmp 把祭坛临时格中的龙珠收取到背包，腾出空间继续上供。
+			//
+			// 服务端对批次做整体校验：只要混入一条失效/过期记录，整批都会返回
+			// INVALID_DRAGONBALL(2)。因此这里逐颗发送，跳过失效记录，只要至少
+			// 收取成功一颗就视为腾出了空间。
 			collectTmp := func() (bool, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				infoResp, err := session.Call(cCtx, protocol.BuildDragonballTmpInfoPacket(), protocol.ActionIDDragonballTmpInfo)
 				cancel()
 				if err != nil || infoResp == nil {
@@ -50,23 +54,35 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 				if err != nil || len(balls) == 0 {
 					return false, err
 				}
-				ids := make([]int32, 0, len(balls))
+				collected, invalid := 0, 0
 				for _, b := range balls {
-					ids = append(ids, b.PlayerDBID)
+					if err := ctx.Err(); err != nil {
+						return collected > 0, nil
+					}
+					cCtx2, cancel2 := context.WithTimeout(ctx, 6*time.Second)
+					resp, cErr := session.Call(cCtx2, protocol.BuildDragonballCollectPacket([]int32{b.PlayerDBID}), protocol.ActionIDDragonballCollect)
+					cancel2()
+					if cErr != nil || resp == nil {
+						continue
+					}
+					result, ids, perr := protocol.ParseDragonballCollectResult(resp.Payload)
+					if perr != nil {
+						continue
+					}
+					switch result {
+					case protocol.DragonballResultSuccess, protocol.DragonballResultPackageFull:
+						collected++
+						slog.Info("神龙祭坛临时格收取成功",
+							"role_id", session.RoleID(), "player_d_b_id", b.PlayerDBID, "collected", ids)
+					case protocol.DragonballResultInvalidDragonball:
+						invalid++
+						slog.Info("神龙祭坛临时格跳过失效龙珠",
+							"role_id", session.RoleID(), "player_d_b_id", b.PlayerDBID)
+					}
 				}
-				cCtx2, cancel2 := context.WithTimeout(ctx, 6*time.Second)
-				resp, err := session.Call(cCtx2, protocol.BuildDragonballCollectPacket(ids), protocol.ActionIDDragonballCollect)
-				cancel2()
-				if err != nil || resp == nil {
-					return false, err
-				}
-				result, collected, perr := protocol.ParseDragonballCollectResult(resp.Payload)
-				if perr != nil {
-					return false, perr
-				}
-				slog.Info("神龙祭坛临时格收取",
-					"role_id", session.RoleID(), "result", result, "requested", len(ids), "collected", len(collected))
-				return result == protocol.DragonballResultSuccess || result == protocol.DragonballResultPackageFull, nil
+				slog.Info("神龙祭坛临时格收取完成",
+					"role_id", session.RoleID(), "requested", len(balls), "collected", collected, "invalid", invalid)
+				return collected > 0, nil
 			}
 
 			offers := 0

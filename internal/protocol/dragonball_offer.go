@@ -205,10 +205,12 @@ func ParseDragonballTmpInfoResult(payload []byte) ([]DragonballTmpBall, error) {
 
 // BuildDragonballCollectPacket 构造收取临时格龙珠封包 (0x006F0001)。
 //
-// 官方 request 为 [[Int]]：外层数组包含 1 组，内层为本次要收取的玩家龙珠实例 ID。
+// 官方 AS3 描述符 request=[[IntUtil]]，经线上实测：Haloer 序列化器把参数
+// 展开为「Uint16 count + Int32 player_d_b_id」的扁平数组；若再包一层
+// outer count=1，服务端会返回 INVALID_DRAGONBALL(2)。同时服务端对批次
+// 做整体校验：只要混入一条失效记录，整批都会被拒，因此调用方应逐颗收取。
 func BuildDragonballCollectPacket(ids []int32) *Packet {
 	w := NewWriter()
-	w.WriteUint16(1)
 	w.WriteUint16(uint16(len(ids)))
 	for _, id := range ids {
 		w.WriteInt32(id)

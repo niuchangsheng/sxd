@@ -21,6 +21,8 @@ const (
 	FunctionIDWorshipMars int32 = 55
 	// FunctionIDWuFaField 悟法领域功能编号 (FunctionTypeData: WuFaField)
 	FunctionIDWuFaField int32 = 245
+	// FunctionIDFateHunt 猎命功能编号 (FunctionTypeData: Fate)
+	FunctionIDFateHunt int32 = 24
 	// FunctionIDZodiac 十二生肖功能编号 (FunctionTypeData: Zodiac)
 	FunctionIDZodiac int32 = 58
 	// FunctionIDBeelzebubTrials 魔王试炼功能编号 (FunctionTypeData: BeelzebubTrials)

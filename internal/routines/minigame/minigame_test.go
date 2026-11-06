@@ -103,9 +103,10 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 		if err := r.Execute(context.Background(), session, nil); err != nil {
 			t.Fatalf("悟法领域执行失败: %v", err)
 		}
-		// Mock 面板中秘馆 2 有免费十连，应优先执行十连抽卡。
-		if got := session.LastActionID(); got != protocol.ActionIDWuFaDrawCard {
-			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDWuFaDrawCard, got)
+		// Mock 面板中秘馆 2 有免费十连：应优先执行十连抽卡，
+		// 抽卡后刷新面板发现免费次数归零且无冥想书卷，随即停止。
+		if got := session.LastActionID(); got != protocol.ActionIDWuFaFieldInfo {
+			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDWuFaFieldInfo, got)
 		}
 	})
 
@@ -986,5 +987,24 @@ func TestSelectTreasureAwardsByNeed(t *testing.T) {
 		if got[i].TierID != int32(i+1) || got[i].ItemID != id {
 			t.Errorf("tier %d expected award %d, got %+v", i+1, id, got[i])
 		}
+	}
+}
+
+func TestHasWuFaItem(t *testing.T) {
+	panel := &protocol.WuFaPanel{Items: []protocol.WuFaItemState{
+		{ItemID: 8359, ItemNum: 0},
+		{ItemID: 8641, ItemNum: 8},
+	}}
+	if hasWuFaItem(panel, 8359) {
+		t.Fatal("8359 数量为 0，应判定为无余量")
+	}
+	if !hasWuFaItem(panel, 8641) {
+		t.Fatal("8641 数量为 8，应判定有余量")
+	}
+	if hasWuFaItem(panel, 8700) {
+		t.Fatal("不存在的道具应判定为无余量")
+	}
+	if hasWuFaItem(nil, 8641) {
+		t.Fatal("空面板应判定为无余量")
 	}
 }

@@ -6,7 +6,8 @@
 //   - main_panel          Act 1 -> 0x02990001
 //   - get_deploy_info     Act 2 -> 0x02990002
 //   - get_monster_team_info Act 3 -> 0x02990003
-//   - deploy              Act 4 -> 0x02990004  [Int job_id, UByte team_type]
+//   - deploy              Act 4 -> 0x02990004  [Int player_role_id, UByte grid_type_id]
+//     (grid_type_id=0 表示下阵; 已由官方客户端 CommonDeployView.up_deploy/down_deploy 验证)
 //   - start_challenge     Act 5 -> 0x02990005  [Int job_id, Int battle_stars]
 //   - active_job_stunt    Act 6 -> 0x02990006  [Int job_id]
 //   - active_soul         Act 7 -> 0x02990007  [Int job_id]
@@ -40,6 +41,18 @@ const (
 	MasterPracticeResultSuccess uint8 = 0
 	// MasterPracticeResultFailed 失败
 	MasterPracticeResultFailed uint8 = 1
+	// MasterPracticeResultNotExistGrid 格位不存在 (仅 deploy)
+	MasterPracticeResultNotExistGrid uint8 = 2
+	// MasterPracticeResultOnDeployLimit 上阵数量限制 (仅 deploy)
+	MasterPracticeResultOnDeployLimit uint8 = 3
+	// MasterPracticeResultLeaveTeam 需先离队/下阵 (仅 deploy)
+	MasterPracticeResultLeaveTeam uint8 = 4
+	// MasterPracticeResultNeedUpTibu1 需先上阵替补1 (仅 deploy)
+	MasterPracticeResultNeedUpTibu1 uint8 = 5
+	// MasterPracticeResultNeedDownTibu2 需先下阵替补2 (仅 deploy)
+	MasterPracticeResultNeedDownTibu2 uint8 = 6
+	// MasterPracticeResultUpPartnerLimit 上阵伙伴数量限制 (仅 deploy)
+	MasterPracticeResultUpPartnerLimit uint8 = 7
 	// MasterPracticeResultNoChallengeTimes 挑战次数不足
 	MasterPracticeResultNoChallengeTimes uint8 = 8
 	// MasterPracticeResultIsChallenged 今日已挑战
@@ -58,6 +71,8 @@ const (
 	MasterPracticeResultConditionLimited uint8 = 15
 	// MasterPracticeResultStepUpCD 突破冷却中
 	MasterPracticeResultStepUpCD uint8 = 16
+	// MasterPracticeResultNotActiveAll 炼魂未全部激活
+	MasterPracticeResultNotActiveAll uint8 = 17
 	// MasterPracticeResultTopStep 已达最高境界
 	MasterPracticeResultTopStep uint8 = 18
 	// MasterPracticeResultIsLocked 未解锁
@@ -104,6 +119,17 @@ func BuildMasterPracticePanelPacket(prevAct uint32) *Packet {
 	}
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDMasterPracticePanel, w.Bytes())
+}
+
+// BuildMasterPracticeDeployPacket 构造宗师修行布阵/下阵封包 (0x02990004)。
+//
+// 官方客户端 CommonDeployView.up_deploy 发送 [player_role_id Int32, grid_type_id UByte]
+// 上阵；down_deploy 发送 [player_role_id Int32, 0] 下阵。
+func BuildMasterPracticeDeployPacket(playerRoleID int32, gridTypeID uint8) *Packet {
+	w := NewWriter()
+	w.WriteInt32(playerRoleID)
+	w.WriteUint8(gridTypeID)
+	return NewPacket(ActionIDMasterPracticeDeploy, w.Bytes())
 }
 
 // BuildMasterPracticeChallengePacket 构造发起宗师试炼挑战封包 (0x02990005)。

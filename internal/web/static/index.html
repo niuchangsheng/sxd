@@ -149,6 +149,16 @@
     }
     input:checked + .slider { background-color: var(--success); }
     input:checked + .slider:before { transform: translateX(18px); }
+    .role-select {
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 0.8rem;
+      max-width: 180px;
+    }
+    .role-count { font-size: 0.7rem; color: var(--text-muted); font-weight: normal; }
   </style>
 </head>
 <body>
@@ -200,7 +210,10 @@
     <div class="card">
       <div class="card-title">
         <span>⚡ 自动化玩法矩阵 (30+ 玩法)</span>
-        <div style="display: flex; gap: 6px;">
+        <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+          <select id="routine-role" class="role-select" onchange="changeRoutineRole(this.value)" title="选择要单独调整的角色；选择“全部角色”时开关对所有角色生效">
+            <option value="">全部角色 (全局)</option>
+          </select>
           <button class="btn btn-success" onclick="applyPreset('recommended')">一键减负预设</button>
           <button class="btn btn-secondary" onclick="applyPreset('all')">全开</button>
           <button class="btn btn-secondary" onclick="applyPreset('none')">全关</button>
@@ -224,18 +237,29 @@
   </div>
 
   <script>
+    let allRoles = [];
     let allRoutines = [];
     let currentDomain = 'all';
+    let selectedRoleId = '';
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[ch]);
+    }
 
     async function fetchData() {
       try {
+        const routinesURL = '/api/routines' + (selectedRoleId ? '?role_id=' + encodeURIComponent(selectedRoleId) : '');
         const [rolesRes, logsRes, routinesRes] = await Promise.all([
           fetch('/api/roles'),
           fetch('/api/logs'),
-          fetch('/api/routines')
+          fetch(routinesURL)
         ]);
         if (rolesRes.ok) {
-          renderRoles(await rolesRes.json());
+          allRoles = await rolesRes.json();
+          renderRoles(allRoles);
+          renderRoleFilter();
         }
         if (logsRes.ok) {
           renderLogs(await logsRes.json());
@@ -258,11 +282,32 @@
       }
       tbody.innerHTML = roles.map(r => `
         <tr>
-          <td><strong>${r.role_name}</strong></td>
-          <td>${r.server_id}</td>
-          <td><span class="badge ${r.state === 'Active' ? 'badge-success' : (r.state === 'Closed' ? 'badge-danger' : 'badge-warn')}">${r.state}</span></td>
+          <td><strong>${escapeHtml(r.role_name)}</strong></td>
+          <td>${escapeHtml(r.server_id)}</td>
+          <td><span class="badge ${r.state === 'Active' ? 'badge-success' : (r.state === 'Closed' ? 'badge-danger' : 'badge-warn')}">${escapeHtml(r.state)}</span></td>
         </tr>
       `).join('');
+    }
+
+    function renderRoleFilter() {
+      const sel = document.getElementById('routine-role');
+      if (!sel) return;
+      const signature = allRoles.map(r => `${r.role_id}:${r.role_name}:${r.server_id}`).join('|');
+      if (sel.dataset.signature !== signature) {
+        sel.innerHTML = '<option value="">全部角色 (全局)</option>' + allRoles.map(r =>
+          `<option value="${escapeHtml(r.role_id)}">${escapeHtml(r.role_name)} · ${escapeHtml(r.server_id)}</option>`
+        ).join('');
+        sel.dataset.signature = signature;
+      }
+      if (selectedRoleId && !allRoles.some(r => r.role_id === selectedRoleId)) {
+        selectedRoleId = '';
+      }
+      sel.value = selectedRoleId;
+    }
+
+    function changeRoutineRole(roleID) {
+      selectedRoleId = roleID;
+      fetchData();
     }
 
     function renderLogs(logs) {
@@ -300,25 +345,30 @@
         ? allRoutines 
         : allRoutines.filter(r => r.domain === currentDomain);
 
-      container.innerHTML = filtered.map(r => `
+      container.innerHTML = filtered.map(r => {
+        const roleSummary = (!selectedRoleId && r.roles && r.roles.length > 0)
+          ? ` · <span class="role-count">${r.roles.filter(x => x.enabled).length}/${r.roles.length} 个角色启用</span>`
+          : '';
+        return `
         <div class="routine-item">
           <div class="routine-meta">
             <div class="routine-name">
-              <span>${r.name}</span>
+              <span>${escapeHtml(r.name)}</span>
               <span class="badge ${r.state === 'Cooling' ? 'badge-warn' : (r.enabled ? 'badge-success' : 'badge-danger')}">
                 ${r.state === 'Cooling' ? '熔断休眠中' : (r.enabled ? '运行中' : '已停用')}
               </span>
             </div>
-            <div class="routine-desc">${r.description || r.id}</div>
+            <div class="routine-desc">${escapeHtml(r.description || r.id)}${roleSummary}</div>
           </div>
           <div>
             <label class="toggle">
-              <input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleRoutine('${r.id}', this.checked)">
+              <input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleRoutine('${escapeHtml(r.id)}', this.checked)">
               <span class="slider"></span>
             </label>
           </div>
         </div>
-      `).join('');
+      `;
+      }).join('');
     }
 
     async function toggleRoutine(id, enabled) {
@@ -326,7 +376,7 @@
         await fetch('/api/routines', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, enabled })
+          body: JSON.stringify({ role_id: selectedRoleId, id, enabled })
         });
         fetchData();
       } catch (e) {
@@ -336,10 +386,14 @@
 
     async function applyPreset(preset) {
       try {
+        const scope = selectedRoleId ? `角色 ${selectedRoleId}` : '全部角色';
+        if (!confirm(`确认对 ${scope} 应用预设「${preset}」？`)) {
+          return;
+        }
         await fetch('/api/routines', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ preset })
+          body: JSON.stringify({ role_id: selectedRoleId, preset })
         });
         fetchData();
       } catch (e) {

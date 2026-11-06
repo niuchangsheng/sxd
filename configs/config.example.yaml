@@ -28,6 +28,11 @@ accounts:
       - server_id: "s0"        # 区服ID，如测试1服为 "s0"，双线1区为 "s1"
         role_name: "YOUR_ROLE_NAME"
         auto_login: true
+      # 同一账号可继续追加多个区服角色：每个角色拥有独立会话、心跳与调度器，
+      # 换票阶段会按 startup.ticket_*_interval_seconds 串行拉开间隔。
+      # - server_id: "s1"
+      #   role_name: "YOUR_SECOND_ROLE_NAME"
+      #   auto_login: true
 
 scheduler:
   jitter:
@@ -101,6 +106,7 @@ scheduler:
     collection_booklets: true   # 23. 神仙收藏册 (领取声望档位奖励并拜访好友)
     npc_friendship: true        # 24. NPC结交 (赠送铜钱伴手礼，不用元宝)
     dragonball_offer: true        # 神龙普通上供 (铜钱获取活跃度，不消耗元宝)
+    fate_hunt: true               # 免费猎命 + 命宫碎片兑换 (铜钱获取活跃度，不消耗元宝)
     destiny_sword: true         # 25. 飞剑 (一键淬炼剑意，不用元宝)
     daily_gifts: true           # 26. 每日免费礼包 (俸禄/灵石/PC微端礼包)
     eudemons: true              # 27. 幻兽经脉 (自动激活经脉，不用元宝)
@@ -187,3 +193,48 @@ scheduler:
   # 喜从天降与五福临门均无策略参数，也不会消耗元宝：
   # - 喜从天降：查询龙鱼令数量后串行召唤并领奖，直到龙鱼令耗尽；
   # - 五福临门：只使用每日免费祈福次数并立即领奖。
+
+  # 宗师修行策略
+  # 服务端要求宗师修行阵容中所有已上阵角色 (含不可下阵的主角) 与挑战方向同职业；
+  # 错误码 11 的官方文案是“请上阵相同职业的角色”。
+  # 主角通过切换“神器绝技”(Mod 85 Act 3 use_stunt_skill) 转换职业：
+  # 职业 -> 已激活绝技的映射来自 Mod 85 Act 5 get_artifact_stunt_info；
+  # 切换成功后服务端会改写主角当前 role_id，因此可依次修行 practice_order 中的职业。
+  master_practice:
+    practice_order: []           # 期望修行的职业 JobId 顺序，如 [15, 3, 1]；留空=主角当前职业
+    max_stars_per_job: 30        # 单方向累计星数上限；服务端 MAX_STARS 会提前视为满星
+    auto_normalize_deploy: true  # 自动下阵异职业伙伴、上阵同职业伙伴，使整队满足服务端要求
+    allow_switch_stunt: true     # 是否允许通过切换主角宗师绝技转换职业
+    allow_step_up: true          # 挑战后是否自动尝试境界突破
+    # 注意：切换绝技会改写主角当前职业，可能影响竞技场等其它队伍；
+    # 建议把希望最终保留的职业放在 practice_order 最后。
+
+  # 多区服启动编排：相邻两次平台换票之间的随机间隔 (秒)。
+  # 平台 Web 登录对同一账号存在频控，多区服必须串行换票并拉开间隔。
+  # 显式设置为 0 可关闭延迟。
+  startup:
+    ticket_min_interval_seconds: 2
+    ticket_max_interval_seconds: 5
+
+  # 按区服覆盖全局调度策略 (可选)。
+  # 合并语义：映射逐键合并、标量整体替换、列表整体替换；未列出的字段继承全局。
+  # 下方示例让 s0 开启天帝宝库并走 auto 选奖，s1 仍继承全局设置。
+  # server_overrides:
+  #   s0:
+  #     routines:
+  #       treasure_house: true
+  #     treasure_house:
+  #       selection_mode: auto
+  #   s1:
+  #     routines:
+  #       treasure_house: true
+  #     treasure_house:
+  #       selection_mode: explicit
+  #       award_ids: [4, 21, 33]
+  #
+  # 还可覆盖 cron_times / dungeon / pilgrimage / spirit_pool 等任意 scheduler 子项，例如：
+  #   s0:
+  #     cron_times: ["00:00", "12:00", "20:01"]
+  #     dungeon:
+  #       sweep:
+  #         max_batch_times: 3

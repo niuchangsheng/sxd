@@ -137,14 +137,16 @@ func TestLogBuffer_Capacity(t *testing.T) {
 }
 
 type mockRoutineProvider struct {
-	routines []web.RoutineStatus
+	routines   []web.RoutineStatus
+	lastRoleID string
 }
 
-func (m *mockRoutineProvider) ListRoutines() []web.RoutineStatus {
+func (m *mockRoutineProvider) ListRoutines(roleID string) []web.RoutineStatus {
 	return m.routines
 }
 
-func (m *mockRoutineProvider) ToggleRoutine(id string, enabled bool) error {
+func (m *mockRoutineProvider) ToggleRoutine(roleID, id string, enabled bool) error {
+	m.lastRoleID = roleID
 	for i := range m.routines {
 		if m.routines[i].ID == id {
 			m.routines[i].Enabled = enabled
@@ -154,7 +156,8 @@ func (m *mockRoutineProvider) ToggleRoutine(id string, enabled bool) error {
 	return nil
 }
 
-func (m *mockRoutineProvider) ApplyPreset(preset string) error {
+func (m *mockRoutineProvider) ApplyPreset(roleID, preset string) error {
+	m.lastRoleID = roleID
 	for i := range m.routines {
 		if preset == "all" {
 			m.routines[i].Enabled = true
@@ -224,5 +227,27 @@ func TestWebServer_RoutinesAPI(t *testing.T) {
 	if mockP.routines[0].Enabled || mockP.routines[1].Enabled {
 		t.Error("expected all routines to be disabled after preset none")
 	}
-}
 
+	// 4. POST /api/routines 指定 role_id 时透传给按角色隔离的管理器
+	roleToggleBody := strings.NewReader(`{"role_id": "s0-遁一", "id": "herb_garden", "enabled": true}`)
+	roleResp, err := http.Post(baseURL+"/api/routines", "application/json", roleToggleBody)
+	if err != nil {
+		t.Fatalf("POST /api/routines with role_id failed: %v", err)
+	}
+	roleResp.Body.Close()
+	if mockP.lastRoleID != "s0-遁一" {
+		t.Errorf("expected role_id to be forwarded, got %q", mockP.lastRoleID)
+	}
+
+	// 5. GET /api/routines?role_id=... 也透传角色过滤
+	roleListResp, err := http.Get(baseURL + "/api/routines?role_id=s0-%E9%81%81%E4%B8%80")
+	if err != nil {
+		t.Fatalf("GET /api/routines?role_id failed: %v", err)
+	}
+	defer roleListResp.Body.Close()
+	var roleList []web.RoutineStatus
+	_ = json.NewDecoder(roleListResp.Body).Decode(&roleList)
+	if len(roleList) != 2 {
+		t.Fatalf("expected 2 routines for role query, got %d", len(roleList))
+	}
+}

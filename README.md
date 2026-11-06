@@ -120,6 +120,31 @@ scheduler:
     arena: true
 ```
 
+### 多区服与按区服策略覆盖
+
+在 `accounts[].roles` 中列出多个 `server_id` 即可同时运行多个区服。每个角色会获得独立的
+`RoleSession` 与 `RoleScheduler`；换票阶段串行执行并按 `startup.ticket_min_interval_seconds` /
+`ticket_max_interval_seconds` 加入随机间隔，避免同一账号短时间多次 Web 登录触发风控。
+
+若需要让不同区服使用不同的玩法开关或策略参数，使用 `scheduler.server_overrides.<server_id>`：
+
+```yaml
+scheduler:
+  routines:
+    treasure_house: true
+  server_overrides:
+    s0:
+      treasure_house:
+        selection_mode: auto
+    s1:
+      treasure_house:
+        selection_mode: explicit
+        award_ids: [4, 21, 33]
+```
+
+覆盖采用深度合并语义：映射逐键合并、标量整体替换、列表整体替换，未列出的字段继承全局配置。
+Web 控制台的玩法面板可切换“全部角色 / 指定角色”，按角色隔离开关，互不影响。
+
 ---
 
 ## 🤝 贡献与规范

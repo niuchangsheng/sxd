@@ -144,3 +144,45 @@ func TestForbiddenBookRoutine_ExchangeFailureStop(t *testing.T) {
 		t.Fatalf("exchange failure should not trigger exploration, got %d", exploreCalls.Load())
 	}
 }
+
+// TestForbiddenBookRoutine_SkipsPaidExploreAreas 验证：面板同时下发免费入口与
+// 元宝计费入口时，例程只使用免费入口，绝不因 cur_number>0 而误扣元宝。
+func TestForbiddenBookRoutine_SkipsPaidExploreAreas(t *testing.T) {
+	var exploreCalls atomic.Int32
+	var paidExplores atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDForbiddenBookInfo:
+			// 线上同款布局：type=20 多次入口剩 4 次但每次 300 元宝；
+			// type=20 单次入口免费且剩 2 次。
+			_ = protocol.WritePacket(conn, protocol.BuildForbiddenBookInfoResultPacket(protocol.ForbiddenBookInfo{
+				Areas: []protocol.ForbiddenBookArea{
+					{ForbiddenType: 20, ExploreType: protocol.ForbiddenBookMulti, CurNumber: 4, CostIngot: 300},
+					{ForbiddenType: 20, ExploreType: protocol.ForbiddenBookOnce, CurNumber: 2, CostIngot: 0},
+				},
+			}))
+		case protocol.ActionIDForbiddenBookExplore:
+			exploreCalls.Add(1)
+			if len(pkt.Payload) >= 2 && pkt.Payload[1] == protocol.ForbiddenBookMulti {
+				paidExplores.Add(1)
+			}
+			_ = protocol.WritePacket(conn, protocol.BuildForbiddenBookExploreResultPacket(protocol.AwakeResultSuccess))
+		case protocol.ActionIDForbiddenBookExchangeInfo:
+			// 兑换价格全部含元宝，例程不应兑换。
+			_ = protocol.WritePacket(conn, protocol.BuildForbiddenBookExchangeInfoResultPacket([]protocol.ForbiddenBookExchangeInfo{
+				{ForbiddenType: 20, CostCoin: 100, CostIngot: 5, Count: 5},
+			}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewForbiddenBookRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("forbidden book: %v", err)
+	}
+	if got := paidExplores.Load(); got != 0 {
+		t.Fatalf("paid explore must never run, got %d", got)
+	}
+	if got := exploreCalls.Load(); got != 2 {
+		t.Fatalf("expected 2 free explorations, got %d", got)
+	}
+}

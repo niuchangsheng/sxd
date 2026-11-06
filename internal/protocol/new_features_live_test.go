@@ -315,6 +315,19 @@ func TestMasterPracticePacketLayouts(t *testing.T) {
 	if got := hex.EncodeToString(up.Payload); got != "0000000f" {
 		t.Fatalf("step_up payload mismatch: %s", got)
 	}
+
+	// deploy: [player_role_id Int32, grid_type_id UByte]，grid=0 表示下阵。
+	deployUp := protocol.BuildMasterPracticeDeployPacket(768553, 9)
+	if deployUp.ActionID != protocol.ActionIDMasterPracticeDeploy {
+		t.Fatalf("unexpected deploy action: 0x%08X", deployUp.ActionID)
+	}
+	if got := hex.EncodeToString(deployUp.Payload); got != "000bba2909" {
+		t.Fatalf("deploy up payload mismatch: %s", got)
+	}
+	deployDown := protocol.BuildMasterPracticeDeployPacket(1035439, 0)
+	if got := hex.EncodeToString(deployDown.Payload); got != "000fccaf00" {
+		t.Fatalf("deploy down payload mismatch: %s", got)
+	}
 }
 
 func TestParseMasterPracticeFailureCodes(t *testing.T) {

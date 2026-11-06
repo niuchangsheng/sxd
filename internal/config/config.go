@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -20,6 +21,10 @@ type Config struct {
 	Log       LogConfig       `yaml:"log"`
 	Accounts  []AccountConfig `yaml:"accounts"`
 	Scheduler SchedulerConfig `yaml:"scheduler"`
+
+	// schedulerNode 保留 scheduler 段的原始 YAML 节点，用于按区服做深度合并覆盖。
+	// 未经过 Load 手工构造的 Config 该字段为空，EffectiveScheduler 会自动回退。
+	schedulerNode *yaml.Node
 }
 
 // LogConfig 本地文件日志配置
@@ -97,10 +102,16 @@ type RoleConfig struct {
 
 // SchedulerConfig 任务调度器与防封配置
 type SchedulerConfig struct {
-	Jitter          JitterConfig           `yaml:"jitter"`
-	Preset          string                 `yaml:"preset"`
-	CronTimes       []string               `yaml:"cron_times"`
-	Routines        map[string]bool        `yaml:"routines"`
+	Jitter    JitterConfig    `yaml:"jitter"`
+	Preset    string          `yaml:"preset"`
+	CronTimes []string        `yaml:"cron_times"`
+	Routines  map[string]bool `yaml:"routines"`
+	Startup   StartupConfig   `yaml:"startup"`
+	// ServerOverrides 按区服覆盖全局调度策略。
+	// 覆盖采用 YAML 深度合并语义：标量整体替换、映射逐键合并、列表整体替换。
+	// 未列出的字段继承全局配置。
+	ServerOverrides map[string]*ServerOverrideConfig `yaml:"server_overrides"`
+
 	Dungeon         DungeonConfig          `yaml:"dungeon"`
 	SixRealms       SixRealmsConfig        `yaml:"six_realms"`
 	Pilgrimage      PilgrimageConfig       `yaml:"pilgrimage"`
@@ -112,7 +123,95 @@ type SchedulerConfig struct {
 	TreasureHouse   TreasureHouseConfig    `yaml:"treasure_house"`
 	LuckyStar       LuckyStarConfig        `yaml:"lucky_star"`
 	OnlineGift      OnlineGiftConfig       `yaml:"online_gift"`
+	MasterPractice  MasterPracticeConfig   `yaml:"master_practice"`
 	Expert          map[string]interface{} `yaml:"expert"`
+}
+
+// MasterPracticeConfig 宗师修行策略配置。
+//
+// 官方服务端要求宗师修行阵容中所有已上阵角色 (含不可下阵的主角) 都与挑战方向同 JobId。
+// 主角可通过 Mod_Library_Base.use_stunt_skill (Module 85 Action 3) 切换神器绝技，
+// 绝技与职业的映射来自 get_artifact_stunt_info (Module 85 Action 5)；
+// 切换成功后服务端会改写主角当前 role_id/职业。PracticeOrder 指定要依次修行的职业顺序：
+// 当前方向满星后，自动切到下一个职业的已激活绝技并重整阵容。
+type MasterPracticeConfig struct {
+	// PracticeOrder 期望修行的职业 JobId 顺序 (如 [15, 3, 1])。
+	// 当前职业累计星数满后会切换到下一个职业的宗师绝技继续修行。
+	// 留空时默认只修行主角当前 JobId 对应的方向。
+	PracticeOrder []int32 `yaml:"practice_order"`
+	// MaxStarsPerJob 单方向累计星数上限 (默认 30)。
+	// 服务端返回 MAX_STARS(10) 时会立即视为满星并切换到下一职业，因此该值只是本地快速判断上限。
+	MaxStarsPerJob int32 `yaml:"max_stars_per_job"`
+	// AutoNormalizeDeploy 是否自动调整宗师修行阵容：
+	// 下阵异职业伙伴、上阵同职业伙伴，使整队满足服务端同职业要求 (默认 true)。
+	AutoNormalizeDeploy *bool `yaml:"auto_normalize_deploy"`
+	// AllowSwitchStunt 是否允许通过切换主角宗师绝技来转换职业 (默认 true)。
+	// 切换绝技会改变主角当前 role_id/职业，是官方支持的职业切换途径。
+	AllowSwitchStunt *bool `yaml:"allow_switch_stunt"`
+	// AllowStepUp 是否在挑战后自动升阶 (默认 true)。
+	AllowStepUp *bool `yaml:"allow_step_up"`
+}
+
+// StartupConfig 多区服启动编排配置。
+type StartupConfig struct {
+	// TicketMinIntervalSeconds 相邻两次换票之间的最小间隔 (秒)。
+	// 平台 Web 登录对同一账号存在频控，多区服换票必须串行并拉开间隔。
+	TicketMinIntervalSeconds *float64 `yaml:"ticket_min_interval_seconds"`
+	// TicketMaxIntervalSeconds 相邻两次换票之间的最大间隔 (秒)。
+	TicketMaxIntervalSeconds *float64 `yaml:"ticket_max_interval_seconds"`
+}
+
+// TicketDelayRange 返回换票间隔的上下限。未配置时默认 2~5 秒；
+// 显式配置为 0 表示关闭延迟。
+func (c StartupConfig) TicketDelayRange() (time.Duration, time.Duration) {
+	minSec, maxSec := 2.0, 5.0
+	if c.TicketMinIntervalSeconds != nil {
+		minSec = *c.TicketMinIntervalSeconds
+	}
+	if c.TicketMaxIntervalSeconds != nil {
+		maxSec = *c.TicketMaxIntervalSeconds
+	}
+	if minSec < 0 {
+		minSec = 0
+	}
+	if maxSec < 0 {
+		maxSec = 0
+	}
+	if minSec > maxSec {
+		minSec, maxSec = maxSec, minSec
+	}
+	return time.Duration(minSec * float64(time.Second)), time.Duration(maxSec * float64(time.Second))
+}
+
+// ServerOverrideConfig 单个区服的局部策略覆盖。
+//
+// 该结构在 YAML 中与 scheduler 段同构（但不应再嵌套 server_overrides）：
+//
+//	server_overrides:
+//	  s0:
+//	    routines: { treasure_house: true }
+//	    treasure_house: { selection_mode: auto }
+//
+// 为支持任意子项覆盖，这里保留原始 YAML 节点并在 EffectiveScheduler 中做深度合并。
+type ServerOverrideConfig struct {
+	// Routines 玩法开关覆盖，与全局 routines 逐键合并。
+	Routines map[string]bool `yaml:"routines"`
+
+	rawNode *yaml.Node
+}
+
+// UnmarshalYAML 捕获原始节点，同时解析 routines 便于配置自检。
+func (o *ServerOverrideConfig) UnmarshalYAML(node *yaml.Node) error {
+	type plain struct {
+		Routines map[string]bool `yaml:"routines"`
+	}
+	var p plain
+	if err := node.Decode(&p); err != nil {
+		return err
+	}
+	o.Routines = p.Routines
+	o.rawNode = cloneYAMLNode(node)
+	return nil
 }
 
 // SixRealmsConfig 六道轮回挑战与灵件配置
@@ -336,6 +435,18 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: failed to parse YAML: %w", err)
 	}
 
+	// 保留 scheduler 原始节点：区服覆盖必须基于“配置原文”合并后再套默认值，
+	// 否则默认值会掩盖按区服显式设置的零值 (例如 max_* 计算字段)。
+	var rawDoc struct {
+		Scheduler yaml.Node `yaml:"scheduler"`
+	}
+	if err := yaml.Unmarshal([]byte(expanded), &rawDoc); err != nil {
+		return nil, fmt.Errorf("config: failed to parse scheduler node: %w", err)
+	}
+	if rawDoc.Scheduler.Kind != 0 {
+		cfg.schedulerNode = cloneYAMLNode(&rawDoc.Scheduler)
+	}
+
 	// 补齐并校验默认值
 	if cfg.Server.Host == "" {
 		cfg.Server.Host = "127.0.0.1"
@@ -344,110 +455,13 @@ func Load(path string) (*Config, error) {
 		cfg.Server.Port = 8080
 	}
 
-	if cfg.Scheduler.Jitter.MinSeconds <= 0 {
-		cfg.Scheduler.Jitter.MinSeconds = 1.0
-	}
-	if cfg.Scheduler.Jitter.MaxSeconds <= 0 {
-		cfg.Scheduler.Jitter.MaxSeconds = 3.0
-	}
-	if cfg.Scheduler.Jitter.MinSeconds > cfg.Scheduler.Jitter.MaxSeconds {
-		cfg.Scheduler.Jitter.MinSeconds, cfg.Scheduler.Jitter.MaxSeconds =
-			cfg.Scheduler.Jitter.MaxSeconds, cfg.Scheduler.Jitter.MinSeconds
-	}
+	applySchedulerDefaults(&cfg.Scheduler)
 
-	if cfg.Scheduler.Routines == nil {
-		cfg.Scheduler.Routines = make(map[string]bool)
-	}
-
-	if cfg.Scheduler.Preset == "" {
-		cfg.Scheduler.Preset = "recommended"
-	}
-
-	if len(cfg.Scheduler.CronTimes) == 0 {
-		cfg.Scheduler.CronTimes = []string{
-			"00:00", "06:02", "08:02", "12:00", "16:05", "18:01", "20:01", "22:01",
+	// 预校验所有区服覆盖，避免运行期才发现覆盖节点非法。
+	for serverID := range cfg.Scheduler.ServerOverrides {
+		if _, err := cfg.EffectiveScheduler(serverID); err != nil {
+			return nil, fmt.Errorf("config: invalid server_overrides[%s]: %w", serverID, err)
 		}
-	}
-
-	if cfg.Scheduler.Expert == nil {
-		cfg.Scheduler.Expert = make(map[string]interface{})
-	}
-
-	hasSubDungeon := cfg.Scheduler.Dungeon.QuestCycle.Enabled ||
-		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina > 0 ||
-		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
-		cfg.Scheduler.Dungeon.Sweep.Enabled ||
-		cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes > 0 ||
-		cfg.Scheduler.Dungeon.Sweep.SellSweptItems ||
-		cfg.Scheduler.Dungeon.Sweep.AutoSellSweptItems ||
-		cfg.Scheduler.Dungeon.SellSweptItems ||
-		cfg.Scheduler.Dungeon.AutoSellSweptItems ||
-		len(cfg.Scheduler.Dungeon.Sweep.Pipeline) > 0
-	if len(cfg.Scheduler.Dungeon.Pipeline) == 0 && !hasSubDungeon {
-		cfg.Scheduler.Dungeon.Pipeline = []string{
-			"push_mainline",
-			"push_side",
-			"sweep_elite",
-		}
-	}
-	if cfg.Scheduler.Dungeon.SellSweptItems || cfg.Scheduler.Dungeon.AutoSellSweptItems {
-		cfg.Scheduler.Dungeon.Sweep.SellSweptItems = true
-	}
-	// 默认启用秒完成
-	if !cfg.Scheduler.Dungeon.PreferPracticeQuickly {
-		cfg.Scheduler.Dungeon.PreferPracticeQuickly = true
-	}
-	if cfg.Scheduler.Dungeon.MaxBatchTimes <= 0 {
-		cfg.Scheduler.Dungeon.MaxBatchTimes = 10
-	}
-	if cfg.Scheduler.Dungeon.MaxReplenishStamina <= 0 {
-		if cfg.Scheduler.Dungeon.MaxReplenishTimes > 0 {
-			cfg.Scheduler.Dungeon.MaxReplenishStamina = cfg.Scheduler.Dungeon.MaxReplenishTimes * 10
-		} else {
-			cfg.Scheduler.Dungeon.MaxReplenishStamina = 200
-		}
-	}
-	if cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina <= 0 {
-		if cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 {
-			cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina = cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes * 10
-		} else {
-			cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina = 200
-		}
-	}
-	if cfg.Scheduler.Dungeon.MaxReplenishTimes <= 0 {
-		cfg.Scheduler.Dungeon.MaxReplenishTimes = 10
-	}
-	// AutoReplenishStamina 默认为 true
-	if !cfg.Scheduler.Dungeon.AutoReplenishStamina {
-		cfg.Scheduler.Dungeon.AutoReplenishStamina = true
-	}
-
-	// Pilgrimage 默认开启自动打劫；仅使用免费次数，不会消耗元宝。
-	if cfg.Scheduler.Pilgrimage.AutoRob == nil {
-		autoRob := true
-		cfg.Scheduler.Pilgrimage.AutoRob = &autoRob
-	}
-	if cfg.Scheduler.Pilgrimage.MaxRobAttempts <= 0 {
-		cfg.Scheduler.Pilgrimage.MaxRobAttempts = 5
-	}
-	if cfg.Scheduler.Pilgrimage.MaxRobAttempts > 5 {
-		cfg.Scheduler.Pilgrimage.MaxRobAttempts = 5
-	}
-	if cfg.Scheduler.Pilgrimage.MaxProbeTargets <= 0 {
-		cfg.Scheduler.Pilgrimage.MaxProbeTargets = 8
-	}
-	if cfg.Scheduler.Pilgrimage.MaxProbeTargets > 50 {
-		cfg.Scheduler.Pilgrimage.MaxProbeTargets = 50
-	}
-
-	// 粗铁淬炼池默认淬炼玄铁; 可显式指定 lingcai 提炼灵材。
-	if cfg.Scheduler.SpiritPool.RefineTarget == "" {
-		cfg.Scheduler.SpiritPool.RefineTarget = "xuantie"
-	}
-
-	// BeelzebubTrials 默认等级门槛 0 (由服务端资格检查自动决定)
-	if cfg.Scheduler.BeelzebubTrials.MinLevel < 0 {
-		cfg.Scheduler.BeelzebubTrials.MinLevel = 0
 	}
 
 	if cfg.Accounts == nil {
@@ -455,4 +469,154 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// applySchedulerDefaults 为调度配置补齐默认值。
+// Load 与 EffectiveScheduler 都会调用，因此必须保持幂等。
+func applySchedulerDefaults(sc *SchedulerConfig) {
+	if sc.Jitter.MinSeconds <= 0 {
+		sc.Jitter.MinSeconds = 1.0
+	}
+	if sc.Jitter.MaxSeconds <= 0 {
+		sc.Jitter.MaxSeconds = 3.0
+	}
+	if sc.Jitter.MinSeconds > sc.Jitter.MaxSeconds {
+		sc.Jitter.MinSeconds, sc.Jitter.MaxSeconds =
+			sc.Jitter.MaxSeconds, sc.Jitter.MinSeconds
+	}
+
+	if sc.Routines == nil {
+		sc.Routines = make(map[string]bool)
+	}
+
+	if sc.Preset == "" {
+		sc.Preset = "recommended"
+	}
+
+	if len(sc.CronTimes) == 0 {
+		sc.CronTimes = []string{
+			"00:00", "06:02", "08:02", "12:00", "16:05", "18:01", "20:01", "22:01",
+		}
+	}
+
+	if sc.Expert == nil {
+		sc.Expert = make(map[string]interface{})
+	}
+
+	hasSubDungeon := sc.Dungeon.QuestCycle.Enabled ||
+		sc.Dungeon.QuestCycle.MaxReplenishStamina > 0 ||
+		sc.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
+		sc.Dungeon.Sweep.Enabled ||
+		sc.Dungeon.Sweep.MaxBatchTimes > 0 ||
+		sc.Dungeon.Sweep.SellSweptItems ||
+		sc.Dungeon.Sweep.AutoSellSweptItems ||
+		sc.Dungeon.SellSweptItems ||
+		sc.Dungeon.AutoSellSweptItems ||
+		len(sc.Dungeon.Sweep.Pipeline) > 0
+	if len(sc.Dungeon.Pipeline) == 0 && !hasSubDungeon {
+		sc.Dungeon.Pipeline = []string{
+			"push_mainline",
+			"push_side",
+			"sweep_elite",
+		}
+	}
+	if sc.Dungeon.SellSweptItems || sc.Dungeon.AutoSellSweptItems {
+		sc.Dungeon.Sweep.SellSweptItems = true
+	}
+	// 默认启用秒完成
+	if !sc.Dungeon.PreferPracticeQuickly {
+		sc.Dungeon.PreferPracticeQuickly = true
+	}
+	if sc.Dungeon.MaxBatchTimes <= 0 {
+		sc.Dungeon.MaxBatchTimes = 10
+	}
+	if sc.Dungeon.MaxReplenishStamina <= 0 {
+		if sc.Dungeon.MaxReplenishTimes > 0 {
+			sc.Dungeon.MaxReplenishStamina = sc.Dungeon.MaxReplenishTimes * 10
+		} else {
+			sc.Dungeon.MaxReplenishStamina = 200
+		}
+	}
+	if sc.Dungeon.QuestCycle.MaxReplenishStamina <= 0 {
+		if sc.Dungeon.QuestCycle.MaxReplenishTimes > 0 {
+			sc.Dungeon.QuestCycle.MaxReplenishStamina = sc.Dungeon.QuestCycle.MaxReplenishTimes * 10
+		} else {
+			sc.Dungeon.QuestCycle.MaxReplenishStamina = 200
+		}
+	}
+	if sc.Dungeon.MaxReplenishTimes <= 0 {
+		sc.Dungeon.MaxReplenishTimes = 10
+	}
+	// AutoReplenishStamina 默认为 true
+	if !sc.Dungeon.AutoReplenishStamina {
+		sc.Dungeon.AutoReplenishStamina = true
+	}
+
+	// Pilgrimage 默认开启自动打劫；仅使用免费次数，不会消耗元宝。
+	if sc.Pilgrimage.AutoRob == nil {
+		autoRob := true
+		sc.Pilgrimage.AutoRob = &autoRob
+	}
+	if sc.Pilgrimage.MaxRobAttempts <= 0 {
+		sc.Pilgrimage.MaxRobAttempts = 5
+	}
+	if sc.Pilgrimage.MaxRobAttempts > 5 {
+		sc.Pilgrimage.MaxRobAttempts = 5
+	}
+	if sc.Pilgrimage.MaxProbeTargets <= 0 {
+		sc.Pilgrimage.MaxProbeTargets = 8
+	}
+	if sc.Pilgrimage.MaxProbeTargets > 50 {
+		sc.Pilgrimage.MaxProbeTargets = 50
+	}
+
+	// 粗铁淬炼池默认淬炼玄铁; 可显式指定 lingcai 提炼灵材。
+	if sc.SpiritPool.RefineTarget == "" {
+		sc.SpiritPool.RefineTarget = "xuantie"
+	}
+
+	// BeelzebubTrials 默认等级门槛 0 (由服务端资格检查自动决定)
+	if sc.BeelzebubTrials.MinLevel < 0 {
+		sc.BeelzebubTrials.MinLevel = 0
+	}
+
+	// 宗师修行: 单方向星数上限 30；默认自动整理阵容并允许升阶。
+	if sc.MasterPractice.MaxStarsPerJob <= 0 {
+		sc.MasterPractice.MaxStarsPerJob = 30
+	}
+	if sc.MasterPractice.AutoNormalizeDeploy == nil {
+		autoNormalize := true
+		sc.MasterPractice.AutoNormalizeDeploy = &autoNormalize
+	}
+	if sc.MasterPractice.AllowSwitchStunt == nil {
+		allowSwitchStunt := true
+		sc.MasterPractice.AllowSwitchStunt = &allowSwitchStunt
+	}
+	if sc.MasterPractice.AllowStepUp == nil {
+		allowStepUp := true
+		sc.MasterPractice.AllowStepUp = &allowStepUp
+	}
+
+	// 多区服换票默认串行间隔 2~5 秒；显式设置为 0 可关闭。
+	if sc.Startup.TicketMinIntervalSeconds == nil && sc.Startup.TicketMaxIntervalSeconds == nil {
+		minSec, maxSec := 2.0, 5.0
+		sc.Startup.TicketMinIntervalSeconds = &minSec
+		sc.Startup.TicketMaxIntervalSeconds = &maxSec
+	} else if sc.Startup.TicketMinIntervalSeconds == nil {
+		v := *sc.Startup.TicketMaxIntervalSeconds
+		sc.Startup.TicketMinIntervalSeconds = &v
+	} else if sc.Startup.TicketMaxIntervalSeconds == nil {
+		v := *sc.Startup.TicketMinIntervalSeconds
+		sc.Startup.TicketMaxIntervalSeconds = &v
+	}
+	if *sc.Startup.TicketMinIntervalSeconds < 0 {
+		*sc.Startup.TicketMinIntervalSeconds = 0
+	}
+	if *sc.Startup.TicketMaxIntervalSeconds < 0 {
+		*sc.Startup.TicketMaxIntervalSeconds = 0
+	}
+	if *sc.Startup.TicketMinIntervalSeconds > *sc.Startup.TicketMaxIntervalSeconds {
+		*sc.Startup.TicketMinIntervalSeconds, *sc.Startup.TicketMaxIntervalSeconds =
+			*sc.Startup.TicketMaxIntervalSeconds, *sc.Startup.TicketMinIntervalSeconds
+	}
 }

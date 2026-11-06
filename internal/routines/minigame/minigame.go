@@ -1190,7 +1190,8 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 		"wufa_field",
 		"minigame",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 冥想是每日活跃度的高权重大头 (每次 +10)，提升优先级确保尽早执行。
+		scheduler.PriorityHigh,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -1202,14 +1203,16 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 
 			// 0. 原生探测功能开放状态 (Mod_Player_Base.check_function_open)。
 			// 未解锁模块服务端会静默丢弃业务请求，先查询可避免空等超时。
-			chkCtx, chkCancel := context.WithTimeout(ctx, 2*time.Second)
+			// 线上实测：例程在会话运行一段时间后，check_function_open 偶发被服务端
+			// 静默丢弃；面板查询本身即可判定玩法可用性，因此探测失败时仅告警并继续，
+			// 避免整轮被误跳过（功能确实未开放时，面板查询会失败并退出）。
+			chkCtx, chkCancel := context.WithTimeout(ctx, wuFaCallTimeout)
 			open, chkErr := session.CheckFunctionOpen(chkCtx, protocol.FunctionIDWuFaField)
 			chkCancel()
 			if chkErr != nil {
-				slog.Warn("查询悟法领域功能开放状态失败，跳过", "role_id", session.RoleID(), "err", chkErr)
-				return nil
-			}
-			if !open {
+				slog.Warn("查询悟法领域功能开放状态失败，继续尝试面板查询",
+					"role_id", session.RoleID(), "err", chkErr)
+			} else if !open {
 				slog.Info("悟法领域功能未开启，跳过", "role_id", session.RoleID())
 				return nil
 			}
@@ -1218,7 +1221,7 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 			// 1. 查询悟法领域面板 (Mod 658, Act 0)。
 			// 官方面板回包没有 result_code，只能通过结构完整性校验判断是否可信。
 			infoPkt := protocol.BuildWuFaFieldInfoPacket(protocol.ActionIDTownEnter)
-			iCtx, iCancel := context.WithTimeout(ctx, 2*time.Second)
+			iCtx, iCancel := context.WithTimeout(ctx, wuFaCallTimeout)
 			infoResp, err := session.Call(iCtx, infoPkt, protocol.ActionIDWuFaFieldInfo)
 			iCancel()
 			if err != nil || infoResp == nil {
@@ -1236,44 +1239,86 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 				return fmt.Errorf("解析悟法领域面板回包失败: %w", err)
 			}
 
-			fieldType, drawType, ok := selectWuFaFreeDraw(panel)
-			if !ok {
-				slog.Info("悟法领域当前无免费感悟次数，跳过本次抽卡",
-					"role_id", session.RoleID(),
-					"rest_times", panel.RestTimes,
-				)
+			// 2. 读取每日活跃度，确认「悟法领域冥想」任务还有多少次可计入，
+			//    避免免费次数/冥想道具在任务满额后被白白消耗。
+			actCtx, actCancel := context.WithTimeout(ctx, wuFaCallTimeout)
+			actResp, actErr := session.Call(actCtx, protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
+			actCancel()
+			if actErr != nil || actResp == nil {
+				slog.Warn("查询每日活跃度失败，跳过悟法领域抽卡",
+					"role_id", session.RoleID(), "err", actErr)
 				return nil
 			}
-
-			// 2. 感悟抽卡 (Mod 658, Act 1)，仅使用免费次数。
-			drawPkt := protocol.BuildWuFaDrawCardPacket(fieldType, drawType)
-			dCtx, dCancel := context.WithTimeout(ctx, 2*time.Second)
-			drawResp, err := session.Call(dCtx, drawPkt, protocol.ActionIDWuFaDrawCard)
-			dCancel()
-			if err != nil || drawResp == nil {
-				slog.Warn("悟法领域感悟抽卡未收到回包",
-					"role_id", session.RoleID(),
-					"field_type", fieldType,
-					"draw_type", drawType,
-					"err", err,
-				)
+			actPanel, actErr := protocol.ParseGameAssistantInfo(actResp.Payload)
+			if actErr != nil {
+				return fmt.Errorf("解析每日活跃度失败: %w", actErr)
+			}
+			remain := actPanel.RemainingTimesFor(wuFaDailyTaskMeditation)
+			if remain <= 0 {
+				slog.Info("悟法领域冥想活跃度已完成，跳过抽卡", "role_id", session.RoleID())
 				return nil
 			}
-
-			result, err := protocol.ParseWuFaDrawResult(drawResp.Payload)
-			if err != nil {
-				slog.Warn("解析悟法感悟抽卡回包失败",
-					"role_id", session.RoleID(),
-					"err", err,
-					"payload_hex", fmt.Sprintf("%x", drawResp.Payload),
-				)
-				return fmt.Errorf("解析悟法感悟抽卡回包失败: %w", err)
+			if remain > maxWuFaDrawsPerRun {
+				remain = maxWuFaDrawsPerRun
 			}
 
-			if result.Result != protocol.WuFaResultSuccess {
-				err = classifyWuFaDrawResult(result.Result)
-				if err == nil {
-					slog.Info("悟法领域感悟抽卡无需执行",
+			// 3. 逐次感悟：优先免费次数，其次使用已持有的冥想书卷 (item 8641，
+			//    对应 field_type 3)。冥想书卷为非元宝道具，绝不触发元宝档。
+			for draw := 0; draw < remain; draw++ {
+				if ctx.Err() != nil {
+					return nil
+				}
+				fieldType, drawType, ok := selectWuFaFreeDraw(panel)
+				if !ok {
+					// 免费次数用尽：仅在持有冥想书卷时继续，否则停止。
+					if !hasWuFaItem(panel, wuFaMeditationBookItem) {
+						slog.Info("悟法领域无免费次数且无冥想书卷，停止抽卡",
+							"role_id", session.RoleID(),
+							"rest_times", panel.RestTimes,
+						)
+						return nil
+					}
+					fieldType, drawType = wuFaMeditationFieldType, protocol.WuFaDrawOne
+				}
+
+				drawPkt := protocol.BuildWuFaDrawCardPacket(fieldType, drawType)
+				dCtx, dCancel := context.WithTimeout(ctx, wuFaCallTimeout)
+				drawResp, err := session.Call(dCtx, drawPkt, protocol.ActionIDWuFaDrawCard)
+				dCancel()
+				if err != nil || drawResp == nil {
+					slog.Warn("悟法领域感悟抽卡未收到回包",
+						"role_id", session.RoleID(),
+						"field_type", fieldType,
+						"draw_type", drawType,
+						"err", err,
+					)
+					return nil
+				}
+
+				result, err := protocol.ParseWuFaDrawResult(drawResp.Payload)
+				if err != nil {
+					slog.Warn("解析悟法感悟抽卡回包失败",
+						"role_id", session.RoleID(),
+						"err", err,
+						"payload_hex", fmt.Sprintf("%x", drawResp.Payload),
+					)
+					return fmt.Errorf("解析悟法感悟抽卡回包失败: %w", err)
+				}
+
+				if result.Result != protocol.WuFaResultSuccess {
+					err = classifyWuFaDrawResult(result.Result)
+					if err == nil {
+						slog.Info("悟法领域感悟抽卡无需执行",
+							"role_id", session.RoleID(),
+							"field_type", fieldType,
+							"draw_type", drawType,
+							"result", result.Result,
+							"result_text", protocol.WuFaResultText(result.Result),
+							"rest_times", result.RestTimes,
+						)
+						return nil
+					}
+					slog.Warn("悟法领域感悟抽卡返回业务失败",
 						"role_id", session.RoleID(),
 						"field_type", fieldType,
 						"draw_type", drawType,
@@ -1281,29 +1326,62 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 						"result_text", protocol.WuFaResultText(result.Result),
 						"rest_times", result.RestTimes,
 					)
-					return nil
+					return err
 				}
-				slog.Warn("悟法领域感悟抽卡返回业务失败",
+
+				slog.Info("悟法领域技能感悟成功",
 					"role_id", session.RoleID(),
 					"field_type", fieldType,
 					"draw_type", drawType,
-					"result", result.Result,
-					"result_text", protocol.WuFaResultText(result.Result),
+					"award_count", len(result.Awards),
 					"rest_times", result.RestTimes,
 				)
-				return err
-			}
 
-			slog.Info("悟法领域技能感悟成功",
-				"role_id", session.RoleID(),
-				"field_type", fieldType,
-				"draw_type", drawType,
-				"award_count", len(result.Awards),
-				"rest_times", result.RestTimes,
-			)
+				// 刷新面板，确保下一轮只使用真实剩余的免费次数或道具。
+				refreshPkt := protocol.BuildWuFaFieldInfoPacket(protocol.ActionIDWuFaDrawCard)
+				rCtx, rCancel := context.WithTimeout(ctx, wuFaCallTimeout)
+				refreshResp, rErr := session.Call(rCtx, refreshPkt, protocol.ActionIDWuFaFieldInfo)
+				rCancel()
+				if rErr != nil || refreshResp == nil {
+					return nil
+				}
+				refreshed, rErr := protocol.ParseWuFaPanel(refreshResp.Payload)
+				if rErr != nil {
+					return nil
+				}
+				panel = refreshed
+			}
 			return nil
 		},
 	)
+}
+
+// 悟法领域冥想相关常量。
+const (
+	// wuFaCallTimeout 悟法领域单次协议调用超时。实测网关响应在 2s 上下波动，
+	// 过短的超时会把"功能已开放"误判为静默丢弃，导致例程整轮跳过。
+	wuFaCallTimeout = 5 * time.Second
+	// wuFaDailyTaskMeditation 每日活跃度任务「每日悟法领域冥想」编号
+	wuFaDailyTaskMeditation int32 = 69
+	// wuFaMeditationBookItem 冥想书卷 (入门通玄秘馆)，线上实测对应 field_type 3
+	wuFaMeditationBookItem int32 = 8641
+	// wuFaMeditationFieldType 冥想书卷对应的秘馆类型
+	wuFaMeditationFieldType int32 = 3
+	// maxWuFaDrawsPerRun 单轮最多感悟次数，避免单次调度长时间占用会话
+	maxWuFaDrawsPerRun = 10
+)
+
+// hasWuFaItem 判断面板资源中指定道具是否有余量。
+func hasWuFaItem(panel *protocol.WuFaPanel, itemID int32) bool {
+	if panel == nil {
+		return false
+	}
+	for _, item := range panel.Items {
+		if item.ItemID == itemID {
+			return item.ItemNum > 0
+		}
+	}
+	return false
 }
 
 // selectWuFaFreeDraw 从面板中挑选免费次数最多的秘馆与抽卡类型。
@@ -1370,16 +1448,40 @@ func classifyWuFaDrawResult(code uint8) error {
 
 // MasterPracticeConfig 宗师修行策略配置。
 type MasterPracticeConfig struct {
-	// DictRepo 静态数据字典，用于把主角/伙伴 role_id 映射为职业 JobId，
-	// 从而自适应选择可挑战的修行方向。
+	// DictRepo 静态数据字典，用于把主角/伙伴 role_id 映射为职业 JobId。
 	DictRepo dictionary.Repository
+	// PracticeOrder 期望修行的职业 JobId 顺序。服务端要求整队同职业；
+	// 切换主角神器绝技 (Mod 85 Act 3，映射来自 Act 5) 会改写主角当前 role_id/职业，
+	// 因此可依次切换职业并上阵同职业伙伴，逐个方向修行。
+	PracticeOrder []int32
+	// MaxStarsPerJob 单方向累计星数上限 (默认 30)。
+	MaxStarsPerJob int32
+	// AutoNormalizeDeploy 是否自动下阵异职业伙伴、上阵同职业伙伴 (默认 true)。
+	AutoNormalizeDeploy bool
+	// AllowSwitchStunt 是否允许通过切换主角宗师绝技来转换职业 (默认 true)。
+	AllowSwitchStunt bool
+	// AllowStepUp 是否在挑战后自动升阶 (默认 true)。
+	AllowStepUp bool
+}
+
+// DefaultMasterPracticeConfig 返回宗师修行默认策略配置。
+func DefaultMasterPracticeConfig() MasterPracticeConfig {
+	return MasterPracticeConfig{
+		MaxStarsPerJob:      30,
+		AutoNormalizeDeploy: true,
+		AllowSwitchStunt:    true,
+		AllowStepUp:         true,
+	}
 }
 
 // NewMasterPracticeRoutine 构造宗师修行挑战与突破任务 (Feature 15: 宗师修行)。
 func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRoutine {
-	cfg := MasterPracticeConfig{}
+	cfg := DefaultMasterPracticeConfig()
 	if len(cfgs) > 0 {
 		cfg = cfgs[0]
+		if cfg.MaxStarsPerJob <= 0 {
+			cfg.MaxStarsPerJob = 30
+		}
 	}
 	return scheduler.NewBaseRoutine(
 		"master_practice",
@@ -1423,135 +1525,404 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 				"jobs", len(panel.Jobs),
 			)
 
-			// 2. 查询当前布阵，按主角职业与伙伴职业自适应选择修行方向。
-			var deploy *protocol.MasterPracticeDeployInfo
-			if dResp, dErr := call(protocol.BuildMasterPracticeDeployInfoPacket(), protocol.ActionIDMasterPracticeDeployInfo); dErr == nil && dResp != nil {
-				if parsed, pErr := protocol.ParseMasterPracticeDeployInfoResult(dResp.Payload); pErr == nil {
-					deploy = parsed
-				}
-			}
-			candidates := masterPracticeDirectionCandidates(panel, deploy, cfg.DictRepo)
-			if len(candidates) == 0 {
-				slog.Info("宗师修行没有可用方向，跳过", "role_id", session.RoleID())
+			// 2. 查询神器绝技映射 (职业 -> 已激活绝技) 与当前布阵。
+			//   主角通过切换神器绝技转换职业 (Mod 85 Act 3)，映射来自 Mod 85 Act 5；
+			//   Mod 85 Act 7 的未激活宗师绝技会被服务端静默丢弃，不能用于切换。
+			stunts, stErr := masterPracticeFetchStunts(call)
+			if stErr != nil {
+				slog.Warn("宗师修行绝技映射查询失败，跳过", "role_id", session.RoleID(), "err", stErr)
 				return nil
 			}
-			slog.Info("宗师修行自适应方向候选", "role_id", session.RoleID(), "candidates", candidates)
+			deploy := masterPracticeFetchDeploy(call)
+			if deploy == nil {
+				slog.Info("宗师修行布阵信息不可用，跳过", "role_id", session.RoleID())
+				return nil
+			}
+			_, currentJob, hasMain := masterPracticeProtagonistJob(deploy, cfg.DictRepo)
+			if !hasMain {
+				slog.Info("宗师修行无法解析主角当前职业，跳过", "role_id", session.RoleID())
+				return nil
+			}
 
-			// 3. 逐个方向探测：主角职业优先，其次已上阵伙伴职业，最后按面板活跃度兜底。
-			// 服务端对不匹配的方回返回 JOB_ERROR 且不消耗挑战次数，可安全尝试下一个。
-			for _, jobID := range candidates {
-				job, ok := masterPracticeJobByID(panel, jobID)
-				if !ok {
-					continue
-				}
+			order := cfg.PracticeOrder
+			if len(order) == 0 {
+				order = []int32{currentJob}
+				slog.Info("宗师修行未配置职业顺序，仅修行主角当前职业",
+					"role_id", session.RoleID(), "job_id", currentJob)
+			}
+			slog.Info("宗师修行职业顺序",
+				"role_id", session.RoleID(), "order", order, "current_job", currentJob)
+
+			totalChallenged := 0
+			switchedAny := false
+
+			for _, requestedJob := range order {
 				if err := ctx.Err(); err != nil {
 					return nil
 				}
-				challengedToday := make(map[int32]bool, len(job.TodayChallenge))
-				for _, s := range job.TodayChallenge {
-					challengedToday[s] = true
+
+				// 每个职业开始前刷新面板，确保星数与今日完成状态是最新的。
+				if fresh := masterPracticeFetchPanel(call); fresh != nil {
+					panel = fresh
+				}
+				job, found := masterPracticeJobByID(panel, requestedJob)
+				if !found {
+					slog.Info("宗师修行方向不在面板中，跳过", "role_id", session.RoleID(), "job_id", requestedJob)
+					continue
+				}
+				if masterPracticeJobFull(job, cfg.MaxStarsPerJob) {
+					slog.Info("宗师修行方向累计星数已满，切换下一职业",
+						"role_id", session.RoleID(), "job_id", requestedJob, "total_stars", job.TotalStars)
+					continue
 				}
 
-				directionValid := false
-				abort := false
-				for star := int32(1); star <= 3; star++ {
-					if challengedToday[star] {
-						directionValid = true
+				// 刷新布阵，读取主角当前职业。
+				deploy = masterPracticeFetchDeploy(call)
+				if deploy == nil {
+					slog.Warn("宗师修行布阵信息刷新失败，跳过该职业", "role_id", session.RoleID(), "job_id", requestedJob)
+					continue
+				}
+				_, currentJob, hasMain = masterPracticeProtagonistJob(deploy, cfg.DictRepo)
+				if !hasMain {
+					slog.Warn("宗师修行无法解析主角当前职业，跳过该职业", "role_id", session.RoleID(), "job_id", requestedJob)
+					continue
+				}
+
+				// 今日已完成但尚未满星：先升阶，然后本轮停止 (满星后才切换到下一职业)。
+				if masterPracticeJobDoneToday(job) {
+					if requestedJob == currentJob && cfg.AllowStepUp {
+						if refreshed := masterPracticeStepUpJob(requestedJob, cfg, session.RoleID(), call); refreshed != nil {
+							panel = refreshed
+						}
+					}
+					slog.Info("宗师修行方向今日已完成，本轮结束",
+						"role_id", session.RoleID(), "job_id", requestedJob, "total_stars", job.TotalStars)
+					return nil
+				}
+
+				// 3. 切换主角宗师绝技 (职业)。成功后服务端会改写主角 role_id。
+				switched, swErr := masterPracticeEnsureStunt(ctx, currentJob, requestedJob, stunts, cfg, session.RoleID(), call)
+				if swErr != nil {
+					slog.Warn("宗师修行切换主角绝技失败，跳过该职业",
+						"role_id", session.RoleID(), "job_id", requestedJob, "err", swErr)
+					continue
+				}
+				if switched {
+					switchedAny = true
+					verified := false
+					for attempt := 0; attempt < 2; attempt++ {
+						if err := masterPracticeDeployPause(ctx); err != nil {
+							return nil
+						}
+						deploy = masterPracticeFetchDeploy(call)
+						if deploy == nil {
+							continue
+						}
+						_, currentJob, hasMain = masterPracticeProtagonistJob(deploy, cfg.DictRepo)
+						if hasMain && currentJob == requestedJob {
+							verified = true
+							break
+						}
+					}
+					if !verified {
+						slog.Warn("切换绝技后主角职业未生效，跳过该职业",
+							"role_id", session.RoleID(), "expect_job", requestedJob, "actual_job", currentJob)
 						continue
 					}
-					cResp, cErr := call(
-						protocol.BuildMasterPracticeChallengePacket(uint32(job.JobID), uint32(star), 0),
-						protocol.ActionIDMasterPracticeChallenge,
-					)
-					if cErr != nil || cResp == nil {
-						slog.Warn("宗师修行挑战无回包", "role_id", session.RoleID(), "job_id", job.JobID, "star", star, "err", cErr)
-						abort = true
-						break
-					}
-					code, pErr := protocol.ParseMasterPracticeActionCode(cResp.Payload)
-					if pErr != nil {
-						slog.Warn("解析宗师修行挑战回包失败", "role_id", session.RoleID(), "err", pErr)
-						abort = true
-						break
-					}
-					switch code {
-					case protocol.MasterPracticeResultSuccess:
-						directionValid = true
-						slog.Info("宗师修行挑战成功",
-							"role_id", session.RoleID(), "job_id", job.JobID, "star", star)
-					case protocol.MasterPracticeResultNoChallengeTimes:
-						slog.Info("宗师修行今日挑战次数已用尽", "role_id", session.RoleID())
-						return nil
-					case protocol.MasterPracticeResultIsChallenged:
-						directionValid = true
-					case protocol.MasterPracticeResultMaxStars, protocol.MasterPracticeResultLessStars:
-						directionValid = true
-						star = 3
-					case protocol.MasterPracticeResultJobError, protocol.MasterPracticeResultConditionLimited,
-						protocol.MasterPracticeResultIsLocked, protocol.MasterPracticeResultFailed:
-						// 首颗星即被拒绝说明该方向与当前主角/伙伴职业不匹配，换下一个方向。
-						if star == 1 {
-							slog.Info("宗师修行方向不匹配，尝试下一方向",
-								"role_id", session.RoleID(), "job_id", job.JobID, "result", code)
-							abort = true
-						} else {
-							directionValid = true
-						}
-						star = 3
-					default:
-						directionValid = true
-						star = 3
-					}
-					select {
-					case <-ctx.Done():
-						return nil
-					case <-time.After(200 * time.Millisecond):
-					}
 				}
-				if abort {
-					continue
-				}
-				if !directionValid {
-					continue
-				}
-				slog.Info("宗师修行选定方向",
-					"role_id", session.RoleID(), "job_id", job.JobID, "total_stars", job.TotalStars)
 
-				// 4. 境界突破 (Mod 665, Act 8)。
-				if job.TotalStars <= 0 {
+				// 4. 调整阵容为整队同职业。JOB_ERROR(11) 的官方文案是
+				//   “请上阵相同职业的角色”，因此异职业伙伴必须先下阵。
+				if cfg.AutoNormalizeDeploy {
+					var normErr error
+					deploy, normErr = masterPracticeNormalizeDeploy(ctx, deploy, requestedJob, cfg.DictRepo, call)
+					if normErr != nil {
+						slog.Warn("宗师修行阵容整理失败，跳过该职业",
+							"role_id", session.RoleID(), "job_id", requestedJob, "err", normErr)
+						continue
+					}
+				}
+				if ok, reason := masterPracticeDeployMatches(deploy, requestedJob, cfg.DictRepo); !ok {
+					slog.Warn("宗师修行阵容未满足整队同职业，跳过该职业",
+						"role_id", session.RoleID(), "job_id", requestedJob, "reason", reason)
+					continue
+				}
+
+				// 5. 挑战尚未完成的星级。
+				challenged, full, chErr := masterPracticeChallengeJob(ctx, job, session.RoleID(), call)
+				totalChallenged += challenged
+				if chErr != nil {
+					if errors.Is(chErr, scheduler.ErrAttemptsExhausted) {
+						slog.Info("宗师修行今日挑战次数已用尽", "role_id", session.RoleID())
+					}
+					return chErr
+				}
+
+				// 6. 刷新面板后升阶；只有当前职业满星才继续修行顺序中的下一个职业。
+				if refreshed := masterPracticeStepUpJob(requestedJob, cfg, session.RoleID(), call); refreshed != nil {
+					panel = refreshed
+					if freshJob, ok := masterPracticeJobByID(panel, requestedJob); ok {
+						full = full || masterPracticeJobFull(freshJob, cfg.MaxStarsPerJob)
+					}
+				}
+				if !full {
+					slog.Info("宗师修行当前职业尚未满星，本轮结束",
+						"role_id", session.RoleID(), "job_id", requestedJob, "challenged", challenged)
 					return nil
 				}
-				bResp, bErr := call(
-					protocol.BuildMasterPracticeStepUpPacket(uint32(job.JobID), 0),
-					protocol.ActionIDMasterPracticeStepUp,
-				)
-				if bErr != nil || bResp == nil {
-					slog.Warn("宗师境界突破无回包", "role_id", session.RoleID(), "job_id", job.JobID, "err", bErr)
-					return nil
-				}
-				code, pErr := protocol.ParseMasterPracticeActionCode(bResp.Payload)
-				if pErr != nil {
-					slog.Warn("解析宗师突破回包失败", "role_id", session.RoleID(), "err", pErr)
-					return nil
-				}
-				switch code {
-				case protocol.MasterPracticeResultSuccess:
-					slog.Info("宗师境界突破成功", "role_id", session.RoleID(), "job_id", job.JobID)
-				case protocol.MasterPracticeResultStepUpCD:
-					slog.Info("宗师境界突破冷却中", "role_id", session.RoleID(), "job_id", job.JobID)
-				case protocol.MasterPracticeResultLessStars:
-					slog.Info("宗师境界突破星数不足", "role_id", session.RoleID(), "job_id", job.JobID)
-				case protocol.MasterPracticeResultTopStep:
-					slog.Info("宗师境界已达最高", "role_id", session.RoleID(), "job_id", job.JobID)
-				default:
-					slog.Info("宗师境界突破未成功", "role_id", session.RoleID(), "job_id", job.JobID, "result", code)
-				}
-				return nil
+				slog.Info("宗师修行当前职业已满星，继续下一职业",
+					"role_id", session.RoleID(), "job_id", requestedJob)
 			}
-			slog.Info("宗师修行没有与主角/伙伴职业匹配的可用方向", "role_id", session.RoleID())
+
+			if totalChallenged == 0 && !switchedAny {
+				slog.Info("宗师修行本轮没有可执行方向",
+					"role_id", session.RoleID(), "order", order,
+					"reason", "全部方向已满星、今日已完成，或未学习对应宗师绝技")
+			}
 			return nil
 		},
 	)
+}
+
+// masterPracticeFetchStunts 查询职业 -> 已激活神器绝技映射 (Mod 85 Act 5)。
+//
+// 注意: Mod 85 Act 7 的“宗师绝技”列表在未激活时 role_stunt_id=0/is_active=0，
+// 服务端会静默丢弃这类 use_stunt_skill 请求。切换主角职业必须使用
+// Mod 85 Act 5 返回的已激活神器绝技 ID。
+func masterPracticeFetchStunts(call func(*protocol.Packet, uint32) (*protocol.Packet, error)) ([]protocol.LibraryStuntInfo, error) {
+	resp, err := call(protocol.BuildLibraryArtifactStuntInfoPacket(), protocol.ActionIDLibraryArtifactStuntInfo)
+	if err != nil {
+		return nil, fmt.Errorf("查询神器绝技映射无回包: %w", err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("查询神器绝技映射无回包")
+	}
+	infos, pErr := protocol.ParseLibraryStuntInfoResult(resp.Payload)
+	if pErr != nil {
+		return nil, pErr
+	}
+	return infos, nil
+}
+
+// masterPracticeFindStunt 从神器绝技映射中选择目标职业可用的绝技。
+// 优先 is_use=1，其次 is_active=1；未激活的绝技服务端会静默丢弃，不能用于切换。
+func masterPracticeFindStunt(stunts []protocol.LibraryStuntInfo, jobID int32) (int32, bool) {
+	var fallback int32
+	for _, info := range stunts {
+		if info.RoleJobID != jobID {
+			continue
+		}
+		stuntID := info.RoleStuntID
+		if stuntID <= 0 {
+			stuntID = info.NextRoleStuntID
+		}
+		if stuntID <= 0 {
+			continue
+		}
+		if info.IsUse == 1 {
+			return stuntID, true
+		}
+		if info.IsActive == 1 && fallback == 0 {
+			fallback = stuntID
+		}
+	}
+	if fallback > 0 {
+		return fallback, true
+	}
+	return 0, false
+}
+
+// masterPracticeEnsureStunt 通过切换主角宗师绝技把职业转换为 targetJob。
+// 返回 switched=true 表示已发送切换请求并成功。
+func masterPracticeEnsureStunt(
+	ctx context.Context,
+	currentJob, targetJob int32,
+	stunts []protocol.LibraryStuntInfo,
+	cfg MasterPracticeConfig,
+	roleID string,
+	call func(*protocol.Packet, uint32) (*protocol.Packet, error),
+) (bool, error) {
+	if currentJob == targetJob {
+		return false, nil
+	}
+	if !cfg.AllowSwitchStunt {
+		return false, fmt.Errorf("主角当前职业 %d != 目标 %d，且配置关闭了绝技切换", currentJob, targetJob)
+	}
+	stuntID, ok := masterPracticeFindStunt(stunts, targetJob)
+	if !ok {
+		return false, fmt.Errorf("职业 %d 没有已激活的宗师绝技 (请先学习对应绝技)", targetJob)
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	pkt, err := protocol.BuildLibraryUseStuntSkillPacket(stuntID)
+	if err != nil {
+		return false, err
+	}
+	resp, err := call(pkt, protocol.ActionIDLibraryUseStuntSkill)
+	if err != nil || resp == nil {
+		return false, fmt.Errorf("切换宗师绝技无回包: %w", err)
+	}
+	result, curRoleID, curStuntID, pErr := protocol.ParseLibraryUseStuntSkillResult(resp.Payload)
+	if pErr != nil {
+		return false, pErr
+	}
+	if result != protocol.LibraryResultSuccess {
+		return false, fmt.Errorf("切换宗师绝技失败: %s (result=%d)", protocol.LibraryUseStuntResultText(result), result)
+	}
+	slog.Info("已切换主角宗师绝技",
+		"role_id", roleID,
+		"target_job", targetJob,
+		"stunt_id", stuntID,
+		"cur_role_id", curRoleID,
+		"cur_stunt_id", curStuntID,
+	)
+	return true, nil
+}
+
+// masterPracticeChallengeJob 挑战指定职业今日尚未完成的星级。
+// 返回 challenged=实际发起的挑战次数, full=该方向已累计满星。
+func masterPracticeChallengeJob(
+	ctx context.Context,
+	job protocol.MasterPracticeJobInfo,
+	roleID string,
+	call func(*protocol.Packet, uint32) (*protocol.Packet, error),
+) (challenged int, full bool, err error) {
+	challengedToday := make(map[int32]bool, len(job.TodayChallenge))
+	for _, star := range job.TodayChallenge {
+		challengedToday[star] = true
+	}
+
+	for star := int32(1); star <= 3; star++ {
+		if challengedToday[star] {
+			continue
+		}
+		if ctx.Err() != nil {
+			return challenged, false, nil
+		}
+		resp, callErr := call(
+			protocol.BuildMasterPracticeChallengePacket(uint32(job.JobID), uint32(star), 0),
+			protocol.ActionIDMasterPracticeChallenge,
+		)
+		if callErr != nil || resp == nil {
+			slog.Warn("宗师修行挑战无回包", "role_id", roleID, "job_id", job.JobID, "star", star, "err", callErr)
+			return challenged, false, nil
+		}
+		code, pErr := protocol.ParseMasterPracticeActionCode(resp.Payload)
+		if pErr != nil {
+			slog.Warn("解析宗师修行挑战回包失败", "role_id", roleID, "err", pErr)
+			return challenged, false, nil
+		}
+		outcome, outcomeErr := classifyMasterPracticeChallengeResult(code)
+		switch outcome {
+		case masterPracticeChallengeContinue:
+			challenged++
+			if code == protocol.MasterPracticeResultSuccess {
+				slog.Info("宗师修行挑战成功", "role_id", roleID, "job_id", job.JobID, "star", star)
+			} else {
+				slog.Info("宗师修行该星级今日已挑战", "role_id", roleID, "job_id", job.JobID, "star", star)
+			}
+		case masterPracticeChallengeFull:
+			slog.Info("宗师修行方向累计星数已满", "role_id", roleID, "job_id", job.JobID, "result", code)
+			return challenged, true, nil
+		case masterPracticeChallengeNoTimes:
+			return challenged, false, scheduler.ErrAttemptsExhausted
+		case masterPracticeChallengeJobError:
+			slog.Warn("宗师修行职业不匹配 (请上阵相同职业的角色)",
+				"role_id", roleID, "job_id", job.JobID, "result", code)
+			return challenged, false, scheduler.ErrConditionNotMet
+		default:
+			if outcomeErr != nil {
+				slog.Warn("宗师修行挑战业务失败",
+					"role_id", roleID, "job_id", job.JobID, "star", star, "result", code, "err", outcomeErr)
+				return challenged, false, outcomeErr
+			}
+			return challenged, false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return challenged, false, nil
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	return challenged, false, nil
+}
+
+// masterPracticeStepUpJob 刷新面板并在星数满足时尝试升阶，返回刷新后的面板。
+func masterPracticeStepUpJob(
+	jobID int32,
+	cfg MasterPracticeConfig,
+	roleID string,
+	call func(*protocol.Packet, uint32) (*protocol.Packet, error),
+) *protocol.MasterPracticePanel {
+	panel := masterPracticeFetchPanel(call)
+	if panel == nil {
+		slog.Warn("宗师修行升阶前刷新面板失败", "role_id", roleID, "job_id", jobID)
+		return nil
+	}
+	if !cfg.AllowStepUp {
+		return panel
+	}
+	job, found := masterPracticeJobByID(panel, jobID)
+	if !found || job.TotalStars <= 0 {
+		return panel
+	}
+	resp, err := call(
+		protocol.BuildMasterPracticeStepUpPacket(uint32(jobID), 0),
+		protocol.ActionIDMasterPracticeStepUp,
+	)
+	if err != nil || resp == nil {
+		slog.Warn("宗师境界突破无回包", "role_id", roleID, "job_id", jobID, "err", err)
+		return panel
+	}
+	code, pErr := protocol.ParseMasterPracticeActionCode(resp.Payload)
+	if pErr != nil {
+		slog.Warn("解析宗师突破回包失败", "role_id", roleID, "err", pErr)
+		return panel
+	}
+	switch code {
+	case protocol.MasterPracticeResultSuccess:
+		slog.Info("宗师境界突破成功", "role_id", roleID, "job_id", jobID)
+	case protocol.MasterPracticeResultStepUpCD:
+		slog.Info("宗师境界突破冷却中", "role_id", roleID, "job_id", jobID)
+	case protocol.MasterPracticeResultLessStars:
+		slog.Info("宗师境界突破星数不足", "role_id", roleID, "job_id", jobID)
+	case protocol.MasterPracticeResultLessItem:
+		slog.Info("宗师境界突破道具不足", "role_id", roleID, "job_id", jobID)
+	case protocol.MasterPracticeResultNotActiveAll:
+		slog.Info("宗师境界突破需先激活全部炼魂", "role_id", roleID, "job_id", jobID)
+	case protocol.MasterPracticeResultTopStep:
+		slog.Info("宗师境界已达最高", "role_id", roleID, "job_id", jobID)
+	default:
+		slog.Info("宗师境界突破未成功", "role_id", roleID, "job_id", jobID, "result", code)
+	}
+	return panel
+}
+
+// masterPracticeFetchPanel 查询并解析宗师修行主面板。
+func masterPracticeFetchPanel(call func(*protocol.Packet, uint32) (*protocol.Packet, error)) *protocol.MasterPracticePanel {
+	resp, err := call(protocol.BuildMasterPracticePanelPacket(protocol.ActionIDTownEnter), protocol.ActionIDMasterPracticePanel)
+	if err != nil || resp == nil {
+		return nil
+	}
+	panel, pErr := protocol.ParseMasterPracticePanelResult(resp.Payload)
+	if pErr != nil || panel.Result != protocol.MasterPracticeResultSuccess {
+		return nil
+	}
+	return panel
+}
+
+// masterPracticeFetchDeploy 查询并解析宗师修行布阵信息。
+func masterPracticeFetchDeploy(call func(*protocol.Packet, uint32) (*protocol.Packet, error)) *protocol.MasterPracticeDeployInfo {
+	resp, err := call(protocol.BuildMasterPracticeDeployInfoPacket(), protocol.ActionIDMasterPracticeDeployInfo)
+	if err != nil || resp == nil {
+		return nil
+	}
+	info, pErr := protocol.ParseMasterPracticeDeployInfoResult(resp.Payload)
+	if pErr != nil || info.Result != protocol.MasterPracticeResultSuccess {
+		return nil
+	}
+	return info
 }
 
 // masterPracticeJobByID 按 JobID 从面板中查找方向。
@@ -1564,65 +1935,285 @@ func masterPracticeJobByID(panel *protocol.MasterPracticePanel, jobID int32) (pr
 	return protocol.MasterPracticeJobInfo{}, false
 }
 
-// masterPracticeDirectionCandidates 按“主角职业 → 已上阵伙伴职业 → 面板活跃方向 → 全部方向”
-// 的优先级生成修行方向候选，保证优先选择与当前队伍职业匹配的方向。
-func masterPracticeDirectionCandidates(panel *protocol.MasterPracticePanel, deploy *protocol.MasterPracticeDeployInfo, repo dictionary.Repository) []int32 {
-	panelIDs := make(map[int32]bool, len(panel.Jobs))
-	for _, job := range panel.Jobs {
-		panelIDs[job.JobID] = true
+// masterPracticeRoleJob 把角色 role_id 映射为职业 JobId；字典缺失时返回 0。
+func masterPracticeRoleJob(repo dictionary.Repository, roleID int32) int32 {
+	if repo == nil || roleID <= 0 {
+		return 0
 	}
-	seen := make(map[int32]bool, len(panel.Jobs))
-	out := make([]int32, 0, len(panel.Jobs))
-	add := func(jobID int32) {
-		if jobID <= 0 || !panelIDs[jobID] || seen[jobID] {
-			return
-		}
-		seen[jobID] = true
-		out = append(out, jobID)
+	rt, err := repo.GetRoleType(int(roleID))
+	if err != nil || rt == nil {
+		return 0
 	}
-	jobOf := func(roleID int32) int32 {
-		if repo == nil || roleID <= 0 {
-			return 0
-		}
-		rt, err := repo.GetRoleType(int(roleID))
-		if err != nil || rt == nil {
-			return 0
-		}
-		return int32(rt.JobID)
-	}
+	return int32(rt.JobID)
+}
 
-	if deploy != nil {
-		// 主角职业优先。
-		for _, role := range deploy.Roles {
-			if role.IsMainRole == 1 {
-				add(jobOf(role.RoleID))
-			}
+// masterPracticeProtagonistJob 返回阵容中的主角及其当前 JobId。
+func masterPracticeProtagonistJob(deploy *protocol.MasterPracticeDeployInfo, repo dictionary.Repository) (playerRoleID, jobID int32, ok bool) {
+	if deploy == nil {
+		return 0, 0, false
+	}
+	for _, role := range deploy.Roles {
+		if role.IsMainRole != 1 {
+			continue
 		}
-		// 已上阵伙伴职业。
-		roleByPlayerID := make(map[int32]protocol.MasterPracticeDeployRole, len(deploy.Roles))
-		for _, role := range deploy.Roles {
-			roleByPlayerID[role.PlayerRoleID] = role
+		job := masterPracticeRoleJob(repo, role.RoleID)
+		if job <= 0 {
+			return role.PlayerRoleID, 0, false
 		}
-		for _, grid := range deploy.Grids {
-			if grid.PlayerRoleID == 0 {
-				continue
-			}
-			if role, ok := roleByPlayerID[grid.PlayerRoleID]; ok {
-				add(jobOf(role.RoleID))
-			}
+		return role.PlayerRoleID, job, true
+	}
+	return 0, 0, false
+}
+
+// masterPracticeJobFull 判断方向累计星数是否已达上限。
+func masterPracticeJobFull(job protocol.MasterPracticeJobInfo, maxStars int32) bool {
+	return maxStars > 0 && job.TotalStars >= maxStars
+}
+
+// masterPracticeJobDoneToday 判断方向今日 1~3 星是否均已挑战。
+func masterPracticeJobDoneToday(job protocol.MasterPracticeJobInfo) bool {
+	var seen [4]bool
+	for _, star := range job.TodayChallenge {
+		if star >= 1 && star <= 3 {
+			seen[star] = true
 		}
 	}
-	// 面板中已有进度 (总星数/境界) 的方向。
-	for _, job := range panel.Jobs {
-		if job.TotalStars > 0 || job.StepID > 0 {
-			add(job.JobID)
-		}
+	return seen[1] && seen[2] && seen[3]
+}
+
+// masterPracticeMismatchedPartners 返回需要下阵的异职业伙伴 player_role_id。
+// 主角 (IsMainRole==1) 永不下阵。
+func masterPracticeMismatchedPartners(deploy *protocol.MasterPracticeDeployInfo, targetJob int32, repo dictionary.Repository) []int32 {
+	if deploy == nil {
+		return nil
 	}
-	// 最后兜底：面板全部方向。
-	for _, job := range panel.Jobs {
-		add(job.JobID)
+	roleByPlayerID := make(map[int32]protocol.MasterPracticeDeployRole, len(deploy.Roles))
+	for _, role := range deploy.Roles {
+		roleByPlayerID[role.PlayerRoleID] = role
+	}
+	var out []int32
+	for _, grid := range deploy.Grids {
+		if grid.PlayerRoleID == 0 {
+			continue
+		}
+		role, ok := roleByPlayerID[grid.PlayerRoleID]
+		if !ok || role.IsMainRole == 1 {
+			continue
+		}
+		if masterPracticeRoleJob(repo, role.RoleID) != targetJob {
+			out = append(out, grid.PlayerRoleID)
+		}
 	}
 	return out
+}
+
+// masterPracticeHasDeployedPartner 判断阵容中是否已有同职业伙伴。
+func masterPracticeHasDeployedPartner(deploy *protocol.MasterPracticeDeployInfo, targetJob int32, repo dictionary.Repository) bool {
+	if deploy == nil {
+		return false
+	}
+	roleByPlayerID := make(map[int32]protocol.MasterPracticeDeployRole, len(deploy.Roles))
+	for _, role := range deploy.Roles {
+		roleByPlayerID[role.PlayerRoleID] = role
+	}
+	for _, grid := range deploy.Grids {
+		if grid.PlayerRoleID == 0 {
+			continue
+		}
+		role, ok := roleByPlayerID[grid.PlayerRoleID]
+		if !ok || role.IsMainRole == 1 {
+			continue
+		}
+		if masterPracticeRoleJob(repo, role.RoleID) == targetJob {
+			return true
+		}
+	}
+	return false
+}
+
+// masterPracticeDeployCandidate 选择一名未上阵的同职业伙伴及空余格位。
+// 返回 ok=false 表示没有可上阵的同职业伙伴、当前已有同职业伙伴或没有空位。
+func masterPracticeDeployCandidate(deploy *protocol.MasterPracticeDeployInfo, targetJob int32, repo dictionary.Repository) (playerRoleID int32, gridTypeID uint8, ok bool) {
+	if deploy == nil {
+		return 0, 0, false
+	}
+	if masterPracticeHasDeployedPartner(deploy, targetJob, repo) {
+		return 0, 0, false
+	}
+	deployed := make(map[int32]bool, len(deploy.Grids))
+	empty := make(map[int32]bool, len(deploy.Grids))
+	for _, grid := range deploy.Grids {
+		if grid.PlayerRoleID != 0 {
+			deployed[grid.PlayerRoleID] = true
+		} else if isMasterPracticeNormalGrid(grid.GridTypeID) {
+			empty[grid.GridTypeID] = true
+		}
+	}
+
+	for _, role := range deploy.Roles {
+		if role.IsMainRole == 1 || deployed[role.PlayerRoleID] {
+			continue
+		}
+		if masterPracticeRoleJob(repo, role.RoleID) == targetJob {
+			playerRoleID = role.PlayerRoleID
+			break
+		}
+	}
+	if playerRoleID == 0 {
+		return 0, 0, false
+	}
+
+	// 优先使用 9 号常规格，其次 2~8；不使用 1 号主角位与 51/52 替补位。
+	for _, preferred := range []int32{9, 2, 3, 4, 5, 6, 7, 8} {
+		if empty[preferred] {
+			return playerRoleID, uint8(preferred), true
+		}
+	}
+	return 0, 0, false
+}
+
+func isMasterPracticeNormalGrid(gridTypeID int32) bool {
+	return gridTypeID >= 1 && gridTypeID <= 9
+}
+
+// masterPracticeDeployPause 在连续布阵操作之间注入短间隔，降低触发风控的概率。
+func masterPracticeDeployPause(ctx context.Context) error {
+	timer := time.NewTimer(200 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// masterPracticeDeployMatches 校验所有已上阵角色 (含主角) 是否都与 targetJob 同职业。
+func masterPracticeDeployMatches(deploy *protocol.MasterPracticeDeployInfo, targetJob int32, repo dictionary.Repository) (bool, string) {
+	if deploy == nil {
+		return false, "布阵信息为空"
+	}
+	roleByPlayerID := make(map[int32]protocol.MasterPracticeDeployRole, len(deploy.Roles))
+	for _, role := range deploy.Roles {
+		roleByPlayerID[role.PlayerRoleID] = role
+	}
+	mainDeployed := false
+	for _, grid := range deploy.Grids {
+		if grid.PlayerRoleID == 0 {
+			continue
+		}
+		role, ok := roleByPlayerID[grid.PlayerRoleID]
+		if !ok {
+			return false, fmt.Sprintf("格位 %d 的角色 %d 不在角色列表", grid.GridTypeID, grid.PlayerRoleID)
+		}
+		job := masterPracticeRoleJob(repo, role.RoleID)
+		if role.IsMainRole == 1 {
+			mainDeployed = true
+		}
+		if job != targetJob {
+			return false, fmt.Sprintf("角色 %d (%s) 职业 %d != 目标 %d", role.PlayerRoleID, role.RoleName, job, targetJob)
+		}
+	}
+	if !mainDeployed {
+		return false, "主角未上阵"
+	}
+	return true, ""
+}
+
+// masterPracticeNormalizeDeploy 下阵异职业伙伴，并在需要时上阵一名同职业伙伴。
+func masterPracticeNormalizeDeploy(
+	ctx context.Context,
+	deploy *protocol.MasterPracticeDeployInfo,
+	targetJob int32,
+	repo dictionary.Repository,
+	call func(*protocol.Packet, uint32) (*protocol.Packet, error),
+) (*protocol.MasterPracticeDeployInfo, error) {
+	mismatched := masterPracticeMismatchedPartners(deploy, targetJob, repo)
+	for _, playerRoleID := range mismatched {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		resp, err := call(protocol.BuildMasterPracticeDeployPacket(playerRoleID, 0), protocol.ActionIDMasterPracticeDeploy)
+		if err != nil || resp == nil {
+			return nil, fmt.Errorf("下阵角色 %d 无回包: %w", playerRoleID, err)
+		}
+		code, pErr := protocol.ParseMasterPracticeActionCode(resp.Payload)
+		if pErr != nil || code != protocol.MasterPracticeResultSuccess {
+			return nil, fmt.Errorf("下阵角色 %d 失败: result=%d err=%v", playerRoleID, code, pErr)
+		}
+		if err := masterPracticeDeployPause(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if len(mismatched) > 0 {
+		refreshed := masterPracticeFetchDeploy(call)
+		if refreshed == nil {
+			return nil, fmt.Errorf("下阵后刷新布阵信息失败")
+		}
+		deploy = refreshed
+	}
+
+	if masterPracticeHasDeployedPartner(deploy, targetJob, repo) {
+		return deploy, nil
+	}
+	playerRoleID, gridTypeID, ok := masterPracticeDeployCandidate(deploy, targetJob, repo)
+	if !ok {
+		// 没有同职业伙伴时仍允许以主角单人阵容挑战；若服务端要求伙伴，
+		// 后续挑战会返回 JOB_ERROR 并由调用方熔断。
+		return deploy, nil
+	}
+	resp, err := call(protocol.BuildMasterPracticeDeployPacket(playerRoleID, gridTypeID), protocol.ActionIDMasterPracticeDeploy)
+	if err != nil || resp == nil {
+		return nil, fmt.Errorf("上阵角色 %d 到格位 %d 无回包: %w", playerRoleID, gridTypeID, err)
+	}
+	code, pErr := protocol.ParseMasterPracticeActionCode(resp.Payload)
+	if pErr != nil || code != protocol.MasterPracticeResultSuccess {
+		return nil, fmt.Errorf("上阵角色 %d 到格位 %d 失败: result=%d err=%v", playerRoleID, gridTypeID, code, pErr)
+	}
+	if err := masterPracticeDeployPause(ctx); err != nil {
+		return nil, err
+	}
+	refreshed := masterPracticeFetchDeploy(call)
+	if refreshed == nil {
+		return nil, fmt.Errorf("上阵后刷新布阵信息失败")
+	}
+	return refreshed, nil
+}
+
+// masterPracticeChallengeOutcome 挑战回包的业务分类。
+type masterPracticeChallengeOutcome int
+
+const (
+	// masterPracticeChallengeContinue 已挑战或挑战成功，继续下一星。
+	masterPracticeChallengeContinue masterPracticeChallengeOutcome = iota
+	// masterPracticeChallengeStop 正常停止当前方向 (如星数不足)。
+	masterPracticeChallengeStop
+	// masterPracticeChallengeFull 该方向累计星数已满。
+	masterPracticeChallengeFull
+	// masterPracticeChallengeNoTimes 今日挑战次数用尽。
+	masterPracticeChallengeNoTimes
+	// masterPracticeChallengeJobError 阵容职业与方向不匹配。
+	masterPracticeChallengeJobError
+)
+
+// classifyMasterPracticeChallengeResult 将挑战结果码映射为业务动作与调度错误。
+func classifyMasterPracticeChallengeResult(code uint8) (masterPracticeChallengeOutcome, error) {
+	switch code {
+	case protocol.MasterPracticeResultSuccess, protocol.MasterPracticeResultIsChallenged:
+		return masterPracticeChallengeContinue, nil
+	case protocol.MasterPracticeResultMaxStars:
+		return masterPracticeChallengeFull, nil
+	case protocol.MasterPracticeResultNoChallengeTimes:
+		return masterPracticeChallengeNoTimes, scheduler.ErrAttemptsExhausted
+	case protocol.MasterPracticeResultJobError:
+		return masterPracticeChallengeJobError, scheduler.ErrConditionNotMet
+	case protocol.MasterPracticeResultLessStars, protocol.MasterPracticeResultFailed:
+		return masterPracticeChallengeStop, nil
+	case protocol.MasterPracticeResultConditionLimited, protocol.MasterPracticeResultIsLocked:
+		return masterPracticeChallengeStop, scheduler.ErrConditionNotMet
+	default:
+		return masterPracticeChallengeStop, fmt.Errorf("宗师修行挑战未知结果码: %d", code)
+	}
 }
 
 // AwardSelectorFunc 允许注入自定义交互选择器（例如命令行交互、Web交互回调或自动化测试桩）。
@@ -3276,7 +3867,21 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 1. 免费次数优先。
+			//    线上实测：面板同时下发"单次免费"与"多次元宝"两种入口，后者
+			//    cur_number>0 且 cost_ingot=300；若不加门禁直接探索会消耗元宝。
+			//    因此这里只探索 cost_ingot=0 且 cost_coin=0 的纯免费入口。
 			for _, area := range info.Areas {
+				if area.CostIngot > 0 || area.CostCoin > 0 {
+					slog.Info("禁地之书跳过计费探索入口",
+						"role_id", session.RoleID(),
+						"type", area.ForbiddenType,
+						"explore_type", area.ExploreType,
+						"cost_ingot", area.CostIngot,
+						"cost_coin", area.CostCoin,
+						"cur_number", area.CurNumber,
+					)
+					continue
+				}
 				exploreArea(area)
 			}
 

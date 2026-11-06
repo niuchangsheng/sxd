@@ -2268,6 +2268,9 @@ func runMockGameServer(conn net.Conn) {
 	findImmortalPending := true
 	findImmortalState := int8(0)
 	findImmortalCultivation := int32(1000)
+
+	// 悟法领域 mock 状态: 秘馆 2 有 1 次免费十连，抽卡后归零。
+	wuFaFreeTenCount := int32(1)
 	findImmortalTotalCount := int32(5)
 	findBlessNumber := int16(1)
 	findBlessStage := int8(0)
@@ -3564,7 +3567,7 @@ func runMockGameServer(conn net.Conn) {
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetMoralAward, []byte{protocol.BeelzebubTrialsSuccess}))
 
 		case protocol.ActionIDWuFaFieldInfo:
-			// 悟法领域面板: 2 个秘馆；秘馆 1 有 1 次免费单抽，秘馆 2 有 1 次免费十连。
+			// 悟法领域面板: 2 个秘馆；秘馆 2 有 1 次免费十连，抽卡后剩余次数归零。
 			w := protocol.NewWriter()
 			w.WriteUint16(2)
 			// 秘馆 1
@@ -3572,7 +3575,7 @@ func runMockGameServer(conn net.Conn) {
 			w.WriteInt32(0) // today_count
 			w.WriteInt32(0) // total_count
 			w.WriteInt32(0) // curr_count_id
-			w.WriteInt32(1) // left_free_one_count
+			w.WriteInt32(0) // left_free_one_count
 			w.WriteInt32(0) // left_free_ten_count
 			w.WriteInt32(0) // wish_gongfa
 			w.WriteInt32(0) // wish_gongfa_prob
@@ -3583,7 +3586,7 @@ func runMockGameServer(conn net.Conn) {
 			w.WriteInt32(0)
 			w.WriteInt32(0)
 			w.WriteInt32(0)
-			w.WriteInt32(1) // left_free_ten_count
+			w.WriteInt32(wuFaFreeTenCount) // left_free_ten_count
 			w.WriteInt32(0)
 			w.WriteInt32(0)
 			w.WriteInt32(0)
@@ -3607,8 +3610,17 @@ func runMockGameServer(conn net.Conn) {
 			w.WriteInt8(1)  // is_skip
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDWuFaFieldInfo, w.Bytes()))
 
+		case protocol.ActionIDGameAssistantInfo:
+			// 每日活跃度面板: 仅返回「悟法领域冥想」任务，剩余 20 次。
+			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
+				{TaskID: 69, CurTimes: 0, MaxTimes: 20, PerActiveAdd: 10},
+			}))
+
 		case protocol.ActionIDWuFaDrawCard:
 			// 悟法感悟抽卡成功，返回 1 项奖励与剩余次数。
+			if wuFaFreeTenCount > 0 {
+				wuFaFreeTenCount--
+			}
 			w := protocol.NewWriter()
 			w.WriteUint8(protocol.WuFaResultSuccess)
 			w.WriteUint16(1)

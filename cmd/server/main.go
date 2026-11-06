@@ -23,12 +23,6 @@ import (
 	"sxd-pie-ng/internal/logging"
 	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/qa"
-	"sxd-pie-ng/internal/routines"
-	"sxd-pie-ng/internal/routines/daily"
-	"sxd-pie-ng/internal/routines/dungeon"
-	"sxd-pie-ng/internal/routines/farming"
-	"sxd-pie-ng/internal/routines/minigame"
-	"sxd-pie-ng/internal/routines/social"
 	"sxd-pie-ng/internal/scheduler"
 	"sxd-pie-ng/internal/web"
 )
@@ -41,94 +35,6 @@ var (
 	// Date 编译期注入的构建日期
 	Date = "unknown"
 )
-
-type routineManager struct {
-	mu         sync.RWMutex
-	enabledMap map[string]bool
-	schedulers []*scheduler.RoleScheduler
-}
-
-func (rm *routineManager) ListRoutines() []web.RoutineStatus {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
-	defs := routines.GetAllDefinitions()
-	res := make([]web.RoutineStatus, len(defs))
-	for i, d := range defs {
-		enabled, ok := rm.enabledMap[d.ID]
-		if !ok {
-			enabled = d.DefaultOn
-		}
-
-		state := "Disabled"
-		coolingUntilStr := ""
-		if enabled {
-			state = "Active"
-			for _, s := range rm.schedulers {
-				if _, _, coolingUntil, found := s.GetRoutineState(d.ID); found {
-					if coolingUntil.After(time.Now()) {
-						state = "Cooling"
-						coolingUntilStr = coolingUntil.Format("15:04:05")
-						break
-					}
-				}
-			}
-		}
-
-		res[i] = web.RoutineStatus{
-			ID:           d.ID,
-			Name:         d.Name,
-			Domain:       d.Domain,
-			Schedule:     d.Schedule.String(),
-			Description:  d.Description,
-			Enabled:      enabled,
-			State:        state,
-			CoolingUntil: coolingUntilStr,
-		}
-	}
-	return res
-}
-
-func (rm *routineManager) ToggleRoutine(id string, enabled bool) error {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	rm.enabledMap[id] = enabled
-	for _, s := range rm.schedulers {
-		s.SetRoutineEnabled(id, enabled)
-	}
-	return nil
-}
-
-func (rm *routineManager) ApplyPreset(preset string) error {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-
-	defs := routines.GetAllDefinitions()
-	switch preset {
-	case "all":
-		for _, d := range defs {
-			rm.enabledMap[d.ID] = true
-			for _, s := range rm.schedulers {
-				s.SetRoutineEnabled(d.ID, true)
-			}
-		}
-	case "none":
-		for _, d := range defs {
-			rm.enabledMap[d.ID] = false
-			for _, s := range rm.schedulers {
-				s.SetRoutineEnabled(d.ID, false)
-			}
-		}
-	case "recommended":
-		for _, d := range defs {
-			rm.enabledMap[d.ID] = d.DefaultOn
-			for _, s := range rm.schedulers {
-				s.SetRoutineEnabled(d.ID, d.DefaultOn)
-			}
-		}
-	}
-	return nil
-}
 
 type multiHandler struct {
 	handlers []slog.Handler
@@ -172,6 +78,22 @@ type sessionManager struct {
 	sessions []*client.RoleSession
 	roles    []web.RoleInfo
 	mu       sync.RWMutex
+}
+
+func (m *sessionManager) add(sess *client.RoleSession, info web.RoleInfo) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions = append(m.sessions, sess)
+	m.roles = append(m.roles, info)
+}
+
+func (m *sessionManager) closeAll() {
+	m.mu.RLock()
+	sessions := append([]*client.RoleSession(nil), m.sessions...)
+	m.mu.RUnlock()
+	for _, sess := range sessions {
+		sess.Close()
+	}
 }
 
 func (m *sessionManager) ListRoles() []web.RoleInfo {
@@ -299,173 +221,6 @@ func run(ctx context.Context, args []string) error {
 		slog.Info("已成功加载智能题库问答引擎", "total_questions", qaEngine.Size())
 	}
 
-	factory := routines.NewRegistryFactory(qaEngine, dictRepo)
-	dCfg := dungeon.DefaultSweepConfig()
-	hasSubDungeon := cfg.Scheduler.Dungeon.QuestCycle.Enabled ||
-		cfg.Scheduler.Dungeon.QuestCycle.AutoReplenishStamina ||
-		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina > 0 ||
-		cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
-		cfg.Scheduler.Dungeon.Sweep.Enabled ||
-		cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes > 0 ||
-		cfg.Scheduler.Dungeon.Sweep.SellSweptItems ||
-		cfg.Scheduler.Dungeon.Sweep.AutoSellSweptItems ||
-		cfg.Scheduler.Dungeon.SellSweptItems ||
-		cfg.Scheduler.Dungeon.AutoSellSweptItems ||
-		len(cfg.Scheduler.Dungeon.Sweep.Pipeline) > 0
-	// 1. 剧情推图配置 (quest_cycle)
-	if hasSubDungeon {
-		dCfg.QuestCycle.Enabled = cfg.Scheduler.Dungeon.QuestCycle.Enabled
-		dCfg.QuestCycle.AutoReplenishStamina = cfg.Scheduler.Dungeon.QuestCycle.AutoReplenishStamina
-		dCfg.QuestCycle.MaxReplenishStamina = cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishStamina
-		dCfg.QuestCycle.MaxReplenishTimes = cfg.Scheduler.Dungeon.QuestCycle.MaxReplenishTimes
-	} else {
-		dCfg.QuestCycle.AutoReplenishStamina = cfg.Scheduler.Dungeon.AutoReplenishStamina
-		dCfg.QuestCycle.MaxReplenishStamina = cfg.Scheduler.Dungeon.MaxReplenishStamina
-		dCfg.QuestCycle.MaxReplenishTimes = cfg.Scheduler.Dungeon.MaxReplenishTimes
-	}
-
-	// 2. 关卡扫荡配置 (sweep)
-	if hasSubDungeon {
-		dCfg.Sweep.Enabled = cfg.Scheduler.Dungeon.Sweep.Enabled
-		dCfg.Sweep.Pipeline = cfg.Scheduler.Dungeon.Sweep.Pipeline
-		dCfg.Sweep.MaxBatchTimes = cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes
-		dCfg.Sweep.PreferPracticeQuickly = cfg.Scheduler.Dungeon.Sweep.PreferPracticeQuickly
-		dCfg.Sweep.SellSweptItems = cfg.Scheduler.Dungeon.Sweep.SellSweptItems || cfg.Scheduler.Dungeon.Sweep.AutoSellSweptItems || cfg.Scheduler.Dungeon.SellSweptItems || cfg.Scheduler.Dungeon.AutoSellSweptItems
-	} else {
-		if len(cfg.Scheduler.Dungeon.Pipeline) > 0 {
-			dCfg.Sweep.Pipeline = cfg.Scheduler.Dungeon.Pipeline
-		}
-		dCfg.Sweep.PreferPracticeQuickly = cfg.Scheduler.Dungeon.PreferPracticeQuickly
-		dCfg.Sweep.MaxBatchTimes = cfg.Scheduler.Dungeon.MaxBatchTimes
-		dCfg.Sweep.SellSweptItems = cfg.Scheduler.Dungeon.SellSweptItems || cfg.Scheduler.Dungeon.AutoSellSweptItems
-	}
-
-	dCfg.Pipeline = cfg.Scheduler.Dungeon.Pipeline
-	dCfg.PreferPracticeQuickly = cfg.Scheduler.Dungeon.PreferPracticeQuickly
-	dCfg.MaxBatchTimes = cfg.Scheduler.Dungeon.MaxBatchTimes
-	dCfg.AutoReplenishStamina = cfg.Scheduler.Dungeon.AutoReplenishStamina
-	dCfg.MaxReplenishStamina = cfg.Scheduler.Dungeon.MaxReplenishStamina
-	dCfg.MaxReplenishTimes = cfg.Scheduler.Dungeon.MaxReplenishTimes
-	dCfg.SellSweptItems = dCfg.Sweep.SellSweptItems
-	factory.SetDungeonConfig(dCfg)
-
-	// 结缘宝箱配置 (每批最多10个)
-	jBoxCfg := social.DefaultJieYuanBoxConfig()
-	if cfg.Scheduler.JieYuanBox.MaxBatchSize > 0 {
-		jBoxCfg.MaxBatchSize = cfg.Scheduler.JieYuanBox.MaxBatchSize
-	}
-	factory.SetJieYuanBoxConfig(jBoxCfg)
-
-	// 帮派祭神上香配置 (默认免费白檀香，不主动覆盖更高祝福)
-	fbCfg := social.DefaultFactionBlessingConfig()
-	if cfg.Scheduler.FactionBlessing.OfferingID > 0 {
-		fbCfg.OfferingID = cfg.Scheduler.FactionBlessing.OfferingID
-	}
-	fbCfg.AllowCover = cfg.Scheduler.FactionBlessing.AllowCover
-	factory.SetFactionBlessingConfig(fbCfg)
-
-	// 天帝宝库自选三档大奖配置
-	thCfg := minigame.TreasureHouseConfig{
-		DictRepo:      dictRepo,
-		SelectionMode: cfg.Scheduler.TreasureHouse.SelectionMode,
-		PreferAwards:  cfg.Scheduler.TreasureHouse.PreferAwards,
-		Interactive:   cfg.Scheduler.TreasureHouse.Interactive,
-		Awards:        cfg.Scheduler.TreasureHouse.ResolveSelections(),
-		MaxDrawTimes:  cfg.Scheduler.TreasureHouse.MaxDrawTimes,
-	}
-	factory.SetTreasureHouseConfig(thCfg)
-
-	// 个人吉星高照策略配置 (仅使用免费逆天改运次数，永不消耗元宝)
-	lsCfg := minigame.DefaultLuckyStarConfig()
-	if cfg.Scheduler.LuckyStar.MaxRerollsPerRoll > 0 {
-		lsCfg.MaxRerollsPerRoll = cfg.Scheduler.LuckyStar.MaxRerollsPerRoll
-	}
-	factory.SetLuckyStarConfig(lsCfg)
-
-	// 在线礼包与功能终结礼包策略配置
-	ogCfg := daily.DefaultOnlineGiftConfig()
-	if cfg.Scheduler.OnlineGift.ClaimFunctionEndGifts != nil {
-		ogCfg.ClaimFunctionEndGifts = *cfg.Scheduler.OnlineGift.ClaimFunctionEndGifts
-	}
-	if cfg.Scheduler.OnlineGift.MaxClaimsPerGift > 0 {
-		ogCfg.MaxClaimsPerGift = cfg.Scheduler.OnlineGift.MaxClaimsPerGift
-	}
-	factory.SetOnlineGiftConfig(ogCfg)
-
-	// 魔王试炼自动化策略配置
-	btCfg := dungeon.DefaultBeelzebubTrialsConfig()
-	if cfg.Scheduler.BeelzebubTrials.PreferBossID > 0 {
-		btCfg.PreferBossID = cfg.Scheduler.BeelzebubTrials.PreferBossID
-	}
-	if cfg.Scheduler.BeelzebubTrials.MinLevel > 0 {
-		btCfg.MinLevel = cfg.Scheduler.BeelzebubTrials.MinLevel
-	}
-	btCfg.AutoMoralAward = cfg.Scheduler.BeelzebubTrials.AutoMoralAward
-	factory.SetBeelzebubTrialsConfig(btCfg)
-
-	// 仙界练功房挂机收益维护策略配置 (默认只占空闲席位，不主动 PVP 争夺)
-	trCfg := dungeon.DefaultTrainingRoomConfig()
-	if cfg.Scheduler.TrainingRoom.AllowRobSeat || cfg.Scheduler.TrainingRoom.MaxRobAttempts > 0 {
-		trCfg.AllowRobSeat = cfg.Scheduler.TrainingRoom.AllowRobSeat
-		if cfg.Scheduler.TrainingRoom.MaxRobAttempts > 0 {
-			trCfg.MaxRobAttempts = cfg.Scheduler.TrainingRoom.MaxRobAttempts
-		}
-	}
-	factory.SetTrainingRoomConfig(trCfg)
-
-	// 六道轮回挑战与灵件策略配置
-	srCfg := dungeon.DefaultSixRealmsConfig()
-	if cfg.Scheduler.SixRealms.AutoReset || cfg.Scheduler.SixRealms.AutoSellBlue || cfg.Scheduler.SixRealms.AutoSellPurple || cfg.Scheduler.SixRealms.MaxFloorRetries > 0 {
-		srCfg.AutoReset = cfg.Scheduler.SixRealms.AutoReset
-		srCfg.AutoSellBlue = cfg.Scheduler.SixRealms.AutoSellBlue
-		srCfg.AutoSellPurple = cfg.Scheduler.SixRealms.AutoSellPurple
-		if cfg.Scheduler.SixRealms.MaxFloorRetries > 0 {
-			srCfg.MaxFloorRetries = cfg.Scheduler.SixRealms.MaxFloorRetries
-		}
-	}
-	factory.SetSixRealmsConfig(srCfg)
-
-	// 西天取经护送与打劫策略配置 (默认自动打劫，仅使用免费次数)
-	pCfg := farming.DefaultPilgrimageConfig()
-	if cfg.Scheduler.Pilgrimage.AutoRob != nil {
-		pCfg.AutoRob = *cfg.Scheduler.Pilgrimage.AutoRob
-	}
-	if cfg.Scheduler.Pilgrimage.MaxRobAttempts > 0 {
-		pCfg.MaxRobAttempts = cfg.Scheduler.Pilgrimage.MaxRobAttempts
-	}
-	if cfg.Scheduler.Pilgrimage.MaxProbeTargets > 0 {
-		pCfg.MaxProbeTargets = cfg.Scheduler.Pilgrimage.MaxProbeTargets
-	}
-	factory.SetPilgrimageConfig(pCfg)
-
-	// 粗铁淬炼池策略配置 (默认淬炼玄铁; 可切换提炼灵材, 两者均只消耗铜钱)
-	spCfg := farming.DefaultSpiritPoolConfig()
-	if target, ok := farming.ParseSpiritPoolRefineTarget(cfg.Scheduler.SpiritPool.RefineTarget); ok {
-		spCfg.Target = target
-	} else {
-		slog.Warn("粗铁淬炼池目标配置无法识别, 回退为玄铁",
-			"refine_target", cfg.Scheduler.SpiritPool.RefineTarget,
-		)
-	}
-	factory.SetSpiritPoolConfig(spCfg)
-
-	routineMgr := &routineManager{
-		enabledMap: make(map[string]bool),
-	}
-	if strings.ToLower(cfg.Scheduler.Preset) == "all" {
-		for _, d := range routines.GetAllDefinitions() {
-			routineMgr.enabledMap[d.ID] = true
-		}
-	}
-	for k, v := range cfg.Scheduler.Routines {
-		routineMgr.enabledMap[k] = v
-		if k == "dungeon" {
-			routineMgr.enabledMap["dungeon_sweep"] = v
-		} else if k == "dungeon_sweep" {
-			routineMgr.enabledMap["dungeon"] = v
-		}
-	}
-
 	// 4. 初始化角色会话与多角色调度器
 	mgr := &sessionManager{}
 	dispatcher := scheduler.NewDispatcher()
@@ -479,143 +234,25 @@ func run(ctx context.Context, args []string) error {
 		ticketCache.RegisterAuthenticator(xdAuth)
 	}
 
-	for _, acc := range cfg.Accounts {
-		if acc.Cookie != "" && xdAuth != nil && (strings.EqualFold(acc.Platform, "xindong") || strings.EqualFold(acc.Platform, "xd")) {
-			xdAuth.SetCookie(acc.Cookie)
-		}
+	// 阶段一：纯内存构建启动计划 (去重、网关解析、区服覆盖合并、工厂装配)。
+	plans := buildRolePlans(cfg, qaEngine, dictRepo)
+	slog.Info("已生成多区服启动计划", "role_count", len(plans))
 
-		for _, role := range acc.Roles {
-			roleID := fmt.Sprintf("%s-%s", role.ServerID, role.RoleName)
+	// 阶段二：串行换票，避免同一账号短时间多次 Web 登录触发风控。
+	fetchAllCredentials(ctx, plans, cfg.Scheduler.Startup, ticketCache, xdAuth)
 
-			// 网关地址解析 (Gateway Resolution): 若为 sandbox 或默认，自动解析已知真实网关
-			serverAddr := role.ServerAddr
-			if serverAddr == "" || serverAddr == "sandbox" {
-				if strings.Contains(role.ServerID, "813") {
-					serverAddr = "49.232.196.100:8381"
-				} else if strings.EqualFold(role.ServerID, "s0") || strings.EqualFold(role.ServerID, "0") {
-					serverAddr = "9x050.sxdweb.xd.com:8200"
-				}
-			}
-
-			roleCfg := client.SessionConfig{
-				RoleID:               roleID,
-				RoleName:             role.RoleName,
-				Username:             acc.Username,
-				ServerAddr:           serverAddr,
-				ServerID:             role.ServerID,
-				Platform:             acc.Platform,
-				Code:                 role.Code,
-				Time:                 role.Time,
-				Hash:                 role.Hash,
-				Time1:                role.Time1,
-				Hash1:                role.Hash1,
-				Authenticator:        client.DefaultAuthenticator,
-				MaxReconnectAttempts: 3,
-			}
-
-			// 全自治凭据流水线 (Autonomous Ingress):
-			// 优先通过账号密码或会话 Cookie 全自动发起原生 Web 登录换取双轨凭据 (0外部依赖)
-			if acc.Platform != "" && (acc.Cookie != "" || (acc.Username != "" && acc.Password != "")) {
-				slog.Info("正在通过全自治 Web 驱动自动换取平台最新凭据...", "platform", acc.Platform, "username", acc.Username, "server", role.ServerID)
-				ticket, err := ticketCache.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)
-				if err != nil {
-					slog.Warn("原生平台换票未成功，尝试备用降级通道", "error", err)
-				} else {
-					client.ApplyTicket(&roleCfg, ticket)
-					if ticket.GatewayURL != "" {
-						roleCfg.ServerAddr = ticket.GatewayURL
-					}
-					slog.Info("已成功全自动换取最新双轨凭据并直注会话", "server_id", roleCfg.ServerID, "role_name", role.RoleName, "server_addr", roleCfg.ServerAddr)
-				}
-			}
-
-			// 备用降级通道: 仅当原生平台换票未成功 (主服 Hash 缺失) 时，才尝试从外部 user.ini 摄取
-			if roleCfg.Hash == "" {
-				if ticket, err := platform.LoadTicketFromIni("", role.RoleName); err == nil {
-					client.ApplyTicket(&roleCfg, ticket)
-					slog.Info("已通过备用 Ticket Ingress 成功摄取本地凭据", "role_name", role.RoleName, "server_id", roleCfg.ServerID)
-				}
-			}
-
-			// 装配自愈凭据刷新管道: 断线时自动使旧 Ticket 失效并全自治重新向 Web 换票
-			if acc.Platform != "" && acc.Username != "" && acc.Password != "" {
-				pName := acc.Platform
-				uName := acc.Username
-				pWord := acc.Password
-				sID := role.ServerID
-				roleCfg.MaxReconnectAttempts = 10
-				roleCfg.RefreshCredentials = func(c context.Context, sCfg *client.SessionConfig) error {
-					ticketCache.Invalidate(pName, uName, sID)
-					freshTicket, err := ticketCache.GetOrFetch(c, pName, uName, pWord, sID)
-					if err != nil {
-						return err
-					}
-					client.ApplyTicket(sCfg, freshTicket)
-					if freshTicket.GatewayURL != "" {
-						sCfg.ServerAddr = freshTicket.GatewayURL
-					}
-					return nil
-				}
-			}
-
-			sess := client.NewRoleSession(roleCfg)
-			mgr.sessions = append(mgr.sessions, sess)
-			mgr.roles = append(mgr.roles, web.RoleInfo{
-				RoleID:   roleID,
-				RoleName: role.RoleName,
-				ServerID: roleCfg.ServerID,
-				State:    sess.State().String(),
-			})
-
-			jitterCfg := scheduler.JitterConfig{
-				MinDuration: time.Duration(cfg.Scheduler.Jitter.MinSeconds * float64(time.Second)),
-				MaxDuration: time.Duration(cfg.Scheduler.Jitter.MaxSeconds * float64(time.Second)),
-			}
-			roleSched, _ := dispatcher.AddRole(roleID, sess, jitterCfg)
-
-			if roleSched != nil {
-				// 装配全量 30+ 玩法
-				regCount := factory.RegisterAll(roleSched, routineMgr.enabledMap)
-				slog.Info("已为角色装配自动化玩法矩阵", "role_id", roleID, "registered_count", regCount)
-				routineMgr.schedulers = append(routineMgr.schedulers, roleSched)
-			}
-
-			if role.AutoLogin {
-				if roleCfg.Hash == "" && roleCfg.Hash1 == "" && roleCfg.ServerAddr != "sandbox" {
-					slog.Error("角色缺失有效网关认证票据 (Hash 为空)，已跳过自动连接", "role_id", roleID)
-				} else {
-					_ = sess.Start(ctx)
-				}
-			}
-		}
-	}
-
+	// 阶段三：装配会话与独立调度器，然后并发启动会话。
+	routineMgr := newRoutineManager(buildRoutineEnabledMap(cfg.Scheduler))
+	startable := registerPlans(plans, mgr, dispatcher, routineMgr)
 	dispatcher.StartAll(ctx)
+	startPlans(ctx, startable)
 
-	// 启动定点 Cron 调度监控时钟 (比对配置的 cron_times 自动批量唤醒)
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		lastTriggerMinute := ""
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
-				currentMinute := now.Format("15:04")
-				if currentMinute != lastTriggerMinute {
-					for _, cronTime := range cfg.Scheduler.CronTimes {
-						if currentMinute == cronTime {
-							lastTriggerMinute = currentMinute
-							triggered := dispatcher.TriggerBatch(scheduler.ScheduleCron)
-							slog.Info("触发定点日常重置批量唤醒", "time", currentMinute, "triggered_count", triggered)
-							break
-						}
-					}
-				}
-			}
-		}
-	}()
+	// 每个角色按其生效的 cron_times 独立唤醒 Cron 玩法。
+	cronTimesByRole := make(map[string][]string, len(plans))
+	for _, p := range plans {
+		cronTimesByRole[p.roleID] = p.eff.CronTimes
+	}
+	go runCronTicker(ctx, dispatcher, cronTimesByRole)
 
 	// 5. 启动 Web 控制台服务并注入玩法管理提供器
 	webServer := web.NewServer(cfg.Server.Host, cfg.Server.Port, mgr, logBuf, Version)
@@ -633,9 +270,7 @@ func run(ctx context.Context, args []string) error {
 
 	_ = webServer.Shutdown(shutdownCtx)
 	dispatcher.StopAll()
-	for _, sess := range mgr.sessions {
-		sess.Close()
-	}
+	mgr.closeAll()
 
 	slog.Info("神仙道助手已安全退出")
 	return nil

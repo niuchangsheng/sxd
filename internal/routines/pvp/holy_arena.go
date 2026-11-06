@@ -18,11 +18,20 @@ import (
 // maxSaArenaRobs 单轮调度的最大抢占次数。
 const maxSaArenaRobs = 10
 
+// openSaintAreaSession 建立圣域独立长连接。抽成变量以便单测注入。
+var openSaintAreaSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+	return s.OpenSaintAreaSession(ctx)
+}
+
 // NewHolyArenaRoutine 构造圣域竞技场自动抢占任务。
 //
 // 官方 com.datas.SaArenaData: get_info 返回 5 个擂台席位与剩余可抢占次数。
 // 空席位 (sa_player_id=0) 可直接免费占据；有人的席位则发起抢占战斗。
 // 自动化优先选择空席位，其次选择战力最低的对手，避免无意义消耗。
+//
+// 官方 SaArenaThroneView 将 get_info / rob_the_seat 全部路由到圣域连接
+// (DataBase.SOCKETSAINTAREA)。线上实测：主服调用 get_info 返回全空席位，
+// rob_the_seat 固定返回 ACTIVITY_CLOSE(3)；必须改用圣域会话才能看到真实席位。
 //
 // 圣域竞技场不消耗元宝，只消耗每日免费抢占次数。
 func NewHolyArenaRoutine() scheduler.ActivityRoutine {
@@ -52,10 +61,39 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			// 圣域开启状态：关闭/维护时直接跳过，避免建立无意义的透传连接。
+			sCtx, sCancel := context.WithTimeout(ctx, 5*time.Second)
+			statusResp, sErr := session.Call(sCtx, protocol.BuildSaintAreaStatusPacket(), protocol.ActionIDSaintAreaStatus)
+			sCancel()
+			if sErr != nil || statusResp == nil {
+				slog.Info("查询圣域状态无回包，跳过圣域竞技场", "role_id", session.RoleID(), "err", sErr)
+				return nil
+			}
+			status, sErr := protocol.ParseSaintAreaStatusResult(statusResp.Payload)
+			if sErr != nil {
+				slog.Warn("解析圣域状态失败，跳过圣域竞技场", "role_id", session.RoleID(), "err", sErr)
+				return nil
+			}
+			if status.Status != protocol.SaintAreaStatusOpen {
+				slog.Info("圣域当前未开启，跳过圣域竞技场",
+					"role_id", session.RoleID(), "status", status.Status)
+				return nil
+			}
+
+			// 竞技场协议必须走圣域独立长连接。
+			sa, oErr := openSaintAreaSession(ctx, session)
+			if oErr != nil || sa == nil {
+				slog.Info("建立圣域会话失败，跳过圣域竞技场", "role_id", session.RoleID(), "err", oErr)
+				return nil
+			}
+			if sa != session {
+				defer sa.Close()
+			}
+
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
 				cCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
-				return session.Call(cCtx, pkt, act)
+				return sa.Call(cCtx, pkt, act)
 			}
 
 			fetchInfo := func() (*protocol.SaArenaInfo, error) {

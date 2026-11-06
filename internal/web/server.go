@@ -34,6 +34,15 @@ type RoleProvider interface {
 	ListRoles() []RoleInfo
 }
 
+// RoleRoutineStatus 单个角色下某个玩法的运行状态 (多区服控制台展示用)。
+type RoleRoutineStatus struct {
+	RoleID       string `json:"role_id"`
+	ServerID     string `json:"server_id"`
+	Enabled      bool   `json:"enabled"`
+	State        string `json:"state"` // "Active", "Cooling", "Disabled"
+	CoolingUntil string `json:"cooling_until,omitempty"`
+}
+
 // RoutineStatus 玩法运行与配置状态
 type RoutineStatus struct {
 	ID           string `json:"id"`
@@ -44,13 +53,18 @@ type RoutineStatus struct {
 	Enabled      bool   `json:"enabled"`
 	State        string `json:"state"` // "Active", "Cooling", "Disabled"
 	CoolingUntil string `json:"cooling_until,omitempty"`
+	// Roles 按角色拆分的明细；仅聚合查询 (role_id 为空) 时返回。
+	Roles []RoleRoutineStatus `json:"roles,omitempty"`
 }
 
-// RoutineProvider 玩法管理器接口
+// RoutineProvider 玩法管理器接口。
+//
+// roleID 为空表示对所有角色生效 (全局开关)；指定 roleID 时只影响该角色，
+// 用于多区服/多角色场景下互不干扰的独立开关。
 type RoutineProvider interface {
-	ListRoutines() []RoutineStatus
-	ToggleRoutine(id string, enabled bool) error
-	ApplyPreset(preset string) error
+	ListRoutines(roleID string) []RoutineStatus
+	ToggleRoutine(roleID, id string, enabled bool) error
+	ApplyPreset(roleID, preset string) error
 }
 
 // Server Web 控制台与管理 API 服务
@@ -197,7 +211,7 @@ func (s *Server) handleRoutines(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet {
-		routines := s.routineProvider.ListRoutines()
+		routines := s.routineProvider.ListRoutines(r.URL.Query().Get("role_id"))
 		if routines == nil {
 			routines = []RoutineStatus{}
 		}
@@ -207,6 +221,7 @@ func (s *Server) handleRoutines(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		var req struct {
+			RoleID  string `json:"role_id"`
 			ID      string `json:"id"`
 			Enabled *bool  `json:"enabled"`
 			Preset  string `json:"preset"`
@@ -217,12 +232,12 @@ func (s *Server) handleRoutines(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if req.Preset != "" {
-			if err := s.routineProvider.ApplyPreset(req.Preset); err != nil {
+			if err := s.routineProvider.ApplyPreset(req.RoleID, req.Preset); err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
 		} else if req.ID != "" && req.Enabled != nil {
-			if err := s.routineProvider.ToggleRoutine(req.ID, *req.Enabled); err != nil {
+			if err := s.routineProvider.ToggleRoutine(req.RoleID, req.ID, *req.Enabled); err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
@@ -240,4 +255,3 @@ func writeJSON(w http.ResponseWriter, code int, data any) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(data)
 }
-

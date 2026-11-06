@@ -43,6 +43,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "daily_gifts", Name: "每日免费礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "领取每日俸禄、每日灵石与 PC 微端礼包 (仅免费档)", DefaultOn: false},
 		{ID: "saint_practice", Name: "圣域修炼替身", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "圣域开启时进入免费修炼房并领取累积经验 (不消耗元宝)", DefaultOn: false},
 		{ID: "dragonball_offer", Name: "神龙普通上供", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "每日普通上供获取活跃度与龙珠经验 (仅消耗铜钱)", DefaultOn: false},
+		{ID: "fate_hunt", Name: "免费猎命与命宫碎片", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "每日免费指定猎命师与铜钱兑换命宫碎片 (不消耗元宝)", DefaultOn: false},
 
 		// 2. Farming 领域 (6)
 		{ID: "herb_garden", Name: "药园种植巡检", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动药园播种、施肥、除草与成熟采摘", DefaultOn: true},
@@ -114,19 +115,20 @@ func GetAllDefinitions() []RoutineDefinition {
 
 // RegistryFactory 构建并注册所有玩法的统一工厂。
 type RegistryFactory struct {
-	qaEngine      qa.Engine
-	dictRepo      dictionary.Repository
-	dungeonCfg    dungeon.SweepConfig
-	sixRealmsCfg  dungeon.SixRealmsConfig
-	beelzebubCfg  dungeon.BeelzebubTrialsConfig
-	trainingCfg   dungeon.TrainingRoomConfig
-	jieyuanCfg    social.JieYuanBoxConfig
-	blessingCfg   social.FactionBlessingConfig
-	treasureCfg   minigame.TreasureHouseConfig
-	luckyCfg      minigame.LuckyStarConfig
-	pilgrimageCfg farming.PilgrimageConfig
-	spiritPoolCfg farming.SpiritPoolConfig
-	onlineGiftCfg daily.OnlineGiftConfig
+	qaEngine          qa.Engine
+	dictRepo          dictionary.Repository
+	dungeonCfg        dungeon.SweepConfig
+	sixRealmsCfg      dungeon.SixRealmsConfig
+	beelzebubCfg      dungeon.BeelzebubTrialsConfig
+	trainingCfg       dungeon.TrainingRoomConfig
+	jieyuanCfg        social.JieYuanBoxConfig
+	blessingCfg       social.FactionBlessingConfig
+	treasureCfg       minigame.TreasureHouseConfig
+	luckyCfg          minigame.LuckyStarConfig
+	masterPracticeCfg minigame.MasterPracticeConfig
+	pilgrimageCfg     farming.PilgrimageConfig
+	spiritPoolCfg     farming.SpiritPoolConfig
+	onlineGiftCfg     daily.OnlineGiftConfig
 }
 
 // NewRegistryFactory 创建注册工厂实例。
@@ -134,19 +136,20 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 	cfg := dungeon.DefaultSweepConfig()
 	cfg.PreferPracticeQuickly = true
 	return &RegistryFactory{
-		qaEngine:      qaEngine,
-		dictRepo:      dictRepo,
-		dungeonCfg:    cfg,
-		sixRealmsCfg:  dungeon.DefaultSixRealmsConfig(),
-		beelzebubCfg:  dungeon.DefaultBeelzebubTrialsConfig(),
-		trainingCfg:   dungeon.DefaultTrainingRoomConfig(),
-		jieyuanCfg:    social.DefaultJieYuanBoxConfig(),
-		blessingCfg:   social.DefaultFactionBlessingConfig(),
-		treasureCfg:   minigame.DefaultTreasureHouseConfig(),
-		luckyCfg:      minigame.DefaultLuckyStarConfig(),
-		pilgrimageCfg: farming.DefaultPilgrimageConfig(),
-		spiritPoolCfg: farming.DefaultSpiritPoolConfig(),
-		onlineGiftCfg: daily.DefaultOnlineGiftConfig(),
+		qaEngine:          qaEngine,
+		dictRepo:          dictRepo,
+		dungeonCfg:        cfg,
+		sixRealmsCfg:      dungeon.DefaultSixRealmsConfig(),
+		beelzebubCfg:      dungeon.DefaultBeelzebubTrialsConfig(),
+		trainingCfg:       dungeon.DefaultTrainingRoomConfig(),
+		jieyuanCfg:        social.DefaultJieYuanBoxConfig(),
+		blessingCfg:       social.DefaultFactionBlessingConfig(),
+		treasureCfg:       minigame.DefaultTreasureHouseConfig(),
+		luckyCfg:          minigame.DefaultLuckyStarConfig(),
+		masterPracticeCfg: minigame.DefaultMasterPracticeConfig(),
+		pilgrimageCfg:     farming.DefaultPilgrimageConfig(),
+		spiritPoolCfg:     farming.DefaultSpiritPoolConfig(),
+		onlineGiftCfg:     daily.DefaultOnlineGiftConfig(),
 	}
 }
 
@@ -193,6 +196,14 @@ func (f *RegistryFactory) SetLuckyStarConfig(cfg minigame.LuckyStarConfig) {
 	f.luckyCfg = cfg
 }
 
+// SetMasterPracticeConfig 设置宗师修行方向顺序与阵容整理策略。
+func (f *RegistryFactory) SetMasterPracticeConfig(cfg minigame.MasterPracticeConfig) {
+	if cfg.DictRepo == nil {
+		cfg.DictRepo = f.dictRepo
+	}
+	f.masterPracticeCfg = cfg
+}
+
 // SetOnlineGiftConfig 设置在线礼包与功能终结礼包策略配置。
 func (f *RegistryFactory) SetOnlineGiftConfig(cfg daily.OnlineGiftConfig) {
 	f.onlineGiftCfg = cfg
@@ -234,6 +245,12 @@ func (f *RegistryFactory) RegisterAll(sched *scheduler.RoleScheduler, enabledMap
 	return count
 }
 
+// CreateRoutine 按玩法 ID 实例化单个 Routine。
+// 供控制台在运行时首次开启某个启动时未注册的玩法时补装配。
+func (f *RegistryFactory) CreateRoutine(id string) scheduler.ActivityRoutine {
+	return f.createRoutine(id)
+}
+
 func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	// 动态路由实例化具体领域 Routine
 	switch id {
@@ -264,6 +281,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewSaintPracticeRoutine()
 	case "dragonball_offer":
 		return daily.NewDragonballOfferRoutine()
+	case "fate_hunt":
+		return daily.NewFateHuntRoutine()
 
 	// 2. Farming
 	case "herb_garden":
@@ -371,7 +390,11 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "wufa_field":
 		return minigame.NewWuFaRoutine()
 	case "master_practice":
-		return minigame.NewMasterPracticeRoutine(minigame.MasterPracticeConfig{DictRepo: f.dictRepo})
+		cfg := f.masterPracticeCfg
+		if cfg.DictRepo == nil {
+			cfg.DictRepo = f.dictRepo
+		}
+		return minigame.NewMasterPracticeRoutine(cfg)
 	case "treasure_house":
 		cfg := f.treasureCfg
 		if cfg.DictRepo == nil {
