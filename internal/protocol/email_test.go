@@ -68,6 +68,40 @@ func TestEmailOneKeyGetAward_ResultEmpty(t *testing.T) {
 	}
 }
 
+func TestEmailGetAttachment_Packet(t *testing.T) {
+	const mailID int32 = 12345
+	pkt := protocol.BuildEmailGetAttachmentPacket(mailID, protocol.ActionIDEmailGetInfo)
+	if pkt.ActionID != 0x01590002 {
+		t.Fatalf("附件领取协议号应为 0x01590002, 实际 0x%08X", pkt.ActionID)
+	}
+	if len(pkt.Payload) != 8 {
+		t.Fatalf("载荷应为 Int mailID + prevAct 共 8 字节, 实际 %d", len(pkt.Payload))
+	}
+	if got := int32(binary.BigEndian.Uint32(pkt.Payload[0:4])); got != mailID {
+		t.Errorf("mailID 期望 %d, 实际 %d", mailID, got)
+	}
+	if got := binary.BigEndian.Uint32(pkt.Payload[4:8]); got != protocol.ActionIDEmailGetInfo {
+		t.Errorf("prevAct 期望 0x%08X, 实际 0x%08X", protocol.ActionIDEmailGetInfo, got)
+	}
+}
+
+func TestEmailGetAttachment_Result(t *testing.T) {
+	for _, code := range []uint8{
+		protocol.EmailResultSuccess,
+		protocol.EmailResultHadGet,
+		protocol.EmailResultNoAward,
+		protocol.EmailResultIDError,
+	} {
+		got, err := protocol.ParseEmailGetAttachmentResult([]byte{code})
+		if err != nil || got != code {
+			t.Fatalf("code %d: got=%d err=%v", code, got, err)
+		}
+	}
+	if _, err := protocol.ParseEmailGetAttachmentResult(nil); !errors.Is(err, protocol.ErrInvalidPayload) {
+		t.Fatalf("空回包应返回 ErrInvalidPayload, 实际: %v", err)
+	}
+}
+
 func TestEmailGetInfoAndIsHaveNew_Packet(t *testing.T) {
 	info := protocol.BuildEmailGetInfoPacket(protocol.ActionIDTownEnter)
 	if info.ActionID != 0x01590000 || len(info.Payload) != 4 {

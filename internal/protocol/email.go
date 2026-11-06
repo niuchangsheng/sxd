@@ -90,6 +90,25 @@ func BuildEmailOneKeyGetAwardPacket(prevAct uint32) *Packet {
 	return newPrevActPacket(ActionIDEmailOneKeyGetAward, prevAct)
 }
 
+// BuildEmailGetAttachmentPacket 构造领取单封邮件附件封包 (Module 345, Action 2)。
+// 线格式对齐 docs/protocol-spec.md: Int mailID + prevAct (尾部)。
+func BuildEmailGetAttachmentPacket(mailID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(mailID)
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDEmailGetAttachmentAward, w.Bytes())
+}
+
+// ParseEmailGetAttachmentResult 解析单封邮件附件领取回包: uint8 业务结果码。
+func ParseEmailGetAttachmentResult(payload []byte) (uint8, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	result, err := r.ReadUint8()
+	if err != nil {
+		return 0, fmt.Errorf("%w: failed to read get_attachment_award result: %v", ErrInvalidPayload, err)
+	}
+	return result, nil
+}
+
 // ParseEmailIsHaveNewResult 解析新邮件查询回包: uint8 状态。
 func ParseEmailIsHaveNewResult(payload []byte) (uint8, error) {
 	r := NewReader(DecompressPayloadIfNeeded(payload))
