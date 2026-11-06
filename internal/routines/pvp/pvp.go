@@ -810,13 +810,24 @@ func NewGodsAndDemonsRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// NewCaravanHijackRoutine 构造阵营劫镖任务 (Feature 7: 劫镖)。
+// NewCaravanHijackRoutine 构造劫镖任务 (Feature 7: 劫镖)。
+//
+// 官方 Mod_RobMoney_Base 流程：
+//
+//	get_rob_money_info (Act 0) 读取目标状态 → rob (Act 2) 劫镖
+//
+// 目标状态首字节: 0=NOT_SEARCH 尚未搜索，1=SEARCHED 已有可劫目标。
+// 搜索 (Act 1) 在"重搜"场景会消耗 30 元宝，自动化无法确认服务端是否收费，
+// 因此本任务只对已存在的目标发起劫镖；未搜索时直接跳过，绝不调用 search。
+// 旧实现把 Act 12 (open_panel) 当成劫镖、把 Act 2 (rob) 当成结算，且丢弃结果码，
+// 现一并修正为严格解析 rob 结果码。
 func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
+	const callTimeout = 5 * time.Second
 	return scheduler.NewBaseRoutine(
 		"caravan_hijack",
 		"pvp",
 		scheduler.ScheduleCron,
-		scheduler.PriorityLow,
+		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -825,39 +836,62 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			slog.Info("正在执行对抗任务: 阵营商队巡查与自动劫镖拦截", "role_id", session.RoleID())
+			slog.Info("正在执行对抗任务: 劫镖", "role_id", session.RoleID())
 
-			// 1. 获取当前运镖队伍列表 (Mod 314, Act 1)
-			listPkt := protocol.BuildCaravanGetListPacket(protocol.ActionIDTownEnter)
-			callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			resp, err := session.Call(callCtx, listPkt, protocol.ActionIDCaravanGetList)
-			cancel()
+			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
+				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
+				defer cancel()
+				resp, err := session.Call(cCtx, pkt, act)
+				if err != nil {
+					slog.Warn("劫镖协议无回包", "role_id", session.RoleID(),
+						"action", fmt.Sprintf("0x%08X", act), "err", err)
+					return nil
+				}
+				return resp
+			}
 
-			if err != nil || resp == nil || len(resp.Payload) < 2 {
-				slog.Info("劫镖功能未开放/暂无可劫目标，跳过", "role_id", session.RoleID(), "err", err)
+			// 1. 读取劫镖面板状态。
+			infoResp := call(protocol.BuildCaravanGetDetailPacket(session.LastActionID()), protocol.ActionIDCaravanGetDetail)
+			if infoResp == nil {
+				slog.Info("劫镖功能不可用或未开放，跳过", "role_id", session.RoleID())
+				return nil
+			}
+			state, err := protocol.ParseCaravanInfoResultCode(infoResp.Payload)
+			if err != nil {
+				slog.Warn("解析劫镖面板失败", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			if state != protocol.CaravanStateSearched {
+				slog.Info("劫镖当前无可劫目标（搜索可能消耗元宝，自动化不发起搜索）",
+					"role_id", session.RoleID(), "state", state)
 				return nil
 			}
 
-			// 2. 查询拦截目标详情 (Mod 314, Act 0)
-			detailPkt := protocol.BuildCaravanGetDetailPacket(protocol.ActionIDCaravanGetList)
-			dCtx, dCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-			_, _ = session.Call(dCtx, detailPkt, protocol.ActionIDCaravanGetDetail)
-			dCancel()
-
-			// 3. 发起劫镖拦截攻击 (Mod 314, Act 12: 载荷对齐抓包仅包含 PrevAct)
-			hijackPkt := protocol.BuildCaravanHijackPacket(protocol.ActionIDCaravanGetDetail)
-			hCtx, hCancel := context.WithTimeout(ctx, 2*time.Second)
-			_, _ = session.Call(hCtx, hijackPkt, protocol.ActionIDCaravanHijack)
-			hCancel()
-
-			// 4. 战斗结果结算 (Mod 314, Act 2)
-			settlePkt := protocol.BuildCaravanSettlePacket(protocol.ActionIDCaravanHijack)
-			sCtx, sCancel := context.WithTimeout(ctx, 2*time.Second)
-			sResp, sErr := session.Call(sCtx, settlePkt, protocol.ActionIDCaravanSettle)
-			sCancel()
-
-			if sErr == nil && sResp != nil {
-				slog.Info("劫镖战斗结算完成，已获取声望与铜钱奖励", "role_id", session.RoleID())
+			// 2. 对已搜索到的目标发起劫镖。
+			robResp := call(protocol.BuildCaravanRobPacket(protocol.ActionIDCaravanGetDetail), protocol.ActionIDCaravanRob)
+			if robResp == nil {
+				return nil
+			}
+			res, err := protocol.ParseCaravanRobResult(robResp.Payload)
+			if err != nil {
+				slog.Warn("解析劫镖回包失败", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			switch res.Result {
+			case protocol.CaravanResultSuccess:
+				slog.Info("劫镖成功",
+					"role_id", session.RoleID(),
+					"award_type", res.Award[0],
+					"award_value", res.Award[1])
+			case protocol.CaravanResultNotEnoughTimes:
+				slog.Info("今日劫镖次数已用尽", "role_id", session.RoleID())
+			case protocol.CaravanResultFailure:
+				slog.Info("劫镖战斗失败", "role_id", session.RoleID())
+			default:
+				slog.Info("劫镖未成功",
+					"role_id", session.RoleID(),
+					"result", res.Result,
+					"result_text", protocol.CaravanResultText(res.Result))
 			}
 			return nil
 		},

@@ -99,6 +99,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return pvp.NewHolyArenaRoutine()
 	case "children_daily":
 		return daily.NewChildrenDailyRoutine()
+	case "activity_report":
+		return daily.NewDailyActivityReportRoutine()
 	case "jieyuan_box":
 		return social.NewJieYuanBoxRoutine(social.DefaultJieYuanBoxConfig())
 	case "spirit_pool":

@@ -326,25 +326,142 @@ func BuildCaravanGetDetailPacket(prevAct uint32) *Packet {
 	return NewPacket(ActionIDCaravanGetDetail, w.Bytes())
 }
 
-// BuildCaravanHijackPacket 构造发起打劫拦截封包 (Module 314, Action 12)。
-// 依据 haha.pcapng 抓包事实: 载荷仅包含 PrevAct (0x013A0000)。
-func BuildCaravanHijackPacket(prevAct uint32) *Packet {
+// BuildCaravanOpenPanelPacket 构造打开劫镖面板封包 (Module 314, Action 12)。
+func BuildCaravanOpenPanelPacket(prevAct uint32) *Packet {
 	w := NewWriter()
 	if prevAct == 0 {
 		prevAct = ActionIDCaravanGetDetail
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDCaravanHijack, w.Bytes())
+	return NewPacket(ActionIDCaravanOpenPanel, w.Bytes())
 }
 
-// BuildCaravanSettlePacket 构造劫镖战斗结算封包 (Module 314, Action 2)。
-func BuildCaravanSettlePacket(prevAct uint32) *Packet {
+// BuildCaravanRobPacket 构造发起劫镖封包 (Module 314, Action 2)。
+//
+// 官方 Mod_RobMoney_Base.rob: request=[]，线上实测载荷仅需 PrevAct。
+func BuildCaravanRobPacket(prevAct uint32) *Packet {
 	w := NewWriter()
 	if prevAct == 0 {
-		prevAct = ActionIDCaravanHijack
+		prevAct = ActionIDCaravanGetList
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDCaravanSettle, w.Bytes())
+	return NewPacket(ActionIDCaravanRob, w.Bytes())
+}
+
+// 兼容旧命名。
+func BuildCaravanHijackPacket(prevAct uint32) *Packet { return BuildCaravanOpenPanelPacket(prevAct) }
+func BuildCaravanSettlePacket(prevAct uint32) *Packet { return BuildCaravanRobPacket(prevAct) }
+
+// 劫镖结果码 (Mod_RobMoney_Base)。
+const (
+	// CaravanResultSuccess 成功
+	CaravanResultSuccess uint8 = 5
+	// CaravanResultFunctionNoOpen 功能未开放
+	CaravanResultFunctionNoOpen uint8 = 6
+	// CaravanResultNotActivityTime 不在活动时间
+	CaravanResultNotActivityTime uint8 = 7
+	// CaravanResultNotEnoughTimes 劫镖次数不足
+	CaravanResultNotEnoughTimes uint8 = 8
+	// CaravanResultNotEnoughIngot 元宝不足
+	CaravanResultNotEnoughIngot uint8 = 9
+	// CaravanResultHaveApply 已申请
+	CaravanResultHaveApply uint8 = 10
+	// CaravanResultFailure 失败
+	CaravanResultFailure uint8 = 11
+)
+
+// CaravanRobResult 表示一次劫镖的结果。
+type CaravanRobResult struct {
+	// Result 结果码
+	Result uint8
+	// Award 奖励标识 [类型, 数值]
+	Award [2]int32
+}
+
+// ParseCaravanRobResult 解析劫镖回包 [UByte result, [Int, Int]]。
+func ParseCaravanRobResult(payload []byte) (*CaravanRobResult, error) {
+	r := NewReader(payload)
+	res := &CaravanRobResult{}
+	var err error
+	if res.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("劫镖结果码读取失败: %w", err)
+	}
+	if res.Result == CaravanResultSuccess {
+		if res.Award[0], err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("劫镖奖励类型读取失败: %w", err)
+		}
+		if res.Award[1], err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("劫镖奖励数值读取失败: %w", err)
+		}
+	}
+	return res, nil
+}
+
+// ParseCaravanInfoResultCode 解析劫镖信息面板首字节状态码。
+//
+// 该字段不是通用结果码，而是目标搜索状态：
+// 0=NOT_SEARCH (尚未搜索到目标)，1=SEARCHED (已搜索到可劫目标)。
+func ParseCaravanInfoResultCode(payload []byte) (uint8, error) {
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("%w: empty caravan info", ErrInvalidPayload)
+	}
+	return payload[0], nil
+}
+
+// 劫镖搜索状态。
+const (
+	// CaravanStateNotSearch 尚未搜索目标
+	CaravanStateNotSearch uint8 = 0
+	// CaravanStateSearched 已搜索到目标
+	CaravanStateSearched uint8 = 1
+)
+
+// CaravanResultText 返回劫镖结果码的可读文本。
+func CaravanResultText(code uint8) string {
+	switch code {
+	case CaravanResultSuccess:
+		return "成功"
+	case CaravanResultFunctionNoOpen:
+		return "功能未开放"
+	case CaravanResultNotActivityTime:
+		return "不在活动时间"
+	case CaravanResultNotEnoughTimes:
+		return "劫镖次数不足"
+	case CaravanResultNotEnoughIngot:
+		return "元宝不足"
+	case CaravanResultHaveApply:
+		return "已申请"
+	case CaravanResultFailure:
+		return "失败"
+	default:
+		return fmt.Sprintf("未知结果码(%d)", code)
+	}
+}
+
+// BuildCaravanRobResultPacket 构造劫镖回包，供离线 mock 与单测使用。
+func BuildCaravanRobResultPacket(result uint8, award [2]int32) *Packet {
+	w := NewWriter()
+	w.WriteUint8(result)
+	if result == CaravanResultSuccess {
+		w.WriteInt32(award[0])
+		w.WriteInt32(award[1])
+	}
+	return NewPacket(ActionIDCaravanRob, w.Bytes())
+}
+
+// BuildCaravanInfoResultPacket 构造劫镖面板最小回包，供离线 mock 与单测使用。
+func BuildCaravanInfoResultPacket(result uint8) *Packet {
+	w := NewWriter()
+	w.WriteUint8(result)
+	w.WriteInt32(0)
+	w.WriteInt32(0)
+	w.WriteInt32(0)
+	w.WriteInt32(0)
+	w.WriteUint16(0)
+	w.WriteString("")
+	w.WriteInt32(0)
+	w.WriteInt32(0)
+	return NewPacket(ActionIDCaravanGetDetail, w.Bytes())
 }
 
 // --------------------------------------------------------------------------------

@@ -109,6 +109,9 @@
 | 五福临门（任务 46） | 当日已被外部操作完成 10/10；`is_five_blessings_open` 在 22:50 仍返回关闭，说明活动按时段开放，例程无需改动 |
 | 回忆之境（任务 67） | 主面板可读（3 个区域），`backtrack` 需要具体回忆角色 id，暂未确认触发条件 |
 | 仙盟上香（任务 49） | Module 178/179 请求全部超时，角色可能未加入仙盟 |
+| **轮回净地（任务 70）** | **已实现 `rebirth_land`**：`one_click_quick_free_back (852/6)` 免费领取，线上实测 +20、`ingot_delta=0` |
+| 纪元湮劫（任务 71） | Module 855 仅 `get_mission_list`；战斗在 853 (无尽洞天) 的 `fight` 流程，需要章节/队伍上下文，暂未实现 |
+| 劫镖（任务 83） | 已修正协议语义（Act 2=rob、Act 12=open_panel）并解析结果码；`search` 重搜可能消耗 30 元宝，自动化只在已存在目标时劫镖，否则跳过 |
 
 ### 3.3.1 服务端会话链约束（实测）
 
@@ -134,6 +137,9 @@
   不被长任务队列挤到末尾。
 - 新增 `internal/protocol/children.go`、`internal/routines/daily/children_daily.go`：
   孩子学堂上学与孩子任务奖励领取，优先级 120（必须早于活跃度读取）；注册并写入配置示例。
+- 新增 `internal/protocol/era_rebirth_land.go`、`internal/routines/daily/rebirth_land.go`：
+  轮回净地免费一键领取挂机奖励（+20/日），注册并写入配置。
+- 修正劫镖协议语义与结果码解析（`feature_packets.go` / `pvp.go`），并加单测。
 - 单元测试：`daily_activity_test.go`、`fate_hunt_test.go`、`fate_hunt_test.go`(例程)、
   `forbidden_book_test.go`、`minigame_test.go`。
 

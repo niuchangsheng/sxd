@@ -63,6 +63,8 @@ scheduler:
     dragonball_offer: true        # 神龙普通上供 (铜钱)
     fate_hunt: true               # 免费猎命 + 命宫碎片兑换
     children_daily: true          # 孩子上学 + 孩子任务奖励 (培养金)
+    rebirth_land: true             # 轮回净地免费挂机奖励 (不消耗元宝)
+    activity_report: true         # 每日活跃度汇总 (只读)
 
     # 【农场 farming】药园、取经、矿山、淬炼、壶中界、符文
     herb_garden: true             # 药园播种/施肥/除草/采摘

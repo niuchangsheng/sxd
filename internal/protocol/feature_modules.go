@@ -86,10 +86,14 @@ const (
 	ActionIDCaravanGetList uint32 = 0x013A0001
 	// ActionIDCaravanGetDetail 查询劫镖目标详情 (Module 314, Action 0 -> 0x013A0000)
 	ActionIDCaravanGetDetail uint32 = 0x013A0000
-	// ActionIDCaravanHijack 发起劫镖拦截攻击 (Module 314, Action 12 -> 0x013A000C)
-	ActionIDCaravanHijack uint32 = 0x013A000C
-	// ActionIDCaravanSettle 劫镖战斗结果结算 (Module 314, Action 2 -> 0x013A0002)
-	ActionIDCaravanSettle uint32 = 0x013A0002
+	// ActionIDCaravanOpenPanel 打开劫镖面板 (Module 314, Action 12 -> 0x013A000C)
+	ActionIDCaravanOpenPanel uint32 = 0x013A000C
+	// ActionIDCaravanRob 发起劫镖 (Module 314, Action 2 -> 0x013A0002)
+	ActionIDCaravanRob uint32 = 0x013A0002
+	// ActionIDCaravanHijack 兼容旧命名，等价于 ActionIDCaravanOpenPanel
+	ActionIDCaravanHijack uint32 = ActionIDCaravanOpenPanel
+	// ActionIDCaravanSettle 兼容旧命名，等价于 ActionIDCaravanRob
+	ActionIDCaravanSettle uint32 = ActionIDCaravanRob
 
 	// ActionIDTakeBibleOpen 打开西天取经主面板 (Module 30, Action 0 -> 0x001E0000)
 	ActionIDTakeBibleOpen uint32 = 0x001E0000

@@ -94,6 +94,8 @@ venv/
 *.so
 *.dylib
 /bin/
+# go build ./cmd/server 默认输出在当前目录
+/server
 
 # ==============================================================================
 # 逆向与大型解包资产隔离 (Reverse Engineering Artifacts)
