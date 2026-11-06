@@ -894,3 +894,97 @@ func TestSelectTreasureAwardsByRarity_PreferenceWins(t *testing.T) {
 		t.Fatalf("优先清单未命中时应回退稀有度选择, 实际 %+v", got[1])
 	}
 }
+
+// TestEvaluateAwardNeed_Dynamic 验证账号养成快照驱动的需求分计算。
+func TestEvaluateAwardNeed_Dynamic(t *testing.T) {
+	snap := &NeedSnapshot{
+		Items: map[int32]int32{
+			itemHongMengZiQi:      17,
+			itemDaFaLiShi:         6,
+			itemYongHengLingBao:   2,
+			itemXueHunShi:         70,
+			itemHuangJinShengShui: 1441,
+			itemLingZhu:           4977,
+			itemJingJieDian:       41304,
+		},
+		MagicArray: &protocol.MagicArrayPanel{Level: 16, Exp: 9340, MaxExp: 41000},
+		Bloodline: &protocol.BloodlinePanel{Bloodlines: []protocol.Bloodline{
+			{ID: 1, Level: 80}, {ID: 2, Level: 80}, {ID: 3, Level: 80},
+			{ID: 4, Level: 60}, {ID: 5, Level: 31}, {ID: 6, Level: 1},
+		}},
+		Library: &protocol.LibraryPanel{Jobs: []protocol.LibraryJob{
+			{JobID: 1, Level: 270}, {JobID: 2, Level: 270}, {JobID: 3, Level: 270},
+		}},
+		Tactics:  &protocol.TacticsPanel{Level: 60, Exp: 308500, NextLevelExp: 400000},
+		Eudemons: &protocol.EudemonsPanel{StoneMaxLevel: 0, TotalStoneStep: 0},
+		ElixirSoul: &protocol.ElixirSoulPanel{Slots: []protocol.ElixirSoulSlot{
+			{ID: 1, Level: 2}, {ID: 2, Level: 3}, {ID: 3, Level: 2},
+		}},
+	}
+
+	cases := []struct {
+		awardID int32
+		min     float64
+		max     float64
+	}{
+		{26, 90, 100}, // 鸿蒙紫气最缺
+		{23, 70, 90},  // 法阵缺口大
+		{9, 40, 80},   // 永恒灵宝库存 2
+		{34, 50, 60},  // 丹魂魂位全低
+		{51, 60, 65},  // 幻兽宝石阶数 0
+		{12, 0, 0.01}, // 血魂石 70 已覆盖缺口
+		{43, 0, 0.01}, // 黄金圣水 1441 已覆盖兵法缺口
+		{36, 0, 0.01}, // 藏经阁满级
+		{42, 0, 5},    // 境界点充足
+		{32, 0, 0.01}, // 灵珠充足
+	}
+	for _, c := range cases {
+		got := EvaluateAwardNeed(c.awardID, snap)
+		if got.Score < c.min || got.Score > c.max {
+			t.Errorf("award %d score=%.2f, want [%.2f, %.2f] (%s)", c.awardID, got.Score, c.min, c.max, got.Reason)
+		}
+	}
+}
+
+// TestSelectTreasureAwardsByNeed 验证需求分最高的候选优先，同分回退稀有度。
+func TestSelectTreasureAwardsByNeed(t *testing.T) {
+	pool := &protocol.TreasureHousePool{
+		Tier1Items: []int32{9, 12, 4},
+		Tier2Items: []int32{23, 18},
+		Tier3Items: []int32{34, 42},
+	}
+	items := map[int32]*dictionary.Item{
+		2010: {ID: 2010, Name: "永恒灵宝", TypeID: 30100, Quality: 7},
+		4954: {ID: 4954, Name: "血魂石", TypeID: 31000, Quality: 5},
+		6651: {ID: 6651, Name: "伙伴碎片自选包", TypeID: 42100, Quality: 5},
+		6909: {ID: 6909, Name: "大法力石", TypeID: 31000, Quality: 5},
+		2407: {ID: 2407, Name: "超级火龙珠", TypeID: 31000, Quality: 7},
+		5397: {ID: 5397, Name: "普通进阶丹", TypeID: 31000, Quality: 4},
+		1740: {ID: 1740, Name: "境界点", TypeID: 28000, Quality: 5},
+	}
+	lookup := func(id int32) (*dictionary.Item, error) {
+		if it, ok := items[id]; ok {
+			return it, nil
+		}
+		return nil, errors.New("not found")
+	}
+	needs := map[int32]AwardNeed{
+		9:  {Score: 40, Reason: "永恒灵宝"},
+		12: {Score: 10, Reason: "血魂石"},
+		4:  {Score: 30, Reason: "伙伴碎片"},
+		23: {Score: 80, Reason: "法阵"},
+		18: {Score: 70, Reason: "龙珠"},
+		34: {Score: 50, Reason: "丹魂"},
+		42: {Score: 2, Reason: "境界点"},
+	}
+	got := SelectTreasureAwardsByNeed(pool, lookup, func(int32) bool { return true }, needs)
+	want := []int32{9, 23, 34}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d tiers, got %+v", len(want), got)
+	}
+	for i, id := range want {
+		if got[i].TierID != int32(i+1) || got[i].ItemID != id {
+			t.Errorf("tier %d expected award %d, got %+v", i+1, id, got[i])
+		}
+	}
+}

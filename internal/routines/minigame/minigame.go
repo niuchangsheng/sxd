@@ -1638,6 +1638,8 @@ const (
 	TreasureHouseSelectionRarity = "rarity"
 	// TreasureHouseSelectionExplicit 严格使用配置指定的奖励 ID
 	TreasureHouseSelectionExplicit = "explicit"
+	// TreasureHouseSelectionAuto 依据账号养成进度快照动态计算需求分并选奖
+	TreasureHouseSelectionAuto = "auto"
 )
 
 // TreasureHouseConfig 天帝宝库自选大奖与开启抽奖配置。
@@ -1997,17 +1999,36 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				}
 			}
 			selectedAwards := resolveTreasureAwards(cfg.Awards, mainInfo.WishList, offered)
-			// 仅非交互模式默认按稀有度自动选；交互模式保留配置值作为回车默认。
-			if !cfg.Interactive && cfg.Selector == nil && cfg.SelectionMode != TreasureHouseSelectionExplicit {
+			// 非交互模式选奖策略:
+			//   auto     -> 采集账号养成进度并动态计算需求分 (每次刷新重新评估)
+			//   explicit -> 使用配置奖励
+			//   rarity   -> 稀有度/价值序 + 功能开放过滤 (默认)
+			// 交互模式保留配置值作为回车默认。
+			if !cfg.Interactive && cfg.Selector == nil {
 				// 先取角色已开放功能集合，过滤掉所属系统未开放的奖励。
 				var isFuncOpen func(int32) bool
 				if openSet, fErr := session.RefreshPlayerFunctionsIfStale(ctx); fErr != nil {
-					slog.Warn("获取功能开放列表失败，按稀有度选择（不做功能过滤）",
+					slog.Warn("获取功能开放列表失败，选奖时不做功能过滤",
 						"role_id", session.RoleID(), "err", fErr)
 				} else {
 					isFuncOpen = func(functionID int32) bool { return openSet[functionID] }
 				}
-				selectedAwards = SelectTreasureAwardsByRarity(offered, itemLookup, isFuncOpen, cfg.PreferAwards)
+
+				switch cfg.SelectionMode {
+				case TreasureHouseSelectionExplicit:
+					// 保持 resolveTreasureAwards 的结果。
+				case TreasureHouseSelectionAuto:
+					snap := CollectNeedSnapshot(ctx, session, offered)
+					if snap.hasProgressData() {
+						needs := EvaluateTreasureNeeds(snap, offered)
+						selectedAwards = SelectTreasureAwardsByNeed(offered, itemLookup, isFuncOpen, needs)
+					} else {
+						slog.Warn("账号养成进度采集全部失败，回退稀有度选奖", "role_id", session.RoleID())
+						selectedAwards = SelectTreasureAwardsByRarity(offered, itemLookup, isFuncOpen, cfg.PreferAwards)
+					}
+				default:
+					selectedAwards = SelectTreasureAwardsByRarity(offered, itemLookup, isFuncOpen, cfg.PreferAwards)
+				}
 			}
 			slog.Info("天帝宝库当前可选大奖",
 				"role_id", session.RoleID(),
@@ -2232,6 +2253,85 @@ func pickBestTreasureAward(candidates []treasureAwardCandidate) (treasureAwardCa
 		}
 	}
 	return best, found
+}
+
+// SelectTreasureAwardsByNeed 依据账号养成需求分选择三档奖励。
+//
+// 需求分由 EvaluateAwardNeed 结合实机面板 (法阵/龙珠/血脉/藏经阁/丹魂/圣器/
+// 兵法/混沌虚空/幻兽) 与道具持有量计算；同分时回退稀有度/价值序。
+func SelectTreasureAwardsByNeed(
+	offered *protocol.TreasureHousePool,
+	lookup func(int32) (*dictionary.Item, error),
+	isFuncOpen func(int32) bool,
+	needs map[int32]AwardNeed,
+) []protocol.TreasureAwardSelect {
+	tiers := []struct {
+		tier    int32
+		options []int32
+	}{
+		{1, offered.Tier1Items},
+		{2, offered.Tier2Items},
+		{3, offered.Tier3Items},
+	}
+
+	resolved := make([]protocol.TreasureAwardSelect, 0, len(tiers))
+	for _, t := range tiers {
+		var best *treasureAwardCandidate
+		var bestNeed AwardNeed
+		var skipped []string
+		for _, id := range t.options {
+			award, ok := protocol.TreasureAwardByID(id)
+			if !ok {
+				continue
+			}
+			if isFuncOpen != nil && award.FuncID != 0 && !isFuncOpen(award.FuncID) {
+				skipped = append(skipped, fmt.Sprintf("%d(func=%d)", award.ID, award.FuncID))
+				continue
+			}
+			var item *dictionary.Item
+			if lookup != nil {
+				if it, err := lookup(award.ItemID); err == nil {
+					item = it
+				}
+			}
+			cand := treasureAwardCandidate{award: award, item: item}
+			need := needs[id]
+			if best == nil || need.Score > bestNeed.Score ||
+				(need.Score == bestNeed.Score && betterTreasureAward(cand.award, cand.item, best.award, best.item)) {
+				candCopy := cand
+				best = &candCopy
+				bestNeed = need
+			}
+		}
+
+		if best == nil {
+			if len(t.options) > 0 {
+				resolved = append(resolved, protocol.TreasureAwardSelect{TierID: t.tier, ItemID: t.options[0]})
+				slog.Warn("天帝宝库该档无可用的动态选奖候选，退回首个开放候选",
+					"tier", t.tier, "award_id", t.options[0])
+			}
+			continue
+		}
+
+		itemName := ""
+		if best.item != nil {
+			itemName = best.item.Name
+		}
+		slog.Info("天帝宝库按账号需求选定大奖",
+			"tier", t.tier,
+			"tier_quality", protocol.TreasureAwardQualityName(best.award.Quality),
+			"award_id", best.award.ID,
+			"item_id", best.award.ItemID,
+			"item_name", itemName,
+			"item_num", best.award.ItemNum,
+			"need_score", bestNeed.Score,
+			"reason", bestNeed.Reason,
+			"skipped_function_closed", skipped,
+			"candidates", t.options,
+		)
+		resolved = append(resolved, protocol.TreasureAwardSelect{TierID: t.tier, ItemID: best.award.ID})
+	}
+	return resolved
 }
 
 // SelectTreasureAwardsByRarity 按商品稀有度与方案 A 价值序为三档各选一个开放候选。

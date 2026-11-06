@@ -26,6 +26,7 @@ import (
 func main() {
 	cfgPath := flag.String("config", "configs/s1.yaml", "配置文件路径")
 	noFilter := flag.Bool("no-filter", false, "关闭所属功能开放过滤")
+	autoMode := flag.Bool("auto", false, "使用账号养成进度动态需求分选奖 (与生产 auto 模式一致)")
 	flag.Parse()
 
 	slog.SetLogLoggerLevel(slog.LevelInfo)
@@ -198,8 +199,31 @@ func main() {
 		}
 	}
 
-	selected := minigame.SelectTreasureAwardsByRarity(pool, lookup, isFuncOpen, cfg.Scheduler.TreasureHouse.PreferAwards)
-	fmt.Println("========== 方案 A 推荐选择 ==========")
+	var selected []protocol.TreasureAwardSelect
+	if *autoMode {
+		snap := minigame.CollectNeedSnapshot(ctx, sess, pool)
+		needs := minigame.EvaluateTreasureNeeds(snap, pool)
+		fmt.Println("========== 动态需求分 ==========")
+		for _, entry := range []struct {
+			tier int32
+			ids  []int32
+		}{{1, pool.Tier1Items}, {2, pool.Tier2Items}, {3, pool.Tier3Items}} {
+			for _, id := range entry.ids {
+				award, ok := protocol.TreasureAwardByID(id)
+				if !ok {
+					continue
+				}
+				need := needs[id]
+				fmt.Printf("  tier=%d award=%-3d item=%-5d need_score=%-8.2f reason=%s\n",
+					entry.tier, award.ID, award.ItemID, need.Score, need.Reason)
+			}
+		}
+		selected = minigame.SelectTreasureAwardsByNeed(pool, lookup, isFuncOpen, needs)
+		fmt.Println("========== 动态需求推荐选择 ==========")
+	} else {
+		selected = minigame.SelectTreasureAwardsByRarity(pool, lookup, isFuncOpen, cfg.Scheduler.TreasureHouse.PreferAwards)
+		fmt.Println("========== 方案 A 推荐选择 ==========")
+	}
 	for _, s := range selected {
 		award, _ := protocol.TreasureAwardByID(s.ItemID)
 		item, _ := lookup(award.ItemID)

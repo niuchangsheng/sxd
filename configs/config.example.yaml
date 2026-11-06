@@ -161,7 +161,7 @@ scheduler:
 
   # 天帝宝库自选三档大奖配置
   treasure_house:
-    selection_mode: rarity      # 非交互选奖: rarity(默认, 按稀有度自动选)|explicit(使用下方指定奖励)
+    selection_mode: auto        # 非交互选奖: auto(按账号养成进度动态计算需求分)|rarity(按稀有度)|explicit(使用下方指定奖励)
     # 优先奖励条目 ID 列表 (按顺序匹配当前开放候选; 用于优先补齐账号最缺资源, 如鸿蒙紫气 26)
     prefer_awards: []
     interactive: true           # 开启交互式选奖：先向服务端拉取刷新候选奖池，并在控制台提示交互输入选择

@@ -677,7 +677,25 @@ Action 6 只下发**当前角色已开放**的功能条目（客户端 `Function
 `prefer_awards` 可配置账号级优先奖励条目（如鸿蒙紫气 26），出现在当前候选时
 优先命中，否则回退上述规则。实现见 `protocol/treasure_awards.go` 与
 `minigame.SelectTreasureAwardsByRarity`；只读演练探针为
-`probe_treasure_house_select.go`。
+`probe_treasure_house_select.go`（`-auto` 可演练动态选奖）。
+
+**账号养成动态选奖 (`selection_mode: auto`)**：每次宝库刷新时，Routine 会通过
+只读接口采集账号进度并计算各候选的「需求分 = 系统权重 × 缺口比例」：
+
+| 系统 | 协议 | 关键字段 |
+| :--- | :--- | :--- |
+| 法阵 | 486/1 `open_panel` | fali_level / fali_exp / max_fali_exp / 材料 add_exp |
+| 龙珠 | 111/3 `get_dragonball_list` | 每颗龙珠 level / exp |
+| 血脉 | 116/0 `get_bloodline_info` | 每条血脉 level |
+| 藏经阁 | 85/1 `get_library_info` | 各职业 job_library_level |
+| 丹魂 | 347/0 `get_role_info` | 各魂位 level / 技能等级 |
+| 圣器 | 280/0 `get_sant_weapon_info` | 各角色圣器 level / star_level |
+| 兵法 | 299/0 `get_tactics_info` | level / exp / 下一级 want_exp |
+| 混沌虚空 | 124/0,1 | 灵叶 / 魔兽潜力 / 道具年代 |
+| 幻兽 | 693/0 `panel_info` | stone_max_level / total_stone_step |
+
+道具数量一律通过 `get_the_item_num (2,107)` 查询。任一子查询失败时对应规则使用
+保守缺口，不影响整轮选奖；全部采集失败时回退 `prefer_awards` / 稀有度规则。
 
 **库存探测注意**：`get_player_pack_item_list (2,41)` 只返回主背包/仓库中的实体物品；
 灵珠、鸿蒙紫气、星魂等以系统货币形式存储的资源不会出现在该列表中。判断这些资源
