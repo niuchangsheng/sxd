@@ -39,6 +39,9 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "online_reward", Name: "在线奖励一键领取", Domain: "daily", Schedule: scheduler.ScheduleLoop, Description: "按当日在线时长一键领取在线奖励 (含元宝档位，不消耗元宝)", DefaultOn: false},
 		{ID: "device_bind_reward", Name: "设备绑定奖励", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "手机绑定后领取首绑200元宝与月度50元宝 (不代绑定)", DefaultOn: false},
 		{ID: "town_practice", Name: "城镇打坐练功", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "上线自动结算并领取离线城镇打坐练功经验", DefaultOn: true},
+		{ID: "destiny_sword", Name: "飞剑", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动一键淬炼飞剑剑意 (不消耗元宝)", DefaultOn: false},
+		{ID: "daily_gifts", Name: "每日免费礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "领取每日俸禄、每日灵石与 PC 微端礼包 (仅免费档)", DefaultOn: false},
+		{ID: "saint_practice", Name: "圣域修炼替身", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "圣域开启时进入免费修炼房并领取累积经验 (不消耗元宝)", DefaultOn: false},
 
 		// 2. Farming 领域 (6)
 		{ID: "herb_garden", Name: "药园种植巡检", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动药园播种、施肥、除草与成熟采摘", DefaultOn: true},
@@ -57,6 +60,8 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "jieyuan_box", Name: "结缘宝箱开启", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "批量开启结缘宝箱 (除了传说，其他都开)", DefaultOn: false},
 		{ID: "faction_blessing", Name: "帮派祭神", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "每日帮派上香祭神，获取祝福、声望与神像灵气", DefaultOn: false},
 		{ID: "faction_lucky_wheel", Name: "帮派转盘", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "消耗青龙令自动转动帮派转盘直至次数耗尽", DefaultOn: false},
+		{ID: "collection_booklets", Name: "神仙收藏册", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "领取声望档位奖励并拜访好友获得声望 (不消耗元宝)", DefaultOn: false},
+		{ID: "npc_friendship", Name: "NPC结交", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "结交 NPC、领取任务奖励并赠送铜钱伴手礼 (不消耗元宝)", DefaultOn: false},
 
 		// 4. Dungeon 领域 (8)
 		{ID: "dungeon", Name: "副本推图与扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/支线任务闭环推图与关卡扫荡", DefaultOn: true},
@@ -68,10 +73,12 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "qimen_dunjia", Name: "奇门遁甲法阵", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "奇门遁甲法阵星图注灵与布阵生效", DefaultOn: false},
 		{ID: "xunxian_road", Name: "寻仙之路推图", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "寻仙之路关卡挑战与节点宝箱领用", DefaultOn: false},
 		{ID: "beelzebub_trials", Name: "魔王试炼", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "自动创建队伍、招募助战镜像、挑战每日魔王试炼并领取道行奖励", DefaultOn: false},
+		{ID: "tong_tian_tower", Name: "通天塔", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "自动逐层挑战通天塔并按需突破重天 (不消耗元宝)", DefaultOn: false},
 
 		// 5. PVP 领域 (6)
 		{ID: "arena", Name: "本服竞技场", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "本服竞技场自动寻找适宜对手挑战与排名领奖", DefaultOn: false},
 		{ID: "celestial_arena", Name: "仙界竞技场", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "仙界竞技场积分赛自动挑战与最弱对手筛选", DefaultOn: false},
+		{ID: "holy_arena", Name: "圣域竞技场", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "圣域竞技场抢占空席位与最弱对手 (不消耗元宝)", DefaultOn: false},
 		{ID: "gods_and_demons", Name: "神魔大战阵营", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "神魔大战阵营对抗定时参战", DefaultOn: false},
 		{ID: "caravan_hijack", Name: "阵营劫镖拦截", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "阵营商队巡查截击与声望抢夺", DefaultOn: false},
 		{ID: "world_boss", Name: "世界Boss争夺", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "擎天木/赤炎兽Boss定时准点参战与伤害鼓舞", DefaultOn: false},
@@ -97,6 +104,10 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "treasure_house", Name: "天帝宝库自选", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "天帝宝库自选大奖与钥匙抽奖开启", DefaultOn: false},
 		{ID: "find_immortal", Name: "喜从天降画龙鱼", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "喜从天降免费龙鱼令召唤与奖励领取 (不消耗元宝)", DefaultOn: false},
 		{ID: "five_blessings", Name: "五福临门", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "五福临门每日免费祈福与奖励领取 (不消耗元宝)", DefaultOn: false},
+		{ID: "find_beast", Name: "寻找异兽", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日使用免费次数寻找异兽并领取奖励 (不消耗元宝)", DefaultOn: false},
+		{ID: "duobao_mountain", Name: "多宝山", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日使用免费次数挖掘多宝山宝藏 (不消耗元宝)", DefaultOn: false},
+		{ID: "eudemons", Name: "幻兽经脉", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动激活幻兽经脉并维护幻兽面板 (不消耗元宝)", DefaultOn: false},
+		{ID: "partner_link", Name: "灵结", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动激活灵结 (仅消耗伙伴灵契，不消耗元宝)", DefaultOn: false},
 	}
 }
 
@@ -244,6 +255,12 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewDeviceBindRewardRoutine()
 	case "town_practice":
 		return daily.NewTownPracticeRoutine()
+	case "destiny_sword":
+		return daily.NewDestinySwordRoutine()
+	case "daily_gifts":
+		return daily.NewDailyGiftsRoutine()
+	case "saint_practice":
+		return daily.NewSaintPracticeRoutine()
 
 	// 2. Farming
 	case "herb_garden":
@@ -276,6 +293,10 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewFactionBlessingRoutine(f.blessingCfg)
 	case "faction_lucky_wheel":
 		return social.NewFactionLuckyWheelRoutine()
+	case "collection_booklets":
+		return social.NewCollectionBookletsRoutine()
+	case "npc_friendship":
+		return social.NewNpcFriendshipRoutine()
 
 	// 4. Dungeon
 	case "dungeon", "dungeon_sweep":
@@ -296,12 +317,16 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return dungeon.NewXunXianRoutine()
 	case "beelzebub_trials":
 		return dungeon.NewBeelzebubTrialsRoutine(f.beelzebubCfg)
+	case "tong_tian_tower":
+		return dungeon.NewTongTianTowerRoutine()
 
 	// 5. PVP
 	case "arena":
 		return pvp.NewArenaRoutine()
 	case "celestial_arena":
 		return pvp.NewCelestialArenaRoutine()
+	case "holy_arena":
+		return pvp.NewHolyArenaRoutine()
 	case "gods_and_demons":
 		return pvp.NewGodsAndDemonsRoutine()
 	case "caravan_hijack":
@@ -354,6 +379,14 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewFindImmortalRoutine()
 	case "five_blessings":
 		return minigame.NewFiveBlessingsRoutine()
+	case "find_beast":
+		return minigame.NewFindBeastRoutine()
+	case "duobao_mountain":
+		return minigame.NewDuobaoMountainRoutine()
+	case "eudemons":
+		return minigame.NewEudemonsRoutine()
+	case "partner_link":
+		return minigame.NewPartnerLinkRoutine()
 
 	default:
 		return nil

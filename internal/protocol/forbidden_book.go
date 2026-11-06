@@ -74,6 +74,68 @@ type ForbiddenBookInfo struct {
 	ConsumScore int32
 }
 
+// ForbiddenBookExchangeInfo 表示某禁地区域兑换一次探索次数的价格。
+//
+// 官方 Mod_Awake_Base.get_explore_exchange_info (Act 13) 回包:
+// 列表元素 [UByte forbidden_type, Short cost_coin, Short cost_ingot, Short count]。
+// 线上 s0 实测: 18 号区域 cost_coin=10/cost_ingot=1，19/20 号区域 cost_coin=50/100、
+// cost_ingot=0。自动化只兑换 cost_ingot=0 的纯铜钱档位。
+type ForbiddenBookExchangeInfo struct {
+	// ForbiddenType 禁地类型
+	ForbiddenType uint8
+	// CostCoin 兑换一次所需铜钱
+	CostCoin int16
+	// CostIngot 兑换一次所需元宝
+	CostIngot int16
+	// Count 可兑换次数
+	Count int16
+}
+
+// BuildForbiddenBookExchangeInfoPacket 构造查询兑换价格封包 (0x00C7000D)。
+func BuildForbiddenBookExchangeInfoPacket() *Packet {
+	return NewPacket(ActionIDForbiddenBookExchangeInfo, nil)
+}
+
+// ParseForbiddenBookExchangeInfoResult 解析兑换价格列表。
+func ParseForbiddenBookExchangeInfoResult(payload []byte) ([]ForbiddenBookExchangeInfo, error) {
+	r := NewReader(payload)
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read exchange count: %v", ErrInvalidPayload, err)
+	}
+	out := make([]ForbiddenBookExchangeInfo, 0, count)
+	for i := 0; i < int(count); i++ {
+		var info ForbiddenBookExchangeInfo
+		if info.ForbiddenType, err = r.ReadUint8(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read exchange[%d].type: %v", ErrInvalidPayload, i, err)
+		}
+		if info.CostCoin, err = r.ReadInt16(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read exchange[%d].cost_coin: %v", ErrInvalidPayload, i, err)
+		}
+		if info.CostIngot, err = r.ReadInt16(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read exchange[%d].cost_ingot: %v", ErrInvalidPayload, i, err)
+		}
+		if info.Count, err = r.ReadInt16(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read exchange[%d].count: %v", ErrInvalidPayload, i, err)
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
+// BuildForbiddenBookExchangeInfoResultPacket 构造兑换价格回包，供离线 mock 与单测使用。
+func BuildForbiddenBookExchangeInfoResultPacket(list []ForbiddenBookExchangeInfo) *Packet {
+	w := NewWriter()
+	w.WriteUint16(uint16(len(list)))
+	for _, info := range list {
+		w.WriteUint8(info.ForbiddenType)
+		w.WriteInt16(info.CostCoin)
+		w.WriteInt16(info.CostIngot)
+		w.WriteInt16(info.Count)
+	}
+	return NewPacket(ActionIDForbiddenBookExchangeInfo, w.Bytes())
+}
+
 // BuildForbiddenBookInfoPacket 构造查询禁地之书封包 (0x00C7000B)。
 func BuildForbiddenBookInfoPacket() *Packet {
 	return NewPacket(ActionIDForbiddenBookInfo, nil)

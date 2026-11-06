@@ -1,0 +1,265 @@
+// Package protocol 提供神仙道客户端与服务器之间的二进制协议序列化、反序列化、大端序编解码与透明 zlib 流解压缩引擎。
+//
+// 本文件实现官方宗师修行协议 (Mod_MasterPractice_Base, Module 665 / 0x0299)。
+// 依据官方 Main.swf 反编译的 com.protocols.Mod_MasterPractice_Base、
+// com.datas.MasterPracticeData 与 com.views.master_practice.MasterPracticeBattleView：
+//   - main_panel          Act 1 -> 0x02990001
+//   - get_deploy_info     Act 2 -> 0x02990002
+//   - get_monster_team_info Act 3 -> 0x02990003
+//   - deploy              Act 4 -> 0x02990004  [Int job_id, UByte team_type]
+//   - start_challenge     Act 5 -> 0x02990005  [Int job_id, Int battle_stars]
+//   - active_job_stunt    Act 6 -> 0x02990006  [Int job_id]
+//   - active_soul         Act 7 -> 0x02990007  [Int job_id]
+//   - step_up             Act 8 -> 0x02990008  [Int job_id]
+package protocol
+
+import "fmt"
+
+const (
+	// ActionIDMasterPracticePanel 查询宗师修行主面板 (Action 1 -> 0x02990001)
+	ActionIDMasterPracticePanel uint32 = 0x02990001
+	// ActionIDMasterPracticeDeployInfo 查询布阵信息 (Action 2 -> 0x02990002)
+	ActionIDMasterPracticeDeployInfo uint32 = 0x02990002
+	// ActionIDMasterPracticeMonsterTeamInfo 查询怪物队伍信息 (Action 3 -> 0x02990003)
+	ActionIDMasterPracticeMonsterTeamInfo uint32 = 0x02990003
+	// ActionIDMasterPracticeDeploy 布阵 (Action 4 -> 0x02990004)
+	ActionIDMasterPracticeDeploy uint32 = 0x02990004
+	// ActionIDMasterPracticeChallenge 发起宗师试炼挑战 (Action 5 -> 0x02990005)
+	ActionIDMasterPracticeChallenge uint32 = 0x02990005
+	// ActionIDMasterPracticeActiveJobStunt 激活职业绝技 (Action 6 -> 0x02990006)
+	ActionIDMasterPracticeActiveJobStunt uint32 = 0x02990006
+	// ActionIDMasterPracticeActiveSoul 激活魂 (Action 7 -> 0x02990007)
+	ActionIDMasterPracticeActiveSoul uint32 = 0x02990007
+	// ActionIDMasterPracticeStepUp 境界突破 (Action 8 -> 0x02990008)
+	ActionIDMasterPracticeStepUp uint32 = 0x02990008
+)
+
+// 宗师修行结果码 (Mod_MasterPractice_Base)。
+const (
+	// MasterPracticeResultSuccess 成功
+	MasterPracticeResultSuccess uint8 = 0
+	// MasterPracticeResultFailed 失败
+	MasterPracticeResultFailed uint8 = 1
+	// MasterPracticeResultNoChallengeTimes 挑战次数不足
+	MasterPracticeResultNoChallengeTimes uint8 = 8
+	// MasterPracticeResultIsChallenged 今日已挑战
+	MasterPracticeResultIsChallenged uint8 = 9
+	// MasterPracticeResultMaxStars 已满星
+	MasterPracticeResultMaxStars uint8 = 10
+	// MasterPracticeResultJobError 职业错误
+	MasterPracticeResultJobError uint8 = 11
+	// MasterPracticeResultLessStars 星数不足
+	MasterPracticeResultLessStars uint8 = 12
+	// MasterPracticeResultIsActived 已激活
+	MasterPracticeResultIsActived uint8 = 13
+	// MasterPracticeResultLessItem 道具不足
+	MasterPracticeResultLessItem uint8 = 14
+	// MasterPracticeResultConditionLimited 条件不满足
+	MasterPracticeResultConditionLimited uint8 = 15
+	// MasterPracticeResultStepUpCD 突破冷却中
+	MasterPracticeResultStepUpCD uint8 = 16
+	// MasterPracticeResultTopStep 已达最高境界
+	MasterPracticeResultTopStep uint8 = 18
+	// MasterPracticeResultIsLocked 未解锁
+	MasterPracticeResultIsLocked uint8 = 19
+)
+
+// MasterPracticeJobInfo 表示一个职业的宗师修行状态。
+type MasterPracticeJobInfo struct {
+	// JobID 职业编号
+	JobID int32
+	// StepID 当前境界
+	StepID int32
+	// TotalStars 累计星数
+	TotalStars int32
+	// StepUpCDTime 突破冷却时间戳
+	StepUpCDTime int32
+	// TodayChallenge 今日已挑战的星级
+	TodayChallenge []int32
+	// ActivedSouls 已激活魂
+	ActivedSouls []int32
+	// UseFeatures 已装配特性 [grid_id, feature_id]
+	UseFeatures [][2]int32
+}
+
+// MasterPracticePanel 表示宗师修行主面板。
+type MasterPracticePanel struct {
+	// Result 结果码
+	Result uint8
+	// TodayChallengeTimes 今日已挑战次数
+	TodayChallengeTimes int32
+	// ArtifactSkillLevel 神器技能等级
+	ArtifactSkillLevel int32
+	// HaveItems 拥有的材料 [item_id, num]
+	HaveItems [][2]int32
+	// Jobs 各职业修行状态
+	Jobs []MasterPracticeJobInfo
+}
+
+// BuildMasterPracticePanelPacket 构造查询宗师修行主面板封包 (0x02990001)。
+func BuildMasterPracticePanelPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = ActionIDTownEnter
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDMasterPracticePanel, w.Bytes())
+}
+
+// BuildMasterPracticeChallengePacket 构造发起宗师试炼挑战封包 (0x02990005)。
+func BuildMasterPracticeChallengePacket(jobID, battleStars, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(int32(jobID))
+	w.WriteInt32(int32(battleStars))
+	if prevAct != 0 {
+		w.WriteUint32(prevAct)
+	}
+	return NewPacket(ActionIDMasterPracticeChallenge, w.Bytes())
+}
+
+// BuildMasterPracticeStepUpPacket 构造境界突破封包 (0x02990008)。
+func BuildMasterPracticeStepUpPacket(jobID, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(int32(jobID))
+	if prevAct != 0 {
+		w.WriteUint32(prevAct)
+	}
+	return NewPacket(ActionIDMasterPracticeStepUp, w.Bytes())
+}
+
+// ParseMasterPracticePanelResult 解析宗师修行主面板。
+func ParseMasterPracticePanelResult(payload []byte) (*MasterPracticePanel, error) {
+	r := NewReader(payload)
+	p := &MasterPracticePanel{}
+	var err error
+	if p.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read master practice result: %v", ErrInvalidPayload, err)
+	}
+	if p.Result != MasterPracticeResultSuccess {
+		return p, nil
+	}
+	if p.TodayChallengeTimes, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read today_challenge_times: %v", ErrInvalidPayload, err)
+	}
+	if p.ArtifactSkillLevel, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read artifact_skill_level: %v", ErrInvalidPayload, err)
+	}
+	itemCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read have_item count: %v", ErrInvalidPayload, err)
+	}
+	p.HaveItems = make([][2]int32, 0, itemCount)
+	for i := 0; i < int(itemCount); i++ {
+		a, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read have_item[%d]: %v", ErrInvalidPayload, i, err)
+		}
+		b, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read have_item[%d] num: %v", ErrInvalidPayload, i, err)
+		}
+		p.HaveItems = append(p.HaveItems, [2]int32{a, b})
+	}
+	jobCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read job count: %v", ErrInvalidPayload, err)
+	}
+	p.Jobs = make([]MasterPracticeJobInfo, 0, jobCount)
+	for i := 0; i < int(jobCount); i++ {
+		var j MasterPracticeJobInfo
+		for _, field := range []*int32{&j.JobID, &j.StepID, &j.TotalStars, &j.StepUpCDTime} {
+			if *field, err = r.ReadInt32(); err != nil {
+				return nil, fmt.Errorf("%w: failed to read job[%d] head: %v", ErrInvalidPayload, i, err)
+			}
+		}
+		if j.TodayChallenge, err = readMPInt32List(r); err != nil {
+			return nil, fmt.Errorf("%w: job[%d] today_challenge: %v", ErrInvalidPayload, i, err)
+		}
+		if j.ActivedSouls, err = readMPInt32List(r); err != nil {
+			return nil, fmt.Errorf("%w: job[%d] actived_souls: %v", ErrInvalidPayload, i, err)
+		}
+		featCount, err := r.ReadUint16()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read job[%d] feature count: %v", ErrInvalidPayload, i, err)
+		}
+		j.UseFeatures = make([][2]int32, 0, featCount)
+		for k := 0; k < int(featCount); k++ {
+			a, err := r.ReadInt32()
+			if err != nil {
+				return nil, fmt.Errorf("%w: failed to read job[%d] feature[%d]: %v", ErrInvalidPayload, i, k, err)
+			}
+			b, err := r.ReadInt32()
+			if err != nil {
+				return nil, fmt.Errorf("%w: failed to read job[%d] feature[%d] value: %v", ErrInvalidPayload, i, k, err)
+			}
+			j.UseFeatures = append(j.UseFeatures, [2]int32{a, b})
+		}
+		p.Jobs = append(p.Jobs, j)
+	}
+	return p, nil
+}
+
+func readMPInt32List(r *Reader) ([]int32, error) {
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int32, 0, count)
+	for i := 0; i < int(count); i++ {
+		v, err := r.ReadInt32()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// ParseMasterPracticeActionCode 解析仅返回单结果码的动作。
+func ParseMasterPracticeActionCode(payload []byte) (uint8, error) {
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("%w: empty master practice action result", ErrInvalidPayload)
+	}
+	return payload[0], nil
+}
+
+// BuildMasterPracticePanelResultPacket 构造宗师修行面板回包，供离线 mock 与单测使用。
+func BuildMasterPracticePanelResultPacket(p MasterPracticePanel) *Packet {
+	w := NewWriter()
+	w.WriteUint8(p.Result)
+	if p.Result == MasterPracticeResultSuccess {
+		w.WriteInt32(p.TodayChallengeTimes)
+		w.WriteInt32(p.ArtifactSkillLevel)
+		w.WriteUint16(uint16(len(p.HaveItems)))
+		for _, it := range p.HaveItems {
+			w.WriteInt32(it[0])
+			w.WriteInt32(it[1])
+		}
+		w.WriteUint16(uint16(len(p.Jobs)))
+		for _, j := range p.Jobs {
+			w.WriteInt32(j.JobID)
+			w.WriteInt32(j.StepID)
+			w.WriteInt32(j.TotalStars)
+			w.WriteInt32(j.StepUpCDTime)
+			w.WriteUint16(uint16(len(j.TodayChallenge)))
+			for _, v := range j.TodayChallenge {
+				w.WriteInt32(v)
+			}
+			w.WriteUint16(uint16(len(j.ActivedSouls)))
+			for _, v := range j.ActivedSouls {
+				w.WriteInt32(v)
+			}
+			w.WriteUint16(uint16(len(j.UseFeatures)))
+			for _, f := range j.UseFeatures {
+				w.WriteInt32(f[0])
+				w.WriteInt32(f[1])
+			}
+		}
+	}
+	return NewPacket(ActionIDMasterPracticePanel, w.Bytes())
+}
+
+// BuildMasterPracticeActionCodePacket 构造单结果码回包，供离线 mock 与单测使用。
+func BuildMasterPracticeActionCodePacket(actionID uint32, code uint8) *Packet {
+	return NewPacket(actionID, []byte{code})
+}

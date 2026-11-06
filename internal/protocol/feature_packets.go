@@ -231,18 +231,8 @@ func BuildJieYuanBoxOpenPacket(itemID int32, openCount int32, prevAct uint32) *P
 }
 
 // --------------------------------------------------------------------------------
-// 3. 领取日活跃奖励
+// 3. 领取日活跃奖励 (协议见 assistant.go)
 // --------------------------------------------------------------------------------
-
-// BuildAssistantClaimRewardPacket 构造小助手日活跃奖励领取封包 (Module 293, Action 2)。
-func BuildAssistantClaimRewardPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTownEnter
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDAssistantClaimReward, w.Bytes())
-}
 
 // --------------------------------------------------------------------------------
 // 4. 奇门遁甲
@@ -308,15 +298,9 @@ func BuildQiMenFormationConfirmPacket(prevAct uint32) *Packet {
 // 6. 天神赐福
 // --------------------------------------------------------------------------------
 
-// BuildGodBlessClaimPacket 构造领取跨服天神赐福封包 (Module 52, Action 0)。
-func BuildGodBlessClaimPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTownEnter
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDGodBlessClaim, w.Bytes())
-}
+// --------------------------------------------------------------------------------
+// 6. 天神赐福 (协议见 god_welfare.go)
+// --------------------------------------------------------------------------------
 
 // --------------------------------------------------------------------------------
 // 7. 劫镖
@@ -585,65 +569,8 @@ func BuildWuFaDrawCardPacket(fieldType int32, drawType uint8) *Packet {
 }
 
 // --------------------------------------------------------------------------------
-// 15. 宗师修行
+// 15. 宗师修行 (协议常量与编解码见 master_practice.go)
 // --------------------------------------------------------------------------------
-
-// BuildMasterPracticePanelPacket 构造查询宗师修行主面板封包 (Module 665, Action 1)。
-func BuildMasterPracticePanelPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTownEnter
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMasterPracticePanel, w.Bytes())
-}
-
-// BuildMasterPracticeSelectSkillPacket 构造选定宗师修行心法封包 (Module 665, Action 3)。
-func BuildMasterPracticeSelectSkillPacket(realmID int32, skillID int32, prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteInt32(realmID)
-	w.WriteInt32(skillID)
-	if prevAct == 0 {
-		prevAct = ActionIDMasterPracticePanel
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMasterPracticeSelectSkill, w.Bytes())
-}
-
-// BuildMasterPracticeChallengePacket 构造发起宗师修行试炼挑战封包 (Module 665, Action 2)。
-func BuildMasterPracticeChallengePacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDMasterPracticeSelectSkill
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMasterPracticeChallenge, w.Bytes())
-}
-
-// BuildMasterPracticeFastFinishPacket 构造宗师试炼极速通关封包 (Module 665, Action 4)。
-// 依据抓包实采: 00 0f cc af 09 + PrevAct
-func BuildMasterPracticeFastFinishPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteUint32(0x000FCCAF)
-	w.WriteUint8(0x09)
-	if prevAct == 0 {
-		prevAct = ActionIDMasterPracticeChallenge
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMasterPracticeSettle, w.Bytes())
-}
-
-// BuildMasterPracticeBreakthroughPacket 构造突破宗师境界封包 (Module 665, Action 5)。
-func BuildMasterPracticeBreakthroughPacket(realmID int32, skillID int32, prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteInt32(realmID)
-	w.WriteInt32(skillID)
-	if prevAct == 0 {
-		prevAct = ActionIDMasterPracticeChallenge
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDMasterPracticeBreakthrough, w.Bytes())
-}
 
 // --------------------------------------------------------------------------------
 // 16. 天帝宝库

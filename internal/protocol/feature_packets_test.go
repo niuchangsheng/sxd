@@ -50,10 +50,10 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDJieYuanBoxOpen, pOpen.ActionID)
 	}
 
-	// 3. 日活跃领奖 (Module 293, Action 2)
-	pAssistant := protocol.BuildAssistantClaimRewardPacket(0x00EB000D)
-	if pAssistant.ActionID != protocol.ActionIDAssistantClaimReward {
-		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDAssistantClaimReward, pAssistant.ActionID)
+	// 3. 日活跃领奖 (Module 52, Action 3 one_key_get_award)
+	pAssistant := protocol.BuildAssistantOneKeyGetAwardPacket(1)
+	if pAssistant.ActionID != protocol.ActionIDAssistantOneKeyGetAward {
+		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDAssistantOneKeyGetAward, pAssistant.ActionID)
 	}
 
 	// 4. 奇门遁甲 (Module 486, Action 7)
@@ -73,10 +73,10 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDRefineExecute, pRefine.ActionID)
 	}
 
-	// 6. 天神赐福 (Module 52, Action 0)
-	pGod := protocol.BuildGodBlessClaimPacket(0)
-	if pGod.ActionID != protocol.ActionIDGodBlessClaim {
-		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDGodBlessClaim, pGod.ActionID)
+	// 6. 天神赐福 (Module 328, Action 2 get_award)
+	pGod := protocol.BuildGodWelfareGetAwardPacket(5)
+	if pGod.ActionID != protocol.ActionIDGodWelfareGetAward {
+		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDGodWelfareGetAward, pGod.ActionID)
 	}
 
 	// 7. 劫镖 (Module 314, Action 12)
@@ -140,10 +140,13 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 		t.Errorf("悟法抽卡请求应为 Int field_type + UByte draw_type (0000000200), 实际 %s", got)
 	}
 
-	// 15. 宗师修行 (Module 665, Action 5)
-	pMaster := protocol.BuildMasterPracticeBreakthroughPacket(1, 1, 0)
-	if pMaster.ActionID != protocol.ActionIDMasterPracticeBreakthrough {
-		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDMasterPracticeBreakthrough, pMaster.ActionID)
+	// 15. 宗师修行 (Module 665, Action 8 step_up)
+	pMaster := protocol.BuildMasterPracticeStepUpPacket(1, 0)
+	if pMaster.ActionID != protocol.ActionIDMasterPracticeStepUp {
+		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDMasterPracticeStepUp, pMaster.ActionID)
+	}
+	if got := hex.EncodeToString(pMaster.Payload); got != "00000001" {
+		t.Errorf("宗师突破请求应为 Int job_id (00000001), 实际 %s", got)
 	}
 
 	// 16. 天帝宝库 (Module 594, Action 6)

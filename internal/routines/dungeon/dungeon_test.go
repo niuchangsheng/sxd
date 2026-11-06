@@ -2644,3 +2644,62 @@ func TestSpiritTrialRoutine_Execute(t *testing.T) {
 		t.Fatalf("精灵试炼任务执行失败: %v", err)
 	}
 }
+
+// TestDungeonSweep_EliteSweep_NotCappedByMaxBatchTimes 回归验证:
+// 精英副本扫荡按城镇逐个执行，不受 max_batch_times（仅作用于主线最高关扫荡）截断。
+// 数据字典不可用时使用 22 个内置精英城镇，MaxBatchTimes=5 仍应扫荡全部城镇。
+func TestDungeonSweep_EliteSweep_NotCappedByMaxBatchTimes(t *testing.T) {
+	sess, srvConn := createTestSession(t, 200)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var heroSweepCount atomic.Int32
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionHeroMissionList:
+			w := protocol.NewWriter()
+			w.WriteUint16(1)
+			w.WriteInt32(166)
+			w.WriteInt8(1)
+			w.WriteUint8(0)
+			w.WriteInt8(1)
+			w.WriteInt8(1)
+			w.WriteInt8(1)
+			w.WriteInt16(10)
+			w.WriteInt32(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+			return true
+		case protocol.ActionHeroMissionStartPractice:
+			heroSweepCount.Add(1)
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.HeroMissionResultSuccess)
+			w.WriteInt32(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
+			return true
+		case protocol.ActionHeroMissionQuickly:
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.HeroMissionNotifyFinish)
+			w.WriteUint16(0)
+			w.WriteUint16(0)
+			w.WriteInt16(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
+			return true
+		}
+		return false
+	})
+
+	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		MaxBatchTimes: 5, // 不应限制精英副本城镇数量
+		Sweep: dungeon.SweepFeatureConfig{
+			Enabled:  true,
+			Pipeline: []string{"sweep_elite"},
+		},
+	})
+	if err := routine.Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("执行精英副本扫荡失败: %v", err)
+	}
+	if got := heroSweepCount.Load(); got != 22 {
+		t.Fatalf("期望扫荡全部 22 个精英城镇, 实际 %d 个", got)
+	}
+}

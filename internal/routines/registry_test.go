@@ -57,6 +57,16 @@ func TestRoutines_DefinitionsAndRegistry(t *testing.T) {
 	if regCount2 != registered-2 {
 		t.Errorf("预期关闭 2 个玩法后注册数为 %d, 实际为 %d", registered-2, regCount2)
 	}
+
+	// 验证每个玩法定义都能被 createRoutine 实例化，防止新增定义漏接 switch 分支。
+	allOn := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		allOn[d.ID] = true
+	}
+	sched3 := scheduler.NewRoleScheduler("role-test-3", nil, fastJitter)
+	if got := factory.RegisterAll(sched3, allOn); got != len(defs) {
+		t.Errorf("预期全部 %d 个玩法均可实例化注册, 实际为 %d (存在未接线的定义)", len(defs), got)
+	}
 }
 
 func TestSubdomains_Instances(t *testing.T) {

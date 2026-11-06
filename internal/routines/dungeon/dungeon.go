@@ -963,9 +963,6 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 
 			sweepLoop:
 				for _, step := range sweepPipeline {
-					if sweepSuccessRounds >= cfg.Sweep.MaxBatchTimes {
-						break
-					}
 					if session.State() != client.StateActive {
 						for i := 0; i < 15 && session.State() != client.StateActive; i++ {
 							time.Sleep(200 * time.Millisecond)

@@ -176,18 +176,50 @@ func NewDailyQuestRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行日常任务: 领取日活跃度小助手奖励", "role_id", session.RoleID())
 
-			pkt := protocol.BuildAssistantClaimRewardPacket(protocol.ActionIDTownEnter)
-			callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			defer cancel()
-
-			resp, err := session.Call(callCtx, pkt, protocol.ActionIDAssistantClaimReward)
-			if err != nil {
-				slog.Warn("领取日活跃奖励请求超时或网关未即时应答", "err", err)
-				return nil
+			// 官方 Mod_Assistant_Base (Module 52):
+			//   one_key_get_award(Act 3) 按页签类型一键领取所有达标宝箱。
+			// 页签类型从 1 开始；不同版本页签数量不同，逐个尝试并在服务端返回
+			// NOT_ENOUGH_NUM / HAVE_DONE 时继续下一个类型。
+			claimed := 0
+			for typeID := int32(1); typeID <= 3; typeID++ {
+				if err := ctx.Err(); err != nil {
+					return nil
+				}
+				pkt := protocol.BuildAssistantOneKeyGetAwardPacket(typeID)
+				cCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				resp, err := session.Call(cCtx, pkt, protocol.ActionIDAssistantOneKeyGetAward)
+				cancel()
+				if err != nil || resp == nil {
+					if typeID == 1 {
+						slog.Info("小助手功能未开放/无回包，跳过", "role_id", session.RoleID(), "err", err)
+						return nil
+					}
+					continue
+				}
+				result, awards, pErr := protocol.ParseAssistantOneKeyResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析小助手一键领取回包失败", "role_id", session.RoleID(), "err", pErr)
+					return nil
+				}
+				switch result {
+				case protocol.AssistantResultSuccess:
+					claimed++
+					slog.Info("小助手日活跃奖励领取成功",
+						"role_id", session.RoleID(), "type", typeID, "awards", awards)
+				case protocol.AssistantResultHaveDone,
+					protocol.AssistantResultNotEnoughNum,
+					protocol.AssistantResultNotEnoughVIP:
+					// 该页签已领取或未达标，继续下一个页签。
+				case protocol.AssistantResultPackFull:
+					return scheduler.ErrBagFull
+				case protocol.AssistantResultFailed:
+					slog.Info("小助手一键领取失败", "role_id", session.RoleID(), "type", typeID)
+					return nil
+				default:
+					slog.Info("小助手一键领取未成功", "role_id", session.RoleID(), "type", typeID, "result", result)
+				}
 			}
-			if resp != nil {
-				slog.Info("领取日活跃奖励成功", "role_id", session.RoleID())
-			}
+			slog.Info("小助手日活跃奖励巡检完成", "role_id", session.RoleID(), "claimed_types", claimed)
 			return nil
 		},
 	)
@@ -467,30 +499,83 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			slog.Info("正在执行日常任务: 跨服天神赐福领取", "role_id", session.RoleID())
+			slog.Info("正在执行日常任务: 天神赐福等级奖励领取", "role_id", session.RoleID())
 
-			// 依据抓包: 每次领取 1 点天神赐福，单次触发 10 轮
-			prevAct := protocol.ActionIDTownEnter
-			var successCount int
-
-			for i := 0; i < 10; i++ {
-				pkt := protocol.BuildGodBlessClaimPacket(prevAct)
-				prevAct = protocol.ActionIDGodBlessClaim
-
-				cCtx, cCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-				resp, err := session.Call(cCtx, pkt, protocol.ActionIDGodBlessClaim)
-				cCancel()
-
-				if err != nil || resp == nil || len(resp.Payload) == 0 {
-					if successCount == 0 {
-						slog.Info("天神赐福功能未开放/无回包数据，跳过", "role_id", session.RoleID(), "err", err)
-					}
-					break
-				}
-				successCount++
+			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
+				cCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+				defer cancel()
+				return session.Call(cCtx, pkt, act)
 			}
 
-			slog.Info("跨服天神赐福领取完成", "role_id", session.RoleID(), "claimed_times", successCount)
+			// 1. 查询赐福状态 (Mod 328, Act 0)
+			infoResp, err := call(protocol.BuildGodWelfareInfoPacket(), protocol.ActionIDGodWelfareInfo)
+			if err != nil || infoResp == nil {
+				slog.Info("天神赐福功能未开放/无回包，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			info, pErr := protocol.ParseGodWelfareInfoResult(infoResp.Payload)
+			if pErr != nil {
+				slog.Warn("解析天神赐福信息失败，跳过", "role_id", session.RoleID(), "err", pErr)
+				return nil
+			}
+			slog.Info("天神赐福状态",
+				"role_id", session.RoleID(),
+				"level", info.Level,
+				"is_geted", info.IsGeted,
+				"point", info.Point,
+				"max_point", info.MaxPoint,
+			)
+
+			// 2. 查询等级奖励列表 (Mod 328, Act 1)
+			listResp, err := call(protocol.BuildGodWelfareLevelAwardInfoPacket(), protocol.ActionIDGodWelfareLevelAwardInfo)
+			if err != nil || listResp == nil {
+				slog.Warn("查询天神赐福等级奖励无回包", "role_id", session.RoleID(), "err", err)
+				return nil
+			}
+			awards, pErr := protocol.ParseGodWelfareLevelAwardInfoResult(listResp.Payload)
+			if pErr != nil {
+				slog.Warn("解析天神赐福等级奖励失败", "role_id", session.RoleID(), "err", pErr)
+				return nil
+			}
+
+			claimed := 0
+			for _, award := range awards {
+				if award.IsGet != 0 {
+					continue
+				}
+				if err := ctx.Err(); err != nil {
+					return nil
+				}
+				cResp, cErr := call(protocol.BuildGodWelfareGetAwardPacket(award.Level), protocol.ActionIDGodWelfareGetAward)
+				if cErr != nil || cResp == nil {
+					slog.Warn("领取天神赐福等级奖励无回包", "role_id", session.RoleID(), "level", award.Level, "err", cErr)
+					return nil
+				}
+				code, cpErr := protocol.ParseGodWelfareGetAwardResult(cResp.Payload)
+				if cpErr != nil {
+					slog.Warn("解析天神赐福领取回包失败", "role_id", session.RoleID(), "err", cpErr)
+					return nil
+				}
+				switch code {
+				case protocol.GodWelfareResultSuccess:
+					claimed++
+					slog.Info("天神赐福等级奖励领取成功", "role_id", session.RoleID(), "level", award.Level)
+				case protocol.GodWelfareResultHadGet:
+					slog.Debug("天神赐福等级奖励已领取", "role_id", session.RoleID(), "level", award.Level)
+				case protocol.GodWelfareResultLevelLimit:
+					slog.Info("天神赐福等级不足，停止领取", "role_id", session.RoleID(), "level", award.Level)
+					return nil
+				case protocol.GodWelfareResultItemPackFull:
+					return scheduler.ErrBagFull
+				case protocol.GodWelfareResultFailure:
+					slog.Info("天神赐福等级奖励领取失败", "role_id", session.RoleID(), "level", award.Level)
+					continue
+				default:
+					slog.Info("天神赐福等级奖励未领取", "role_id", session.RoleID(), "level", award.Level, "result", code)
+					continue
+				}
+			}
+			slog.Info("天神赐福巡检完成", "role_id", session.RoleID(), "claimed", claimed)
 			return nil
 		},
 	)

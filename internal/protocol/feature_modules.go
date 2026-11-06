@@ -9,12 +9,11 @@ const (
 	ModuleRollCake          uint16 = 38  // 个人吉星高照摇骰子模块 (0x0026, Mod_RollCake_Base)
 	ModuleLuckyWheel        uint16 = 69  // 帮派转盘模块 (0x0045, Mod_LuckyWheel_Base)
 	ModuleVipAward          uint16 = 42  // VIP与在线礼包模块 (0x002A)
-	ModuleStGodWelfare      uint16 = 52  // 跨服天神赐福与全服福利模块 (0x0034)
+	ModuleStGodWelfare      uint16 = 328 // 天神赐福与全服福利模块 (0x0148)
 	ModuleWorshipMarsExt    uint16 = 24  // 拜祭先祖/关公模块 (0x0018)
 	ModuleActivityWelfare   uint16 = 57  // 运营活动福利模块 (0x0039)
 	ModuleJieYuanBox        uint16 = 232 // 结缘宝箱与缘分模块 (0x00E8)
 	ModuleRefinePoolExec    uint16 = 282 // 粗铁淬炼执行模块 (0x011A)
-	ModuleDailyAssistant    uint16 = 293 // 小助手活跃度领奖模块 (0x0125)
 	ModuleCaravanRob        uint32 = 314 // 阵营商队劫镖模块 (0x013A)
 	ModuleTakeBible         uint16 = 30  // 西天取经与护送取经模块 (0x001E)
 	ModuleStTakeBible       uint16 = 114 // 圣域/跨服取经模块 (0x0072)
@@ -62,9 +61,6 @@ const (
 	// ActionIDJieYuanBoxOpen 批量开启结缘宝箱 (Module 232, Action 34 -> 0x00E80022)
 	ActionIDJieYuanBoxOpen uint32 = 0x00E80022
 
-	// ActionIDAssistantClaimReward 领取日活跃度小助手宝箱 (Module 293, Action 2 -> 0x01250002)
-	ActionIDAssistantClaimReward uint32 = 0x01250002
-
 	// ActionIDQiMenArrayInfo 查询奇门遁甲法阵信息 (Module 486, Action 7 -> 0x01E60007)
 	ActionIDQiMenArrayInfo uint32 = 0x01E60007
 	// ActionIDQiMenPuppetInfo 查询阵眼傀儡属性 (Module 485, Action 0 -> 0x01E50000)
@@ -83,8 +79,6 @@ const (
 	// ActionIDRefineExecute 执行粗铁淬炼提纯 (Module 282, Action 1 -> 0x011A0001)
 	ActionIDRefineExecute uint32 = 0x011A0001
 
-	// ActionIDGodBlessClaim 领取跨服天神赐福点数 (Module 52, Action 0 -> 0x00340000)
-	ActionIDGodBlessClaim uint32 = 0x00340000
 	// ActionIDGodBlessNotify 天神赐福状态推送 (Module 558, Action 2 -> 0x022E0002)
 	ActionIDGodBlessNotify uint32 = 0x022E0002
 
@@ -200,16 +194,7 @@ const (
 	// 官方 Mod_WuFaField_Base.draw: request=[Int field_type, UByte draw_type]。
 	ActionIDWuFaDrawCard uint32 = 0x02920001
 
-	// ActionIDMasterPracticePanel 查询宗师修行面板与境界 (Module 665, Action 1 -> 0x02990001)
-	ActionIDMasterPracticePanel uint32 = 0x02990001
-	// ActionIDMasterPracticeSelectSkill 选定宗师修行心法 (Module 665, Action 3 -> 0x02990003)
-	ActionIDMasterPracticeSelectSkill uint32 = 0x02990003
-	// ActionIDMasterPracticeChallenge 发起宗师修行试炼挑战 (Module 665, Action 2 -> 0x02990002)
-	ActionIDMasterPracticeChallenge uint32 = 0x02990002
-	// ActionIDMasterPracticeSettle 上报宗师修行试炼结果 (Module 665, Action 4 -> 0x02990004)
-	ActionIDMasterPracticeSettle uint32 = 0x02990004
-	// ActionIDMasterPracticeBreakthrough 突破宗师境界 (Module 665, Action 5 -> 0x02990005)
-	ActionIDMasterPracticeBreakthrough uint32 = 0x02990005
+	// 宗师修行协议常量见 master_practice.go。
 
 	// 天帝宝库 Module 594 动作编号对齐原版 com.protocols.Mod_TreasureHouse_Base:
 	// Actions = [main_panel, select_panel, set_award, set_use_free_flag, set_notify_flag,

@@ -1374,44 +1374,117 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行益智任务: 宗师修行试炼与境界突破", "role_id", session.RoleID())
 
-			// 1. 查询宗师修行面板 (Mod 665, Act 1)
-			panelPkt := protocol.BuildMasterPracticePanelPacket(protocol.ActionIDTownEnter)
-			pCtx, pCancel := context.WithTimeout(ctx, 2*time.Second)
-			resp, err := session.Call(pCtx, panelPkt, protocol.ActionIDMasterPracticePanel)
-			pCancel()
+			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
+				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+				defer cancel()
+				return session.Call(cCtx, pkt, act)
+			}
 
-			if err != nil || resp == nil || len(resp.Payload) == 0 {
+			// 1. 查询宗师修行主面板 (Mod 665, Act 1)
+			resp, err := call(protocol.BuildMasterPracticePanelPacket(protocol.ActionIDTownEnter), protocol.ActionIDMasterPracticePanel)
+			if err != nil || resp == nil {
 				slog.Info("宗师修行功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
-
-			// 2. 选定心法 (Mod 665, Act 3)
-			skillPkt := protocol.BuildMasterPracticeSelectSkillPacket(1, 1, protocol.ActionIDMasterPracticePanel)
-			sCtx, sCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-			_, _ = session.Call(sCtx, skillPkt, protocol.ActionIDMasterPracticeSelectSkill)
-			sCancel()
-
-			// 3. 发起试炼挑战 (Mod 665, Act 2)
-			chalPkt := protocol.BuildMasterPracticeChallengePacket(protocol.ActionIDMasterPracticeSelectSkill)
-			cCtx, cCancel := context.WithTimeout(ctx, 2*time.Second)
-			_, _ = session.Call(cCtx, chalPkt, protocol.ActionIDMasterPracticeChallenge)
-			cCancel()
-
-			// 3.1 极速通关试炼报告 (Mod 665, Act 4: 抓包实采 00 0f cc af 09 秒过试炼)
-			finishPkt := protocol.BuildMasterPracticeFastFinishPacket(protocol.ActionIDMasterPracticeChallenge)
-			fCtx, fCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-			_, _ = session.Call(fCtx, finishPkt, protocol.ActionIDMasterPracticeSettle)
-			fCancel()
-
-			// 4. 境界突破 (Mod 665, Act 5)
-			breakPkt := protocol.BuildMasterPracticeBreakthroughPacket(1, 1, protocol.ActionIDMasterPracticeSettle)
-			bCtx, bCancel := context.WithTimeout(ctx, 2*time.Second)
-			bResp, bErr := session.Call(bCtx, breakPkt, protocol.ActionIDMasterPracticeBreakthrough)
-			bCancel()
-
-			if bErr == nil && bResp != nil {
-				slog.Info("宗师境界突破成功", "role_id", session.RoleID())
+			panel, err := protocol.ParseMasterPracticePanelResult(resp.Payload)
+			if err != nil {
+				slog.Info("解析宗师修行面板失败，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
 			}
+			if panel.Result != protocol.MasterPracticeResultSuccess {
+				slog.Info("宗师修行面板返回失败", "role_id", session.RoleID(), "result", panel.Result)
+				return nil
+			}
+			slog.Info("宗师修行面板",
+				"role_id", session.RoleID(),
+				"today_challenge_times", panel.TodayChallengeTimes,
+				"jobs", len(panel.Jobs),
+			)
+
+			for _, job := range panel.Jobs {
+				if err := ctx.Err(); err != nil {
+					return nil
+				}
+				challengedToday := make(map[int32]bool, len(job.TodayChallenge))
+				for _, s := range job.TodayChallenge {
+					challengedToday[s] = true
+				}
+				for star := int32(1); star <= 3; star++ {
+					if challengedToday[star] {
+						continue
+					}
+					cResp, cErr := call(
+						protocol.BuildMasterPracticeChallengePacket(uint32(job.JobID), uint32(star), 0),
+						protocol.ActionIDMasterPracticeChallenge,
+					)
+					if cErr != nil || cResp == nil {
+						slog.Warn("宗师修行挑战无回包", "role_id", session.RoleID(), "job_id", job.JobID, "star", star, "err", cErr)
+						break
+					}
+					code, pErr := protocol.ParseMasterPracticeActionCode(cResp.Payload)
+					if pErr != nil {
+						slog.Warn("解析宗师修行挑战回包失败", "role_id", session.RoleID(), "err", pErr)
+						break
+					}
+					switch code {
+					case protocol.MasterPracticeResultSuccess:
+						slog.Info("宗师修行挑战成功",
+							"role_id", session.RoleID(), "job_id", job.JobID, "star", star)
+					case protocol.MasterPracticeResultNoChallengeTimes:
+						slog.Info("宗师修行今日挑战次数已用尽", "role_id", session.RoleID())
+						return nil
+					case protocol.MasterPracticeResultIsChallenged:
+						break
+					case protocol.MasterPracticeResultMaxStars, protocol.MasterPracticeResultLessStars:
+						star = 3
+					case protocol.MasterPracticeResultJobError, protocol.MasterPracticeResultConditionLimited,
+						protocol.MasterPracticeResultIsLocked, protocol.MasterPracticeResultFailed:
+						slog.Info("宗师修行挑战未成功",
+							"role_id", session.RoleID(), "job_id", job.JobID, "star", star, "result", code)
+						star = 3
+					default:
+						slog.Info("宗师修行挑战未成功",
+							"role_id", session.RoleID(), "job_id", job.JobID, "star", star, "result", code)
+						star = 3
+					}
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(200 * time.Millisecond):
+					}
+				}
+
+				// 2. 境界突破 (Mod 665, Act 8)。冷却中或星数不足时服务端会返回对应结果码。
+				if job.TotalStars <= 0 {
+					continue
+				}
+				bResp, bErr := call(
+					protocol.BuildMasterPracticeStepUpPacket(uint32(job.JobID), 0),
+					protocol.ActionIDMasterPracticeStepUp,
+				)
+				if bErr != nil || bResp == nil {
+					slog.Warn("宗师境界突破无回包", "role_id", session.RoleID(), "job_id", job.JobID, "err", bErr)
+					continue
+				}
+				code, pErr := protocol.ParseMasterPracticeActionCode(bResp.Payload)
+				if pErr != nil {
+					slog.Warn("解析宗师突破回包失败", "role_id", session.RoleID(), "err", pErr)
+					continue
+				}
+				switch code {
+				case protocol.MasterPracticeResultSuccess:
+					slog.Info("宗师境界突破成功", "role_id", session.RoleID(), "job_id", job.JobID)
+				case protocol.MasterPracticeResultStepUpCD:
+					slog.Info("宗师境界突破冷却中", "role_id", session.RoleID(), "job_id", job.JobID)
+				case protocol.MasterPracticeResultLessStars:
+					slog.Info("宗师境界突破星数不足", "role_id", session.RoleID(), "job_id", job.JobID)
+				case protocol.MasterPracticeResultTopStep:
+					slog.Info("宗师境界已达最高", "role_id", session.RoleID(), "job_id", job.JobID)
+				default:
+					slog.Info("宗师境界突破未成功", "role_id", session.RoleID(), "job_id", job.JobID, "result", code)
+				}
+			}
+			slog.Info("宗师修行巡检完成", "role_id", session.RoleID())
 			return nil
 		},
 	)
@@ -2670,82 +2743,153 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 
 			explored := 0
 			exchanges := 0
-			for _, area := range info.Areas {
-				// 免费次数优先
+			exploreArea := func(area protocol.ForbiddenBookArea) {
 				for area.CurNumber > 0 && explored < 30 {
 					resp, eErr := call(protocol.BuildForbiddenBookExplorePacket(area.ForbiddenType, area.ExploreType), protocol.ActionIDForbiddenBookExplore)
 					if eErr != nil {
 						slog.Warn("禁地之书探索无应答", "role_id", session.RoleID(), "type", area.ForbiddenType, "err", eErr)
-						break
+						return
 					}
 					result, pErr := protocol.ParseForbiddenBookExploreResult(resp.Payload)
 					if pErr != nil {
 						slog.Warn("解析禁地之书探索回包失败", "role_id", session.RoleID(), "err", pErr)
-						break
+						return
 					}
 					if result != protocol.AwakeResultSuccess {
 						slog.Info("禁地之书探索未成功", "role_id", session.RoleID(), "type", area.ForbiddenType, "result", result)
-						break
+						return
 					}
 					explored++
 					area.CurNumber--
 					slog.Info("禁地之书探索成功", "role_id", session.RoleID(), "type", area.ForbiddenType, "remaining", area.CurNumber)
 					select {
 					case <-ctx.Done():
+						return
+					case <-time.After(200 * time.Millisecond):
+					}
+				}
+			}
+
+			// 1. 免费次数优先。
+			for _, area := range info.Areas {
+				exploreArea(area)
+			}
+
+			// 2. 免费次数用尽后，仅兑换纯铜钱档位的探索次数。
+			// 线上 s0 实测: Act 13 返回 18/19/20 号区域价格，其中 19/20 号
+			// cost_ingot=0、cost_coin=50/100；18 号同时需要元宝，自动化严格跳过。
+			exResp, exErr := call(protocol.BuildForbiddenBookExchangeInfoPacket(), protocol.ActionIDForbiddenBookExchangeInfo)
+			if exErr != nil || exResp == nil {
+				slog.Info("禁地之书兑换价格不可用，跳过铜钱兑换", "role_id", session.RoleID(), "err", exErr)
+				slog.Info("禁地之书巡检完成", "role_id", session.RoleID(), "explored", explored, "coin_exchanges", exchanges)
+				return nil
+			}
+			priceList, pErr := protocol.ParseForbiddenBookExchangeInfoResult(exResp.Payload)
+			if pErr != nil {
+				slog.Warn("解析禁地之书兑换价格失败", "role_id", session.RoleID(), "err", pErr)
+				slog.Info("禁地之书巡检完成", "role_id", session.RoleID(), "explored", explored, "coin_exchanges", exchanges)
+				return nil
+			}
+
+			for _, price := range priceList {
+				if price.CostIngot > 0 || price.CostCoin <= 0 || price.Count <= 0 {
+					continue
+				}
+				exchangedThisType := 0
+				for i := int16(0); i < price.Count && exchanges < 10; i++ {
+					if err := ctx.Err(); err != nil {
+						return nil
+					}
+					coins := session.GetPlayerState().Coins
+					if coins < int64(price.CostCoin) {
+						slog.Info("铜钱不足，停止禁地之书兑换", "role_id", session.RoleID(),
+							"coins", coins, "cost_coin", price.CostCoin)
+						break
+					}
+					resp, xErr := call(protocol.BuildForbiddenBookExchangePacket(price.ForbiddenType), protocol.ActionIDForbiddenBookExchange)
+					if xErr != nil {
+						slog.Warn("禁地之书铜钱兑换无应答", "role_id", session.RoleID(), "type", price.ForbiddenType, "err", xErr)
+						break
+					}
+					result, pErr := protocol.ParseForbiddenBookExchangeResult(resp.Payload)
+					if pErr != nil {
+						slog.Warn("解析禁地之书铜钱兑换回包失败", "role_id", session.RoleID(), "err", pErr)
+						break
+					}
+					if result != protocol.AwakeResultSuccess {
+						slog.Info("禁地之书铜钱兑换未成功", "role_id", session.RoleID(),
+							"type", price.ForbiddenType, "result", result)
+						break
+					}
+					exchanges++
+					exchangedThisType++
+					session.UpdatePlayerState(func(ps *client.PlayerState) {
+						ps.Coins -= int64(price.CostCoin)
+					})
+					slog.Info("禁地之书铜钱兑换成功", "role_id", session.RoleID(),
+						"type", price.ForbiddenType, "cost_coin", price.CostCoin)
+				}
+
+				// 兑换次数不会体现在 panel 的 cur_number 上（线上实测兑换后仍为 0），
+				// 必须主动下发 explore 请求使用兑换次数，由服务端返回结果码熔断。
+				refreshed, rErr := fetchInfo()
+				if rErr != nil || refreshed == nil {
+					continue
+				}
+				var target protocol.ForbiddenBookArea
+				found := false
+				for _, area := range refreshed.Areas {
+					if area.ForbiddenType != price.ForbiddenType {
+						continue
+					}
+					// 兑换得到的次数只能用于不消耗元宝的探索入口。
+					// 线上实测多次探索入口 cost_ingot>0，误用会直接扣元宝；
+					// 因此这里严格要求 cost_ingot=0，并优先单次探索。
+					if area.CostIngot != 0 {
+						continue
+					}
+					if !found || area.ExploreType == protocol.ForbiddenBookOnce {
+						target = area
+						found = true
+					}
+				}
+				if !found {
+					slog.Info("禁地之书兑换区域无免元宝探索入口，跳过探索", "role_id", session.RoleID(),
+						"type", price.ForbiddenType)
+					continue
+				}
+				for n := 0; n < exchangedThisType && explored < 30; n++ {
+					if err := ctx.Err(); err != nil {
+						return nil
+					}
+					eResp, eErr := call(
+						protocol.BuildForbiddenBookExplorePacket(target.ForbiddenType, target.ExploreType),
+						protocol.ActionIDForbiddenBookExplore,
+					)
+					if eErr != nil {
+						slog.Warn("禁地之书兑换次数探索无应答", "role_id", session.RoleID(), "type", target.ForbiddenType, "err", eErr)
+						break
+					}
+					eResult, pErr := protocol.ParseForbiddenBookExploreResult(eResp.Payload)
+					if pErr != nil {
+						slog.Warn("解析禁地之书兑换次数探索回包失败", "role_id", session.RoleID(), "err", pErr)
+						break
+					}
+					if eResult != protocol.AwakeResultSuccess {
+						slog.Info("禁地之书兑换次数探索未成功", "role_id", session.RoleID(),
+							"type", target.ForbiddenType, "result", eResult)
+						break
+					}
+					explored++
+					slog.Info("禁地之书兑换次数探索成功", "role_id", session.RoleID(), "type", target.ForbiddenType)
+					select {
+					case <-ctx.Done():
 						return nil
 					case <-time.After(200 * time.Millisecond):
 					}
 				}
-
-				// 免费次数用尽：仅允许纯铜钱兑换
-				if area.CurNumber == 0 && area.CostCoin > 0 && area.CostIngot <= 0 && exchanges < 5 {
-					coins := session.GetPlayerState().Coins
-					if coins >= int64(area.CostCoin) {
-						resp, xErr := call(protocol.BuildForbiddenBookExchangePacket(area.ForbiddenType), protocol.ActionIDForbiddenBookExchange)
-						if xErr != nil {
-							slog.Warn("禁地之书铜钱兑换无应答", "role_id", session.RoleID(), "type", area.ForbiddenType, "err", xErr)
-							continue
-						}
-						result, pErr := protocol.ParseForbiddenBookExchangeResult(resp.Payload)
-						if pErr != nil || result != protocol.AwakeResultSuccess {
-							slog.Info("禁地之书铜钱兑换未成功", "role_id", session.RoleID(), "type", area.ForbiddenType, "result", result)
-							continue
-						}
-						exchanges++
-						slog.Info("禁地之书铜钱兑换成功", "role_id", session.RoleID(), "type", area.ForbiddenType, "cost_coin", area.CostCoin)
-						if refreshed, rErr := fetchInfo(); rErr == nil && refreshed != nil {
-							for _, ra := range refreshed.Areas {
-								if ra.ForbiddenType != area.ForbiddenType {
-									continue
-								}
-								if ra.CurNumber == 0 {
-									slog.Info("禁地之书兑换后仍无可用次数", "role_id", session.RoleID(), "type", ra.ForbiddenType, "explore_type", ra.ExploreType)
-								}
-								for ra.CurNumber > 0 && explored < 30 {
-									rResp, eErr := call(protocol.BuildForbiddenBookExplorePacket(ra.ForbiddenType, ra.ExploreType), protocol.ActionIDForbiddenBookExplore)
-									if eErr != nil {
-										slog.Warn("禁地之书兑换后探索无应答", "role_id", session.RoleID(), "type", ra.ForbiddenType, "err", eErr)
-										break
-									}
-									rResult, pErr := protocol.ParseForbiddenBookExploreResult(rResp.Payload)
-									if pErr != nil {
-										slog.Warn("解析禁地之书兑换后探索回包失败", "role_id", session.RoleID(), "err", pErr)
-										break
-									}
-									if rResult != protocol.AwakeResultSuccess {
-										slog.Info("禁地之书兑换后探索未成功", "role_id", session.RoleID(), "type", ra.ForbiddenType, "result", rResult)
-										break
-									}
-									explored++
-									ra.CurNumber--
-									slog.Info("禁地之书探索成功", "role_id", session.RoleID(), "type", ra.ForbiddenType, "remaining", ra.CurNumber)
-								}
-								break
-							}
-						}
-					}
-				}
 			}
+
 			slog.Info("禁地之书巡检完成", "role_id", session.RoleID(), "explored", explored, "coin_exchanges", exchanges)
 			return nil
 		},
