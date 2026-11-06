@@ -259,6 +259,165 @@ func BuildMasterPracticePanelResultPacket(p MasterPracticePanel) *Packet {
 	return NewPacket(ActionIDMasterPracticePanel, w.Bytes())
 }
 
+// MasterPracticeDeployRole 表示宗师修行布阵中的一个角色。
+type MasterPracticeDeployRole struct {
+	// PlayerRoleID 玩家角色实例 ID
+	PlayerRoleID int32
+	// IsMainRole 是否主角 (1=主角, 2=幻灵师伙伴)
+	IsMainRole uint8
+	// RoleID 角色编号 (用于查询职业 JobId)
+	RoleID int32
+	// RoleName 角色名
+	RoleName string
+	// RoleLevel 角色等级
+	RoleLevel int32
+	// IsDeploy 是否已上阵
+	IsDeploy uint8
+}
+
+// MasterPracticeDeployGrid 表示宗师修行布阵的一个格位。
+type MasterPracticeDeployGrid struct {
+	// GridTypeID 格位类型 ID
+	GridTypeID int32
+	// PlayerRoleID 上阵的玩家角色实例 ID (0 表示空位)
+	PlayerRoleID int32
+}
+
+// MasterPracticeDeployInfo 表示宗师修行当前布阵。
+type MasterPracticeDeployInfo struct {
+	// Result 结果码
+	Result uint8
+	// DeployLevel 布阵等级
+	DeployLevel int32
+	// Roles 全部可用角色
+	Roles []MasterPracticeDeployRole
+	// Grids 布阵格位
+	Grids []MasterPracticeDeployGrid
+}
+
+// BuildMasterPracticeDeployInfoPacket 构造查询宗师修行布阵信息封包 (0x02990002)。
+func BuildMasterPracticeDeployInfoPacket() *Packet {
+	return NewPacket(ActionIDMasterPracticeDeployInfo, nil)
+}
+
+// ParseMasterPracticeDeployInfoResult 解析宗师修行布阵信息 (Act 2)。
+func ParseMasterPracticeDeployInfoResult(payload []byte) (*MasterPracticeDeployInfo, error) {
+	r := NewReader(payload)
+	info := &MasterPracticeDeployInfo{}
+	var err error
+	if info.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read deploy result: %v", ErrInvalidPayload, err)
+	}
+	if info.Result != MasterPracticeResultSuccess {
+		return info, nil
+	}
+	if info.DeployLevel, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read deploy_level: %v", ErrInvalidPayload, err)
+	}
+	roleCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read deploy role count: %v", ErrInvalidPayload, err)
+	}
+	info.Roles = make([]MasterPracticeDeployRole, 0, roleCount)
+	for i := 0; i < int(roleCount); i++ {
+		var role MasterPracticeDeployRole
+		if role.PlayerRoleID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].player_role_id: %v", ErrInvalidPayload, i, err)
+		}
+		if role.IsMainRole, err = r.ReadUint8(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].is_main_role: %v", ErrInvalidPayload, i, err)
+		}
+		for j := 0; j < 2; j++ { // health, max_health
+			if _, err = r.ReadInt32(); err != nil {
+				return nil, fmt.Errorf("%w: failed to read deploy_role[%d].health[%d]: %v", ErrInvalidPayload, i, j, err)
+			}
+		}
+		if role.RoleID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].role_id: %v", ErrInvalidPayload, i, err)
+		}
+		if role.RoleName, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].role_name: %v", ErrInvalidPayload, i, err)
+		}
+		if role.RoleLevel, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].role_level: %v", ErrInvalidPayload, i, err)
+		}
+		for j := 0; j < 2; j++ { // role_job_name, role_stunt
+			if _, err = r.ReadString(); err != nil {
+				return nil, fmt.Errorf("%w: failed to read deploy_role[%d].string[%d]: %v", ErrInvalidPayload, i, j, err)
+			}
+		}
+		for j := 0; j < 3; j++ { // strength, agile, intellect
+			if _, err = r.ReadInt32(); err != nil {
+				return nil, fmt.Errorf("%w: failed to read deploy_role[%d].stat[%d]: %v", ErrInvalidPayload, i, j, err)
+			}
+		}
+		if role.IsDeploy, err = r.ReadUint8(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].is_deploy: %v", ErrInvalidPayload, i, err)
+		}
+		if _, err = readMPInt32List(r); err != nil { // wear_on_supernatural_list
+			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].supernatural: %v", ErrInvalidPayload, i, err)
+		}
+		for j := 0; j < 3; j++ { // suit_equip_id, rebirth_skill_id, rebirth_skill_id2
+			if _, err = r.ReadInt32(); err != nil {
+				return nil, fmt.Errorf("%w: failed to read deploy_role[%d].tail[%d]: %v", ErrInvalidPayload, i, j, err)
+			}
+		}
+		info.Roles = append(info.Roles, role)
+	}
+	gridCount, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read deploy grid count: %v", ErrInvalidPayload, err)
+	}
+	info.Grids = make([]MasterPracticeDeployGrid, 0, gridCount)
+	for i := 0; i < int(gridCount); i++ {
+		var g MasterPracticeDeployGrid
+		if g.GridTypeID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read deploy_grid[%d].grid_type_id: %v", ErrInvalidPayload, i, err)
+		}
+		if g.PlayerRoleID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read deploy_grid[%d].player_role_id: %v", ErrInvalidPayload, i, err)
+		}
+		info.Grids = append(info.Grids, g)
+	}
+	return info, nil
+}
+
+// BuildMasterPracticeDeployInfoResultPacket 构造布阵信息回包，供离线 mock 与单测使用。
+func BuildMasterPracticeDeployInfoResultPacket(info MasterPracticeDeployInfo) *Packet {
+	w := NewWriter()
+	w.WriteUint8(info.Result)
+	if info.Result == MasterPracticeResultSuccess {
+		w.WriteInt32(info.DeployLevel)
+		w.WriteUint16(uint16(len(info.Roles)))
+		for _, role := range info.Roles {
+			w.WriteInt32(role.PlayerRoleID)
+			w.WriteUint8(role.IsMainRole)
+			w.WriteInt32(100)
+			w.WriteInt32(100)
+			w.WriteInt32(role.RoleID)
+			w.WriteString(role.RoleName)
+			w.WriteInt32(role.RoleLevel)
+			w.WriteString("")
+			w.WriteString("")
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			w.WriteUint8(role.IsDeploy)
+			w.WriteUint16(0)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+		}
+		w.WriteUint16(uint16(len(info.Grids)))
+		for _, g := range info.Grids {
+			w.WriteInt32(g.GridTypeID)
+			w.WriteInt32(g.PlayerRoleID)
+		}
+		w.WriteUint16(0) // children
+	}
+	return NewPacket(ActionIDMasterPracticeDeployInfo, w.Bytes())
+}
+
 // BuildMasterPracticeActionCodePacket 构造单结果码回包，供离线 mock 与单测使用。
 func BuildMasterPracticeActionCodePacket(actionID uint32, code uint8) *Packet {
 	return NewPacket(actionID, []byte{code})

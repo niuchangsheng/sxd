@@ -514,3 +514,32 @@ func TestSpaceFindGetResultLayout(t *testing.T) {
 		t.Fatalf("unexpected counts: %+v", got)
 	}
 }
+
+func TestMasterPracticeDeployInfoRoundTrip(t *testing.T) {
+	info := protocol.MasterPracticeDeployInfo{
+		Result:      protocol.MasterPracticeResultSuccess,
+		DeployLevel: 20,
+		Roles: []protocol.MasterPracticeDeployRole{
+			{PlayerRoleID: 227943, IsMainRole: 1, RoleID: 511, RoleName: "遁一", RoleLevel: 300, IsDeploy: 1},
+			{PlayerRoleID: 1035439, RoleID: 606, RoleName: "魔林月如", RoleLevel: 300, IsDeploy: 1},
+		},
+		Grids: []protocol.MasterPracticeDeployGrid{
+			{GridTypeID: 6, PlayerRoleID: 0},
+			{GridTypeID: 9, PlayerRoleID: 1035439},
+			{GridTypeID: 1, PlayerRoleID: 227943},
+		},
+	}
+	got, err := protocol.ParseMasterPracticeDeployInfoResult(protocol.BuildMasterPracticeDeployInfoResultPacket(info).Payload)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got.DeployLevel != 20 || len(got.Roles) != 2 || len(got.Grids) != 3 {
+		t.Fatalf("unexpected deploy info: %+v", got)
+	}
+	if got.Roles[0].RoleID != 511 || got.Roles[0].IsMainRole != 1 || got.Roles[1].RoleID != 606 {
+		t.Fatalf("unexpected deploy roles: %+v", got.Roles)
+	}
+	if got.Grids[1].GridTypeID != 9 || got.Grids[1].PlayerRoleID != 1035439 {
+		t.Fatalf("unexpected deploy grids: %+v", got.Grids)
+	}
+}

@@ -1368,8 +1368,19 @@ func classifyWuFaDrawResult(code uint8) error {
 	}
 }
 
+// MasterPracticeConfig 宗师修行策略配置。
+type MasterPracticeConfig struct {
+	// DictRepo 静态数据字典，用于把主角/伙伴 role_id 映射为职业 JobId，
+	// 从而自适应选择可挑战的修行方向。
+	DictRepo dictionary.Repository
+}
+
 // NewMasterPracticeRoutine 构造宗师修行挑战与突破任务 (Feature 15: 宗师修行)。
-func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
+func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRoutine {
+	cfg := MasterPracticeConfig{}
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
 	return scheduler.NewBaseRoutine(
 		"master_practice",
 		"minigame",
@@ -1412,7 +1423,27 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 				"jobs", len(panel.Jobs),
 			)
 
-			for _, job := range panel.Jobs {
+			// 2. 查询当前布阵，按主角职业与伙伴职业自适应选择修行方向。
+			var deploy *protocol.MasterPracticeDeployInfo
+			if dResp, dErr := call(protocol.BuildMasterPracticeDeployInfoPacket(), protocol.ActionIDMasterPracticeDeployInfo); dErr == nil && dResp != nil {
+				if parsed, pErr := protocol.ParseMasterPracticeDeployInfoResult(dResp.Payload); pErr == nil {
+					deploy = parsed
+				}
+			}
+			candidates := masterPracticeDirectionCandidates(panel, deploy, cfg.DictRepo)
+			if len(candidates) == 0 {
+				slog.Info("宗师修行没有可用方向，跳过", "role_id", session.RoleID())
+				return nil
+			}
+			slog.Info("宗师修行自适应方向候选", "role_id", session.RoleID(), "candidates", candidates)
+
+			// 3. 逐个方向探测：主角职业优先，其次已上阵伙伴职业，最后按面板活跃度兜底。
+			// 服务端对不匹配的方回返回 JOB_ERROR 且不消耗挑战次数，可安全尝试下一个。
+			for _, jobID := range candidates {
+				job, ok := masterPracticeJobByID(panel, jobID)
+				if !ok {
+					continue
+				}
 				if err := ctx.Err(); err != nil {
 					return nil
 				}
@@ -1420,8 +1451,12 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 				for _, s := range job.TodayChallenge {
 					challengedToday[s] = true
 				}
+
+				directionValid := false
+				abort := false
 				for star := int32(1); star <= 3; star++ {
 					if challengedToday[star] {
+						directionValid = true
 						continue
 					}
 					cResp, cErr := call(
@@ -1430,32 +1465,41 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 					)
 					if cErr != nil || cResp == nil {
 						slog.Warn("宗师修行挑战无回包", "role_id", session.RoleID(), "job_id", job.JobID, "star", star, "err", cErr)
+						abort = true
 						break
 					}
 					code, pErr := protocol.ParseMasterPracticeActionCode(cResp.Payload)
 					if pErr != nil {
 						slog.Warn("解析宗师修行挑战回包失败", "role_id", session.RoleID(), "err", pErr)
+						abort = true
 						break
 					}
 					switch code {
 					case protocol.MasterPracticeResultSuccess:
+						directionValid = true
 						slog.Info("宗师修行挑战成功",
 							"role_id", session.RoleID(), "job_id", job.JobID, "star", star)
 					case protocol.MasterPracticeResultNoChallengeTimes:
 						slog.Info("宗师修行今日挑战次数已用尽", "role_id", session.RoleID())
 						return nil
 					case protocol.MasterPracticeResultIsChallenged:
-						break
+						directionValid = true
 					case protocol.MasterPracticeResultMaxStars, protocol.MasterPracticeResultLessStars:
+						directionValid = true
 						star = 3
 					case protocol.MasterPracticeResultJobError, protocol.MasterPracticeResultConditionLimited,
 						protocol.MasterPracticeResultIsLocked, protocol.MasterPracticeResultFailed:
-						slog.Info("宗师修行挑战未成功",
-							"role_id", session.RoleID(), "job_id", job.JobID, "star", star, "result", code)
+						// 首颗星即被拒绝说明该方向与当前主角/伙伴职业不匹配，换下一个方向。
+						if star == 1 {
+							slog.Info("宗师修行方向不匹配，尝试下一方向",
+								"role_id", session.RoleID(), "job_id", job.JobID, "result", code)
+							abort = true
+						} else {
+							directionValid = true
+						}
 						star = 3
 					default:
-						slog.Info("宗师修行挑战未成功",
-							"role_id", session.RoleID(), "job_id", job.JobID, "star", star, "result", code)
+						directionValid = true
 						star = 3
 					}
 					select {
@@ -1464,10 +1508,18 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 					case <-time.After(200 * time.Millisecond):
 					}
 				}
-
-				// 2. 境界突破 (Mod 665, Act 8)。冷却中或星数不足时服务端会返回对应结果码。
-				if job.TotalStars <= 0 {
+				if abort {
 					continue
+				}
+				if !directionValid {
+					continue
+				}
+				slog.Info("宗师修行选定方向",
+					"role_id", session.RoleID(), "job_id", job.JobID, "total_stars", job.TotalStars)
+
+				// 4. 境界突破 (Mod 665, Act 8)。
+				if job.TotalStars <= 0 {
+					return nil
 				}
 				bResp, bErr := call(
 					protocol.BuildMasterPracticeStepUpPacket(uint32(job.JobID), 0),
@@ -1475,12 +1527,12 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 				)
 				if bErr != nil || bResp == nil {
 					slog.Warn("宗师境界突破无回包", "role_id", session.RoleID(), "job_id", job.JobID, "err", bErr)
-					continue
+					return nil
 				}
 				code, pErr := protocol.ParseMasterPracticeActionCode(bResp.Payload)
 				if pErr != nil {
 					slog.Warn("解析宗师突破回包失败", "role_id", session.RoleID(), "err", pErr)
-					continue
+					return nil
 				}
 				switch code {
 				case protocol.MasterPracticeResultSuccess:
@@ -1494,11 +1546,83 @@ func NewMasterPracticeRoutine() scheduler.ActivityRoutine {
 				default:
 					slog.Info("宗师境界突破未成功", "role_id", session.RoleID(), "job_id", job.JobID, "result", code)
 				}
+				return nil
 			}
-			slog.Info("宗师修行巡检完成", "role_id", session.RoleID())
+			slog.Info("宗师修行没有与主角/伙伴职业匹配的可用方向", "role_id", session.RoleID())
 			return nil
 		},
 	)
+}
+
+// masterPracticeJobByID 按 JobID 从面板中查找方向。
+func masterPracticeJobByID(panel *protocol.MasterPracticePanel, jobID int32) (protocol.MasterPracticeJobInfo, bool) {
+	for _, job := range panel.Jobs {
+		if job.JobID == jobID {
+			return job, true
+		}
+	}
+	return protocol.MasterPracticeJobInfo{}, false
+}
+
+// masterPracticeDirectionCandidates 按“主角职业 → 已上阵伙伴职业 → 面板活跃方向 → 全部方向”
+// 的优先级生成修行方向候选，保证优先选择与当前队伍职业匹配的方向。
+func masterPracticeDirectionCandidates(panel *protocol.MasterPracticePanel, deploy *protocol.MasterPracticeDeployInfo, repo dictionary.Repository) []int32 {
+	panelIDs := make(map[int32]bool, len(panel.Jobs))
+	for _, job := range panel.Jobs {
+		panelIDs[job.JobID] = true
+	}
+	seen := make(map[int32]bool, len(panel.Jobs))
+	out := make([]int32, 0, len(panel.Jobs))
+	add := func(jobID int32) {
+		if jobID <= 0 || !panelIDs[jobID] || seen[jobID] {
+			return
+		}
+		seen[jobID] = true
+		out = append(out, jobID)
+	}
+	jobOf := func(roleID int32) int32 {
+		if repo == nil || roleID <= 0 {
+			return 0
+		}
+		rt, err := repo.GetRoleType(int(roleID))
+		if err != nil || rt == nil {
+			return 0
+		}
+		return int32(rt.JobID)
+	}
+
+	if deploy != nil {
+		// 主角职业优先。
+		for _, role := range deploy.Roles {
+			if role.IsMainRole == 1 {
+				add(jobOf(role.RoleID))
+			}
+		}
+		// 已上阵伙伴职业。
+		roleByPlayerID := make(map[int32]protocol.MasterPracticeDeployRole, len(deploy.Roles))
+		for _, role := range deploy.Roles {
+			roleByPlayerID[role.PlayerRoleID] = role
+		}
+		for _, grid := range deploy.Grids {
+			if grid.PlayerRoleID == 0 {
+				continue
+			}
+			if role, ok := roleByPlayerID[grid.PlayerRoleID]; ok {
+				add(jobOf(role.RoleID))
+			}
+		}
+	}
+	// 面板中已有进度 (总星数/境界) 的方向。
+	for _, job := range panel.Jobs {
+		if job.TotalStars > 0 || job.StepID > 0 {
+			add(job.JobID)
+		}
+	}
+	// 最后兜底：面板全部方向。
+	for _, job := range panel.Jobs {
+		add(job.JobID)
+	}
+	return out
 }
 
 // AwardSelectorFunc 允许注入自定义交互选择器（例如命令行交互、Web交互回调或自动化测试桩）。

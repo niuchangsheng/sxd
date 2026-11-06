@@ -368,7 +368,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "wufa_field":
 		return minigame.NewWuFaRoutine()
 	case "master_practice":
-		return minigame.NewMasterPracticeRoutine()
+		return minigame.NewMasterPracticeRoutine(minigame.MasterPracticeConfig{DictRepo: f.dictRepo})
 	case "treasure_house":
 		cfg := f.treasureCfg
 		if cfg.DictRepo == nil {
