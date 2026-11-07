@@ -47,6 +47,8 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "children_daily", Name: "孩子学习与任务", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "孩子上学与已完成任务奖励领取 (消耗培养金，不消耗元宝)", DefaultOn: false},
 		{ID: "rebirth_land", Name: "轮回净地挂机奖励", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "免费一键领取轮回净地挂机奖励 (不消耗元宝)", DefaultOn: false},
 		{ID: "activity_report", Name: "每日活跃度汇总", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "只读汇总每日/周常活跃度并输出 1200 达标缺口", DefaultOn: false},
+		{ID: "tactics_water", Name: "兵法圣水购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "铜钱购买湛蓝圣水完成兵法活跃度 (不消耗元宝)", DefaultOn: false},
+		{ID: "partner_link_box", Name: "缘魂宝箱购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "道缘/铜钱购买缘魂宝箱完成活跃度 (不消耗元宝)", DefaultOn: false},
 
 		// 2. Farming 领域 (6)
 		{ID: "herb_garden", Name: "药园种植巡检", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动药园播种、施肥、除草与成熟采摘", DefaultOn: true},
@@ -292,6 +294,10 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewRebirthLandRoutine()
 	case "activity_report":
 		return daily.NewDailyActivityReportRoutine()
+	case "tactics_water":
+		return daily.NewTacticsWaterRoutine()
+	case "partner_link_box":
+		return daily.NewPartnerLinkBoxRoutine()
 
 	// 2. Farming
 	case "herb_garden":

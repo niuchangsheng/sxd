@@ -1271,23 +1271,23 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 				remain = maxWuFaDrawsPerRun
 			}
 
-			// 3. 逐次感悟：优先免费次数，其次使用已持有的冥想书卷 (item 8641，
-			//    对应 field_type 3)。冥想书卷为非元宝道具，绝不触发元宝档。
+			// 3. 逐次感悟：优先免费次数，其次使用已持有的冥想道具。
+			//    线上实测道具映射：field 3 <- 冥想书卷 8641，field 1 <- 冥想竹简 8358，
+			//    field 7 <- 冥想玄简 8700。全部为非元宝道具，绝不触发元宝档。
 			for draw := 0; draw < remain; draw++ {
 				if ctx.Err() != nil {
 					return nil
 				}
 				fieldType, drawType, ok := selectWuFaFreeDraw(panel)
 				if !ok {
-					// 免费次数用尽：仅在持有冥想书卷时继续，否则停止。
-					if !hasWuFaItem(panel, wuFaMeditationBookItem) {
-						slog.Info("悟法领域无免费次数且无冥想书卷，停止抽卡",
+					fieldType, drawType, ok = selectWuFaItemDraw(panel)
+					if !ok {
+						slog.Info("悟法领域无免费次数且无冥想道具，停止抽卡",
 							"role_id", session.RoleID(),
 							"rest_times", panel.RestTimes,
 						)
 						return nil
 					}
-					fieldType, drawType = wuFaMeditationFieldType, protocol.WuFaDrawOne
 				}
 
 				drawPkt := protocol.BuildWuFaDrawCardPacket(fieldType, drawType)
@@ -1372,13 +1372,35 @@ const (
 	wuFaCallTimeout = 8 * time.Second
 	// wuFaDailyTaskMeditation 每日活跃度任务「每日悟法领域冥想」编号
 	wuFaDailyTaskMeditation int32 = 69
-	// wuFaMeditationBookItem 冥想书卷 (入门通玄秘馆)，线上实测对应 field_type 3
+	// wuFaMeditationBookItem 冥想书卷 (对应 field_type 3)
 	wuFaMeditationBookItem int32 = 8641
-	// wuFaMeditationFieldType 冥想书卷对应的秘馆类型
-	wuFaMeditationFieldType int32 = 3
-	// maxWuFaDrawsPerRun 单轮最多感悟次数，避免单次调度长时间占用会话
-	maxWuFaDrawsPerRun = 10
+	// wuFaMeditationBambooItem 冥想竹简 (对应 field_type 1)
+	wuFaMeditationBambooItem int32 = 8358
+	// wuFaMeditationXuanItem 冥想玄简 (对应 field_type 7)
+	wuFaMeditationXuanItem int32 = 8700
+	// maxWuFaDrawsPerRun 单轮最多感悟次数 (每日任务上限 20)
+	maxWuFaDrawsPerRun = 20
 )
+
+// wuFaItemFields 冥想道具与秘馆类型映射 (线上实测)。
+var wuFaItemFields = []struct {
+	fieldType int32
+	itemID    int32
+}{
+	{3, wuFaMeditationBookItem},
+	{1, wuFaMeditationBambooItem},
+	{7, wuFaMeditationXuanItem},
+}
+
+// selectWuFaItemDraw 选择可用冥想道具对应的秘馆，优先书卷→竹简→玄简。
+func selectWuFaItemDraw(panel *protocol.WuFaPanel) (int32, uint8, bool) {
+	for _, m := range wuFaItemFields {
+		if hasWuFaItem(panel, m.itemID) {
+			return m.fieldType, protocol.WuFaDrawOne, true
+		}
+	}
+	return 0, 0, false
+}
 
 // hasWuFaItem 判断面板资源中指定道具是否有余量。
 func hasWuFaItem(panel *protocol.WuFaPanel, itemID int32) bool {

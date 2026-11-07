@@ -287,3 +287,100 @@ func BuildPartnerLinkActivateResultPacket(res PartnerLinkActivateResult) *Packet
 	}
 	return NewPacket(ActionIDPartnerLinkActivate, w.Bytes())
 }
+
+// 天缘录缘魂宝箱商店 (Mod_PartnerLink_Base Act 2/3)。
+const (
+	// ActionIDPartnerLinkShop 查询缘魂宝箱商店 (Action 2 -> 0x01220002)
+	ActionIDPartnerLinkShop uint32 = 0x01220002
+	// ActionIDPartnerLinkBuy 购买缘魂宝箱 (Action 3 -> 0x01220003)
+	ActionIDPartnerLinkBuy uint32 = 0x01220003
+)
+
+// 缘魂宝箱结算货币 (Mod_PartnerLink_Base)。
+const (
+	// PartnerLinkMoneyDaoYuan 道缘
+	PartnerLinkMoneyDaoYuan uint8 = 8
+	// PartnerLinkMoneyCoin 铜钱
+	PartnerLinkMoneyCoin uint8 = 9
+	// PartnerLinkMoneyIngot 元宝 (自动化永不购买)
+	PartnerLinkMoneyIngot uint8 = 10
+)
+
+// PartnerLinkResultNotBuyCount 可购买次数不足 (线上实测)。
+const PartnerLinkResultNotBuyCount uint8 = 13
+
+// PartnerLinkBox 表示商店中的一个缘魂宝箱档位。
+type PartnerLinkBox struct {
+	// BoxType 宝箱类型
+	BoxType uint8
+	// OnceNum 单次开启数量
+	OnceNum int32
+	// Times 剩余可购买次数
+	Times int32
+	// TotalTimes 每日总次数
+	TotalTimes int32
+	// MoneyType 结算货币 (8 道缘 / 9 铜钱 / 10 元宝)
+	MoneyType uint8
+	// MoneyNum 单价
+	MoneyNum int32
+}
+
+// BuildPartnerLinkShopPacket 构造缘魂宝箱商店查询封包。
+func BuildPartnerLinkShopPacket() *Packet {
+	pkt := NewPacket(ActionIDPartnerLinkShop, []byte{0, 0, 0, 0})
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// BuildPartnerLinkBuyPacket 构造购买缘魂宝箱封包。
+func BuildPartnerLinkBuyPacket(boxType uint8) *Packet {
+	return NewPacket(ActionIDPartnerLinkBuy, []byte{boxType})
+}
+
+// ParsePartnerLinkShopResult 解析缘魂宝箱商店回包。
+func ParsePartnerLinkShopResult(payload []byte) ([]PartnerLinkBox, error) {
+	r := NewReader(payload)
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("缘魂宝箱数量读取失败: %w", err)
+	}
+	boxes := make([]PartnerLinkBox, 0, count)
+	for i := 0; i < int(count); i++ {
+		var b PartnerLinkBox
+		if b.BoxType, err = r.ReadUint8(); err != nil {
+			return nil, fmt.Errorf("宝箱[%d]类型读取失败: %w", i, err)
+		}
+		if b.OnceNum, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("宝箱[%d]单次数量读取失败: %w", i, err)
+		}
+		if b.Times, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("宝箱[%d]剩余次数读取失败: %w", i, err)
+		}
+		if b.TotalTimes, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("宝箱[%d]总次数读取失败: %w", i, err)
+		}
+		if b.MoneyType, err = r.ReadUint8(); err != nil {
+			return nil, fmt.Errorf("宝箱[%d]货币类型读取失败: %w", i, err)
+		}
+		if b.MoneyNum, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("宝箱[%d]单价读取失败: %w", i, err)
+		}
+		boxes = append(boxes, b)
+	}
+	return boxes, nil
+}
+
+// BuildPartnerLinkShopResultPacket 构造缘魂宝箱商店回包，供离线 mock 与单测使用。
+func BuildPartnerLinkShopResultPacket(boxes []PartnerLinkBox) *Packet {
+	w := NewWriter()
+	w.WriteUint16(uint16(len(boxes)))
+	for _, b := range boxes {
+		w.WriteUint8(b.BoxType)
+		w.WriteInt32(b.OnceNum)
+		w.WriteInt32(b.Times)
+		w.WriteInt32(b.TotalTimes)
+		w.WriteUint8(b.MoneyType)
+		w.WriteInt32(b.MoneyNum)
+	}
+	return NewPacket(ActionIDPartnerLinkShop, w.Bytes())
+}

@@ -105,6 +105,12 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return social.NewJieYuanBoxRoutine(social.DefaultJieYuanBoxConfig())
 	case "spirit_pool":
 		return farming.NewSpiritPoolRoutine(farming.DefaultSpiritPoolConfig())
+	case "wufa_field":
+		return minigame.NewWuFaRoutine()
+	case "pilgrimage":
+		return farming.NewPilgrimageRoutine()
+	case "demon_tower":
+		return dungeon.NewDemonTowerRoutine()
 	default:
 		return nil
 	}

@@ -109,7 +109,8 @@
 | 五福临门（任务 46） | 当日已被外部操作完成 10/10；`is_five_blessings_open` 在 22:50 仍返回关闭，说明活动按时段开放，例程无需改动 |
 | 回忆之境（任务 67） | 主面板可读（3 个区域），`backtrack` 需要具体回忆角色 id，暂未确认触发条件 |
 | 仙盟上香（任务 49） | Module 178/179 请求全部超时，角色可能未加入仙盟 |
-| **轮回净地（任务 70）** | **已实现 `rebirth_land`**：`one_click_quick_free_back (852/6)` 免费领取，线上实测 +20、`ingot_delta=0` |
+| **轮回净地（任务 70）** | **已实现 `rebirth_land`**：`one_click_quick_free_back (852/6)` 免费领取，线上实测 +20、`ingot_delta=0`；但任务 70 未计分（可能绑定 `quick_auto_back`），待对齐 |
+| **兵法（任务 54）** | **已实现 `tactics_water`**：任务描述为「每次购买圣水 +5」。`buy_item (299/2, type=0 湛蓝圣水)` 用铜钱（约 200 万/滴），线上实测 25 次 +125、`ingot_delta=0`；黄金圣水 (type=1) 为元宝档，永不调用 |
 | 纪元湮劫（任务 71） | Module 855 仅 `get_mission_list`；战斗在 853 (无尽洞天) 的 `fight` 流程，需要章节/队伍上下文，暂未实现 |
 | 劫镖（任务 83） | 已修正协议语义（Act 2=rob、Act 12=open_panel）并解析结果码；`search` 重搜可能消耗 30 元宝，自动化只在已存在目标时劫镖，否则跳过 |
 
@@ -140,6 +141,21 @@
 - 新增 `internal/protocol/era_rebirth_land.go`、`internal/routines/daily/rebirth_land.go`：
   轮回净地免费一键领取挂机奖励（+20/日），注册并写入配置。
 - 修正劫镖协议语义与结果码解析（`feature_packets.go` / `pvp.go`），并加单测。
+- 新增 `internal/protocol/tactics.go`、`internal/routines/daily/tactics_water.go`：
+  铜钱购买湛蓝圣水完成兵法活跃度（+125/日），注册并写入配置。
+- `wufa_field` 扩展冥想道具映射：field 1↔冥想竹简 8358、field 7↔冥想玄简 8700
+  （此前只用了 field 3↔冥想书卷 8641），单轮上限提升到 20 次；线上实测 +170。
+- 新增 `partner_link_box` 例程与缘魂宝箱协议（290/2、290/3）：
+  道缘/铜钱购买宝箱（+15/日），元宝档永不购买。
+
+## 6. 新的一天（2026-11-07）实测备注
+
+- 活跃度在 00:00 重置；完整跑完一轮 `s0.yaml` 后为 610。
+- 当晚补分：兵法 +125、悟法冥想道具 +170、缘魂宝箱 +15、召唤仙桃 +5 → **945**。
+- 当日剩余主要缺口均受资源/场景限制：神龙上供 50（祭坛临时格被 9 颗失效龙珠占满，收取返回
+  `INVALID_DRAGONBALL(2)`）、多宝山 100（`dig_num=0`）、五行天仪 50（免费/铜钱次数为 0）、
+  五福临门 50（活动关闭）、阶位赛 100（战斗胜负）、琳琅阁 30/好礼 20/宗门 20/纪元 20（入口未打通）。
+- 兵法任务描述经官方数据确认：「兵法中每次购买圣水获得活跃度」，不是浇灌。
 - 单元测试：`daily_activity_test.go`、`fate_hunt_test.go`、`fate_hunt_test.go`(例程)、
   `forbidden_book_test.go`、`minigame_test.go`。
 

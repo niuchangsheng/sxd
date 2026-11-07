@@ -31,8 +31,8 @@ const (
 	ModuleEudemonsFeed      uint16 = 694 // 幻兽灵石喂养模块 (0x02B6)
 	ModuleEudemonsDeploy    uint16 = 695 // 幻兽阵位出战模块 (0x02B7)
 	ModuleEudemonsInvade    uint16 = 696 // 山海幻兽入侵副本战斗模块 (0x02B8)
-	ModuleDemonTower        uint16 = 701 // 锁妖塔/镇妖塔与幻兽主面板模块 (0x02BD)
-	ModuleDemonBuff         uint16 = 705 // 锁妖塔战斗加成与状态模块 (0x02C1)
+	ModuleStateRecord       uint16 = 701 // 状态记录模块 Mod_StateRecord_Base (0x02BD)
+	ModuleDemonTower        uint16 = 705 // 锁妖塔/镇妖塔模块 Mod_RepressDemonTower_Base (0x02C1)
 	ModuleLingDaoComprehend uint16 = 711 // 灵道初解领悟与领域技能装配模块 (0x02C7)
 	ModuleEraTravel         uint16 = 850 // 山河游历骰子与寻宝模块 (0x0352)
 )
@@ -157,14 +157,14 @@ const (
 	// ActionIDXunXianClaimChest 领取寻仙之路通关宝箱 (Module 466, Action 13 -> 0x01D2000D)
 	ActionIDXunXianClaimChest uint32 = 0x01D2000D
 
-	// ActionIDDemonTowerEnter 进入挑战锁妖塔指定层 (Module 701, Action 1 -> 0x02BD0001)
-	ActionIDDemonTowerEnter uint32 = 0x02BD0001
-	// ActionIDDemonTowerBuff 锁妖塔战斗Buff选择 (Module 705, Action 6 -> 0x02C10006)
-	ActionIDDemonTowerBuff uint32 = 0x02C10006
-	// ActionIDDemonTowerBattle 锁妖塔战斗挑战/结算 (Module 705, Action 1 -> 0x02C10001)
-	ActionIDDemonTowerBattle uint32 = 0x02C10001
-	// ActionIDDemonTowerDeploy 锁妖塔阵型校验 (Module 312, Action 38 -> 0x01380026)
-	ActionIDDemonTowerDeploy uint32 = 0x01380026
+	// ActionIDDemonTowerPanel 查询锁妖塔主面板 (Module 705, Action 0 -> 0x02C10000)
+	ActionIDDemonTowerPanel uint32 = 0x02C10000
+	// ActionIDDemonTowerChallenge 挑战锁妖塔指定层 (Module 705, Action 1 -> 0x02C10001)
+	ActionIDDemonTowerChallenge uint32 = 0x02C10001
+	// ActionIDDemonTowerRank 查询锁妖塔排行榜与自身层数 (Module 705, Action 5 -> 0x02C10005)
+	ActionIDDemonTowerRank uint32 = 0x02C10005
+	// ActionIDDemonTowerBaseInfo 查询锁妖塔赛季开放状态 (Module 705, Action 8 -> 0x02C10008)
+	ActionIDDemonTowerBaseInfo uint32 = 0x02C10008
 
 	// ActionIDEraTravelGetState 查询山河纪元游历状态 (Module 850, Action 4 -> 0x03520004)
 	ActionIDEraTravelGetState uint32 = 0x03520004

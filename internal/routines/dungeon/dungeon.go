@@ -1390,7 +1390,22 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 	)
 }
 
-// NewDemonTowerRoutine 构造锁妖塔与怪物试炼挑战任务 (Feature 9: 锁妖塔)。
+// 锁妖塔单轮挑战上限。官方客户端最多展示 40 层，超过后不再追加下一层。
+const demonTowerMaxChallengesPerRun = 40
+
+// demonTowerCallTimeout 锁妖塔单次请求超时。
+const demonTowerCallTimeout = 8 * time.Second
+
+// NewDemonTowerRoutine 构造锁妖塔挑战任务 (Feature 9: 锁妖塔)。
+//
+// 协议对齐 com.protocols.Mod_RepressDemonTower_Base (Module 705):
+//
+//	panel_info    Act 0 0x02C10000 request=[]
+//	challenge     Act 1 0x02C10001 request=[Int layer_id]
+//	get_base_info Act 8 0x02C10008 request=[] -> [Byte isSeasonTime]
+//
+// 每轮先查询面板，按 layer_list 中最高层 +1 作为下一层目标，
+// 依据 challenge 回包结果码决定继续、领取次数耗尽退出或熔断。
 func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
 		"demon_tower",
@@ -1418,62 +1433,185 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 1. 查询锁妖塔当前进度与层级 (Mod 701, Act 0)
-			layer := int32(3)
-			trialID := int32(31)
-			prevAct := protocol.ActionIDTownEnter
-
-			panelPkt := protocol.BuildHuanshouPanelPacket(prevAct)
-			pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
-			panelResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDHuanshouPanel)
-			pCancel()
-			if pErr != nil || panelResp == nil || len(panelResp.Payload) == 0 {
-				slog.Info("锁妖塔功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", pErr)
+			// 1. 查询赛季开放状态，未开赛时面板请求无意义。
+			baseCtx, baseCancel := context.WithTimeout(ctx, demonTowerCallTimeout)
+			baseResp, baseErr := session.Call(baseCtx, protocol.BuildDemonTowerBaseInfoPacket(), protocol.ActionIDDemonTowerBaseInfo)
+			baseCancel()
+			if baseErr != nil || baseResp == nil {
+				slog.Info("锁妖塔赛季状态查询失败，跳过", "role_id", session.RoleID(), "err", baseErr)
 				return nil
 			}
-			if l, t, err := protocol.ParseDemonTowerPanelResult(panelResp.Payload); err == nil {
-				layer = l
-				trialID = t
+			inSeason, parseErr := protocol.ParseDemonTowerBaseInfoResult(baseResp.Payload)
+			if parseErr != nil {
+				slog.Info("锁妖塔赛季状态解析失败，跳过", "role_id", session.RoleID(), "err", parseErr)
+				return nil
 			}
-			prevAct = protocol.ActionIDHuanshouPanel
-
-			// 2. 发送进入锁妖塔当前层指令 (Mod 701, Act 1)
-			enterPkt := protocol.BuildDemonTowerEnterPacket(layer, trialID, prevAct)
-			callCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-			resp, err := session.Call(callCtx, enterPkt, protocol.ActionIDDemonTowerEnter)
-			cancel()
-
-			if err != nil || resp == nil {
-				slog.Warn("进入锁妖塔超时或未开放", "err", err)
+			if !inSeason {
+				slog.Info("锁妖塔当前不在赛季时间，跳过", "role_id", session.RoleID())
 				return nil
 			}
 
-			// 3. 选择战斗 Buff (Mod 705, Act 6)
-			buffPkt := protocol.BuildDemonTowerBuffPacket(1, protocol.ActionIDDemonTowerEnter)
-			bCtx, bCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(bCtx, buffPkt, protocol.ActionIDDemonTowerBuff)
-			bCancel()
+			// 2. 循环挑战：每轮以最新面板数据计算下一层目标，成功则继续。
+			challenged := 0
+			var lastTarget int32
+			for round := 0; round < demonTowerMaxChallengesPerRun; round++ {
+				if ctx.Err() != nil {
+					return nil
+				}
 
-			// 4. 校验并同步阵型 (Mod 312, Act 38)
-			deployPkt := protocol.NewPacket(protocol.ActionIDDemonTowerDeploy, protocol.NewWriter().WriteUint32(protocol.ActionIDDemonTowerBuff).Bytes())
-			dCtx, dCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(dCtx, deployPkt, protocol.ActionIDDemonTowerDeploy)
-			dCancel()
+				panel, err := fetchDemonTowerPanel(ctx, session)
+				if err != nil {
+					slog.Info("锁妖塔面板查询失败，结束本轮", "role_id", session.RoleID(), "err", err)
+					return nil
+				}
+				switch panel.Result {
+				case protocol.DemonTowerResultSuccess:
+					// 继续执行
+				case protocol.DemonTowerResultFunctionNoOpen:
+					slog.Info("锁妖塔功能未开放，跳过", "role_id", session.RoleID(), "result", panel.Result)
+					return nil
+				default:
+					slog.Info("锁妖塔面板返回失败结果码，结束本轮",
+						"role_id", session.RoleID(), "result", panel.Result, "result_text", demonTowerResultText(panel.Result))
+					return nil
+				}
 
-			// 5. 触发实际战斗结算 (Mod 705, Act 1: 依据抓包对齐)
-			battlePkt := protocol.BuildDemonTowerBattlePacket(protocol.ActionIDDemonTowerDeploy)
-			batCtx, batCancel := context.WithTimeout(ctx, 8*time.Second)
-			batResp, batErr := session.Call(batCtx, battlePkt, protocol.ActionIDDemonTowerBattle)
-			batCancel()
+				if panel.NowTicketNum <= 0 {
+					slog.Info("锁妖塔挑战次数已耗尽", "role_id", session.RoleID(), "challenged", challenged)
+					return scheduler.ErrAttemptsExhausted
+				}
 
-			if batErr == nil && batResp != nil {
-				slog.Info("锁妖塔战斗结算完成", "role_id", session.RoleID(), "layer", layer, "trial_id", trialID)
-			} else {
-				slog.Info("锁妖塔挑战指令已下发", "role_id", session.RoleID(), "layer", layer, "trial_id", trialID)
+				target := panel.NextLayerID()
+				// 跨阶次时 layer_list 可能清空且 now_finish_layer 归零，
+				// 此时用排行榜中的赛季累计层数 self_layer 兜底，避免误从第 1 层重打。
+				if len(panel.LayerList) == 0 && panel.NowFinishLayer <= 0 {
+					if selfLayer, rankErr := fetchDemonTowerSelfLayer(ctx, session); rankErr == nil && selfLayer >= target {
+						target = selfLayer + 1
+					}
+				}
+				if challenged > 0 && target == lastTarget {
+					slog.Warn("锁妖塔通关后进度未推进，结束本轮避免重复消耗次数",
+						"role_id", session.RoleID(), "layer", target, "challenged", challenged)
+					return nil
+				}
+				lastTarget = target
+
+				result, err := challengeDemonTowerLayer(ctx, session, target)
+				if err != nil {
+					slog.Info("锁妖塔挑战请求失败，结束本轮",
+						"role_id", session.RoleID(), "layer", target, "err", err)
+					return nil
+				}
+
+				if result != protocol.DemonTowerResultSuccess {
+					slog.Info("锁妖塔挑战未成功，结束本轮",
+						"role_id", session.RoleID(), "layer", target,
+						"result", result, "result_text", demonTowerResultText(result),
+						"challenged", challenged)
+					switch result {
+					case protocol.DemonTowerResultNotEnoughTicket:
+						return scheduler.ErrAttemptsExhausted
+					case protocol.DemonTowerResultItemPackFull:
+						return scheduler.ErrBagFull
+					case protocol.DemonTowerResultNotEnoughIngot, protocol.DemonTowerResultBuyNumError:
+						// 本实现从不购买次数；出现元宝/购买类错误说明服务端状态异常，记录后熔断。
+						return scheduler.ErrConditionNotMet
+					default:
+						// LAYER_ERROR 表示已到当前阶层的层数上限，属正常收尾；其余失败码本轮退出。
+						return nil
+					}
+				}
+
+				challenged++
+				slog.Info("锁妖塔挑战成功",
+					"role_id", session.RoleID(), "layer", target,
+					"tickets_before", panel.NowTicketNum, "challenged", challenged)
+
+				if jitter != nil {
+					_ = jitter.Wait(ctx)
+				}
 			}
+
+			slog.Info("锁妖塔单轮挑战达到上限，等待下次调度",
+				"role_id", session.RoleID(), "challenged", challenged)
 			return nil
 		},
 	)
+}
+
+// fetchDemonTowerPanel 查询并解析锁妖塔主面板。
+func fetchDemonTowerPanel(ctx context.Context, session *client.RoleSession) (*protocol.DemonTowerPanel, error) {
+	callCtx, cancel := context.WithTimeout(ctx, demonTowerCallTimeout)
+	defer cancel()
+	resp, err := session.Call(callCtx, protocol.BuildDemonTowerPanelPacket(), protocol.ActionIDDemonTowerPanel)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("锁妖塔面板回包为空")
+	}
+	return protocol.ParseDemonTowerPanelResult(resp.Payload)
+}
+
+// fetchDemonTowerSelfLayer 查询锁妖塔排行榜中的赛季累计通关层数。
+func fetchDemonTowerSelfLayer(ctx context.Context, session *client.RoleSession) (int32, error) {
+	callCtx, cancel := context.WithTimeout(ctx, demonTowerCallTimeout)
+	defer cancel()
+	resp, err := session.Call(callCtx, protocol.BuildDemonTowerRankPacket(), protocol.ActionIDDemonTowerRank)
+	if err != nil {
+		return 0, err
+	}
+	if resp == nil {
+		return 0, errors.New("锁妖塔排行榜回包为空")
+	}
+	result, selfLayer, err := protocol.ParseDemonTowerRankSelfLayer(resp.Payload)
+	if err != nil {
+		return 0, err
+	}
+	if result != protocol.DemonTowerResultSuccess {
+		return 0, fmt.Errorf("锁妖塔排行榜结果码 %d", result)
+	}
+	return selfLayer, nil
+}
+
+// challengeDemonTowerLayer 挑战指定层并返回业务结果码。
+func challengeDemonTowerLayer(ctx context.Context, session *client.RoleSession, layerID int32) (uint8, error) {
+	callCtx, cancel := context.WithTimeout(ctx, demonTowerCallTimeout)
+	defer cancel()
+	resp, err := session.Call(callCtx, protocol.BuildDemonTowerChallengePacket(layerID), protocol.ActionIDDemonTowerChallenge)
+	if err != nil {
+		return 0, err
+	}
+	if resp == nil {
+		return 0, errors.New("锁妖塔挑战回包为空")
+	}
+	return protocol.ParseDemonTowerChallengeResult(resp.Payload)
+}
+
+// demonTowerResultText 返回锁妖塔结果码的中文语义文本。
+func demonTowerResultText(result uint8) string {
+	switch result {
+	case protocol.DemonTowerResultSuccess:
+		return "成功"
+	case protocol.DemonTowerResultFailed:
+		return "失败"
+	case protocol.DemonTowerResultFunctionNoOpen:
+		return "功能未开放"
+	case protocol.DemonTowerResultNotEnoughTicket:
+		return "挑战次数不足"
+	case protocol.DemonTowerResultLayerError:
+		return "层数错误"
+	case protocol.DemonTowerResultItemPackFull:
+		return "背包已满"
+	case protocol.DemonTowerResultRaceStepError:
+		return "赛季阶段错误"
+	case protocol.DemonTowerResultNotEnoughIngot:
+		return "元宝不足"
+	case protocol.DemonTowerResultBuyNumError:
+		return "购买次数错误"
+	default:
+		return "未知结果码"
+	}
 }
 
 // NewQiMenRoutine 构造奇门遁甲阵法星图升级与布设任务 (Feature 4: 奇门遁甲)。

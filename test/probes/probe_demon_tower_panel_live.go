@@ -103,6 +103,31 @@ func main() {
 		}
 		slog.Info("get_base_info", "isSeasonTime", int8(payload[0]))
 	})
+	query(ctx, sess, 0x02C10005, "repress_demon_tower.get_rank", func(payload []byte) {
+		r := protocol.NewReader(payload)
+		result, err := r.ReadUint8()
+		if err != nil {
+			slog.Error("get_rank 读取 result 失败", "err", err)
+			return
+		}
+		var fields [7]int32
+		for i := range fields {
+			if fields[i], err = r.ReadInt32(); err != nil {
+				slog.Error("get_rank 读取字段失败", "index", i, "err", err)
+				return
+			}
+		}
+		slog.Info("get_rank 前部字段",
+			"result", result,
+			"self_layer", fields[0],
+			"self_round", fields[1],
+			"self_finish_ts", fields[2],
+			"role_id", fields[3],
+			"head_portrait_id", fields[4],
+			"rim_id", fields[5],
+			"rank_award_id", fields[6],
+		)
+	})
 }
 
 func query(ctx context.Context, sess *client.RoleSession, actionID uint32, name string, parse func([]byte)) {

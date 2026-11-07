@@ -91,14 +91,20 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDXunXianChallenge, pXunXian.ActionID)
 	}
 
-	// 9. 锁妖塔 (Module 701, Action 1 & Module 705, Action 1)
-	pDemon := protocol.BuildDemonTowerEnterPacket(3, 31, 0)
-	if pDemon.ActionID != protocol.ActionIDDemonTowerEnter {
-		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDDemonTowerEnter, pDemon.ActionID)
+	// 9. 锁妖塔 (Module 705, Action 0 面板 / Action 1 挑战)
+	pDemon := protocol.BuildDemonTowerPanelPacket()
+	if pDemon.ActionID != protocol.ActionIDDemonTowerPanel || len(pDemon.Payload) != 0 {
+		t.Errorf("锁妖塔面板封包不匹配: action=0x%08X payload_len=%d", pDemon.ActionID, len(pDemon.Payload))
 	}
-	pDemonBattle := protocol.BuildDemonTowerBattlePacket(0)
-	if pDemonBattle.ActionID != protocol.ActionIDDemonTowerBattle {
-		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDDemonTowerBattle, pDemonBattle.ActionID)
+	pDemonChallenge := protocol.BuildDemonTowerChallengePacket(5)
+	if pDemonChallenge.ActionID != protocol.ActionIDDemonTowerChallenge {
+		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDDemonTowerChallenge, pDemonChallenge.ActionID)
+	}
+	if pDemonChallenge.HasPrevAct {
+		t.Error("锁妖塔 challenge 不得携带 PrevAct 尾部 (会覆盖层号)")
+	}
+	if len(pDemonChallenge.Payload) != 4 {
+		t.Errorf("锁妖塔 challenge 载荷应为 1 个 Int (4 字节), 实际 %d", len(pDemonChallenge.Payload))
 	}
 
 	// 10. 山河游历 (Module 850, Action 0)

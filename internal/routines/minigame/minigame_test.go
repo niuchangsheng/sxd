@@ -1010,3 +1010,27 @@ func TestHasWuFaItem(t *testing.T) {
 		t.Fatal("空面板应判定为无余量")
 	}
 }
+
+func TestSelectWuFaItemDraw(t *testing.T) {
+	panel := &protocol.WuFaPanel{Items: []protocol.WuFaItemState{
+		{ItemID: 8358, ItemNum: 5},
+		{ItemID: 8700, ItemNum: 0},
+	}}
+	if field, drawType, ok := selectWuFaItemDraw(panel); !ok || field != 1 || drawType != protocol.WuFaDrawOne {
+		t.Fatalf("expected field 1 via bamboo, got field=%d type=%d ok=%v", field, drawType, ok)
+	}
+	panel.Items = []protocol.WuFaItemState{{ItemID: 8700, ItemNum: 2}}
+	if field, _, ok := selectWuFaItemDraw(panel); !ok || field != 7 {
+		t.Fatalf("expected field 7 via xuan, got field=%d ok=%v", field, ok)
+	}
+	panel.Items = []protocol.WuFaItemState{
+		{ItemID: 8641, ItemNum: 1}, {ItemID: 8358, ItemNum: 5},
+	}
+	if field, _, ok := selectWuFaItemDraw(panel); !ok || field != 3 {
+		t.Fatalf("expected book priority field 3, got field=%d ok=%v", field, ok)
+	}
+	panel.Items = nil
+	if _, _, ok := selectWuFaItemDraw(panel); ok {
+		t.Fatal("expected no item draw")
+	}
+}
