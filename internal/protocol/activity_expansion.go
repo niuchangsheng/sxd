@@ -86,12 +86,14 @@ const (
 
 // 幻境修炼动作 ID。
 const (
-	ActionIDPartnerPracticeInfo   uint32 = 0x01320000
-	ActionIDPartnerPracticeSelect uint32 = 0x01320001
-	ActionIDPartnerPracticeStart  uint32 = 0x01320002
-	ActionIDPartnerPracticeSpeed  uint32 = 0x01320003
-	ActionIDPartnerPracticeStop   uint32 = 0x01320004
-	ActionIDPartnerPracticeFight  uint32 = 0x01320009
+	ActionIDPartnerPracticeInfo       uint32 = 0x01320000
+	ActionIDPartnerPracticeSelect     uint32 = 0x01320001
+	ActionIDPartnerPracticeStart      uint32 = 0x01320002
+	ActionIDPartnerPracticeSpeed      uint32 = 0x01320003
+	ActionIDPartnerPracticeStop       uint32 = 0x01320004
+	ActionIDPartnerPracticeEnterFight uint32 = 0x01320005
+	ActionIDPartnerPracticeCallMirror uint32 = 0x01320006
+	ActionIDPartnerPracticeFight      uint32 = 0x01320009
 )
 
 // 幻境修炼结果码 (Module 306)。
@@ -344,6 +346,21 @@ func BuildPartnerPracticeStartPacket() *Packet {
 // BuildPartnerPracticeStopPacket 构造停止/结算修炼封包。
 func BuildPartnerPracticeStopPacket() *Packet {
 	return NewPacket(ActionIDPartnerPracticeStop, nil)
+}
+
+// BuildPartnerPracticeEnterFightPacket 构造进入修炼战斗封包 (306/5)。
+func BuildPartnerPracticeEnterFightPacket() *Packet {
+	return NewPacket(ActionIDPartnerPracticeEnterFight, nil)
+}
+
+// BuildPartnerPracticeCallMirrorPacket 构造召唤镜像封包 (306/6)。
+func BuildPartnerPracticeCallMirrorPacket() *Packet {
+	return NewPacket(ActionIDPartnerPracticeCallMirror, nil)
+}
+
+// BuildPartnerPracticeFightPacket 构造修炼战斗封包 (306/9)。
+func BuildPartnerPracticeFightPacket() *Packet {
+	return NewPacket(ActionIDPartnerPracticeFight, nil)
 }
 
 // BuildPartnerPracticeSelectPacket 构造选择修炼伙伴封包。

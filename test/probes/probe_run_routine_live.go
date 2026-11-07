@@ -155,6 +155,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return minigame.NewBaiLianRoutine()
 	case "soul_hunt":
 		return minigame.NewSoulHuntRoutine()
+	case "era_yanjie":
+		return minigame.NewEraYanjieRoutine()
 	case "era_creation":
 		return minigame.NewEraCreationRoutine()
 	case "partner_practice":

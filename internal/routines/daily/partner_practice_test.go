@@ -32,8 +32,8 @@ func TestPartnerPracticeRoutine_StartsPractice(t *testing.T) {
 	}
 }
 
-func TestPartnerPracticeRoutine_FinishedThenSettle(t *testing.T) {
-	var stopCalls atomic.Int32
+func TestPartnerPracticeRoutine_FinishedThenFight(t *testing.T) {
+	var fightCalls atomic.Int32
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDPartnerPracticeInfo:
@@ -42,10 +42,13 @@ func TestPartnerPracticeRoutine_FinishedThenSettle(t *testing.T) {
 		case protocol.ActionIDPartnerPracticeStart:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
 				[]byte{protocol.PartnerPracticeFinished, 0, 0, 0, 0}))
-		case protocol.ActionIDPartnerPracticeStop:
-			stopCalls.Add(1)
+		case protocol.ActionIDPartnerPracticeEnterFight:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
 				[]byte{protocol.PartnerPracticeSuccess}))
+		case protocol.ActionIDPartnerPracticeFight:
+			fightCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.PartnerPracticeSuccess, 0, 0, 0}))
 		}
 	})
 	defer sess.Close()
@@ -53,8 +56,8 @@ func TestPartnerPracticeRoutine_FinishedThenSettle(t *testing.T) {
 	if err := NewPartnerPracticeRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("partner practice: %v", err)
 	}
-	if stopCalls.Load() != 1 {
-		t.Fatalf("FINISHED 后应结算，stop calls = %d", stopCalls.Load())
+	if fightCalls.Load() != 1 {
+		t.Fatalf("FINISHED 后应进入镜像战斗，fight calls = %d", fightCalls.Load())
 	}
 }
 

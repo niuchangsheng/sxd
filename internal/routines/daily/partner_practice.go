@@ -71,29 +71,41 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 				slog.Info("幻境修炼已开始", "role_id", session.RoleID(), "result", code)
 				return nil
 			case protocol.PartnerPracticeFinished:
-				// 修炼已完成，停止以结算免费收益。
-				stopResp := call(protocol.BuildPartnerPracticeStopPacket(), protocol.ActionIDPartnerPracticeStop)
-				if stopResp == nil {
+				// 修炼已完成：进入镜像战斗领取收益 (306/5 -> 306/9)。
+				enterResp := call(protocol.BuildPartnerPracticeEnterFightPacket(), protocol.ActionIDPartnerPracticeEnterFight)
+				if enterResp == nil {
 					return nil
 				}
-				stopCode, sErr := protocol.ParsePartnerPracticeResult(stopResp.Payload)
-				if sErr != nil {
-					slog.Warn("幻境修炼结算回包解析失败", "role_id", session.RoleID(), "err", sErr)
+				enterCode, eErr := protocol.ParsePartnerPracticeResult(enterResp.Payload)
+				if eErr != nil {
 					return nil
 				}
-				switch stopCode {
-				case protocol.PartnerPracticeSuccess:
-					slog.Info("幻境修炼已完成并结算", "role_id", session.RoleID())
-					// 结算后立即重新开始，保证持续累积。
-					if again := call(protocol.BuildPartnerPracticeStartPacket(), protocol.ActionIDPartnerPracticeStart); again != nil {
-						if againCode, aErr := protocol.ParsePartnerPracticeResult(again.Payload); aErr == nil {
-							slog.Info("幻境修炼重新开始", "role_id", session.RoleID(),
-								"result", againCode, "result_text", protocol.PartnerPracticeResultText(againCode))
-						}
+				if enterCode != protocol.PartnerPracticeSuccess {
+					slog.Info("幻境修炼进入战斗未成功", "role_id", session.RoleID(),
+						"result", enterCode, "result_text", protocol.PartnerPracticeResultText(enterCode))
+					return nil
+				}
+				fightResp := call(protocol.BuildPartnerPracticeFightPacket(), protocol.ActionIDPartnerPracticeFight)
+				if fightResp == nil {
+					return nil
+				}
+				fightCode, fErr := protocol.ParsePartnerPracticeResult(fightResp.Payload)
+				if fErr != nil {
+					return nil
+				}
+				if fightCode == protocol.PartnerPracticeSuccess {
+					slog.Info("幻境修炼镜像战斗完成", "role_id", session.RoleID(),
+						"battle_bytes", len(fightResp.Payload))
+				} else {
+					slog.Info("幻境修炼镜像战斗未成功", "role_id", session.RoleID(),
+						"result", fightCode, "result_text", protocol.PartnerPracticeResultText(fightCode))
+				}
+				// 尝试重新开始，保证持续累积。
+				if again := call(protocol.BuildPartnerPracticeStartPacket(), protocol.ActionIDPartnerPracticeStart); again != nil {
+					if againCode, aErr := protocol.ParsePartnerPracticeResult(again.Payload); aErr == nil {
+						slog.Info("幻境修炼重新开始", "role_id", session.RoleID(),
+							"result", againCode, "result_text", protocol.PartnerPracticeResultText(againCode))
 					}
-				default:
-					slog.Info("幻境修炼结算未成功", "role_id", session.RoleID(),
-						"result", stopCode, "result_text", protocol.PartnerPracticeResultText(stopCode))
 				}
 				return nil
 			case protocol.PartnerPracticeFuncNoOpen:
