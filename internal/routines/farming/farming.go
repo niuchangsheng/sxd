@@ -154,8 +154,10 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 					"role_id", session.RoleID(), "err", sParseErr)
 			} else {
 				ownedMap := make(map[int32]int32)
+				seedMeta := make(map[int32]protocol.FarmSeedItem, len(seedsRes.Seeds))
 				for _, sItem := range seedsRes.Seeds {
 					ownedMap[sItem.SeedID] = sItem.OwnedCount
+					seedMeta[sItem.SeedID] = sItem
 				}
 				slog.Info("药园种子库存",
 					"role_id", session.RoleID(),
@@ -168,6 +170,30 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				// 购买请求一旦无回包立即终止本轮，避免 PrevAct 链被污染后
 				// 后续播种/采摘全部连续超时。
 				for _, targetSeedID := range []int32{seedID, 169} {
+					meta, ok := seedMeta[targetSeedID]
+					if !ok {
+						slog.Info("药园种子未在商店列表中，跳过购买",
+							"role_id", session.RoleID(), "seed_id", targetSeedID)
+						continue
+					}
+					// 铁律：自动化绝不消耗元宝。种子商店同时存在铜钱/元宝计价档位
+					// (PriceType=3 为铜钱)；只有铜钱计价的种子才允许购买。
+					if meta.PriceType != 3 {
+						slog.Info("药园种子非铜钱计价，跳过购买以免消耗元宝",
+							"role_id", session.RoleID(),
+							"seed_id", targetSeedID,
+							"price_type", meta.PriceType,
+							"price", meta.Price,
+						)
+						continue
+					}
+					slog.Info("药园种子价格",
+						"role_id", session.RoleID(),
+						"seed_id", targetSeedID,
+						"price_type", meta.PriceType,
+						"price", meta.Price,
+						"owned", meta.OwnedCount,
+					)
 					owned := ownedMap[targetSeedID]
 					if owned >= 4 {
 						continue

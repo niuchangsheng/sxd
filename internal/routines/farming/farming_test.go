@@ -298,7 +298,12 @@ func TestHerbGardenRoutine_AbortsOnSilentDrop(t *testing.T) {
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetPlantState, w.Bytes()))
 			case protocol.ActionIDFarmGetSeeds:
 				w := protocol.NewWriter()
-				w.WriteUint16(0)
+				w.WriteUint16(1)      // count
+				w.WriteInt32(176)     // seed_id
+				w.WriteInt32(0)       // owned
+				w.WriteInt32(3)       // price_type = 铜钱
+				w.WriteInt32(1000000) // price
+				w.WriteInt32(0)       // reserved
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetSeeds, w.Bytes()))
 			case protocol.ActionIDFarmBuySeed:
 				buyCalls.Add(1)
@@ -349,6 +354,107 @@ func TestHerbGardenRoutine_AbortsOnSilentDrop(t *testing.T) {
 	c1.Close()
 	c2.Close()
 	serverWg.Wait()
+}
+
+// TestHerbGardenRoutine_SkipsNonCoinSeed 验证非铜钱计价 (可能消耗元宝) 的种子
+// 不会触发购买请求，满足“自动化绝不消耗元宝”铁律。
+func TestHerbGardenRoutine_SkipsNonCoinSeed(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	var buyCalls atomic.Int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(c2)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerLogin:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerLogin, []byte{
+					0x00, 0x00, 0x00, 0x00, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x00, 0x10, 0x85, 0x01,
+				}))
+			case protocol.ActionIDPlayerInitStep1:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep1,
+					[]byte{0x00, 0x00, 0x13, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x13, 0x0f, 0x00, 0x00, 0x13, 0x12}))
+			case protocol.ActionIDPlayerInitStep2:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00}))
+			case protocol.ActionIDPlayerInitStep3:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep3, make([]byte, 8)))
+			case protocol.ActionIDPlayerGetInfo:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerGetInfo, []byte{
+					0x00, 0x09, 0xe6, 0xa2, 0xa6, 0xe4, 0xb8, 0x80, 0xe5, 0x9c, 0xba,
+					0x00, 0x00, 0x01, 0x2c,
+					0x00, 0x00, 0x9a, 0x37,
+					0x00, 0x00, 0x00, 0x08, 0x6f, 0x93, 0xac, 0xf8,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0a, 0xd1,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0f, 0x99,
+					0x00, 0x00, 0x01, 0x2c,
+				}))
+			case protocol.ActionHeartbeat:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+			case protocol.ActionIDSaintAreaStatus:
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.SaintAreaStatusClose)
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDSaintAreaStatus, w.Bytes()))
+			case protocol.ActionIDFarmGetInfo:
+				resp, _ := protocol.BuildFarmGetInfoResultPacket(protocol.FarmGetInfoResult{Fields: []protocol.FarmField{
+					{LandID: 10, State: 1},
+				}})
+				_ = protocol.WritePacket(c2, resp)
+			case protocol.ActionIDFarmGetPlantState:
+				w := protocol.NewWriter()
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetPlantState, w.Bytes()))
+			case protocol.ActionIDFarmGetSeeds:
+				w := protocol.NewWriter()
+				w.WriteUint16(1)
+				w.WriteInt32(176) // seed_id
+				w.WriteInt32(0)   // owned
+				w.WriteInt32(6)   // price_type = 非铜钱
+				w.WriteInt32(30)  // price
+				w.WriteInt32(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetSeeds, w.Bytes()))
+			case protocol.ActionIDFarmBuySeed:
+				buyCalls.Add(1)
+			case protocol.ActionIDFarmPlant:
+				res := protocol.FarmPlantResult{Success: true, LandID: 10, Cooldown: 28800}
+				resp, _ := protocol.BuildFarmPlantResultPacket(res)
+				_ = protocol.WritePacket(c2, resp)
+			case protocol.ActionIDFarmHarvest:
+				res := protocol.FarmHarvestResult{Success: false}
+				resp, _ := protocol.BuildFarmHarvestResultPacket(res)
+				_ = protocol.WritePacket(c2, resp)
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role-farmer-noncoin", RoleName: "非铜钱种子测试", Username: "farmer_noncoin",
+		Hash: "dummy", ServerAddr: "farm-noncoin-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) { return c1, nil },
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("session.Start 失败: %v", err)
+	}
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("会话未进入激活态: %s", session.State())
+	}
+
+	if err := farming.NewHerbGardenRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("药园 Routine 执行失败: %v", err)
+	}
+	if got := buyCalls.Load(); got != 0 {
+		t.Fatalf("非铜钱计价种子不应触发购买请求, 实际 %d 次", got)
+	}
 }
 
 // TestPilgrimageRoutine_Metadata 验证西天取经 Routine 元数据

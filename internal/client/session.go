@@ -449,10 +449,26 @@ func (s *RoleSession) applyPlayerUpdateData(payload []byte) {
 			}
 		case protocol.PlayerPropIngot2026:
 			if u.Value >= 0 && u.Value <= 1_000_000_000_000 {
+				if s.playerState.Ingots != u.Value {
+					slog.Info("元宝余额变更",
+						"role_id", s.cfg.RoleID,
+						"before", s.playerState.Ingots,
+						"after", u.Value,
+						"delta", u.Value-s.playerState.Ingots,
+					)
+				}
 				s.playerState.Ingots = u.Value
 			}
 		case protocol.PlayerPropCoins2026:
 			if u.Value >= 0 && u.Value <= 1_000_000_000_000_000 {
+				if s.playerState.Coins != u.Value {
+					slog.Info("铜钱余额变更",
+						"role_id", s.cfg.RoleID,
+						"before", s.playerState.Coins,
+						"after", u.Value,
+						"delta", u.Value-s.playerState.Coins,
+					)
+				}
 				s.playerState.Coins = u.Value
 			}
 		case protocol.PlayerPropPower2026:

@@ -37,6 +37,7 @@ func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
 	timeout := flag.Duration("timeout", 3*time.Second, "单个 NPC 的等待上限")
 	npcFlag := flag.Int("npc", 0, "直接指定 NPC id (0=从 NPC 结交面板遍历)")
+	enterTown := flag.Int("enter-town", -1, "先 enter_town 到指定城镇 (-1 不切换)")
 	flag.Parse()
 	cfgPath := os.Getenv("SXD_CONFIG")
 	if cfgPath == "" {
@@ -72,6 +73,18 @@ func main() {
 	defer sess.Close()
 	for sess.State() != client.StateActive && ctx.Err() == nil {
 		time.Sleep(100 * time.Millisecond)
+	}
+
+	ps := sess.GetPlayerState()
+	slog.Info("当前场景", "town_id", ps.TownID, "town_map_id", ps.TownMapID)
+	if *enterTown >= 0 {
+		if code, eErr := sess.EnterTown(ctx, int32(*enterTown)); eErr != nil {
+			slog.Warn("enter_town 失败", "town", *enterTown, "err", eErr)
+		} else {
+			slog.Info("enter_town 完成", "town", *enterTown, "result", code)
+		}
+		ps = sess.GetPlayerState()
+		slog.Info("切换后场景", "town_id", ps.TownID, "town_map_id", ps.TownMapID)
 	}
 
 	infoPkt := protocol.BuildNpcFriendshipInfoPacket()

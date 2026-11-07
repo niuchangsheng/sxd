@@ -62,7 +62,7 @@ scheduler:
     saint_practice: true          # 圣域免费修炼房
     dragonball_offer: true        # 神龙普通上供 (铜钱)
     fate_hunt: true               # 免费猎命 + 命宫碎片兑换
-    children_daily: true          # 孩子上学 + 孩子任务奖励 (培养金)
+    children_daily: false         # 孩子功能: 按用户要求关闭
     rebirth_land: true             # 轮回净地免费挂机奖励 (不消耗元宝)
     activity_report: true         # 每日活跃度汇总 (只读)
     tactics_water: true           # 兵法圣水购买 (铜钱，不消耗元宝)
@@ -139,6 +139,7 @@ scheduler:
     star_picture: false           # 法力星图占星: 首次免费但面板 free 计数与扣费不同步, 可能扣 50 元宝, 默认关闭
     era_yanjie: true               # 纪元湮劫每日一关战斗 (免费)
     mystic_hunt: true              # 仙幽猎境入口开放时免费进入
+    lucky_shop: false             # 琳琅阁: 按用户要求禁用 (无实现, 保留开关)
 
   # ── 副本 / 挑战策略 ─────────────────────────────────────────
   dungeon:
