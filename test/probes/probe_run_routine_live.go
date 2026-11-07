@@ -105,10 +105,18 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return social.NewJieYuanBoxRoutine(social.DefaultJieYuanBoxConfig())
 	case "spirit_pool":
 		return farming.NewSpiritPoolRoutine(farming.DefaultSpiritPoolConfig())
+	case "tong_tian_tower":
+		return dungeon.NewTongTianTowerRoutine()
+	case "find_immortal":
+		return minigame.NewFindImmortalRoutine()
 	case "wufa_field":
 		return minigame.NewWuFaRoutine()
 	case "pilgrimage":
-		return farming.NewPilgrimageRoutine()
+		pcfg := farming.DefaultPilgrimageConfig()
+		if os.Getenv("SXD_PROBE_FORCE_SA") == "1" {
+			pcfg.ForceSaintArea = true
+		}
+		return farming.NewPilgrimageRoutine(pcfg)
 	case "demon_tower":
 		return dungeon.NewDemonTowerRoutine()
 	default:

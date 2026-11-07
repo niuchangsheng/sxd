@@ -417,6 +417,8 @@ type PilgrimageConfig struct {
 	MaxRobAttempts int
 	// MaxProbeTargets 单轮最多探测的目标队伍数量 (上限 50)。
 	MaxProbeTargets int
+	// ForceSaintArea 固定走圣域取经；圣域不可用时跳过本轮，不回退仙界跨服或主服协议。
+	ForceSaintArea bool
 }
 
 // DefaultPilgrimageConfig 返回默认取经策略：自动打劫、最多尝试 5 次、探测 8 支队伍。
@@ -485,6 +487,13 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 					"role_id", session.RoleID(), "error", openErr)
 			}
 		}
+	}
+
+	// 固定圣域模式：圣域不可用时直接跳过本轮，绝不回退仙界跨服或主服协议。
+	if cross == nil && cfg.ForceSaintArea {
+		slog.Info("取经已固定为圣域通道，圣域不可用，跳过本轮且不回退仙界",
+			"role_id", session.RoleID())
+		return true
 	}
 
 	// 2. 圣域不可用时回退仙界跨服取经 (Mod 114)，兼容仍开放跨服取经的区服。

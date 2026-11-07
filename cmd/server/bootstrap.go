@@ -204,6 +204,9 @@ func newRegistryFactory(
 	if sc.Pilgrimage.MaxProbeTargets > 0 {
 		pCfg.MaxProbeTargets = sc.Pilgrimage.MaxProbeTargets
 	}
+	if sc.Pilgrimage.ForceSaintArea != nil {
+		pCfg.ForceSaintArea = *sc.Pilgrimage.ForceSaintArea
+	}
 	factory.SetPilgrimageConfig(pCfg)
 
 	// 11. 粗铁淬炼池策略配置 (默认淬炼玄铁; 可切换提炼灵材, 两者均只消耗铜钱)

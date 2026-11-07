@@ -168,6 +168,7 @@ scheduler:
     auto_rob: true                    # 启程后自动打劫其他玩家队伍
     max_rob_attempts: 5               # 单轮最多打劫次数 (1-5)
     max_probe_targets: 8              # 单轮最多探测目标数 (1-50)
+    force_saint_area: true            # 固定圣域取经，圣域不可用时跳过，不回退仙界/主服
 
   # 粗铁淬炼池 (固定铜钱消耗，永不消耗元宝)
   spirit_pool:

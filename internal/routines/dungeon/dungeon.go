@@ -721,6 +721,59 @@ func NewDungeonRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig) sche
 }
 
 // NewDungeonSweepRoutine 构造副本体力扫荡任务，支持挂载数据字典与智能策略。
+// SellBagCraftScrolls 出售背包中的装备制作卷（名称含「制作卷」且无元宝价值），
+// 用于背包满时释放扫荡所需的格位。返回成功出售数量。
+func SellBagCraftScrolls(ctx context.Context, session *client.RoleSession, dictRepo dictionary.Repository, maxSell int) int {
+	if session == nil || dictRepo == nil || maxSell <= 0 {
+		return 0
+	}
+	cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	resp, err := session.Call(cCtx, protocol.BuildGetPackItemListPacket(), protocol.ActionIDItemGetPackList)
+	cancel()
+	if err != nil || resp == nil {
+		return 0
+	}
+	pack, perr := protocol.ParsePackItemListResponse(resp.Payload)
+	if perr != nil || pack == nil {
+		return 0
+	}
+	sold := 0
+	for _, it := range pack.PackItems {
+		if sold >= maxSell || ctx.Err() != nil {
+			break
+		}
+		dItem, dErr := dictRepo.GetItem(int(it.ItemID))
+		if dErr != nil || dItem == nil {
+			continue
+		}
+		if !strings.Contains(dItem.Name, "制作卷") || dItem.Ingot > 0 {
+			continue
+		}
+		pkt, pErr := protocol.BuildSellItemPacket(int16(it.GridID))
+		if pErr != nil {
+			continue
+		}
+		sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
+		sResp, sErr := session.Call(sCtx, pkt, protocol.ActionIDItemSell)
+		sCancel()
+		if sErr != nil || sResp == nil {
+			continue
+		}
+		if ok, _, pErr := protocol.ParseSellItemResponse(sResp.Payload); pErr == nil && ok {
+			sold++
+			slog.Info("出售装备制作卷成功",
+				"role_id", session.RoleID(), "grid_id", it.GridID,
+				"item_id", it.ItemID, "name", dItem.Name)
+		}
+		select {
+		case <-ctx.Done():
+			return sold
+		case <-time.After(120 * time.Millisecond):
+		}
+	}
+	return sold
+}
+
 func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig) scheduler.ActivityRoutine {
 	cfg := DefaultSweepConfig()
 	hasSubConfig := false
@@ -823,11 +876,18 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				return nil
 			}
 
-			// 2. 检查背包容量
+			// 2. 检查背包容量；已满时先出售装备制作卷腾出扫荡空间。
 			state := session.GetPlayerState()
 			if state.BagCapacity <= 0 {
-				slog.Warn("背包已满，无法继续关卡推图与扫荡", "role_id", session.RoleID())
-				return scheduler.ErrBagFull
+				sold := SellBagCraftScrolls(ctx, session, dictRepo, 20)
+				if sold > 0 {
+					slog.Info("背包已满，已出售装备制作卷腾出扫荡空间",
+						"role_id", session.RoleID(), "sold", sold)
+				} else {
+					slog.Warn("背包已满且无可出售的装备制作卷，无法继续关卡推图与扫荡",
+						"role_id", session.RoleID())
+					return scheduler.ErrBagFull
+				}
 			}
 
 			const powerPerSweep = 5

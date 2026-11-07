@@ -109,13 +109,31 @@ func main() {
 		return
 	}
 	st := sess.GetPlayerState()
-	w := protocol.NewWriter()
-	w.WriteInt32(ids[0])
-	w.WriteUint32(0)
-	resp := call(0x03540005, w.Bytes())
-	if resp != nil {
-		slog.Info("快速找回回包", "id", ids[0], "hex", hex.EncodeToString(resp.Payload))
+	var got *protocol.Packet
+	for _, id := range ids {
+		if ctx.Err() != nil || got != nil {
+			break
+		}
+		for _, withPrev := range []bool{false, true} {
+			w := protocol.NewWriter()
+			w.WriteInt32(id)
+			if withPrev {
+				w.WriteUint32(0)
+			}
+			pkt := protocol.NewPacket(0x03540005, w.Bytes())
+			pkt.HasPrevAct = withPrev
+			c, cc := context.WithTimeout(ctx, 6*time.Second)
+			r, err := sess.Call(c, pkt, 0x03540005)
+			cc()
+			if err != nil {
+				continue
+			}
+			slog.Info("快速找回回包", "id", id, "with_prev", withPrev, "hex", hex.EncodeToString(r.Payload))
+			got = r
+			break
+		}
 	}
+	_ = got
 	time.Sleep(300 * time.Millisecond)
 	after, remain2 := act()
 	fin := sess.GetPlayerState()

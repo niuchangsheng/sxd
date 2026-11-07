@@ -2850,3 +2850,49 @@ func TestZodiacRoutine_SkipsWhenPanelEmpty(t *testing.T) {
 		t.Fatalf("面板为空时不应发送 challenge, 实际 %d 次", got)
 	}
 }
+
+// TestSellBagCraftScrolls 验证背包满时按格位出售装备制作卷。
+func TestSellBagCraftScrolls(t *testing.T) {
+	dictRepo, err := dictionary.NewRepository("")
+	if err != nil {
+		t.Fatalf("load dictionary: %v", err)
+	}
+	defer dictRepo.Close()
+
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	var soldGrid int32
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDItemGetPackList:
+			buf := new(bytes.Buffer)
+			_ = binary.Write(buf, binary.BigEndian, int16(30))
+			_ = binary.Write(buf, binary.BigEndian, int32(0))
+			_ = binary.Write(buf, binary.BigEndian, uint16(1))
+			_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+				PlayerItemID: 1001,
+				ItemID:       940, // 逍遥戟制作卷
+				GridID:       5,
+			})
+			_ = binary.Write(buf, binary.BigEndian, int16(10))
+			_ = binary.Write(buf, binary.BigEndian, uint16(0))
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
+			return true
+		case protocol.ActionIDItemSell:
+			if len(pkt.Payload) >= 2 {
+				soldGrid = int32(int16(binary.BigEndian.Uint16(pkt.Payload[:2])))
+			}
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemSell, []byte{protocol.ItemActionSuccess}))
+			return true
+		}
+		return false
+	})
+
+	sold := dungeon.SellBagCraftScrolls(context.Background(), sess, dictRepo, 5)
+	if sold != 1 {
+		t.Fatalf("sold = %d, want 1", sold)
+	}
+	if soldGrid != 5 {
+		t.Fatalf("sold grid = %d, want 5", soldGrid)
+	}
+}

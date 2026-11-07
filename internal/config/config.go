@@ -281,6 +281,8 @@ type PilgrimageConfig struct {
 	MaxRobAttempts int `yaml:"max_rob_attempts"`
 	// MaxProbeTargets 单轮最多探测的目标队伍数量 (1-50，默认 8)
 	MaxProbeTargets int `yaml:"max_probe_targets"`
+	// ForceSaintArea 固定走圣域取经；圣域不可用时跳过本轮，不回退仙界跨服或主服协议 (默认 false)
+	ForceSaintArea *bool `yaml:"force_saint_area"`
 }
 
 // SpiritPoolConfig 粗铁淬炼池策略配置。

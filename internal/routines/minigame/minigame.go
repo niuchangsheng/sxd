@@ -3493,14 +3493,16 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 		slog.Debug("查询五福临门开启状态未收到回包", "role_id", session.RoleID(), "err", fErr)
 		return
 	}
+	// 线上实测：Act 14 返回 12 (官方常量 NO)，但活动实际已开启且 start_bless
+	// 可正常获得活跃度（面板 bless_number=10）。因此该标志不可作为门禁，
+	// 仅记录日志，是否可祈福以面板返回的 bless_number 为准。
 	open, err := protocol.ParseFiveBlessingsOpenFlagResult(fResp.Payload)
 	if err != nil {
 		slog.Warn("解析五福临门开启状态回包失败", "role_id", session.RoleID(), "err", err)
 		return
 	}
 	if !open {
-		slog.Debug("五福临门活动未开启", "role_id", session.RoleID())
-		return
+		slog.Info("五福临门开启标志返回 NO，改以面板次数为准继续", "role_id", session.RoleID())
 	}
 	prevAct = protocol.ActionIDFindImmortalIsFiveBlessingsOpen
 
