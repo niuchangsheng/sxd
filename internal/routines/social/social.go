@@ -142,7 +142,8 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 							"role_id", session.RoleID(), "err", parseErr)
 						return nil
 					}
-					afterCount := remaining
+					// 数量降到 0 时服务端可能直接从列表中移除该道具，此时按 0 处理。
+					afterCount := int32(0)
 					for _, b := range boxesAfter {
 						if b.ItemID == box.ItemID {
 							afterCount = b.Count

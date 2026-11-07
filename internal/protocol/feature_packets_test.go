@@ -49,6 +49,13 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 	if pOpen.ActionID != protocol.ActionIDJieYuanBoxOpen {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDJieYuanBoxOpen, pOpen.ActionID)
 	}
+	if !pOpen.HasPrevAct {
+		t.Error("结缘宝箱开箱必须标记 HasPrevAct，由会话层填充真实前序动作号")
+	}
+	pList := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDTownEnter)
+	if !pList.HasPrevAct {
+		t.Error("结缘宝箱列表查询必须标记 HasPrevAct")
+	}
 
 	// 3. 日活跃领奖 (Module 52, Action 3 one_key_get_award)
 	pAssistant := protocol.BuildAssistantOneKeyGetAwardPacket(1)

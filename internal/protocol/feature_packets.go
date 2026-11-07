@@ -161,7 +161,9 @@ func BuildJieYuanBoxListPacket(prevAct uint32) *Packet {
 		prevAct = ActionIDTownEnter
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDJieYuanBoxList, w.Bytes())
+	pkt := NewPacket(ActionIDJieYuanBoxList, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // ParseJieYuanBoxListResult 解析结缘宝箱列表回包。
@@ -227,7 +229,9 @@ func BuildJieYuanBoxOpenPacket(itemID int32, openCount int32, prevAct uint32) *P
 		prevAct = ActionIDJieYuanBoxOpenContext
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDJieYuanBoxOpen, w.Bytes())
+	pkt := NewPacket(ActionIDJieYuanBoxOpen, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // --------------------------------------------------------------------------------
