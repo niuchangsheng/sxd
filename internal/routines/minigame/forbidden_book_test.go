@@ -64,6 +64,8 @@ func newMinigameMockSession(t *testing.T, handler func(net.Conn, *protocol.Packe
 		time.Sleep(5 * time.Millisecond)
 	}
 	sess.UpdatePlayerState(func(ps *client.PlayerState) {
+		// Module 48 叶公好龙面板请求需要真实 player_id，Mock 固定一个非零值。
+		ps.PlayerID = 372164
 		ps.Coins = 1_000_000
 	})
 	return sess

@@ -26,6 +26,11 @@ const (
 	getPeachCallTimeout = 10 * time.Second
 	// getPeachWarTimeout 摘取仙桃包含战报下发，超时放宽。
 	getPeachWarTimeout = 20 * time.Second
+	// getPeachPriority 摘仙桃调度优先级。
+	//
+	// 召唤仙桃对应每日活跃度任务 64，需要在长耗时日常任务之前尽早完成，
+	// 并与叶公好龙一致避开后续场景切换可能造成的模块请求丢弃。
+	getPeachPriority scheduler.RoutinePriority = 130
 )
 
 // NewGetPeachRoutine 构造每日摘仙桃任务。
@@ -44,7 +49,7 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 		"get_peach",
 		"minigame",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		getPeachPriority,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {

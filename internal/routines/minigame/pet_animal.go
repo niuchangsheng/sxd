@@ -56,6 +56,10 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			slog.Info("正在执行益智任务: 叶公好龙普通培养", "role_id", session.RoleID())
+			if session.PlayerID() == 0 {
+				slog.Warn("叶公好龙缺少角色 player_id，跳过", "role_id", session.RoleID())
+				return nil
+			}
 
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDPetAnimal)
 			if fErr != nil {
@@ -121,6 +125,7 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 				if ctx.Err() != nil {
 					return nil
 				}
+				prevRemaining := remaining
 				resp := call(protocol.BuildPetAnimalFeedPacket(protocol.PetAnimalFeedTypeCoin, session.LastActionID()),
 					protocol.ActionIDPetAnimalFeed)
 				if resp == nil {
@@ -133,7 +138,17 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 				}
 				switch res.Result {
 				case protocol.PetAnimalResultSuccess:
+					if res.FeedType != protocol.PetAnimalFeedTypeCoin {
+						slog.Warn("叶公好龙培养回包方式异常，已停止以避免元宝消耗",
+							"role_id", session.RoleID(), "feed_type", res.FeedType)
+						return nil
+					}
 					feeds++
+					if res.FeedNum >= prevRemaining {
+						slog.Warn("叶公好龙培养次数未递减，熔断本轮",
+							"role_id", session.RoleID(), "before", prevRemaining, "after", res.FeedNum)
+						return nil
+					}
 					remaining = res.FeedNum
 					slog.Info("叶公好龙普通培养成功",
 						"role_id", session.RoleID(),

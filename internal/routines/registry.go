@@ -126,6 +126,10 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "partner_link", Name: "灵结", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动激活灵结 (仅消耗伙伴灵契，不消耗元宝)", DefaultOn: false},
 		{ID: "star_picture", Name: "法力星图占星", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日消耗免费次数占星 (free 用尽即停止，不消耗元宝)", DefaultOn: false},
 		{ID: "era_yanjie", Name: "纪元湮劫战斗", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "纪元湮劫每日推进一关战斗 (免费, 不加体力/元宝)", DefaultOn: false},
+		{ID: "bailian", Name: "百炼乾坤一/二", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "百炼乾坤一 (272) 与二 (320) 一键挑战 (不消耗元宝)", DefaultOn: false},
+		{ID: "soul_hunt", Name: "灵域猎妖", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "灵域猎妖关卡挑战 (仅免费次数, 不买次数)", DefaultOn: false},
+		{ID: "era_creation", Name: "纪元造化秘境", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "先探索再挑战事件并领取战斗奖励 (不消耗元宝)", DefaultOn: false},
+		{ID: "cultivation_card", Name: "神仙卡牌收藏集", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "觅寻仙踪任务、铜钱卡包商城与叩寻仙踪开包 (不消耗元宝)", DefaultOn: false},
 		{ID: "era_treasure", Name: "纪元秘藏与轮回图录", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "领取纪元秘藏/轮回图录免费奖励 (不消耗元宝)", DefaultOn: false},
 		{ID: "mystic_hunt", Name: "仙幽猎境", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "仙幽猎境入口开放时免费进入一次 (按活动时段)", DefaultOn: false},
 		{ID: "get_peach", Name: "摘仙桃", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "摘取已召唤仙桃并用免费/铜钱次数召唤 (不消耗元宝)", DefaultOn: false},
@@ -293,6 +297,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewCourtyardPetRoutine()
 	case "weekend_event":
 		return daily.NewWeekendEventRoutine()
+	case "partner_practice":
+		return daily.NewPartnerPracticeRoutine()
 	case "daoyuan_vip_shop":
 		return daily.NewDaoyuanVipShopRoutine()
 	case "device_bind_reward":
@@ -465,6 +471,14 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewStarPictureRoutine()
 	case "era_yanjie":
 		return minigame.NewEraYanjieRoutine()
+	case "bailian":
+		return minigame.NewBaiLianRoutine()
+	case "soul_hunt":
+		return minigame.NewSoulHuntRoutine()
+	case "era_creation":
+		return minigame.NewEraCreationRoutine()
+	case "cultivation_card":
+		return minigame.NewCultivationCardRoutine()
 	case "era_treasure":
 		return minigame.NewEraTreasureRoutine()
 	case "mystic_hunt":

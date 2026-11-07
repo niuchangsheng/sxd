@@ -62,6 +62,7 @@ scheduler:
     sa_union_worship: true        # 万古神墟/圣盟膜拜 (仅铜钱档)
     device_bind_reward: true      # 手机绑定首绑/月度奖励
     town_practice: true           # 城镇打坐离线经验结算
+    partner_practice: true        # 幻境修炼开始/结算 (免费)
     destiny_sword: true           # 飞剑剑意淬炼
     daily_gifts: true             # 每日俸禄/灵石/PC微端礼包
     saint_practice: true          # 圣域免费修炼房
@@ -143,6 +144,10 @@ scheduler:
     eudemons: true                # 幻兽经脉激活
     partner_link: true            # 灵结激活
     star_picture: true            # 法力星图: 仅 has_divination=0 且 free>0 时占星一次, 不循环不买次数
+    bailian: true                 # 百炼乾坤一/二一键挑战 (免费)
+    soul_hunt: true               # 灵域猎妖免费挑战 (不买次数)
+    era_creation: true            # 纪元造化秘境探索+挑战 (免费)
+    cultivation_card: true        # 神仙卡牌收藏集 (仅铜钱商城, 不消耗元宝)
     era_yanjie: true               # 纪元湮劫每日一关战斗 (免费)
     era_treasure: true            # 纪元秘藏/轮回图录奖励 (免费)
     mystic_hunt: true              # 仙幽猎境入口开放时免费进入

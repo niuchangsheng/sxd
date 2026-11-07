@@ -48,6 +48,33 @@ func TestPetAnimalRoutine_CoinFeedsUntilExhausted(t *testing.T) {
 	}
 }
 
+func TestPetAnimalRoutine_FeedNumNotDecreaseCircuitBreaker(t *testing.T) {
+	var feedCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPetAnimalInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildPetAnimalInfoResultPacket(protocol.PetAnimalInfo{
+				Lv: 2, Star: 9, Exp: 180228, FeedNum: 3,
+			}))
+		case protocol.ActionIDPetAnimalFeed:
+			feedCalls.Add(1)
+			// 服务端异常: 培养后剩余次数不递减。
+			_ = protocol.WritePacket(conn, protocol.BuildPetAnimalFeedResultPacket(protocol.PetAnimalFeedResult{
+				Result: protocol.PetAnimalResultSuccess, Lv: 2, Star: 9, Exp: 180328,
+				ExpAdd: 100, FeedType: protocol.PetAnimalFeedTypeCoin, FeedNum: 3, Hit: 0,
+			}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewPetAnimalRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("pet animal: %v", err)
+	}
+	if got := feedCalls.Load(); got != 1 {
+		t.Fatalf("次数未递减时应熔断, 实际培养 %d 次", got)
+	}
+}
+
 func TestPetAnimalRoutine_NoFeedNumSkips(t *testing.T) {
 	var feedCalls atomic.Int32
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {

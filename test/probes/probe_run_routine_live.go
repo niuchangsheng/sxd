@@ -143,6 +143,16 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return social.NewMarryHomeRoutine()
 	case "era_treasure":
 		return minigame.NewEraTreasureRoutine()
+	case "bailian":
+		return minigame.NewBaiLianRoutine()
+	case "soul_hunt":
+		return minigame.NewSoulHuntRoutine()
+	case "era_creation":
+		return minigame.NewEraCreationRoutine()
+	case "partner_practice":
+		return daily.NewPartnerPracticeRoutine()
+	case "cultivation_card":
+		return minigame.NewCultivationCardRoutine()
 	default:
 		return nil
 	}
