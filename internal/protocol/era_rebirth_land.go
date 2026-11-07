@@ -84,44 +84,32 @@ type EraRebirthFreeBackResult struct {
 
 // BuildEraRebirthLandPanelPacket 构造轮回净地面板查询封包。
 func BuildEraRebirthLandPanelPacket() *Packet {
-	pkt := NewPacket(ActionIDEraRebirthLandPanel, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDEraRebirthLandPanel, nil)
 }
 
 // BuildEraRebirthLandAutoProfitPacket 构造挂机收益查询封包。
 func BuildEraRebirthLandAutoProfitPacket() *Packet {
-	pkt := NewPacket(ActionIDEraRebirthLandAutoProfit, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDEraRebirthLandAutoProfit, nil)
 }
 
 // BuildEraRebirthLandFreeBackPacket 构造免费一键领取挂机奖励封包。
 func BuildEraRebirthLandFreeBackPacket() *Packet {
-	pkt := NewPacket(ActionIDEraRebirthLandFreeBack, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDEraRebirthLandFreeBack, nil)
 }
 
 // BuildEraRebirthLandPoolPanelPacket 构造渡业台/渡业仙池面板查询封包 (852/12)。
 func BuildEraRebirthLandPoolPanelPacket() *Packet {
-	pkt := NewPacket(ActionIDEraRebirthLandPoolPanel, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDEraRebirthLandPoolPanel, nil)
 }
 
 // BuildEraRebirthLandFreeAwardPacket 构造领取渡业仙池免费奖励封包 (852/13)。
 func BuildEraRebirthLandFreeAwardPacket() *Packet {
-	pkt := NewPacket(ActionIDEraRebirthLandFreeAward, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDEraRebirthLandFreeAward, nil)
 }
 
 // BuildEraRebirthLandTodayAwardPacket 构造领取渡业仙池今日奖励封包 (852/14)。
 func BuildEraRebirthLandTodayAwardPacket() *Packet {
-	pkt := NewPacket(ActionIDEraRebirthLandTodayAward, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDEraRebirthLandTodayAward, nil)
 }
 
 // ParseEraRebirthSimpleResult 解析仅含单字节结果码的 852 回包。

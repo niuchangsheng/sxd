@@ -26,9 +26,7 @@ const (
 
 // BuildStVoidWorldPkRankPacket 构造世界 PK 榜查询封包。
 func BuildStVoidWorldPkRankPacket() *Packet {
-	pkt := NewPacket(ActionIDStVoidWorldPkRank, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDStVoidWorldPkRank, nil)
 }
 
 // BuildStVoidLikePacket 构造膜拜/点赞封包。

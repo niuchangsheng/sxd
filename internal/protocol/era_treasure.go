@@ -19,23 +19,17 @@ const (
 
 // BuildEraTreasurePanelPacket 构造秘藏面板查询封包。
 func BuildEraTreasurePanelPacket() *Packet {
-	pkt := NewPacket(ActionIDEraTreasurePanel, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDEraTreasurePanel, nil)
 }
 
 // BuildEraTreasureOneKeyPacket 构造一键领取封包。
 func BuildEraTreasureOneKeyPacket() *Packet {
-	pkt := NewPacket(ActionIDEraTreasureOneKey, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDEraTreasureOneKey, nil)
 }
 
 // BuildEraTreasureTaskInfoPacket 构造任务列表查询封包。
 func BuildEraTreasureTaskInfoPacket() *Packet {
-	pkt := NewPacket(ActionIDEraTreasureTaskInfo, []byte{0, 0, 0, 0})
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDEraTreasureTaskInfo, nil)
 }
 
 // ParseEraTreasureResult 解析单字节结果码。
