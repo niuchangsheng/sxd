@@ -616,8 +616,9 @@ func (cfg PilgrimageConfig) saintAreaFallbackAllowed(ctx context.Context, sessio
 // 官方客户端流程为：Mod 96 取跨服凭据 → Mod 94 登录跨服节点 → Mod 95 进入仙界城镇
 // → Mod 114 get_take_bible_info → (可选 refresh) → start_take_bible
 // → open_take_bible → get_rob_take_bible_cd_time → rob。
-// 返回 true 表示跨服链路已建立并完成处理；返回 false 表示当前环境不支持仙界跨服
-// 连接（凭据缺失或登录失败），调用方应回退到主服传统取经协议。
+// 返回 true 表示本轮已处理完毕（跨服链路完成，或按圣域回退策略主动跳过）；
+// 返回 false 表示当前环境不支持仙界跨服连接（凭据缺失或登录失败），
+// 调用方应回退到主服传统取经协议。
 func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg PilgrimageConfig) bool {
 	cfg = normalizePilgrimageConfig(cfg)
 	// 一次巡检最多包含护送、刷新、路况查询、目标探测与多次打劫，放宽整体超时。
@@ -634,7 +635,7 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 	// 1. 优先走圣域取经 (Mod_SaTakeBible_Base, Module 395)。
 	// 当前区服已将西天取经迁移至圣域，跨服取经入口可能关闭。
 	// 注意: 圣域状态查询线上实测 ~0.6s, 原 1 秒超时余量过小, 高负载时会把
-	// 已开启的圣域误判为不可用, 从而在 force_saint_area 模式下整轮跳过取经/打劫。
+	// 已开启的圣域误判为不可用, 从而整轮跳过取经/打劫 (自动/固定圣域模式均会跳过)。
 	// 这里放宽到 3 秒 (mock 服务器会立即返回关闭状态, 不影响单测)。
 	statusCtx, statusCancel := context.WithTimeout(crossCtx, 3*time.Second)
 	statusResp, statusErr := session.Call(statusCtx, protocol.BuildSaintAreaStatusPacket(), protocol.ActionIDSaintAreaStatus)

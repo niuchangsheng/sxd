@@ -105,6 +105,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return social.NewJieYuanBoxRoutine(social.DefaultJieYuanBoxConfig())
 	case "spirit_pool":
 		return farming.NewSpiritPoolRoutine(farming.DefaultSpiritPoolConfig())
+	case "refine_pot":
+		return farming.NewRefinePotRoutine()
 	case "tong_tian_tower":
 		return dungeon.NewTongTianTowerRoutine()
 	case "find_immortal":

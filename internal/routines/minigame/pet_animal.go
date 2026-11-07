@@ -21,6 +21,12 @@ const (
 	maxPetAnimalFeeds = 50
 	// petAnimalCallTimeout 单次协议请求超时。
 	petAnimalCallTimeout = 8 * time.Second
+	// petAnimalPriority 叶公好龙调度优先级。
+	//
+	// 2026-11-07 线上实测：Module 48 在角色经过副本/农场等场景切换后再查询会
+	// 被服务端静默丢弃 (8s 超时)，而在登录后较早的主服城镇会话中可正常返回面板。
+	// 因此将其排在孩子日常 (120) 之前、天帝宝库 (200) 之后尽早执行。
+	petAnimalPriority scheduler.RoutinePriority = 130
 )
 
 // NewPetAnimalRoutine 构造叶公好龙普通培养任务。
@@ -37,7 +43,7 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 		"pet_animal",
 		"minigame",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		petAnimalPriority,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -93,6 +99,7 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("叶公好龙面板",
 				"role_id", session.RoleID(),
+				"player_id", session.PlayerID(),
 				"name", info.Name,
 				"lv", info.Lv,
 				"star", info.Star,

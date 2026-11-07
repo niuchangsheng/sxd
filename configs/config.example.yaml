@@ -78,6 +78,7 @@ scheduler:
     pilgrimage: true              # 西天取经护送与打劫
     crystal_mine: true            # 仙界矿山开采与守护
     spirit_pool: true             # 异兽喂养与淬炼池提炼
+    refine_pot: true              # 灵霄宝殿炼宝炉 (材料>=500, 不消耗元宝)
     gourd_realm: true             # 壶中界灵气转化/炼丹/融合
     rune_refine: true             # 符文淬炼与八卦炉提纯
 
@@ -181,6 +182,10 @@ scheduler:
     auto_rob: true                    # 启程后自动打劫其他玩家队伍
     max_rob_attempts: 5               # 单轮最多打劫次数 (1-5)
     max_probe_targets: 8              # 单轮最多探测目标数 (1-50)
+    # 圣域通道回退策略: 不配置=自动 (推荐)。圣域功能已开放的角色只走圣域，
+    # 圣域关闭/维护时跳过本轮；圣域功能未开放的角色回退仙界跨服/主服取经。
+    # force_saint_area: true          # 强制固定圣域，永不回退
+    # force_saint_area: false         # 总是允许回退仙界跨服/主服
 
   # 粗铁淬炼池 (固定铜钱消耗，永不消耗元宝)
   spirit_pool:

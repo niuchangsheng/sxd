@@ -147,7 +147,7 @@ func runMiracleFightersModule(
 				return
 			case protocol.MiracleFightersResultLevelUnopen, protocol.MiracleFightersResultFailed,
 				protocol.MiracleFightersResultLimit, protocol.MiracleFightersResultIdError:
-				slog.Debug(ids.label+" 条目暂不可修炼，尝试下一条目",
+				slog.Info(ids.label+" 条目暂不可修炼，尝试下一条目",
 					"role_id", session.RoleID(), "entry_id", entryID, "result", code)
 				continue
 			case protocol.MiracleFightersResultFuncUnopen:
@@ -178,7 +178,7 @@ func runMiracleFightersModule(
 				return
 			case protocol.MiracleFightersResultLevelUnopen, protocol.MiracleFightersResultFailed,
 				protocol.MiracleFightersResultLimit, protocol.MiracleFightersResultIdError:
-				slog.Debug(ids.label+" 条目暂不可突破，尝试下一条目",
+				slog.Info(ids.label+" 条目暂不可突破，尝试下一条目",
 					"role_id", session.RoleID(), "entry_id", entryID, "result", code)
 				continue
 			case protocol.MiracleFightersResultFuncUnopen:

@@ -59,6 +59,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "pilgrimage", Name: "西天取经护送", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "自动刷新使者启程护送，并打劫取经路上其他玩家队伍", DefaultOn: false},
 		{ID: "crystal_mine", Name: "仙界矿山开采", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动仙界矿石开采与防抢夺守护", DefaultOn: false},
 		{ID: "spirit_pool", Name: "异兽与淬炼池", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "异兽自动喂养与灵宝淬炼池提炼", DefaultOn: false},
+		{ID: "refine_pot", Name: "灵霄宝殿炼宝炉", Domain: "farming", Schedule: scheduler.ScheduleCron, Description: "按材料数量 >=500 选择最大数量炼制 (不消耗元宝)", DefaultOn: false},
 		{ID: "gourd_realm", Name: "壶中界炼丹合成", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "壶中界灵气转化、丹药炼制与材料融合", DefaultOn: false},
 		{ID: "rune_refine", Name: "符文炼化八卦炉", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "符文自动淬炼与八卦炉灵气提纯", DefaultOn: false},
 
@@ -327,6 +328,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return farming.NewPilgrimageRoutine(f.pilgrimageCfg)
 	case "crystal_mine":
 		return farming.NewCrystalMineRoutine()
+	case "refine_pot":
+		return farming.NewRefinePotRoutine()
 	case "spirit_pool":
 		return farming.NewSpiritPoolRoutine(f.spiritPoolCfg)
 	case "gourd_realm":

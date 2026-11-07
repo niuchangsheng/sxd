@@ -79,30 +79,21 @@ func BuildMiracleFightersPracticePacket(actionID uint32, entryID int32) *Packet 
 	w := NewWriter()
 	w.WriteInt32(entryID)
 	w.WriteUint8(MiracleFightersPracticeNormal)
-	w.WriteUint32(0)
-	pkt := NewPacket(actionID, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(actionID, w.Bytes())
 }
 
 // BuildMiracleFightersOneKeyPacket 构造一键修炼封包。
 func BuildMiracleFightersOneKeyPacket(actionID uint32, entryID int32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(entryID)
-	w.WriteUint32(0)
-	pkt := NewPacket(actionID, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(actionID, w.Bytes())
 }
 
 // BuildMiracleFightersBreakThroughPacket 构造突破试炼封包。
 func BuildMiracleFightersBreakThroughPacket(actionID uint32, entryID int32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(entryID)
-	w.WriteUint32(0)
-	pkt := NewPacket(actionID, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(actionID, w.Bytes())
 }
 
 // ParseMiracleFightersInfo 解析面板回包。
