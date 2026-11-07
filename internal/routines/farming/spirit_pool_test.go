@@ -159,6 +159,10 @@ func startSpiritPoolSession(t *testing.T, gw *spiritPoolGateway) (*client.RoleSe
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerGetFunctions, w.Bytes()))
 			case protocol.ActionIDRefinePoolOpen:
 				gw.openCalls.Add(1)
+				if gw.functionClosed {
+					_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDRefinePoolOpen, []byte{0x01}))
+					continue
+				}
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDRefinePoolOpen, buildSpiritPoolPanelPayload()))
 			case protocol.ActionIDRefinePoolPanel:
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDRefinePoolPanel, []byte{0, 0, 0, 0, 0}))
@@ -279,7 +283,7 @@ func TestSpiritPoolRoutine_SuccessWithoutReward(t *testing.T) {
 	}
 }
 
-func TestSpiritPoolRoutine_FunctionClosedSkipsOpen(t *testing.T) {
+func TestSpiritPoolRoutine_FunctionClosedStops(t *testing.T) {
 	gw := &spiritPoolGateway{functionClosed: true}
 	session, cleanup := startSpiritPoolSession(t, gw)
 	defer cleanup()
@@ -287,11 +291,9 @@ func TestSpiritPoolRoutine_FunctionClosedSkipsOpen(t *testing.T) {
 	if err := executeSpiritPool(t, session, farming.DefaultSpiritPoolConfig()); err != nil {
 		t.Fatalf("功能未开启应正常跳过, 实际: %v", err)
 	}
-	if got := gw.checkCalls.Load(); got != 1 {
-		t.Fatalf("应查询 1 次功能开放状态, 实际 %d", got)
-	}
-	if got := gw.openCalls.Load(); got != 0 {
-		t.Fatalf("功能未开启时不应发送 open_panel, 实际 %d 次", got)
+	// 282/0 面板自身承担开放门禁；关闭时服务端返回失败/空面板。
+	if got := gw.openCalls.Load(); got != 1 {
+		t.Fatalf("应发送 1 次 open_panel 作为开放门禁, 实际 %d 次", got)
 	}
 	if got := len(gw.lastRefinePayload()); got != 0 {
 		t.Fatalf("功能未开启时不应发送 refine 请求, payload_len=%d", got)
