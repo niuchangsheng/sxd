@@ -150,8 +150,10 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 							break
 						}
 					}
-					if afterCount >= remaining {
-						slog.Warn("结缘宝箱开箱未生效（数量未减少），终止本轮",
+					if afterCount == remaining {
+						// 仅当数量完全不变时才判定开箱未生效；若数量增加，
+						// 说明开出的奖励恰好是同一种宝箱道具，属于正常结算。
+						slog.Warn("结缘宝箱开箱未生效（数量未变化），终止本轮",
 							"role_id", session.RoleID(),
 							"item_id", box.ItemID,
 							"before", remaining,
