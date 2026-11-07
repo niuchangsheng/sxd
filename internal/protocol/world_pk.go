@@ -95,3 +95,85 @@ func BuildWorldPkJoinResultPacket(result uint8) *Packet {
 	w.WriteInt32(0)
 	return NewPacket(ActionIDWorldPkJoin, w.Bytes())
 }
+
+// 跨服 PK 奖励/任务动作 ID (Module 349)。
+const (
+	ActionIDWorldPkReceiveSpecial uint32 = 0x015D000E
+	ActionIDWorldPkSetAutoMatch   uint32 = 0x015D0010
+	ActionIDWorldPkAwardPanel     uint32 = 0x015D0019
+	ActionIDWorldPkOpenTaskPanel  uint32 = 0x015D001A
+	ActionIDWorldPkTaskAward      uint32 = 0x015D001B
+)
+
+// 跨服 PK 奖励结果码。
+const (
+	WorldPkRewardSuccess      uint8 = 3
+	WorldPkRewardFailed       uint8 = 5
+	WorldPkRewardTimesLimit   uint8 = 12
+	WorldPkRewardPackFull     uint8 = 13
+	WorldPkRewardNotCompleted uint8 = 22
+)
+
+// BuildWorldPkSetAutoMatchPacket 构造自动匹配开关封包 [Byte]。
+func BuildWorldPkSetAutoMatchPacket(on bool) *Packet {
+	v := uint8(0)
+	if on {
+		v = 1
+	}
+	return NewPacket(ActionIDWorldPkSetAutoMatch, []byte{v})
+}
+
+// BuildWorldPkReceiveSpecialPacket 构造领取特殊奖励封包。
+func BuildWorldPkReceiveSpecialPacket() *Packet {
+	return NewPacket(ActionIDWorldPkReceiveSpecial, nil)
+}
+
+// BuildWorldPkOpenTaskPanelPacket 构造打开每日任务面板封包。
+func BuildWorldPkOpenTaskPanelPacket() *Packet {
+	return NewPacket(ActionIDWorldPkOpenTaskPanel, nil)
+}
+
+// BuildWorldPkTaskAwardPacket 构造领取每日任务奖励封包。
+func BuildWorldPkTaskAwardPacket(taskID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(taskID)
+	return NewPacket(ActionIDWorldPkTaskAward, w.Bytes())
+}
+
+// BuildWorldPkAwardPanelPacket 构造奖励面板查询封包。
+func BuildWorldPkAwardPanelPacket() *Packet {
+	return NewPacket(ActionIDWorldPkAwardPanel, nil)
+}
+
+// ParseWorldPkTaskIDs 解析 open_task_panel 前三组任务列表中的任务 ID。
+//
+// 回包首字节为结果码，随后是 3 个 [Int,Int,Int] 列表。
+func ParseWorldPkTaskIDs(payload []byte) ([]int32, error) {
+	if len(payload) < 1 {
+		return nil, fmt.Errorf("%w: empty world pk task panel", ErrInvalidPayload)
+	}
+	r := NewReader(payload)
+	if _, err := r.ReadUint8(); err != nil {
+		return nil, err
+	}
+	var ids []int32
+	for list := 0; list < 3; list++ {
+		if r.Remaining() < 2 {
+			break
+		}
+		count, err := r.ReadUint16()
+		if err != nil {
+			break
+		}
+		for i := 0; i < int(count); i++ {
+			if r.Remaining() < 12 {
+				return ids, nil
+			}
+			id, _ := r.ReadInt32()
+			_, _ = r.ReadInt32()
+			_, _ = r.ReadInt32()
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
