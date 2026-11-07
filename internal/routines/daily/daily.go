@@ -696,15 +696,13 @@ func NewOnlineRewardRoutine() scheduler.ActivityRoutine {
 			now := time.Now().Unix()
 			if panel.StartTime == 0 || panel.EndTime == 0 ||
 				now < int64(panel.StartTime) || now > int64(panel.EndTime) {
-				slog.Info("在线奖励活动未开放或已结束，跳过",
+				slog.Info("Module 712 在线奖励已结束，回退节日活动 218 在线奖励",
 					"role_id", session.RoleID(),
 					"start_time", panel.StartTime,
 					"end_time", panel.EndTime,
 					"now", now,
-					"online_time", panel.OnlineTime,
-					"tiers", len(panel.Tiers),
 				)
-				return nil
+				return claimFestivalOnlineReward(ctx, session)
 			}
 
 			claimable := make([]int32, 0, len(panel.Tiers))
@@ -753,6 +751,55 @@ func NewOnlineRewardRoutine() scheduler.ActivityRoutine {
 			return nil
 		},
 	)
+}
+
+// claimFestivalOnlineReward 走节日活动 218 的在线时长奖励 (秋季嘉年华等复用)。
+func claimFestivalOnlineReward(ctx context.Context, session *client.RoleSession) error {
+	infoResp, err := callDaily(ctx, session, protocol.BuildFestivalOnlineInfoPacket(), protocol.ActionIDFestivalOnlineInfo, 8*time.Second)
+	if err != nil {
+		slog.Info("节日在线奖励面板不可用，跳过", "role_id", session.RoleID(), "err", err)
+		return nil
+	}
+	indexes, err := protocol.ParseFestivalOnlineTierIndexes(infoResp.Payload)
+	if err != nil {
+		return fmt.Errorf("解析节日在线奖励面板失败: %w", err)
+	}
+	if len(indexes) == 0 {
+		slog.Info("节日在线奖励暂无可领取档位", "role_id", session.RoleID())
+		return nil
+	}
+	claimed := 0
+	for _, idx := range indexes {
+		resp, cErr := callDaily(ctx, session, protocol.BuildFestivalOnlineAwardPacket(idx), protocol.ActionIDFestivalOnlineAward, 8*time.Second)
+		if cErr != nil {
+			slog.Info("节日在线奖励领取无回包", "role_id", session.RoleID(), "index", idx, "err", cErr)
+			return nil
+		}
+		if len(resp.Payload) == 0 {
+			return nil
+		}
+		code := resp.Payload[0]
+		switch code {
+		case protocol.FestivalOnlineSuccess:
+			claimed++
+			slog.Info("节日在线奖励领取成功", "role_id", session.RoleID(), "index", idx)
+		case protocol.FestivalOnlineHadGet:
+			continue
+		case protocol.FestivalOnlinePackFull:
+			return scheduler.ErrBagFull
+		case protocol.FestivalOnlineNonActivityTime, protocol.FestivalOnlineTimesLimit,
+			protocol.FestivalOnlineFunctionNotOpen:
+			slog.Info("节日在线奖励当前不可领取", "role_id", session.RoleID(),
+				"index", idx, "result", code, "result_text", protocol.FestivalOnlineResultText(code))
+			return nil
+		default:
+			slog.Info("节日在线奖励领取未成功", "role_id", session.RoleID(),
+				"index", idx, "result", code, "result_text", protocol.FestivalOnlineResultText(code))
+			return nil
+		}
+	}
+	slog.Info("节日在线奖励巡检完成", "role_id", session.RoleID(), "claimed", claimed)
+	return nil
 }
 
 // NewDeviceBindRewardRoutine 构造设备/手机绑定奖励领取任务 (Module 814)。

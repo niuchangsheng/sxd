@@ -349,3 +349,96 @@ func writeSignInTiers(w *Writer, tiers []SignInTier) {
 		w.WriteUint8(t.State)
 	}
 }
+
+// 节日活动在线奖励动作 ID (Mod_SpringActivity_Base, Module 218)。
+const (
+	ActionIDFestivalOnlineInfo  uint32 = 0x00DA001F
+	ActionIDFestivalOnlineAward uint32 = 0x00DA0020
+)
+
+// 节日活动在线奖励结果码。
+const (
+	FestivalOnlineSuccess         uint8 = 14
+	FestivalOnlineError           uint8 = 15
+	FestivalOnlineNonActivityTime uint8 = 17
+	FestivalOnlineHadGet          uint8 = 24
+	FestivalOnlineFunctionNotOpen uint8 = 42
+	FestivalOnlinePackFull        uint8 = 43
+	FestivalOnlineTimesLimit      uint8 = 45
+)
+
+// BuildFestivalOnlineInfoPacket 构造节日活动在线奖励面板封包。
+func BuildFestivalOnlineInfoPacket() *Packet {
+	return NewPacket(ActionIDFestivalOnlineInfo, nil)
+}
+
+// BuildFestivalOnlineAwardPacket 构造领取节日在线奖励封包。
+func BuildFestivalOnlineAwardPacket(index uint8) *Packet {
+	return NewPacket(ActionIDFestivalOnlineAward, []byte{index})
+}
+
+// ParseFestivalOnlineTierIndexes 解析 218/31 回包中的奖励档位索引。
+//
+// [Int, [Byte, UByte, [Int,Int], Int, Int]]。
+func ParseFestivalOnlineTierIndexes(payload []byte) ([]uint8, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	if _, err := r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("节日在线奖励头部读取失败: %w", err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, nil
+	}
+	indexes := make([]uint8, 0, count)
+	for i := 0; i < int(count); i++ {
+		idx, err := r.ReadUint8()
+		if err != nil {
+			return indexes, err
+		}
+		if _, err = r.ReadUint8(); err != nil {
+			return indexes, err
+		}
+		pairs, err := r.ReadUint16()
+		if err != nil {
+			return indexes, err
+		}
+		for j := 0; j < int(pairs); j++ {
+			if _, err = r.ReadInt32(); err != nil {
+				return indexes, err
+			}
+			if _, err = r.ReadInt32(); err != nil {
+				return indexes, err
+			}
+		}
+		if _, err = r.ReadInt32(); err != nil {
+			return indexes, err
+		}
+		if _, err = r.ReadInt32(); err != nil {
+			return indexes, err
+		}
+		indexes = append(indexes, idx)
+	}
+	return indexes, nil
+}
+
+// FestivalOnlineResultText 返回节日在线奖励结果码文本。
+func FestivalOnlineResultText(code uint8) string {
+	switch code {
+	case FestivalOnlineSuccess:
+		return "成功"
+	case FestivalOnlineError:
+		return "失败"
+	case FestivalOnlineNonActivityTime:
+		return "非活动时间"
+	case FestivalOnlineHadGet:
+		return "已领取"
+	case FestivalOnlineFunctionNotOpen:
+		return "功能未开放"
+	case FestivalOnlinePackFull:
+		return "背包已满"
+	case FestivalOnlineTimesLimit:
+		return "次数上限"
+	default:
+		return fmt.Sprintf("未知结果码(%d)", code)
+	}
+}
