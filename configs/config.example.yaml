@@ -88,6 +88,7 @@ scheduler:
     faction_lucky_wheel: true     # 帮派转盘 (青龙令)
     collection_booklets: true     # 神仙收藏册声望奖励
     npc_friendship: true          # NPC结交与铜钱伴手礼
+    marry_home: true              # 家园小蛋糕奖励 (免费, 非活动时间跳过)
 
     # 【副本 dungeon】推图、扫荡、爬塔、练功房、试炼
     dungeon: true                 # 剧情推图 + 精英副本扫荡

@@ -1939,7 +1939,7 @@ func (s *RoleSession) runLoop() {
 		s.setState(StateAuthenticating)
 		if s.cfg.Authenticator != nil {
 			if err := s.cfg.Authenticator(s); err != nil {
-				slog.Warn("角色身份认证失败", "role_id", s.cfg.RoleID, "error", err)
+				slog.Info("角色身份认证失败", "role_id", s.cfg.RoleID, "error", err)
 				s.closeCurrentConn()
 				if !s.handleConnectFailure(err) {
 					return
@@ -1991,7 +1991,7 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 		waitDuration = 30 * time.Second
 	}
 
-	slog.Warn("网络连接中断，等待重连",
+	slog.Info("网络连接中断，等待重连",
 		"role_id", s.cfg.RoleID,
 		"server_addr", s.cfg.ServerAddr,
 		"attempts", s.reconnectAttempts,
@@ -2028,7 +2028,7 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 			s.reconnectAttempts = 0
 
 		case err := <-readErrCh:
-			slog.Warn("网络读取循环退出", "role_id", s.cfg.RoleID, "error", err)
+			slog.Info("网络读取循环退出", "role_id", s.cfg.RoleID, "error", err)
 			s.closeCurrentConn()
 			return s.handleConnectFailure(err)
 
@@ -3654,6 +3654,13 @@ func runMockGameServer(conn net.Conn) {
 				code = 1
 			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDStarPictureDivination, []byte{code}))
+
+		case protocol.ActionIDMarryHomeGetCake:
+			// 家园小蛋糕: 领取成功并返回 1 件奖励。
+			_ = protocol.WritePacket(conn, protocol.BuildMarryHomeCakeResultPacket(protocol.MarryHomeCakeResult{
+				Result: protocol.MarryHomeResultSuccess,
+				Awards: []protocol.MarryHomeCakeAward{{ItemID: 2001, ItemNum: 1}},
+			}))
 
 		case protocol.ActionIDGameAssistantInfo:
 			// 每日活跃度面板: 仅返回「悟法领域冥想」任务，剩余 20 次。

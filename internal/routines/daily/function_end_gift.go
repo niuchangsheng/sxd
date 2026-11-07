@@ -142,6 +142,17 @@ func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift
 			if !claim.IsHaveNext {
 				return nil
 			}
+			// 线上实测：已领完的礼包会持续返回 result=SUCCESS + 全零奖励 + is_have_next=1，
+			// 按 is_have_next 无脑重试会连发满分请求且毫无收益。
+			// 一旦本次领取未产生任何奖励，判定该礼包已无更多可领取内容，立即停止。
+			if !functionEndClaimGranted(claim) {
+				slog.Info("功能终结礼包本次未产生新奖励，停止该礼包",
+					"role_id", session.RoleID(),
+					"gift_id", gift.GiftID,
+					"attempt", attempt,
+				)
+				return nil
+			}
 			if attempt == maxClaims {
 				break
 			}
@@ -187,6 +198,24 @@ func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift
 		"max_claims", maxClaims,
 	)
 	return nil
+}
+
+// functionEndClaimGranted 判断一次成功领取是否实际发放了奖励。
+//
+// 服务端对已无剩余内容的礼包仍可能返回 SUCCESS，但奖励字段全部为 0；
+// 此时 is_have_next 不可作为继续领取的依据。
+func functionEndClaimGranted(claim *protocol.FunctionEndClaimResult) bool {
+	if claim == nil {
+		return false
+	}
+	return claim.StatePoint != 0 ||
+		claim.Skill != 0 ||
+		claim.XianLing != 0 ||
+		claim.Fame != 0 ||
+		claim.Nimbus != 0 ||
+		claim.CoinBuff != 0 ||
+		claim.ExpBuff != 0 ||
+		claim.JuLing != 0
 }
 
 func waitFunctionEndClaim(ctx context.Context) error {

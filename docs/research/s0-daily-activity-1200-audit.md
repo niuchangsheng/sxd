@@ -206,6 +206,18 @@
   当前城镇 NPC id（`TownType.getTownNPCIdByFunc(mapId, NPCType.LuckyShopNPC)`），
   并非空请求；`info_assistant (100/78)` 可读但当前返回全 0，好礼馈赠需继续定位 NPC/入口。
 
+## 9. 2026-11-07 下午续：家园奖励与圣域状态加固
+
+- **家园奖励（任务 58，+5）已实现**：新增 `social/marry_home.go` 与 `protocol/marry_home.go`，
+  直接调用 `get_cake (210/19)`（请求 `[Int player_id]`）。线上返回 `NON_ACTIVITY_TIME(18)`，
+  说明角色有家园但当前不在活动时段；活动时段开启后会正常领取并计分。
+  实测教训：**不要先调用 `0x0000002A` 活跃度面板**——它会污染会话上下文，导致紧随其后的
+  Module 210 请求被静默丢弃（首次实现因此超时）。
+- **圣域状态查询超时加固**：`Mod_SaintAreaStatus (293/2)` 实测约 0.6s，原 1s 超时余量过小，
+  已放宽到 3s，避免高负载时把已开启的圣域误判为关闭而跳过取经/打劫。
+- 其余入口复核：琳琅阁（100/80 与 2/76 + 神秘商人 npc 38）均无回包；
+  回忆之境 `get_bind_award` 全超时、`backtrack` 返回 `FAILED(1)`。
+
 ## 5. 已知缺陷
 
 ### 5.1 禁地之书元宝泄漏（已修复）

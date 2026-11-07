@@ -36,6 +36,7 @@ const (
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
 	timeout := flag.Duration("timeout", 3*time.Second, "单个 NPC 的等待上限")
+	npcFlag := flag.Int("npc", 0, "直接指定 NPC id (0=从 NPC 结交面板遍历)")
 	flag.Parse()
 	cfgPath := os.Getenv("SXD_CONFIG")
 	if cfgPath == "" {
@@ -89,27 +90,34 @@ func main() {
 		return
 	}
 	ids := make([]int32, 0, len(snap.Npcs))
-	for _, n := range snap.Npcs {
-		if n.TownNpcID > 0 {
-			ids = append(ids, n.TownNpcID)
+	if *npcFlag > 0 {
+		ids = append(ids, int32(*npcFlag))
+	} else {
+		for _, n := range snap.Npcs {
+			if n.TownNpcID > 0 {
+				ids = append(ids, n.TownNpcID)
+			}
 		}
 	}
 	slog.Info("城镇 NPC 列表", "count", len(ids), "town_npc_ids", ids)
 
-	for _, npcID := range ids {
-		w := protocol.NewWriter()
-		w.WriteInt32(npcID)
-		pkt := protocol.NewPacket(actionLuckyShopItemList, w.Bytes())
-		pkt.HasPrevAct = true
-		c, cc := context.WithTimeout(ctx, *timeout)
-		resp, err := sess.Call(c, pkt, actionLuckyShopItemList)
-		cc()
-		if err != nil {
-			continue
+	// 两个候选实现: Mod_Mobile_Base (100/80) 与 Mod_Item_Base (2/76)。
+	for _, act := range []uint32{actionLuckyShopItemList, 0x0002004C} {
+		for _, npcID := range ids {
+			w := protocol.NewWriter()
+			w.WriteInt32(npcID)
+			pkt := protocol.NewPacket(act, w.Bytes())
+			pkt.HasPrevAct = true
+			c, cc := context.WithTimeout(ctx, *timeout)
+			resp, err := sess.Call(c, pkt, act)
+			cc()
+			if err != nil {
+				continue
+			}
+			slog.Info("琳琅阁回包命中", "action", fmt.Sprintf("0x%08X", act), "npc_id", npcID,
+				"len", len(resp.Payload), "hex", hex.EncodeToString(resp.Payload))
+			return
 		}
-		slog.Info("琳琅阁回包命中", "npc_id", npcID, "len", len(resp.Payload),
-			"hex", hex.EncodeToString(resp.Payload))
-		return
 	}
 	slog.Warn("未找到可响应的琳琅阁 NPC", "tried", len(ids))
 }

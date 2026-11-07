@@ -321,7 +321,7 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 }
 
 // TestRoleSession_BeelzebubTrialsAutoChallengeAll_SilentDropCircuitBreaker 验证建队请求被服务端
-// 静默丢弃（超时且无任何回包）时，逐关挑战会在连续两次无回包后熔断本轮，
+// 静默丢弃（超时且无任何回包）时，逐关挑战会在首次无回包后熔断本轮，
 // 而不是对可挑战列表中的每个关卡反复重试。
 func TestRoleSession_BeelzebubTrialsAutoChallengeAll_SilentDropCircuitBreaker(t *testing.T) {
 	serverConn, clientConn := net.Pipe()

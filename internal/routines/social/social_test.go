@@ -57,6 +57,15 @@ func TestSocialRoutines_Execute(t *testing.T) {
 		t.Fatalf("住宅任务执行失败: %v", err)
 	}
 
+	r2b := NewMarryHomeRoutine()
+	if r2b.Name() != "marry_home" {
+		t.Fatalf("家园奖励任务名称不匹配: %s", r2b.Name())
+	}
+	// 该测试会话为无响应的管道，只验证不 panic/不返回错误。
+	if err := r2b.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("家园奖励任务执行失败: %v", err)
+	}
+
 	t.Run("结缘宝箱每批最多10个配置", func(t *testing.T) {
 		cfg := JieYuanBoxConfig{MaxBatchSize: 10}
 		r3 := NewJieYuanBoxRoutine(cfg)
@@ -208,5 +217,26 @@ func TestHomesteadRoutine_Execute(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if err := NewHomesteadRoutine().Execute(context.Background(), session, nil); err != nil {
 		t.Fatalf("住宅任务执行失败: %v", err)
+	}
+}
+
+// TestMarryHomeRoutine_Execute 使用内置 mock 验证家园奖励领取链路。
+func TestMarryHomeRoutine_Execute(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_marry_home",
+		RoleName:   "测试家园角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("家园奖励执行失败: %v", err)
+	}
+	if got := session.LastActionID(); got != protocol.ActionIDMarryHomeGetCake {
+		t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDMarryHomeGetCake, got)
 	}
 }

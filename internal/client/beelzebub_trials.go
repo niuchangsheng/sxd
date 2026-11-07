@@ -24,11 +24,11 @@ const (
 	beelzebubFightSettleDelay = 500 * time.Millisecond
 	// beelzebubTeamSettleDelay 两关之间等待服务端同步队伍/战场状态的时间。
 	beelzebubTeamSettleDelay = 200 * time.Millisecond
-	// beelzebubSilentDropThreshold 建队请求连续多少次被静默丢弃后熔断本轮试炼。
+	// beelzebubSilentDropThreshold 建队请求被静默丢弃多少次后熔断本轮试炼。
 	//
-	// 建队是每个关卡的必经动作；连续两次无回包已可排除偶发丢包，
-	// 继续遍历其余关卡只会放大无效请求（实测 155 关约 18 分钟）并触发风控。
-	beelzebubSilentDropThreshold = 2
+	// 建队是每个关卡的必经动作；服务端返回无回包属于确定性拒绝（资格/状态不满足），
+	// 换关卡重试不会恢复，首次无回包即停止，避免放大无效请求并产生 WARN 噪音。
+	beelzebubSilentDropThreshold = 1
 )
 
 // beelzebubCandidate 魔王试炼可挑战关卡候选。
@@ -139,7 +139,8 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 		// 每关开始前确认剩余挑战次数，避免次数耗尽后仍盲目发起战斗。
 		ok, cErr := s.BeelzebubTrialsCheckCanChallenge(ctx)
 		if cErr != nil {
-			slog.Warn("复检魔王试炼挑战次数失败，停止后续关卡", "role_id", s.RoleID(), "error", cErr)
+			// 服务端静默丢弃复检请求时无法确认剩余次数，按本轮结束处理，等待下次调度。
+			slog.Info("复检魔王试炼挑战次数无回包，停止后续关卡", "role_id", s.RoleID(), "error", cErr)
 			break
 		}
 		if !ok {
@@ -176,7 +177,7 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 			if errors.Is(cErr, ErrBeelzebubTrialsNoResponse) {
 				silentDrops++
 				if silentDrops >= beelzebubSilentDropThreshold {
-					slog.Warn("魔王试炼建队请求连续被服务端静默丢弃，判定服务端拒绝该玩法请求，终止本轮",
+					slog.Info("魔王试炼建队请求被服务端静默丢弃，判定当前状态不满足，终止本轮",
 						"role_id", s.RoleID(),
 						"consecutive_drops", silentDrops,
 						"boss_id", cand.id,

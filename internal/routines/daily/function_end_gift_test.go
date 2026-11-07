@@ -113,6 +113,27 @@ func TestOnlineGiftRoutine_FunctionEndPackFullCircuitBreaker(t *testing.T) {
 	}
 }
 
+func TestFunctionEndClaimGranted(t *testing.T) {
+	cases := []struct {
+		name  string
+		claim *protocol.FunctionEndClaimResult
+		want  bool
+	}{
+		{name: "nil", claim: nil, want: false},
+		{name: "全零奖励", claim: &protocol.FunctionEndClaimResult{IsHaveNext: true}, want: false},
+		{name: "境界点", claim: &protocol.FunctionEndClaimResult{StatePoint: 10}, want: true},
+		{name: "技能点", claim: &protocol.FunctionEndClaimResult{Skill: 1}, want: true},
+		{name: "聚灵", claim: &protocol.FunctionEndClaimResult{JuLing: 5}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := functionEndClaimGranted(tc.claim); got != tc.want {
+				t.Fatalf("functionEndClaimGranted=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOnlineGiftRoutine_PreservesOnlineGiftStateMachine(t *testing.T) {
 	session := startFunctionEndTestSession(t, "role_test_function_end_online_state")
 	session.UpdatePlayerState(func(ps *client.PlayerState) {

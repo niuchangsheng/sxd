@@ -509,7 +509,9 @@ func performEliteTownSweep(
 
 	quickRes, quickErr := quicklyHeroMissionPractice(ctx, session)
 	if quickErr != nil {
-		slog.Warn("英雄副本扫荡快速完成未收到回包", "role_id", session.RoleID(), "town_id", townID, "err", quickErr)
+		// 服务端静默丢弃快速完成请求时，终态推送仍可能到达；继续等待结算即可。
+		slog.Info("英雄副本扫荡快速完成未收到回包，继续等待结算推送",
+			"role_id", session.RoleID(), "town_id", townID, "err", quickErr)
 	} else if quickRes != nil {
 		switch quickRes.Result {
 		case protocol.HeroMissionResultSuccess:
@@ -557,8 +559,26 @@ func executeEliteMissionSweep(
 ) (int, error) {
 	towns := eliteMissionTowns(dictRepo)
 	if len(towns) == 0 {
-		slog.Warn("数据字典中未发现精英副本城镇，跳过精英扫荡", "role_id", session.RoleID())
+		slog.Info("数据字典中未发现精英副本城镇，跳过精英扫荡", "role_id", session.RoleID())
 		return 0, nil
+	}
+	// 英雄副本列表只对角色当前所在城镇有效；其它城镇会被服务端静默丢弃。
+	// 若已知当前 TownMapID，则只扫荡该城镇，避免逐个城镇空等超时。
+	if currentMap := int(session.GetPlayerState().TownMapID); currentMap > 0 {
+		filtered := make([]int, 0, 1)
+		for _, townID := range towns {
+			if townID == currentMap {
+				filtered = append(filtered, townID)
+			}
+		}
+		if len(filtered) == 0 {
+			slog.Info("当前城镇不在精英副本城镇列表中，跳过精英扫荡",
+				"role_id", session.RoleID(), "town_map_id", currentMap)
+			return 0, nil
+		}
+		slog.Info("精英副本扫荡限定当前城镇",
+			"role_id", session.RoleID(), "town_map_id", currentMap, "all_towns", len(towns))
+		towns = filtered
 	}
 
 	waiter := heroNotifyWaiterFor(session)
@@ -588,7 +608,7 @@ func executeEliteMissionSweep(
 			}
 		}
 
-		const maxTownAttempts = 4
+		const maxTownAttempts = 2
 		for attempt := 0; attempt < maxTownAttempts; attempt++ {
 			if attempt > 0 {
 				time.Sleep(500 * time.Millisecond)
@@ -596,12 +616,9 @@ func executeEliteMissionSweep(
 
 			list, listErr := fetchHeroMissionList(ctx, session, townID)
 			if listErr != nil {
-				if isTransientDungeonError(listErr) && attempt < maxTownAttempts-1 {
-					slog.Warn("查询英雄副本列表超时，准备重试",
-						"role_id", session.RoleID(), "town_id", townID, "attempt", attempt+1, "err", listErr)
-					continue
-				}
-				slog.Warn("查询英雄副本列表失败，跳过该城镇", "role_id", session.RoleID(), "town_id", townID, "err", listErr)
+				// 列表查询被服务端静默丢弃说明当前城镇上下文不匹配；重试无意义。
+				slog.Info("查询英雄副本列表失败/服务端未响应，跳过该城镇",
+					"role_id", session.RoleID(), "town_id", townID, "err", listErr)
 				break
 			}
 			if list == nil || len(list.Missions) == 0 {
@@ -634,11 +651,12 @@ func executeEliteMissionSweep(
 
 			if sweepErr != nil {
 				if isTransientDungeonError(sweepErr) && attempt < maxTownAttempts-1 {
-					slog.Warn("英雄副本城镇扫荡超时，准备重试",
+					// 超时通常源于服务端主动丢弃（城镇上下文不匹配/正在结算），重试一次即可。
+					slog.Info("英雄副本城镇扫荡等待超时，重试当前城镇",
 						"role_id", session.RoleID(), "town_id", townID, "attempt", attempt+1, "err", sweepErr)
 					continue
 				}
-				slog.Warn("英雄副本城镇扫荡失败，跳过该城镇",
+				slog.Info("英雄副本城镇扫荡失败，跳过该城镇",
 					"role_id", session.RoleID(), "town_id", townID, "err", sweepErr)
 				break
 			}
@@ -1291,7 +1309,7 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 
 			// 3. 检查灵件背包空间是否已满 (>= 20 为上限预警)
 			if info.BagNum >= 20 {
-				slog.Warn("灵件背包已满，暂停六道挑战以防灵件溢出丢弃", "role_id", session.RoleID(), "bag_num", info.BagNum)
+				slog.Info("灵件背包已满，暂停六道挑战以防灵件溢出丢弃", "role_id", session.RoleID(), "bag_num", info.BagNum)
 				return nil
 			}
 
@@ -1408,7 +1426,7 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 
 					// 检查不可重试的硬终止条件
 					if res.Result == protocol.TowerResultFullBag {
-						slog.Warn("灵件背包已满，终止六道轮回挑战", "role_id", session.RoleID())
+						slog.Info("灵件背包已满，终止六道轮回挑战", "role_id", session.RoleID())
 						return nil
 					}
 					if res.Result == protocol.TowerResultFullTimes {

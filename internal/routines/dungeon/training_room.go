@@ -9,6 +9,7 @@ package dungeon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -221,11 +222,21 @@ func runStPracticeRoomMaintenance(ctx context.Context, api stPracticeRoomAPI, cf
 	}
 
 	if err := sitInStPracticeRoom(ctx, api, target); err != nil {
+		if errors.Is(err, scheduler.ErrConditionNotMet) {
+			// 服务端以 FUNCTION_NO_OPEN 表达当前资格/条件不满足（如等级或跨服限制），
+			// 属于正常业务状态，本轮跳过等待下次调度即可。
+			slog.Info("仙界练功房暂不可入座，跳过本轮", "quality", target.quality, "error", err)
+			return nil
+		}
 		slog.Warn("仙界练功房入座失败", "quality", target.quality, "error", err)
 		// 星级房间入座异常时兜底回到普通练功场，避免角色长时间离线无收益。
 		if target.quality != protocol.StPracticeRoomFreeQuality {
 			if fallbackErr := sitDownStPracticeRoomFree(ctx, api); fallbackErr != nil {
-				slog.Warn("仙界练功房回落普通练功场失败", "error", fallbackErr)
+				if errors.Is(fallbackErr, scheduler.ErrConditionNotMet) {
+					slog.Info("仙界练功房普通练功场同样不可用，跳过本轮", "error", fallbackErr)
+				} else {
+					slog.Warn("仙界练功房回落普通练功场失败", "error", fallbackErr)
+				}
 			}
 		}
 		return nil

@@ -469,7 +469,10 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 
 	// 1. 优先走圣域取经 (Mod_SaTakeBible_Base, Module 395)。
 	// 当前区服已将西天取经迁移至圣域，跨服取经入口可能关闭。
-	statusCtx, statusCancel := context.WithTimeout(crossCtx, time.Second)
+	// 注意: 圣域状态查询线上实测 ~0.6s, 原 1 秒超时余量过小, 高负载时会把
+	// 已开启的圣域误判为不可用, 从而在 force_saint_area 模式下整轮跳过取经/打劫。
+	// 这里放宽到 3 秒 (mock 服务器会立即返回关闭状态, 不影响单测)。
+	statusCtx, statusCancel := context.WithTimeout(crossCtx, 3*time.Second)
 	statusResp, statusErr := session.Call(statusCtx, protocol.BuildSaintAreaStatusPacket(), protocol.ActionIDSaintAreaStatus)
 	statusCancel()
 	if statusErr == nil && statusResp != nil {

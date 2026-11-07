@@ -42,9 +42,12 @@ func NewSignInRoutine() scheduler.ActivityRoutine {
 			slog.Info("正在执行日常任务: 每日签到", "role_id", session.RoleID())
 
 			// 2. 活动状态：未开启时官方客户端不展示签到入口，直接跳过。
-			statusResp, err := callDaily(ctx, session, protocol.BuildSignInStatusPacket(), protocol.ActionIDSignInStatus, 2*time.Second)
+			statusResp, err := callDaily(ctx, session, protocol.BuildSignInStatusPacket(), protocol.ActionIDSignInStatus, 8*time.Second)
 			if err != nil {
-				return fmt.Errorf("查询签到活动状态失败: %w", err)
+				// 活动未开放时服务端会静默丢弃状态查询；按暂不可用跳过，由下次 Cron 重试。
+				slog.Info("签到活动状态查询失败/未开放，跳过",
+					"role_id", session.RoleID(), "err", err)
+				return nil
 			}
 			status, err := protocol.ParseSignInStatusResult(statusResp.Payload)
 			if err != nil {
@@ -60,7 +63,7 @@ func NewSignInRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 3. 签到详情
-			infoResp, err := callDaily(ctx, session, protocol.BuildSignInInfoPacket(), protocol.ActionIDSignInInfo, 2*time.Second)
+			infoResp, err := callDaily(ctx, session, protocol.BuildSignInInfoPacket(), protocol.ActionIDSignInInfo, 8*time.Second)
 			if err != nil {
 				return fmt.Errorf("查询签到详情失败: %w", err)
 			}
@@ -81,7 +84,7 @@ func NewSignInRoutine() scheduler.ActivityRoutine {
 
 			// 4. 执行签到
 			if info.SignState != protocol.SignInStateAlreadySignIn {
-				actResp, err := callDaily(ctx, session, protocol.BuildSignInPlayerPacket(), protocol.ActionIDSignInPlayer, 2*time.Second)
+				actResp, err := callDaily(ctx, session, protocol.BuildSignInPlayerPacket(), protocol.ActionIDSignInPlayer, 8*time.Second)
 				if err != nil {
 					return fmt.Errorf("每日签到请求失败: %w", err)
 				}
@@ -109,7 +112,7 @@ func NewSignInRoutine() scheduler.ActivityRoutine {
 
 			// 5. 连签奖励 (state=0 才可领)
 			if info.ContinueState == protocol.SignInStateCanGet {
-				resp, err := callDaily(ctx, session, protocol.BuildSignInContinuePacket(), protocol.ActionIDSignInContinue, 2*time.Second)
+				resp, err := callDaily(ctx, session, protocol.BuildSignInContinuePacket(), protocol.ActionIDSignInContinue, 8*time.Second)
 				if err != nil {
 					slog.Warn("领取连签奖励无应答", "role_id", session.RoleID(), "err", err)
 				} else if result, day, pErr := protocol.ParseSignInContinueResult(resp.Payload); pErr != nil {
@@ -126,7 +129,7 @@ func NewSignInRoutine() scheduler.ActivityRoutine {
 				if tier.State != protocol.SignInStateCanGet {
 					continue
 				}
-				resp, err := callDaily(ctx, session, protocol.BuildSignInTotalAwardPacket(tier.Tier), protocol.ActionIDSignInTotalAward, 2*time.Second)
+				resp, err := callDaily(ctx, session, protocol.BuildSignInTotalAwardPacket(tier.Tier), protocol.ActionIDSignInTotalAward, 8*time.Second)
 				if err != nil {
 					slog.Warn("领取累计签到奖励无应答", "role_id", session.RoleID(), "tier", tier.Tier, "err", err)
 					continue
@@ -601,7 +604,7 @@ func NewVIPWelfareRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行日常任务: VIP每日免费礼包领取", "role_id", session.RoleID())
 
-			infoResp, err := callDaily(ctx, session, protocol.BuildVIPInfoPacket(), protocol.ActionIDVIPInfo, 3*time.Second)
+			infoResp, err := callDaily(ctx, session, protocol.BuildVIPInfoPacket(), protocol.ActionIDVIPInfo, 8*time.Second)
 			if err != nil {
 				return fmt.Errorf("查询VIP信息失败: %w", err)
 			}
@@ -621,7 +624,7 @@ func NewVIPWelfareRoutine() scheduler.ActivityRoutine {
 				if int32(gift.Level) > info.VIPLevel || !gift.SendGiftClaimable() {
 					continue
 				}
-				resp, cErr := callDaily(ctx, session, protocol.BuildVIPSendGiftPacket(gift.Level), protocol.ActionIDVIPSendGift, 3*time.Second)
+				resp, cErr := callDaily(ctx, session, protocol.BuildVIPSendGiftPacket(gift.Level), protocol.ActionIDVIPSendGift, 8*time.Second)
 				if cErr != nil {
 					slog.Warn("VIP礼包领取无应答", "role_id", session.RoleID(), "level", gift.Level, "err", cErr)
 					continue
@@ -718,7 +721,7 @@ func NewOnlineRewardRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			resp, err := callDaily(ctx, session, protocol.BuildOnlineRewardOneKeyPacket(), protocol.ActionIDOnlineRewardOneKey, 5*time.Second)
+			resp, err := callDaily(ctx, session, protocol.BuildOnlineRewardOneKeyPacket(), protocol.ActionIDOnlineRewardOneKey, 8*time.Second)
 			if err != nil {
 				return fmt.Errorf("在线奖励一键领取失败: %w", err)
 			}
@@ -764,7 +767,7 @@ func NewDeviceBindRewardRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			infoResp, err := callDaily(ctx, session, protocol.BuildDeviceBindInfoPacket(), protocol.ActionIDDeviceBindInfo, 3*time.Second)
+			infoResp, err := callDaily(ctx, session, protocol.BuildDeviceBindInfoPacket(), protocol.ActionIDDeviceBindInfo, 8*time.Second)
 			if err != nil {
 				return fmt.Errorf("查询设备绑定状态失败: %w", err)
 			}
@@ -795,7 +798,7 @@ func NewDeviceBindRewardRoutine() scheduler.ActivityRoutine {
 			}
 
 			claim := func(pkt *protocol.Packet, actionID uint32, name string) error {
-				resp, cErr := callDaily(ctx, session, pkt, actionID, 3*time.Second)
+				resp, cErr := callDaily(ctx, session, pkt, actionID, 8*time.Second)
 				if cErr != nil {
 					slog.Warn(name+"无应答", "role_id", session.RoleID(), "err", cErr)
 					return nil

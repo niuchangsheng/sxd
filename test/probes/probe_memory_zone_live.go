@@ -125,16 +125,6 @@ func main() {
 	costIngot, _ := br.ReadInt32()
 	slog.Info("回溯面板解析", "result", bres, "today_back", todayBack,
 		"daily_free_times", freeTimes, "daily_ingot_times", ingotTimes, "cost_ingot", costIngot)
-	// 先尝试领取绑定奖励 (Act 3)，主面板 get_award=1 表示有可领取。
-	for _, t := range types {
-		gw := protocol.NewWriter()
-		gw.WriteInt32(t)
-		gw.WriteUint32(0)
-		if gResp := call(0x020E0003, gw.Bytes()); gResp != nil {
-			slog.Info("绑定奖励回包", "type", t, "hex", hex.EncodeToString(gResp.Payload))
-			break
-		}
-	}
 	if freeTimes <= 0 || len(roleIDs) == 0 {
 		slog.Info("无免费回溯次数或无伙伴，跳过")
 		return
@@ -151,4 +141,25 @@ func main() {
 	time.Sleep(300 * time.Millisecond)
 	fin := sess.GetPlayerState()
 	slog.Info("回溯后", "coin_delta", fin.Coins-st.Coins, "ingot_delta", fin.Ingots-st.Ingots)
+
+	// 回溯完成后再尝试领取绑定奖励 (Act 3)，避免 0x020E0003 的静默无回包
+	// 打断 PrevAct 链导致 backtrack 被判 FAILED。
+	for _, t := range types {
+		for _, withPrev := range []bool{false, true} {
+			gw := protocol.NewWriter()
+			gw.WriteInt32(t)
+			gw.WriteUint32(0)
+			pkt := protocol.NewPacket(0x020E0003, gw.Bytes())
+			pkt.HasPrevAct = withPrev
+			c, cc := context.WithTimeout(ctx, 6*time.Second)
+			gResp, gErr := sess.Call(c, pkt, 0x020E0003)
+			cc()
+			if gErr != nil {
+				continue
+			}
+			slog.Info("绑定奖励回包", "type", t, "with_prev", withPrev,
+				"hex", hex.EncodeToString(gResp.Payload))
+			return
+		}
+	}
 }

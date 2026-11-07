@@ -42,7 +42,8 @@ func NewPartnerLinkBoxRoutine() scheduler.ActivityRoutine {
 				defer cancel()
 				resp, err := session.Call(cCtx, pkt, act)
 				if err != nil {
-					slog.Warn("缘魂宝箱协议无回包", "role_id", session.RoleID(),
+					// 重连/服务端静默丢弃均表现为无回包；缘魂宝箱为低优先级福利，直接跳过本轮。
+					slog.Info("缘魂宝箱协议无回包，跳过本轮", "role_id", session.RoleID(),
 						"action", act, "err", err)
 					return nil
 				}
@@ -51,7 +52,7 @@ func NewPartnerLinkBoxRoutine() scheduler.ActivityRoutine {
 
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
-				slog.Warn("查询每日活跃度失败，跳过缘魂宝箱", "role_id", session.RoleID())
+				slog.Info("查询每日活跃度失败，跳过缘魂宝箱", "role_id", session.RoleID())
 				return nil
 			}
 			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)

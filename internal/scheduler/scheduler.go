@@ -198,7 +198,7 @@ func (s *RoleScheduler) runLoop() {
 			} else if errors.Is(execErr, ErrBagFull) {
 				// 背包已满：挂起 10 分钟
 				item.coolingUntil = time.Now().Add(10 * time.Minute)
-				slog.Warn("背包已满，日常任务休眠待命",
+				slog.Info("背包已满，日常任务休眠待命",
 					"role_id", s.roleID,
 					"routine", item.routine.Name(),
 					"cooling_until", item.coolingUntil,

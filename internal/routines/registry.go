@@ -70,6 +70,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "faction_lucky_wheel", Name: "帮派转盘", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "消耗青龙令自动转动帮派转盘直至次数耗尽", DefaultOn: false},
 		{ID: "collection_booklets", Name: "神仙收藏册", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "领取声望档位奖励并拜访好友获得声望 (不消耗元宝)", DefaultOn: false},
 		{ID: "npc_friendship", Name: "NPC结交", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "结交 NPC、领取任务奖励并赠送铜钱伴手礼 (不消耗元宝)", DefaultOn: false},
+		{ID: "marry_home", Name: "家园奖励", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "领取自家小蛋糕家园奖励 (免费, 非活动时间自动跳过)", DefaultOn: false},
 
 		// 4. Dungeon 领域 (8)
 		{ID: "dungeon", Name: "副本推图与扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/支线任务闭环推图与关卡扫荡", DefaultOn: true},
@@ -338,6 +339,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewCollectionBookletsRoutine()
 	case "npc_friendship":
 		return social.NewNpcFriendshipRoutine()
+	case "marry_home":
+		return social.NewMarryHomeRoutine()
 
 	// 4. Dungeon
 	case "dungeon", "dungeon_sweep":

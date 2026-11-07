@@ -3611,7 +3611,7 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 		sCancel()
 		prevAct = protocol.ActionIDFindImmortalStartBless
 		if sErr != nil || sResp == nil {
-			slog.Warn("五福临门开始祈福请求未收到回包", "role_id", session.RoleID(), "err", sErr)
+			slog.Info("五福临门开始祈福请求未收到回包，服务端暂不接受，跳过本轮", "role_id", session.RoleID(), "err", sErr)
 			return
 		}
 		start, err := protocol.ParseFiveBlessingsActionResult(sResp.Payload)

@@ -96,6 +96,13 @@ func TestHerbGardenRoutine_FullBusinessFlow(t *testing.T) {
 			case protocol.ActionHeartbeat:
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
 
+			case protocol.ActionIDSaintAreaStatus:
+				// 测试服圣域未开启, 取经应回退到主服协议链路。
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.SaintAreaStatusClose)
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDSaintAreaStatus, w.Bytes()))
+
 			// 药园核心业务流响应
 			case protocol.ActionIDFarmGetInfo:
 				queryCalls.Add(1)
@@ -309,6 +316,13 @@ func TestPilgrimageRoutine_FullBusinessFlow(t *testing.T) {
 
 			case protocol.ActionHeartbeat:
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+
+			case protocol.ActionIDSaintAreaStatus:
+				// 测试服圣域未开启, 取经应回退到主服协议链路。
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.SaintAreaStatusClose)
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDSaintAreaStatus, w.Bytes()))
 
 			// 西天取经业务动作响应
 			case protocol.ActionIDTakeBibleOpen:

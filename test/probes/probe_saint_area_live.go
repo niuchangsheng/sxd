@@ -111,6 +111,7 @@ func main() {
 	slog.Info("主服会话已激活", "role_id", sess.RoleID(), "player_id", sess.PlayerID())
 
 	call := func(s *client.RoleSession, pkt *protocol.Packet, act uint32, name string, timeout time.Duration) *protocol.Packet {
+		start := time.Now()
 		cCtx, cCancel := context.WithTimeout(ctx, timeout)
 		defer cCancel()
 		resp, cErr := s.Call(cCtx, pkt, act)
@@ -122,7 +123,8 @@ func main() {
 			slog.Warn("调用回包为空", "call", name, "action", fmt.Sprintf("0x%08X", act))
 			return nil
 		}
-		slog.Info("调用回包", "call", name, "action", fmt.Sprintf("0x%08X", act), "len", len(resp.Payload))
+		slog.Info("调用回包", "call", name, "action", fmt.Sprintf("0x%08X", act),
+			"len", len(resp.Payload), "elapsed_ms", time.Since(start).Milliseconds())
 		return resp
 	}
 

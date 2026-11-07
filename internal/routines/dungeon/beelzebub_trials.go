@@ -81,6 +81,12 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 			// 3. 检查今日挑战资格
 			canChallenge, err := session.BeelzebubTrialsCheckCanChallenge(ctx)
 			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					// 服务端静默丢弃资格查询（常见于刚切场景/重连后），本轮跳过。
+					slog.Info("检查魔王试炼挑战状态无回包，本轮跳过",
+						"role_id", session.RoleID(), "error", err)
+					return nil
+				}
 				slog.Warn("检查魔王试炼挑战状态失败", "role_id", session.RoleID(), "error", err)
 				return nil
 			}
