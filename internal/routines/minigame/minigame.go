@@ -1562,6 +1562,10 @@ type MasterPracticeConfig struct {
 	AllowSwitchStunt bool
 	// AllowStepUp 是否在挑战后自动升阶 (默认 true)。
 	AllowStepUp bool
+	// MaxRetriesPerStar 单个星级挑战失败后的重试次数 (默认 2)。
+	MaxRetriesPerStar int
+	// SwitchJobOnFailure 当前职业重试耗尽仍失败时，是否切换到其他可修行职业 (默认 true)。
+	SwitchJobOnFailure bool
 }
 
 // DefaultMasterPracticeConfig 返回宗师修行默认策略配置。
@@ -1572,6 +1576,8 @@ func DefaultMasterPracticeConfig() MasterPracticeConfig {
 		AutoNormalizeDeploy: true,
 		AllowSwitchStunt:    true,
 		AllowStepUp:         true,
+		MaxRetriesPerStar:   2,
+		SwitchJobOnFailure:  true,
 	}
 }
 
@@ -1648,14 +1654,14 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 				return nil
 			}
 
-			order := cfg.PracticeOrder
-			if len(order) == 0 {
-				order = []int32{currentJob}
-				slog.Info("宗师修行未配置职业顺序，仅修行主角当前职业",
-					"role_id", session.RoleID(), "job_id", currentJob)
+			order := masterPracticeBuildOrder(cfg, panel, currentJob, stunts)
+			if len(cfg.PracticeOrder) == 0 {
+				slog.Info("宗师修行未配置职业顺序，以主角当前职业为主并按需切换备选职业",
+					"role_id", session.RoleID(), "job_id", currentJob, "order", order)
+			} else {
+				slog.Info("宗师修行职业顺序",
+					"role_id", session.RoleID(), "order", order, "current_job", currentJob)
 			}
-			slog.Info("宗师修行职业顺序",
-				"role_id", session.RoleID(), "order", order, "current_job", currentJob)
 
 			totalChallenged := 0
 			switchedAny := false
@@ -1700,16 +1706,16 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 					continue
 				}
 
-				// 今日已完成但尚未满星：先升阶，然后本轮停止 (满星后才切换到下一职业)。
+				// 今日已完成但尚未满星：先升阶，然后尝试下一候选职业。
 				if masterPracticeJobDoneToday(job) {
 					if requestedJob == currentJob && cfg.AllowStepUp {
 						if refreshed := masterPracticeStepUpJob(requestedJob, cfg, session.RoleID(), call); refreshed != nil {
 							panel = refreshed
 						}
 					}
-					slog.Info("宗师修行方向今日已完成，本轮结束",
+					slog.Info("宗师修行方向今日已完成，尝试下一职业",
 						"role_id", session.RoleID(), "job_id", requestedJob, "total_stars", job.TotalStars)
-					return nil
+					continue
 				}
 
 				// 3. 切换主角神器绝技 (职业)。成功后服务端会改写主角 role_id。
@@ -1767,7 +1773,8 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 						"role_id", session.RoleID(), "used", usedToday, "limit", cfg.MaxChallengesPerDay)
 					return nil
 				}
-				challenged, full, chErr := masterPracticeChallengeJob(ctx, job, remaining, session.RoleID(), call)
+				challenged, full, failed, chErr := masterPracticeChallengeJob(
+					ctx, job, remaining, cfg.MaxRetriesPerStar, session.RoleID(), call)
 				usedToday += challenged
 				totalChallenged += int(challenged)
 				if chErr != nil {
@@ -1775,6 +1782,18 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 						slog.Info("宗师修行今日挑战次数已用尽", "role_id", session.RoleID())
 					}
 					return chErr
+				}
+				if failed {
+					slog.Warn("宗师修行当前职业重试耗尽仍挑战失败，准备切换职业",
+						"role_id", session.RoleID(), "job_id", requestedJob, "challenged", challenged)
+					if !cfg.SwitchJobOnFailure {
+						return nil
+					}
+					// 刷新面板，下一候选职业据此更新剩余次数与今日进度。
+					if fresh := masterPracticeFetchPanel(call); fresh != nil {
+						panel = fresh
+					}
+					continue
 				}
 
 				// 6. 刷新面板后升阶；只有当前职业满星才继续修行顺序中的下一个职业。
@@ -1899,80 +1918,158 @@ func masterPracticeEnsureStunt(
 	return true, nil
 }
 
+// masterPracticeRetryDelay 宗师修行战斗失败后重试同层前的等待。
+const masterPracticeRetryDelay = 400 * time.Millisecond
+
 // masterPracticeChallengeJob 挑战指定职业今日尚未完成的星级。
+//
 // remaining 为今日剩余挑战次数；只有服务端返回 SUCCESS 才扣减一次。
-// 返回 consumed=本次实际消耗的次数, full=该方向已累计满星。
+// maxRetries 为单个星级挑战失败 (FAILED) 后的重试次数。
+// 返回:
+//   - consumed: 本次实际消耗的挑战次数
+//   - full: 该方向已累计满星
+//   - failed: 重试耗尽仍打不过，调用方可切换其他职业继续
 func masterPracticeChallengeJob(
 	ctx context.Context,
 	job protocol.MasterPracticeJobInfo,
 	remaining int32,
+	maxRetries int,
 	roleID string,
 	call func(*protocol.Packet, uint32) (*protocol.Packet, error),
-) (consumed int32, full bool, err error) {
+) (consumed int32, full bool, failed bool, err error) {
 	challengedToday := make(map[int32]bool, len(job.TodayChallenge))
 	for _, star := range job.TodayChallenge {
 		challengedToday[star] = true
+	}
+	if maxRetries < 0 {
+		maxRetries = 0
 	}
 
 	for star := int32(1); star <= 3; star++ {
 		if challengedToday[star] {
 			continue
 		}
-		if remaining > 0 && consumed >= remaining {
-			slog.Info("宗师修行今日挑战次数已用尽，停止发送挑战",
-				"role_id", roleID, "job_id", job.JobID, "remaining", remaining)
-			return consumed, false, scheduler.ErrAttemptsExhausted
-		}
-		if ctx.Err() != nil {
-			return consumed, false, nil
-		}
-		resp, callErr := call(
-			protocol.BuildMasterPracticeChallengePacket(uint32(job.JobID), uint32(star), 0),
-			protocol.ActionIDMasterPracticeChallenge,
-		)
-		if callErr != nil || resp == nil {
-			slog.Warn("宗师修行挑战无回包", "role_id", roleID, "job_id", job.JobID, "star", star, "err", callErr)
-			return consumed, false, nil
-		}
-		code, pErr := protocol.ParseMasterPracticeActionCode(resp.Payload)
-		if pErr != nil {
-			slog.Warn("解析宗师修行挑战回包失败", "role_id", roleID, "err", pErr)
-			return consumed, false, nil
-		}
-		outcome, outcomeErr := classifyMasterPracticeChallengeResult(code)
-		switch outcome {
-		case masterPracticeChallengeContinue:
-			if code == protocol.MasterPracticeResultSuccess {
-				consumed++
-				slog.Info("宗师修行挑战成功", "role_id", roleID, "job_id", job.JobID, "star", star)
-			} else {
-				// 今日已挑战过该星级，不再重复消耗全局次数。
-				slog.Info("宗师修行该星级今日已挑战", "role_id", roleID, "job_id", job.JobID, "star", star)
+		retries := 0
+		for {
+			if remaining > 0 && consumed >= remaining {
+				slog.Info("宗师修行今日挑战次数已用尽，停止发送挑战",
+					"role_id", roleID, "job_id", job.JobID, "remaining", remaining)
+				return consumed, false, false, scheduler.ErrAttemptsExhausted
 			}
-		case masterPracticeChallengeFull:
-			slog.Info("宗师修行方向累计星数已满", "role_id", roleID, "job_id", job.JobID, "result", code)
-			return consumed, true, nil
-		case masterPracticeChallengeNoTimes:
-			return consumed, false, scheduler.ErrAttemptsExhausted
-		case masterPracticeChallengeJobError:
-			slog.Warn("宗师修行职业不匹配 (请上阵相同职业的角色)",
-				"role_id", roleID, "job_id", job.JobID, "result", code)
-			return consumed, false, scheduler.ErrConditionNotMet
-		default:
-			if outcomeErr != nil {
-				slog.Warn("宗师修行挑战业务失败",
-					"role_id", roleID, "job_id", job.JobID, "star", star, "result", code, "err", outcomeErr)
-				return consumed, false, outcomeErr
+			if ctx.Err() != nil {
+				return consumed, false, false, nil
 			}
-			return consumed, false, nil
-		}
-		select {
-		case <-ctx.Done():
-			return consumed, false, nil
-		case <-time.After(200 * time.Millisecond):
+			resp, callErr := call(
+				protocol.BuildMasterPracticeChallengePacket(uint32(job.JobID), uint32(star), 0),
+				protocol.ActionIDMasterPracticeChallenge,
+			)
+			if callErr != nil || resp == nil {
+				slog.Info("宗师修行挑战无回包", "role_id", roleID, "job_id", job.JobID, "star", star, "err", callErr)
+				return consumed, false, false, nil
+			}
+			code, pErr := protocol.ParseMasterPracticeActionCode(resp.Payload)
+			if pErr != nil {
+				slog.Warn("解析宗师修行挑战回包失败", "role_id", roleID, "err", pErr)
+				return consumed, false, false, nil
+			}
+			outcome, outcomeErr := classifyMasterPracticeChallengeResult(code)
+			switch outcome {
+			case masterPracticeChallengeContinue:
+				if code == protocol.MasterPracticeResultSuccess {
+					consumed++
+					slog.Info("宗师修行挑战成功", "role_id", roleID, "job_id", job.JobID, "star", star)
+				} else {
+					// 今日已挑战过该星级，不再重复消耗全局次数。
+					slog.Info("宗师修行该星级今日已挑战", "role_id", roleID, "job_id", job.JobID, "star", star)
+				}
+			case masterPracticeChallengeFull:
+				slog.Info("宗师修行方向累计星数已满", "role_id", roleID, "job_id", job.JobID, "result", code)
+				return consumed, true, false, nil
+			case masterPracticeChallengeNoTimes:
+				return consumed, false, false, scheduler.ErrAttemptsExhausted
+			case masterPracticeChallengeJobError:
+				slog.Warn("宗师修行职业不匹配 (请上阵相同职业的角色)",
+					"role_id", roleID, "job_id", job.JobID, "result", code)
+				return consumed, false, false, scheduler.ErrConditionNotMet
+			default:
+				if code == protocol.MasterPracticeResultFailed {
+					if retries < maxRetries {
+						retries++
+						slog.Warn("宗师修行挑战失败，重试同星级",
+							"role_id", roleID, "job_id", job.JobID, "star", star,
+							"retry", retries, "max_retries", maxRetries)
+						select {
+						case <-ctx.Done():
+							return consumed, false, false, nil
+						case <-time.After(masterPracticeRetryDelay):
+						}
+						continue
+					}
+					slog.Warn("宗师修行挑战失败且重试耗尽",
+						"role_id", roleID, "job_id", job.JobID, "star", star,
+						"retries", retries, "max_retries", maxRetries)
+					return consumed, false, true, nil
+				}
+				if outcomeErr != nil {
+					slog.Warn("宗师修行挑战业务失败",
+						"role_id", roleID, "job_id", job.JobID, "star", star, "result", code, "err", outcomeErr)
+					return consumed, false, false, outcomeErr
+				}
+				return consumed, false, false, nil
+			}
+			select {
+			case <-ctx.Done():
+				return consumed, false, false, nil
+			case <-time.After(200 * time.Millisecond):
+			}
+			break
 		}
 	}
-	return consumed, false, nil
+	return consumed, false, false, nil
+}
+
+// masterPracticeBuildOrder 构建本轮职业修行顺序：
+// 先按配置/当前职业确定主方向；开启失败切换时，再追加面板中可修行且已激活神器绝技的备选职业。
+func masterPracticeBuildOrder(
+	cfg MasterPracticeConfig,
+	panel *protocol.MasterPracticePanel,
+	currentJob int32,
+	stunts []protocol.LibraryStuntInfo,
+) []int32 {
+	seen := make(map[int32]bool)
+	order := make([]int32, 0, len(panel.Jobs)+1)
+	add := func(jobID int32) {
+		if jobID <= 0 || seen[jobID] {
+			return
+		}
+		seen[jobID] = true
+		order = append(order, jobID)
+	}
+
+	if len(cfg.PracticeOrder) > 0 {
+		for _, jobID := range cfg.PracticeOrder {
+			add(jobID)
+		}
+	} else {
+		add(currentJob)
+	}
+
+	if !cfg.SwitchJobOnFailure || !cfg.AllowSwitchStunt {
+		return order
+	}
+	for _, job := range panel.Jobs {
+		if job.JobID == currentJob || seen[job.JobID] {
+			continue
+		}
+		if masterPracticeJobFull(job, cfg.MaxStarsPerJob) || masterPracticeJobDoneToday(job) {
+			continue
+		}
+		if _, ok := masterPracticeFindStunt(stunts, job.JobID); !ok {
+			continue
+		}
+		add(job.JobID)
+	}
+	return order
 }
 
 // masterPracticeStepUpJob 刷新面板并在星数满足时尝试升阶，返回刷新后的面板。

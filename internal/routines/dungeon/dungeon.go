@@ -35,7 +35,7 @@ type QuestCycleFeatureConfig struct {
 type SweepFeatureConfig struct {
 	Enabled               bool     `json:"enabled"`
 	Pipeline              []string `json:"pipeline"`                // 扫荡流水线优先级: "sweep_elite"
-	MaxBatchTimes         int      `json:"max_batch_times"`         // 单次执行最大扫荡次数 (仅作用于 sweep_highest_main；精英副本由服务端每日次数/体力熔断)
+	MaxBatchTimes         int      `json:"max_batch_times"`         // 已废弃: 主线扫荡已下线，精英副本按城镇全量扫荡
 	PreferPracticeQuickly bool     `json:"prefer_practice_quickly"` // 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
 	SellSweptItems        bool     `json:"sell_swept_items"`        // 扫荡精英副本后是否自动卖掉扫荡物
 	AutoSellSweptItems    bool     `json:"auto_sell_swept_items"`   // 别名

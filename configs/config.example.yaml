@@ -150,7 +150,6 @@ scheduler:
       pipeline:
         - "sweep_elite"               # 扫荡精英副本
       sell_swept_items: true          # 扫荡后自动出售扫荡物
-      max_batch_times: 6              # 主线扫荡最大轮数；精英副本按城镇全量扫荡
       prefer_practice_quickly: true   # 优先使用秒完成协议
 
   six_realms:
@@ -171,7 +170,6 @@ scheduler:
     auto_rob: true                    # 启程后自动打劫其他玩家队伍
     max_rob_attempts: 5               # 单轮最多打劫次数 (1-5)
     max_probe_targets: 8              # 单轮最多探测目标数 (1-50)
-    force_saint_area: true            # 固定圣域取经，圣域不可用时跳过，不回退仙界/主服
 
   # 粗铁淬炼池 (固定铜钱消耗，永不消耗元宝)
   spirit_pool:
@@ -196,6 +194,8 @@ scheduler:
     auto_normalize_deploy: true      # 自动下阵异职业伙伴、上阵同职业伙伴
     allow_switch_stunt: true         # 允许切换主角神器绝技转换职业
     allow_step_up: true              # 挑战后自动尝试境界突破
+    max_retries_per_star: 2          # 单个星级挑战失败后的重试次数
+    switch_job_on_failure: true      # 重试耗尽仍打不过时切换到其他可修行职业
 
   # 天帝宝库三档自选大奖
   treasure_house:

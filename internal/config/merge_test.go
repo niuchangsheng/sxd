@@ -104,13 +104,13 @@ scheduler:
     sweep:
       enabled: true
       pipeline: ["sweep_elite"]
-      max_batch_times: 10
+      prefer_practice_quickly: false
   server_overrides:
     s0:
       dungeon:
         sweep:
-          pipeline: ["sweep_elite", "sweep_highest_main"]
-          max_batch_times: 3
+          pipeline: ["sweep_elite", "quest_cycle"]
+          prefer_practice_quickly: true
 `)
 
 	cfg, err := config.Load(path)
@@ -125,15 +125,15 @@ scheduler:
 	if !s0.Dungeon.Sweep.Enabled {
 		t.Error("expected nested enabled to be inherited")
 	}
-	if s0.Dungeon.Sweep.MaxBatchTimes != 3 {
-		t.Errorf("expected max_batch_times 3, got %d", s0.Dungeon.Sweep.MaxBatchTimes)
+	if !s0.Dungeon.Sweep.PreferPracticeQuickly {
+		t.Error("expected nested prefer_practice_quickly override to be applied")
 	}
 	pipeline := s0.Dungeon.Sweep.Pipeline
-	if len(pipeline) != 2 || pipeline[0] != "sweep_elite" || pipeline[1] != "sweep_highest_main" {
+	if len(pipeline) != 2 || pipeline[0] != "sweep_elite" || pipeline[1] != "quest_cycle" {
 		t.Errorf("expected pipeline to be replaced wholesale, got %v", pipeline)
 	}
-	if cfg.Scheduler.Dungeon.Sweep.MaxBatchTimes != 10 {
-		t.Error("global max_batch_times must not be mutated")
+	if cfg.Scheduler.Dungeon.Sweep.PreferPracticeQuickly {
+		t.Error("global prefer_practice_quickly must not be mutated")
 	}
 }
 

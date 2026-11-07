@@ -365,6 +365,102 @@ func TestClassifyMasterPracticeChallengeResult(t *testing.T) {
 	}
 }
 
+// fakeMasterChallengeCall 按预设结果码序列模拟宗师修行挑战回包。
+type fakeMasterChallengeCall struct {
+	results []uint8
+	next    int
+	calls   int
+}
+
+func (f *fakeMasterChallengeCall) call(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
+	if act != protocol.ActionIDMasterPracticeChallenge {
+		return nil, fmt.Errorf("unexpected action 0x%08X", act)
+	}
+	if f.next >= len(f.results) {
+		return nil, fmt.Errorf("challenge result sequence exhausted")
+	}
+	code := f.results[f.next]
+	f.next++
+	f.calls++
+	return protocol.BuildMasterPracticeActionCodePacket(act, code), nil
+}
+
+// TestMasterPracticeChallengeJob_RetriesFailedStarThenSucceeds 验证战斗失败后重试同星级。
+func TestMasterPracticeChallengeJob_RetriesFailedStarThenSucceeds(t *testing.T) {
+	job := protocol.MasterPracticeJobInfo{JobID: 15, TodayChallenge: []int32{2, 3}}
+	fake := &fakeMasterChallengeCall{results: []uint8{
+		protocol.MasterPracticeResultFailed,
+		protocol.MasterPracticeResultSuccess,
+	}}
+
+	consumed, full, failed, err := masterPracticeChallengeJob(
+		context.Background(), job, 3, 2, "s0-test", fake.call)
+	if err != nil || full || failed {
+		t.Fatalf("expected retry success, consumed=%d full=%v failed=%v err=%v", consumed, full, failed, err)
+	}
+	if consumed != 1 || fake.calls != 2 {
+		t.Fatalf("expected 1 consumed after 2 calls, got consumed=%d calls=%d", consumed, fake.calls)
+	}
+}
+
+// TestMasterPracticeChallengeJob_RetriesExhaustedSignalsJobSwitch 验证重试耗尽后
+// 返回 failed=true，调用方可切换职业。
+func TestMasterPracticeChallengeJob_RetriesExhaustedSignalsJobSwitch(t *testing.T) {
+	job := protocol.MasterPracticeJobInfo{JobID: 15, TodayChallenge: []int32{2, 3}}
+	fake := &fakeMasterChallengeCall{results: []uint8{
+		protocol.MasterPracticeResultFailed,
+		protocol.MasterPracticeResultFailed,
+	}}
+
+	consumed, full, failed, err := masterPracticeChallengeJob(
+		context.Background(), job, 3, 1, "s0-test", fake.call)
+	if err != nil || full {
+		t.Fatalf("unexpected error/full: consumed=%d full=%v err=%v", consumed, full, err)
+	}
+	if !failed {
+		t.Fatal("expected failed=true after retry exhaustion")
+	}
+	if consumed != 0 || fake.calls != 2 {
+		t.Fatalf("expected 0 consumed after 1 retry, got consumed=%d calls=%d", consumed, fake.calls)
+	}
+}
+
+// TestMasterPracticeBuildOrder_FallbackJobsRequireStunt 验证失败切换候选：
+// 优先当前职业，再追加未满星/今日未完成且已激活神器绝技的职业。
+func TestMasterPracticeBuildOrder_FallbackJobsRequireStunt(t *testing.T) {
+	panel := &protocol.MasterPracticePanel{Jobs: []protocol.MasterPracticeJobInfo{
+		{JobID: 15},
+		{JobID: 1},
+		{JobID: 2},
+		{JobID: 3, TotalStars: 30},
+		{JobID: 5},
+		{JobID: 6, TodayChallenge: []int32{1, 2, 3}},
+	}}
+	stunts := []protocol.LibraryStuntInfo{
+		{RoleJobID: 1, RoleStuntID: 101, IsActive: 1},
+		{RoleJobID: 2, RoleStuntID: 102, IsActive: 1},
+		{RoleJobID: 3, RoleStuntID: 103, IsActive: 1},
+		// Job 5 未提供已激活绝技，不能作为切换目标。
+	}
+	cfg := MasterPracticeConfig{
+		MaxStarsPerJob:     30,
+		AllowSwitchStunt:   true,
+		SwitchJobOnFailure: true,
+	}
+
+	order := masterPracticeBuildOrder(cfg, panel, 15, stunts)
+	want := []int32{15, 1, 2}
+	if fmt.Sprint(order) != fmt.Sprint(want) {
+		t.Fatalf("expected order %v, got %v", want, order)
+	}
+
+	cfg.SwitchJobOnFailure = false
+	order = masterPracticeBuildOrder(cfg, panel, 15, stunts)
+	if fmt.Sprint(order) != fmt.Sprint([]int32{15}) {
+		t.Fatalf("switch disabled: expected only current job, got %v", order)
+	}
+}
+
 func TestBuildMasterPracticeDeployPacketLayout(t *testing.T) {
 	up := protocol.BuildMasterPracticeDeployPacket(768553, 9)
 	if up.ActionID != protocol.ActionIDMasterPracticeDeploy {

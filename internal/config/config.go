@@ -153,6 +153,10 @@ type MasterPracticeConfig struct {
 	AllowSwitchStunt *bool `yaml:"allow_switch_stunt"`
 	// AllowStepUp 是否在挑战后自动升阶 (默认 true)。
 	AllowStepUp *bool `yaml:"allow_step_up"`
+	// MaxRetriesPerStar 单个星级挑战失败后的重试次数 (默认 2)。
+	MaxRetriesPerStar int `yaml:"max_retries_per_star"`
+	// SwitchJobOnFailure 当前职业重试耗尽仍打不过时，是否切换到其他可修行职业 (默认 true)。
+	SwitchJobOnFailure *bool `yaml:"switch_job_on_failure"`
 }
 
 // StartupConfig 多区服启动编排配置。
@@ -375,9 +379,8 @@ type QuestCycleConfig struct {
 // DungeonSweepFeatureConfig 副本关卡扫荡配置
 type DungeonSweepFeatureConfig struct {
 	Enabled               bool     `yaml:"enabled"`
-	Pipeline              []string `yaml:"pipeline"`                // 扫荡优先级流水线: "sweep_elite"
-	MaxBatchTimes         int      `yaml:"max_batch_times"`         // 主线扫荡单次最大轮数 (sweep_highest_main)；精英副本按城镇全量扫荡
-	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"` // 优先使用秒完成协议 (主线 Module 25 / 英雄副本 quickly)
+	Pipeline              []string `yaml:"pipeline"`                // 扫荡优先级流水线: "quest_cycle" / "sweep_elite"
+	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"` // 优先使用英雄副本秒完成协议
 	SellSweptItems        bool     `yaml:"sell_swept_items"`        // 扫荡精英副本后是否自动卖掉扫荡物
 	AutoSellSweptItems    bool     `yaml:"auto_sell_swept_items"`   // 扫荡精英副本后是否自动卖掉扫荡物 (兼容别名)
 }
@@ -392,7 +395,6 @@ type DungeonConfig struct {
 	// 向下兼容既有顶层扁平配置字段
 	Pipeline              []string `yaml:"pipeline"`
 	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"`
-	MaxBatchTimes         int      `yaml:"max_batch_times"`
 	AutoReplenishStamina  bool     `yaml:"auto_replenish_stamina"`
 	MaxReplenishStamina   int      `yaml:"max_replenish_stamina"`
 	MaxReplenishTimes     int      `yaml:"max_replenish_times"`
@@ -512,7 +514,6 @@ func applySchedulerDefaults(sc *SchedulerConfig) {
 		sc.Dungeon.QuestCycle.MaxReplenishStamina > 0 ||
 		sc.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
 		sc.Dungeon.Sweep.Enabled ||
-		sc.Dungeon.Sweep.MaxBatchTimes > 0 ||
 		sc.Dungeon.Sweep.SellSweptItems ||
 		sc.Dungeon.Sweep.AutoSellSweptItems ||
 		sc.Dungeon.SellSweptItems ||
@@ -531,9 +532,6 @@ func applySchedulerDefaults(sc *SchedulerConfig) {
 	// 默认启用秒完成
 	if !sc.Dungeon.PreferPracticeQuickly {
 		sc.Dungeon.PreferPracticeQuickly = true
-	}
-	if sc.Dungeon.MaxBatchTimes <= 0 {
-		sc.Dungeon.MaxBatchTimes = 10
 	}
 	if sc.Dungeon.MaxReplenishStamina <= 0 {
 		if sc.Dungeon.MaxReplenishTimes > 0 {
@@ -603,6 +601,13 @@ func applySchedulerDefaults(sc *SchedulerConfig) {
 	if sc.MasterPractice.AllowStepUp == nil {
 		allowStepUp := true
 		sc.MasterPractice.AllowStepUp = &allowStepUp
+	}
+	if sc.MasterPractice.MaxRetriesPerStar <= 0 {
+		sc.MasterPractice.MaxRetriesPerStar = 2
+	}
+	if sc.MasterPractice.SwitchJobOnFailure == nil {
+		switchJob := true
+		sc.MasterPractice.SwitchJobOnFailure = &switchJob
 	}
 
 	// 多区服换票默认串行间隔 2~5 秒；显式设置为 0 可关闭。
