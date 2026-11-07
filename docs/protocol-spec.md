@@ -661,10 +661,23 @@ Action 6 只下发**当前角色已开放**的功能条目（客户端 `Function
 自动化在发起业务请求前调用 `RoleSession.IsFunctionOpen(functionID)`（会话内缓存 5 分钟，
 一次 Action 6 即可覆盖整轮日常）。
 
-**天帝宝库 Act 4 的城镇上下文约束（2026-11-06 实机）**：`set_use_free_flag (594,4)`
-在角色处于城镇时正常返回；若本轮先执行过魔王试炼 `create_team`（即使随即 `exit_team`），
-服务端会保留战场上下文并静默丢弃 Act 4，连 `enter_town (1,0)` 也会被丢弃。
-因此天帝宝库 Routine 使用高于 `PriorityHigh` 的优先级（110），在每日任务批次最前执行。
+**天帝宝库 Act 4 的魔王试炼上下文约束（2026-11-07 实机校正）**：`set_use_free_flag (594,4)`
+在角色处于城镇时正常返回；一旦同一连接内发送过**任何** Module 57（魔王试炼）请求
+——包括只读的 `get_player_team_info (57,3)`，即使 `team_id=0`——服务端即进入试炼上下文，
+随后静默丢弃 Act 4，导致整轮免费抽奖被跳过。该污染与会话内的发包顺序无关，只与是否
+发送过 Mod 57 有关；`enter_town (1,0)` 同样可能被丢弃。
+
+进一步的实机定位（2026-11-07）：不仅 Mod 57，动态选奖 `CollectNeedSnapshot` 采集的
+养成面板（法阵 486、龙珠 111、血脉 116、藏经阁 85、兵法 299、圣器、混沌、幻兽、丹魂等）
+同样会让 Act 4 静默丢弃；而 `main_panel (594,1)`、`get_free_item (594,8)`、`select_panel (594,2)`
+等 594 自身动作不会。可见该标记必须紧贴 594 面板调用发送。
+
+因此天帝宝库 Routine：① 优先级 110，在每日任务批次最前执行；② 顺序固定为
+`main_panel -> get_free_item -> set_use_free_flag (Act 4) -> select_panel -> 动态选奖采集
+-> set_award -> lottery`，即 Act 4 必须**在**任何养成面板采集与 Mod 57 请求**之前**发送；
+③ 移除“先查询魔王试炼队伍”的清理逻辑（遗留队伍由魔王试炼 Routine 自身在开战前清理）。
+复现探针：`test/probes/probe_treasure_seq_live.go`（`-beelzebub` 复现 Act 4 被静默丢弃，
+`-variant 4` 验证提前发送 Act 4 的成功顺序）。
 
 **天帝宝库自选奖励元数据（2026-11-06 校正）**：`select_panel` 只下发档位 quality
 与奖励 id，奖励 id → 实际道具/数量/档位品质/官方展示 sort 必须查官方

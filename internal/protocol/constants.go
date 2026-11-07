@@ -131,6 +131,13 @@ const (
 	ActionIDFateGetQuestion uint32 = 0x00150001
 	// ActionIDFateAnswer 仙旅奇缘回答提交选项 (Module 21, Action 2 -> 0x00150002)
 	ActionIDFateAnswer uint32 = 0x00150002
+	// ActionIDFateLotteryDraw 仙旅奇缘开启答题宝箱 (Module 21, Action 4 -> 0x00150004)
+	ActionIDFateLotteryDraw uint32 = 0x00150004
+
+	// ActionIDStarPictureInfo 查询法力星图面板 (Module 485, Action 0 -> 0x01E50000)
+	ActionIDStarPictureInfo uint32 = 0x01E50000
+	// ActionIDStarPictureDivination 法力星图免费占星 (Module 485, Action 1 -> 0x01E50001)
+	ActionIDStarPictureDivination uint32 = 0x01E50001
 
 	// ActionIDArenaOpenPanel 打开本服竞技场面板 (Module 28, Action 0 -> 0x001C0000)
 	ActionIDArenaOpenPanel uint32 = 0x001C0000

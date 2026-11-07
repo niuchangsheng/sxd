@@ -125,6 +125,53 @@ func TestFateCodec_ParseGoldenQuestion(t *testing.T) {
 	if res.Options[1].AnswerID != 8 || res.Options[1].Sign != "B" {
 		t.Errorf("选项 2 不符: %+v", res.Options[1])
 	}
+	// 回包尾部扩展字段: cur_answer_times, tol_answer_times, join_count
+	if res.CurAnswerTimes != 0 || res.TolAnswerTimes != 5 || res.JoinCount != 0 {
+		t.Errorf("答题计数解析不符: cur=%d tol=%d join=%d",
+			res.CurAnswerTimes, res.TolAnswerTimes, res.JoinCount)
+	}
+}
+
+func TestFateCodec_LotteryDraw(t *testing.T) {
+	// 请求: 4 字节 PrevAct, 不含任何业务参数。
+	reqPkt, err := BuildFateLotteryDrawPacket(ActionIDFateGetQuestion)
+	if err != nil {
+		t.Fatalf("BuildFateLotteryDrawPacket 失败: %v", err)
+	}
+	if reqPkt.ActionID != ActionIDFateLotteryDraw {
+		t.Fatalf("ActionID 不匹配: 0x%08X", reqPkt.ActionID)
+	}
+	if got := hex.EncodeToString(reqPkt.Payload); got != "00150001" {
+		t.Fatalf("开宝箱请求载荷不符: %s", got)
+	}
+
+	// 成功路径: 宝箱内道具原样解析。
+	okPkt := BuildFateLotteryDrawResultPacket(FateLotteryDrawResult{
+		Msg:    FateResultSuccess,
+		Awards: []FateDrawItem{{ItemID: 4649, Num: 8}},
+	})
+	res, err := ParseFateLotteryDrawResult(okPkt.Payload)
+	if err != nil {
+		t.Fatalf("ParseFateLotteryDrawResult 失败: %v", err)
+	}
+	if res.Msg != FateResultSuccess || len(res.Awards) != 1 ||
+		res.Awards[0].ItemID != 4649 || res.Awards[0].Num != 8 {
+		t.Fatalf("开宝箱回包解析不符: %+v", res)
+	}
+
+	// 失败路径: 无宝箱可领时 msg 必须透传, 由调用方熔断。
+	failPkt := BuildFateLotteryDrawResultPacket(FateLotteryDrawResult{Msg: 10})
+	failRes, err := ParseFateLotteryDrawResult(failPkt.Payload)
+	if err != nil {
+		t.Fatalf("失败回包解析失败: %v", err)
+	}
+	if failRes.Msg != 10 || len(failRes.Awards) != 0 {
+		t.Fatalf("失败回包解析不符: %+v", failRes)
+	}
+
+	if _, err := ParseFateLotteryDrawResult(nil); err == nil {
+		t.Fatal("空载荷应返回错误")
+	}
 }
 
 func TestFateCodec_ParseGoldenAnswer(t *testing.T) {
@@ -168,9 +215,12 @@ func TestFateCodec_ResultPacketsRoundTrip(t *testing.T) {
 	}
 
 	question := FateQuestionResult{
-		EventID: 26,
-		Story:   "测试故事",
-		Msg:     FateResultSuccess,
+		EventID:        26,
+		Story:          "测试故事",
+		Msg:            FateResultSuccess,
+		CurAnswerTimes: 3,
+		TolAnswerTimes: 5,
+		JoinCount:      2,
 		Options: []FateOption{
 			{AnswerID: 7, Sign: "A", Text: "选项一"},
 			{AnswerID: 8, Sign: "B", Text: "选项二"},
@@ -183,6 +233,9 @@ func TestFateCodec_ResultPacketsRoundTrip(t *testing.T) {
 	}
 	if parsedQ.EventID != question.EventID || parsedQ.Story != question.Story || parsedQ.Msg != question.Msg || len(parsedQ.Options) != 2 {
 		t.Errorf("题目回包往返不符: %+v", parsedQ)
+	}
+	if parsedQ.CurAnswerTimes != 3 || parsedQ.TolAnswerTimes != 5 || parsedQ.JoinCount != 2 {
+		t.Errorf("题目回包答题计数往返不符: %+v", parsedQ)
 	}
 
 	answer := FateAnswerResult{

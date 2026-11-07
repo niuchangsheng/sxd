@@ -110,6 +110,20 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 		}
 	})
 
+	t.Run("法力星图免费占星", func(t *testing.T) {
+		r := NewStarPictureRoutine()
+		if r.Name() != "star_picture" {
+			t.Fatalf("任务名称不匹配: %s", r.Name())
+		}
+		if err := r.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("法力星图执行失败: %v", err)
+		}
+		// Mock 提供 2 次免费占星，执行后最后动作必须是占星结算。
+		if got := session.LastActionID(); got != protocol.ActionIDStarPictureDivination {
+			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDStarPictureDivination, got)
+		}
+	})
+
 	t.Run("空会话防御", func(t *testing.T) {
 		routine := NewTravelEventRoutine(qaEngine)
 		if err := routine.Execute(context.Background(), nil, nil); err != client.ErrNotConnected {

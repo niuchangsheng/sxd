@@ -1,5 +1,7 @@
 # s0 每日活跃度 1200 达标审计与未实现功能清单
 
+> 当前已实现/未实现功能的简明清单见 [unimplemented-free-features.md](./unimplemented-free-features.md)（2026-11-07 复核：完整批次后 s0 `daily_total=1300`）。
+
 - 审计日期: 2026-11-06
 - 账号/区服: s0 (角色 遁一, Lv.300)
 - 目标: `s0.yaml` 执行后每日活跃度 ≥ 1200
@@ -176,6 +178,33 @@
   通天塔仅剩 `practice (648/2)` 未探测，需进一步确认是否为修为丹产出入口。
 - 单元测试：`daily_activity_test.go`、`fate_hunt_test.go`、`fate_hunt_test.go`(例程)、
   `forbidden_book_test.go`、`minigame_test.go`。
+
+## 8. 2026-11-07 下午：链路修复、法力星图与 1265/1200
+
+- **仙旅奇缘答题超时（已修复）**：`get_event_and_answer` 回包尾部 3 个 Int 为
+  `cur_answer_times / tol_answer_times / join_count`。每答满 5 题（`cur >= tol` 且 `tol>0`）
+  必须先调用免费开箱 `lottery_draw (21,4, 0x00150004)` 并重新拉题，否则服务端静默丢弃
+  答题请求直至超时。例程已按此处理，线上 9 连答成功、`ingot_delta=0`。
+  单元测试见 `fate_test.go`（`TestFateCodec_LotteryDraw`）。
+- **天帝宝库 Act 4 被静默丢弃（已修复）**：`set_use_free_flag (594,4)` 必须紧贴 594 面板
+  调用发送。实测同一连接先发送过任意 Mod 57 请求（连只读 `get_player_team_info` 也算），
+  或先执行动态选奖的养成面板采集（486/111/116/85/299 等），Act 4 即被静默丢弃，
+  导致整轮免费钥匙抽奖被跳过。修复：删除例程里的魔王试炼预清理（其本身即污染源），
+  顺序改为 `main_panel -> get_free_item -> set_use_free_flag -> select_panel -> 采集 ->
+  set_award -> lottery`。线上 s0 每日 10 抽、s1 1 抽全部恢复，`ingot_delta=0`。
+- **法力星图占星（新实现，任务 81，+10）**：`Mod_StarPicture_Base` (485)：
+  `get_info (485/0)` + `divination (485/1)`。新增 `star_picture` 例程与协议编解码。
+  **重要实测警告**：面板 `free_divination_count` 与实际扣费不同步——`has_divination==0`
+  的首次占星免费，但同日继续抽第 2/3 次时服务端扣除 **50 元宝**。
+  因此例程每天最多占星 1 次，且仅在 `has_divination==0 && free_divination_count>0`
+  时执行；`has_divination>0` 直接跳过。验证：任务 81 由 0/1 → 1/1（+10）。
+  **鉴于面板计数已被证实会与实际扣费不同步，`star_picture` 默认关闭**
+  （`configs/*.yaml` 中为 `false`），只有在人工确认当日 `has_divination` 语义后才可开启；
+  这不影响当前 1265 分的达标结果。
+- 当日最终活跃度：**1265 / 1200（gap=0）**。
+- **遗留待查**：琳琅阁入口确认为 `Mod_Item_Base.lucky_shop_item_list`，官方客户端请求参数为
+  当前城镇 NPC id（`TownType.getTownNPCIdByFunc(mapId, NPCType.LuckyShopNPC)`），
+  并非空请求；`info_assistant (100/78)` 可读但当前返回全 0，好礼馈赠需继续定位 NPC/入口。
 
 ## 5. 已知缺陷
 

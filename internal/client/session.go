@@ -2235,9 +2235,12 @@ func runMockGameServer(conn net.Conn) {
 	rollCakeRemain := int8(2)
 	rollCakeTodayScore := int32(0)
 
-	// 仙旅奇缘 mock 状态: 每日 3 次，已参与 0 次
+	// 仙旅奇缘 mock 状态: 每日 3 次，已参与 0 次。
+	// 每轮答题 1 次即产出宝箱，用于覆盖 routine 的开箱门禁分支。
 	fateJoinCount := int32(0)
 	fateTotalCount := int32(3)
+	fateCurAnswerTimes := int32(0)
+	fateTolAnswerTimes := int32(1)
 
 	// 帮派祭神 mock 状态: 每日 3 次免费上香机会
 	factionIncenseCount := int32(0)
@@ -2276,6 +2279,8 @@ func runMockGameServer(conn net.Conn) {
 
 	// 悟法领域 mock 状态: 秘馆 2 有 1 次免费十连，抽卡后归零。
 	wuFaFreeTenCount := int32(1)
+	// 法力星图 mock 状态: 2 次免费占星
+	starPictureMockFree := int32(2)
 	findImmortalTotalCount := int32(5)
 	findBlessNumber := int16(1)
 	findBlessStage := int8(0)
@@ -2767,13 +2772,26 @@ func runMockGameServer(conn net.Conn) {
 					{AnswerID: 7, Sign: "A", Text: "创造第三人类，自诩为第三人类始祖。"},
 					{AnswerID: 8, Sign: "B", Text: "遵守天地法则，封印神土，以免人间大乱。"},
 				},
+				CurAnswerTimes: fateCurAnswerTimes,
+				TolAnswerTimes: fateTolAnswerTimes,
+				JoinCount:      fateJoinCount,
 			})
 			_ = protocol.WritePacket(conn, resPkt)
+
+		case protocol.ActionIDFateLotteryDraw:
+			// 响应仙旅奇缘答题宝箱领取: 宝箱开启后本轮答题计数归零
+			fateCurAnswerTimes = 0
+			_ = protocol.WritePacket(conn, protocol.BuildFateLotteryDrawResultPacket(protocol.FateLotteryDrawResult{
+				Msg: protocol.FateResultSuccess,
+			}))
 
 		case protocol.ActionIDFateAnswer:
 			// 响应仙旅奇缘答题结算
 			if fateJoinCount < fateTotalCount {
 				fateJoinCount++
+			}
+			if fateCurAnswerTimes < fateTolAnswerTimes {
+				fateCurAnswerTimes++
 			}
 			resPkt := protocol.BuildFateAnswerResultPacket(protocol.FateAnswerResult{
 				Message: "你获得50声望,30阅历！",
@@ -3617,6 +3635,25 @@ func runMockGameServer(conn net.Conn) {
 			w.WriteInt32(0) // indexTime
 			w.WriteInt8(1)  // is_skip
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDWuFaFieldInfo, w.Bytes()))
+
+		case protocol.ActionIDStarPictureInfo:
+			// 法力星图面板: 2 次免费占星 + 2 次元宝占星。
+			_ = protocol.WritePacket(conn, protocol.BuildStarPictureInfoResultPacket(protocol.StarPictureInfo{
+				FreeDivination:  starPictureMockFree,
+				IngotDivination: 2,
+				ChipCount:       30,
+				CurDeployLevel:  1,
+			}))
+
+		case protocol.ActionIDStarPictureDivination:
+			// 免费占星: 只有 free 次数 > 0 才成功，绝不回落到元宝档。
+			code := protocol.StarPictureResultSuccess
+			if starPictureMockFree > 0 {
+				starPictureMockFree--
+			} else {
+				code = 1
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDStarPictureDivination, []byte{code}))
 
 		case protocol.ActionIDGameAssistantInfo:
 			// 每日活跃度面板: 仅返回「悟法领域冥想」任务，剩余 20 次。

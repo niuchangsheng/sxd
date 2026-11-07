@@ -259,6 +259,38 @@ func NewTravelEventRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				return nil
 			}
 
+			// fetchQuestion 拉取当前奇缘题目并校验业务结果码。
+			fetchQuestion := func() (*protocol.FateQuestionResult, error) {
+				questionPkt, err := protocol.BuildFateQuestionPacket(protocol.FateQuestionRequest{
+					PrevAct: protocol.ActionIDFateGetInfo,
+				})
+				if err != nil {
+					return nil, fmt.Errorf("构造仙旅奇缘题目查询封包失败: %w", err)
+				}
+				qCtx, qCancel := context.WithTimeout(ctx, 8*time.Second)
+				defer qCancel()
+				respQPkt, err := session.Call(qCtx, questionPkt, protocol.ActionIDFateGetQuestion)
+				if err != nil {
+					return nil, fmt.Errorf("拉取仙旅奇缘题目失败: %w", err)
+				}
+				qRes, err := protocol.ParseFateQuestionResult(respQPkt.Payload)
+				if err != nil {
+					return nil, fmt.Errorf("解析仙旅奇缘题目回包失败: %w", err)
+				}
+				return qRes, nil
+			}
+			// rejected 统一记录题目拉取失败语义，调用方随后熔断退出。
+			rejected := func(qRes *protocol.FateQuestionResult) {
+				switch qRes.Msg {
+				case protocol.FateResultCDTime:
+					slog.Info("仙旅奇缘事件冷却中，本轮跳过", "role_id", session.RoleID())
+				case protocol.FateResultReachMaxCount:
+					slog.Info("今日仙旅奇缘次数已耗尽", "role_id", session.RoleID())
+				default:
+					slog.Warn("仙旅奇缘事件拉取被服务端拒绝", "role_id", session.RoleID(), "result", qRes.Msg)
+				}
+			}
+
 			rounds := int(remaining)
 			for i := 0; i < rounds; i++ {
 				if ctx.Err() != nil {
@@ -267,34 +299,57 @@ func NewTravelEventRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				}
 
 				// 3. 发送拉取当前奇缘事件题目请求
-				questionPkt, err := protocol.BuildFateQuestionPacket(protocol.FateQuestionRequest{
-					PrevAct: protocol.ActionIDFateGetInfo,
-				})
+				qRes, err := fetchQuestion()
 				if err != nil {
-					return fmt.Errorf("构造仙旅奇缘题目查询封包失败: %w", err)
-				}
-
-				qCtx, qCancel := context.WithTimeout(ctx, 8*time.Second)
-				respQPkt, err := session.Call(qCtx, questionPkt, protocol.ActionIDFateGetQuestion)
-				qCancel()
-				if err != nil {
-					return fmt.Errorf("拉取仙旅奇缘题目失败: %w", err)
-				}
-
-				qRes, err := protocol.ParseFateQuestionResult(respQPkt.Payload)
-				if err != nil {
-					return fmt.Errorf("解析仙旅奇缘题目回包失败: %w", err)
+					return err
 				}
 				if qRes.Msg != protocol.FateResultSuccess {
-					switch qRes.Msg {
-					case protocol.FateResultCDTime:
-						slog.Info("仙旅奇缘事件冷却中，本轮跳过", "role_id", session.RoleID())
-					case protocol.FateResultReachMaxCount:
-						slog.Info("今日仙旅奇缘次数已耗尽", "role_id", session.RoleID())
-					default:
-						slog.Warn("仙旅奇缘事件拉取被服务端拒绝", "role_id", session.RoleID(), "result", qRes.Msg)
-					}
+					rejected(qRes)
 					return nil
+				}
+
+				// 3.1 每答满一轮 (通常 5 次) 会生成答题宝箱；未开箱前服务端
+				// 会静默拒绝新的答案请求 (不回包直至超时)，因此必须先免费开箱。
+				for boxAttempts := 0; qRes.TolAnswerTimes > 0 && qRes.CurAnswerTimes >= qRes.TolAnswerTimes; boxAttempts++ {
+					if boxAttempts >= 3 {
+						slog.Warn("仙旅奇缘答题宝箱开启次数超限，熔断退出",
+							"role_id", session.RoleID(),
+							"cur_answer_times", qRes.CurAnswerTimes,
+							"tol_answer_times", qRes.TolAnswerTimes,
+						)
+						return nil
+					}
+					drawPkt, err := protocol.BuildFateLotteryDrawPacket(protocol.ActionIDFateGetQuestion)
+					if err != nil {
+						return fmt.Errorf("构造仙旅奇缘开宝箱封包失败: %w", err)
+					}
+					drawCtx, drawCancel := context.WithTimeout(ctx, 8*time.Second)
+					drawRespPkt, err := session.Call(drawCtx, drawPkt, protocol.ActionIDFateLotteryDraw)
+					drawCancel()
+					if err != nil {
+						return fmt.Errorf("开启仙旅奇缘答题宝箱失败: %w", err)
+					}
+					drawRes, err := protocol.ParseFateLotteryDrawResult(drawRespPkt.Payload)
+					if err != nil {
+						return fmt.Errorf("解析仙旅奇缘开宝箱回包失败: %w", err)
+					}
+					if drawRes.Msg != protocol.FateResultSuccess {
+						slog.Warn("仙旅奇缘答题宝箱开启被服务端拒绝",
+							"role_id", session.RoleID(), "result", drawRes.Msg)
+						return nil
+					}
+					slog.Info("仙旅奇缘答题宝箱已开启",
+						"role_id", session.RoleID(),
+						"awards", formatFateDrawItems(drawRes.Awards),
+					)
+					qRes, err = fetchQuestion()
+					if err != nil {
+						return err
+					}
+					if qRes.Msg != protocol.FateResultSuccess {
+						rejected(qRes)
+						return nil
+					}
 				}
 				if len(qRes.Options) == 0 {
 					slog.Warn("仙旅奇缘事件未下发任何分支选项", "role_id", session.RoleID(), "event_id", qRes.EventID)
@@ -379,6 +434,18 @@ func NewTravelEventRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 			return nil
 		},
 	)
+}
+
+// formatFateDrawItems 将答题宝箱道具奖励格式化为便于排查的日志文本。
+func formatFateDrawItems(items []protocol.FateDrawItem) string {
+	if len(items) == 0 {
+		return "无"
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, fmt.Sprintf("%d×%d", item.ItemID, item.Num))
+	}
+	return strings.Join(parts, ",")
 }
 
 // formatFateAwards 将结算奖励明细格式化为便于排查的日志文本。
@@ -2556,26 +2623,11 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				return nil
 			}
 
-			// 0.1 清理上一轮/上一会话可能遗留的魔王试炼队伍。
-			// 服务端在保留战场上下文时会静默丢弃 Act4 set_use_free_flag；
-			// 先退队/离场可避免宝库抽奖链路被污染。
-			if bOpen, bErr := session.IsFunctionOpen(ctx, protocol.FunctionIDBeelzebubTrials); bErr == nil && bOpen {
-				// 该清理只读查询使用短超时，避免在 Act4 前额外阻塞 8 秒。
-				teamCtx, teamCancel := context.WithTimeout(ctx, 3*time.Second)
-				teamID, _, tErr := session.BeelzebubTrialsGetPlayerTeamInfo(teamCtx)
-				teamCancel()
-				if tErr == nil && teamID > 0 {
-					slog.Info("天帝宝库前发现遗留魔王试炼队伍，先清理",
-						"role_id", session.RoleID(), "team_id", teamID)
-					_ = session.BeelzebubTrialsExitTeam(ctx)
-					_ = session.BeelzebubTrialsLeaveWar(ctx, 0)
-					select {
-					case <-ctx.Done():
-						return nil
-					case <-time.After(200 * time.Millisecond):
-					}
-				}
-			}
+			// 0.1 不要在 Act4 之前发送任何 Mod 57 (魔王试炼) 请求。
+			// 线上实测: 即便是只读的 get_player_team_info 也会让服务端进入
+			// 试炼上下文，随后免费优先标记 set_use_free_flag (Act 4) 被静默
+			// 丢弃，导致整轮免费抽奖被跳过。存在遗留队伍时由魔王试炼例程
+			// 自身在开战前清理，无需在此重复处理。
 
 			prevAct := session.LastActionID()
 			if prevAct == 0 {
@@ -2648,6 +2700,36 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 						}
 					}
 				}
+			}
+
+			// 2.1 设置优先使用免费次数 (Mod 594, Act 4) 必须紧跟在主面板/领钥匙之后、
+			// 任何养成面板采集之前发送。线上实测: Mod 57 请求以及动态选奖采集的
+			// 养成面板请求都会让服务端进入其他上下文，随后 Act 4 被静默丢弃，
+			// 整轮免费抽奖因此被跳过。设置失败时直接放弃抽奖，避免误扣元宝。
+			flagResp := call(protocol.BuildTreasureHouseUseFreeFlagPacket(1, prevAct),
+				protocol.ActionIDTreasureHouseSetUseFreeFlag, 8*time.Second)
+			if flagResp == nil {
+				slog.Info("设置免费次数优先无回包，跳过抽奖以免误消耗元宝",
+					"role_id", session.RoleID())
+				return nil
+			}
+			flagCode, fErr := protocol.ParseTreasureHouseResultCode(flagResp.Payload)
+			if fErr != nil {
+				slog.Warn("解析设置免费次数优先回包失败，跳过抽奖", "err", fErr)
+				return nil
+			}
+			if flagCode == protocol.TreasureHouseResultNoFreeItem {
+				// 今日无免费钥匙：服务端正常返回该业务码，不是协议失败。
+				slog.Info("天帝宝库无免费次数，跳过抽奖以免误消耗元宝",
+					"result", flagCode,
+					"meaning", protocol.TreasureHouseResultName(flagCode))
+				return nil
+			}
+			if flagCode != protocol.TreasureHouseResultSuccess {
+				slog.Warn("设置免费次数优先失败，跳过抽奖以免误消耗元宝",
+					"result", flagCode,
+					"meaning", protocol.TreasureHouseResultName(flagCode))
+				return nil
 			}
 
 			// 3. 自选面板 (Mod 594, Act 2): 只有 open_flag=1 的候选才能被服务端接受
@@ -2745,34 +2827,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			}
 			slog.Info("天帝宝库自选大奖设定成功", "awards", selectedAwards)
 
-			// 5. 设置优先使用免费次数 (Mod 594, Act 4)。
-			// 该标记决定抽奖是否优先消耗免费道具；设置失败时直接放弃抽奖，避免误扣元宝。
-			flagResp := call(protocol.BuildTreasureHouseUseFreeFlagPacket(1, prevAct),
-				protocol.ActionIDTreasureHouseSetUseFreeFlag, 8*time.Second)
-			if flagResp == nil {
-				slog.Info("设置免费次数优先无回包，跳过抽奖以免误消耗元宝")
-				return nil
-			}
-			flagCode, fErr := protocol.ParseTreasureHouseResultCode(flagResp.Payload)
-			if fErr != nil {
-				slog.Warn("解析设置免费次数优先回包失败，跳过抽奖", "err", fErr)
-				return nil
-			}
-			if flagCode == protocol.TreasureHouseResultNoFreeItem {
-				// 今日无免费钥匙：服务端正常返回该业务码，不是协议失败。
-				slog.Info("天帝宝库无免费次数，跳过抽奖以免误消耗元宝",
-					"result", flagCode,
-					"meaning", protocol.TreasureHouseResultName(flagCode))
-				return nil
-			}
-			if flagCode != protocol.TreasureHouseResultSuccess {
-				slog.Warn("设置免费次数优先失败，跳过抽奖以免误消耗元宝",
-					"result", flagCode,
-					"meaning", protocol.TreasureHouseResultName(flagCode))
-				return nil
-			}
-
-			// 6. 消耗免费钥匙抽奖 (Mod 594, Act 6): 每次必须解析 result_code，失败立即熔断
+			// 5. 消耗免费钥匙抽奖 (Mod 594, Act 6): 每次必须解析 result_code，失败立即熔断
 			drawLimit := cfg.MaxDrawTimes
 			if int(mainInfo.FreeItemNum) < drawLimit {
 				drawLimit = int(mainInfo.FreeItemNum)

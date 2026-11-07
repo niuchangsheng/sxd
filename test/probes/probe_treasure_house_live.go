@@ -155,9 +155,12 @@ func main() {
 
 	if *routineMode {
 		thCfg := minigame.TreasureHouseConfig{
-			DictRepo:     dictRepo,
-			Awards:       cfg.Scheduler.TreasureHouse.ResolveSelections(),
-			MaxDrawTimes: cfg.Scheduler.TreasureHouse.MaxDrawTimes,
+			DictRepo:      dictRepo,
+			SelectionMode: cfg.Scheduler.TreasureHouse.SelectionMode,
+			PreferAwards:  cfg.Scheduler.TreasureHouse.PreferAwards,
+			Interactive:   cfg.Scheduler.TreasureHouse.Interactive,
+			Awards:        cfg.Scheduler.TreasureHouse.ResolveSelections(),
+			MaxDrawTimes:  cfg.Scheduler.TreasureHouse.MaxDrawTimes,
 		}
 		if *gap > 0 {
 			// 返回 nil 让 Routine 保留已解析的合法大奖，仅插入一段空闲等待，

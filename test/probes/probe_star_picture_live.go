@@ -3,12 +3,18 @@
 // 目标协议: 法力星图 (Mod_StarPicture_Base, Module 485) 免费占星与活跃度验证
 //
 // 官方 get_info response:
-//   [Int has_divination_count, Int free_divination_count, Int ingot_divination_count,
-//    Int chip_count, Int reset_count, Int cur_deploy_level,
-//    [Short,Int,Int,Short] award_list, Byte, Byte, Byte, Byte]
 //
-// divination(Act 1) 无请求参数；服务端按 free_divination_count -> ingot 扣费。
-// 本探针仅在 free_divination_count>0 时占星一次，绝不触发元宝档。
+//	[Int has_divination_count, Int free_divination_count, Int ingot_divination_count,
+//	 Int chip_count, Int reset_count, Int cur_deploy_level,
+//	 [Short,Int,Int,Short] award_list, Byte, Byte, Byte, Byte]
+//
+// divination(Act 1) 无请求参数。
+//
+// 2026-11-07 实测警告：面板 free_divination_count 与实际扣费不同步。
+// has_divination==0 时的首次占星免费；同一天继续占星第 2/3 次时服务端会扣
+// 50 元宝（free 计数只减 1 但实际触发付费档）。生产例程因此每天最多占星 1 次，
+// 且仅在 has_divination==0 && free_divination_count>0 时执行。
+// 本探针每次运行只占星 1 次，-readonly 可只读面板。
 //
 // 运行命令: SXD_CONFIG=configs/s0.yaml go run -tags=probe test/probes/probe_star_picture_live.go
 // 预期表现: 打印免费占星次数；占星后活跃度 +10；元宝 delta=0。
@@ -16,6 +22,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -75,6 +82,8 @@ func dailyActivity(sess *client.RoleSession, ctx context.Context) (int, bool) {
 
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
+	readonly := flag.Bool("readonly", false, "只读取面板，不执行占星")
+	flag.Parse()
 
 	cfgPath := os.Getenv("SXD_CONFIG")
 	if cfgPath == "" {
@@ -170,6 +179,10 @@ func main() {
 		"deploy_level", vals[5],
 	)
 
+	if *readonly {
+		slog.Info("只读模式，未执行占星", "free_divination", vals[1], "ingot_divination", vals[2])
+		return
+	}
 	if vals[1] <= 0 {
 		slog.Info("今日无免费占星次数，跳过 (绝不使用元宝档)")
 		return

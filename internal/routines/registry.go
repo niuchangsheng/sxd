@@ -49,6 +49,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "activity_report", Name: "每日活跃度汇总", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "只读汇总每日/周常活跃度并输出 1200 达标缺口", DefaultOn: false},
 		{ID: "tactics_water", Name: "兵法圣水购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "铜钱购买湛蓝圣水完成兵法活跃度 (不消耗元宝)", DefaultOn: false},
 		{ID: "partner_link_box", Name: "缘魂宝箱购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "道缘/铜钱购买缘魂宝箱完成活跃度 (不消耗元宝)", DefaultOn: false},
+		{ID: "xiudan", Name: "服用修为丹", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "通天道场服用背包内修为丹完成活跃度 (不购买、不消耗元宝)", DefaultOn: false},
 
 		// 2. Farming 领域 (6)
 		{ID: "herb_garden", Name: "药园种植巡检", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动药园播种、施肥、除草与成熟采摘", DefaultOn: true},
@@ -115,6 +116,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "duobao_mountain", Name: "多宝山", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日使用免费次数挖掘多宝山宝藏 (不消耗元宝)", DefaultOn: false},
 		{ID: "eudemons", Name: "幻兽经脉", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动激活幻兽经脉并维护幻兽面板 (不消耗元宝)", DefaultOn: false},
 		{ID: "partner_link", Name: "灵结", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动激活灵结 (仅消耗伙伴灵契，不消耗元宝)", DefaultOn: false},
+		{ID: "star_picture", Name: "法力星图占星", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日消耗免费次数占星 (free 用尽即停止，不消耗元宝)", DefaultOn: false},
 	}
 }
 
@@ -298,6 +300,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewTacticsWaterRoutine()
 	case "partner_link_box":
 		return daily.NewPartnerLinkBoxRoutine()
+	case "xiudan":
+		return daily.NewXiuDanRoutine()
 
 	// 2. Farming
 	case "herb_garden":
@@ -428,6 +432,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewEudemonsRoutine()
 	case "partner_link":
 		return minigame.NewPartnerLinkRoutine()
+	case "star_picture":
+		return minigame.NewStarPictureRoutine()
 
 	default:
 		return nil

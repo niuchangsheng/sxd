@@ -67,6 +67,7 @@ scheduler:
     activity_report: true         # 每日活跃度汇总 (只读)
     tactics_water: true           # 兵法圣水购买 (铜钱，不消耗元宝)
     partner_link_box: true        # 缘魂宝箱购买 (道缘/铜钱，不消耗元宝)
+    xiudan: true                  # 服用修为丹 (背包已有道具，不消耗元宝)
 
     # 【农场 farming】药园、取经、矿山、淬炼、壶中界、符文
     herb_garden: true             # 药园播种/施肥/除草/采摘
@@ -133,6 +134,7 @@ scheduler:
     duobao_mountain: true         # 多宝山免费挖掘
     eudemons: true                # 幻兽经脉激活
     partner_link: true            # 灵结激活
+    star_picture: false           # 法力星图占星: 首次免费但面板 free 计数与扣费不同步, 可能扣 50 元宝, 默认关闭
 
   # ── 副本 / 挑战策略 ─────────────────────────────────────────
   dungeon:

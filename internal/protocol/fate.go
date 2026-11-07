@@ -83,7 +83,10 @@ type FateQuestionRequest struct {
 //
 // 线格式 (Mod_TravelEvent_Base.get_event_and_answer):
 // Int32 eventId, String event, [Int32 answerId, String answerSign, String eventAnswer] answerList,
-// UByte msg。
+// UByte msg, Int32 curAnswerTimes, Int32 tolAnswerTimes, Int32 joinCount。
+//
+// 当 CurAnswerTimes 达到 TolAnswerTimes 时说明本轮答题宝箱已可领取；
+// 未开启宝箱前服务端会拒绝新的答题请求且不回包。
 type FateQuestionResult struct {
 	// EventID 事件编号，提交答案时原样回传
 	EventID int32
@@ -93,6 +96,12 @@ type FateQuestionResult struct {
 	Options []FateOption
 	// Msg 业务结果码 (FateResultSuccess 等)
 	Msg uint8
+	// CurAnswerTimes 当前已答题次数 (回包尾部扩展字段, 缺省为 0)
+	CurAnswerTimes int32
+	// TolAnswerTimes 本轮可答题次数上限 (回包尾部扩展字段, 缺省为 0)
+	TolAnswerTimes int32
+	// JoinCount 今日已参与次数 (回包尾部扩展字段, 缺省为 0)
+	JoinCount int32
 }
 
 // FateAnswerRequest 代表提交仙旅奇缘分支答案请求。
@@ -198,6 +207,63 @@ func ParseFateAnswerRequest(payload []byte) (*FateAnswerRequest, error) {
 	return &FateAnswerRequest{EventID: eventID, AnswerID: answerID}, nil
 }
 
+// FateDrawItem 代表仙旅奇缘答题宝箱中的单件道具奖励。
+type FateDrawItem struct {
+	// ItemID 道具编号
+	ItemID int32
+	// Num 道具数量
+	Num int32
+}
+
+// FateLotteryDrawResult 代表仙旅奇缘开宝箱结算结果。
+//
+// 线格式 (Mod_TravelEvent_Base.lottery_draw):
+// UByte msg, [Int32 itemId, Int32 itemNum] awardList。
+type FateLotteryDrawResult struct {
+	// Msg 业务结果码 (FateResultSuccess 等)
+	Msg uint8
+	// Awards 宝箱道具奖励明细
+	Awards []FateDrawItem
+}
+
+// BuildFateLotteryDrawPacket 构造开启仙旅奇缘答题宝箱请求二进制封包。
+//
+// 官方请求为空，但网关 PrevAct 原子链需要在载荷中写入前序 Action。
+func BuildFateLotteryDrawPacket(prevAct uint32) (*Packet, error) {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = ActionIDFateGetQuestion
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDFateLotteryDraw, w.Bytes()), nil
+}
+
+// ParseFateLotteryDrawResult 从载荷中反序列化开宝箱结算结果。
+func ParseFateLotteryDrawResult(payload []byte) (*FateLotteryDrawResult, error) {
+	r := NewReader(payload)
+	msg, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read lottery msg: %v", ErrInvalidPayload, err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read lottery award count: %v", ErrInvalidPayload, err)
+	}
+	awards := make([]FateDrawItem, 0, count)
+	for i := 0; i < int(count); i++ {
+		itemID, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read lottery item_id #%d: %v", ErrInvalidPayload, i, err)
+		}
+		num, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read lottery item_num #%d: %v", ErrInvalidPayload, i, err)
+		}
+		awards = append(awards, FateDrawItem{ItemID: itemID, Num: num})
+	}
+	return &FateLotteryDrawResult{Msg: msg, Awards: awards}, nil
+}
+
 // ParseFateGetInfoResult 从载荷中反序列化仙旅奇缘活动状态。
 func ParseFateGetInfoResult(payload []byte) (*FateGetInfoResult, error) {
 	if len(payload) < 16 {
@@ -259,12 +325,23 @@ func ParseFateQuestionResult(payload []byte) (*FateQuestionResult, error) {
 		return nil, fmt.Errorf("%w: failed to read msg: %v", ErrInvalidPayload, err)
 	}
 
-	return &FateQuestionResult{
+	res := &FateQuestionResult{
 		EventID: eventID,
 		Story:   story,
 		Options: opts,
 		Msg:     msg,
-	}, nil
+	}
+	// 尾部扩展字段在部分区服缺省, 解析失败时保留零值即可。
+	if v, err := r.ReadInt32(); err == nil {
+		res.CurAnswerTimes = v
+	}
+	if v, err := r.ReadInt32(); err == nil {
+		res.TolAnswerTimes = v
+	}
+	if v, err := r.ReadInt32(); err == nil {
+		res.JoinCount = v
+	}
+	return res, nil
 }
 
 // ParseFateAnswerResult 从服务端回包中解析结算奖励文本、奖励明细与最新活动状态。
@@ -325,7 +402,22 @@ func BuildFateQuestionResultPacket(res FateQuestionResult) *Packet {
 		w.WriteString(opt.Text)
 	}
 	w.WriteUint8(res.Msg)
+	w.WriteInt32(res.CurAnswerTimes)
+	w.WriteInt32(res.TolAnswerTimes)
+	w.WriteInt32(res.JoinCount)
 	return NewPacket(ActionIDFateGetQuestion, w.Bytes())
+}
+
+// BuildFateLotteryDrawResultPacket 构造仙旅奇缘开宝箱回包 (测试与 Mock 服务端使用)。
+func BuildFateLotteryDrawResultPacket(res FateLotteryDrawResult) *Packet {
+	w := NewWriter()
+	w.WriteUint8(res.Msg)
+	w.WriteUint16(uint16(len(res.Awards)))
+	for _, award := range res.Awards {
+		w.WriteInt32(award.ItemID)
+		w.WriteInt32(award.Num)
+	}
+	return NewPacket(ActionIDFateLotteryDraw, w.Bytes())
 }
 
 // BuildFateAnswerResultPacket 构造仙旅奇缘答题结算回包 (测试与 Mock 服务端使用)。
