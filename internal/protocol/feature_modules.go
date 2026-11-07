@@ -175,8 +175,10 @@ const (
 
 	// ActionIDLingDaoGetStatus 查询灵道初解任务状态 (Module 658, Action 0 -> 0x02920000)
 	ActionIDLingDaoGetStatus uint32 = 0x02920000
-	// ActionIDLingDaoComprehend 提交灵道初解任务领悟 (Module 711, Action 0 -> 0x02C70000)
+	// ActionIDLingDaoComprehend 查询灵道初解战斗通行证面板 (Module 711, Action 0 -> 0x02C70000)
 	ActionIDLingDaoComprehend uint32 = 0x02C70000
+	// ActionIDLingDaoOneKeyAward 灵道初解战斗通行证一键领取 (Module 711, Action 3 -> 0x02C70003)
+	ActionIDLingDaoOneKeyAward uint32 = 0x02C70003
 
 	// ActionIDHuanshouPanel 查询山海幻兽主面板 (Module 701, Action 0 -> 0x02BD0000)
 	ActionIDHuanshouPanel uint32 = 0x02BD0000

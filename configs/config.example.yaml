@@ -59,10 +59,14 @@ scheduler:
     weekend_event: true           # 周末狂欢礼 + 水果机 (仅免费次数, 不消耗元宝)
     daoyuan_vip_shop: true        # 精品杂货 VIP5/VIP8 购买 (仅低价档, 不消耗元宝)
     void_worship: true            # 仙界虚空/大神榜膜拜 (每日免费一次)
-    sa_union_worship: true        # 万古神墟/圣盟膜拜 (仅铜钱档)
+    sa_union_worship: true
+    sa_world_tower: true          # 全网幻魔塔 (免费挑战, 不买次数)        # 万古神墟/圣盟膜拜 (仅铜钱档)
     device_bind_reward: true      # 手机绑定首绑/月度奖励
     town_practice: true           # 城镇打坐离线经验结算
     partner_practice: true        # 幻境修炼开始/结算 (免费)
+    expedition: true              # 仙界远征任务派遣 (免费)
+    fairyland_dispatch: true      # 宠物仙域游历 (免费)
+    three_world: true             # 三界/人界修炼 (免费)
     destiny_sword: true           # 飞剑剑意淬炼
     daily_gifts: true             # 每日俸禄/灵石/PC微端礼包
     saint_practice: true          # 圣域免费修炼房
@@ -148,6 +152,7 @@ scheduler:
     soul_hunt: true               # 灵域猎妖免费挑战 (不买次数)
     era_creation: true            # 纪元造化秘境探索+挑战 (免费)
     cultivation_card: true        # 神仙卡牌收藏集 (仅铜钱商城, 不消耗元宝)
+    fortune_box: true             # 奇缘宝藏 (免费开箱)
     era_yanjie: true               # 纪元湮劫每日一关战斗 (免费)
     era_treasure: true            # 纪元秘藏/轮回图录奖励 (免费)
     mystic_hunt: true              # 仙幽猎境入口开放时免费进入

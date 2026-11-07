@@ -837,7 +837,12 @@ func BuildLingDaoGetStatusPacket(prevAct uint32) *Packet {
 	return NewPacket(ActionIDLingDaoGetStatus, w.Bytes())
 }
 
-// BuildLingDaoComprehendPacket 构造提交灵道领悟封包 (Module 711, Action 0)。
+// BuildLingDaoOneKeyAwardPacket 构造灵道战斗通行证一键领取封包 (Module 711, Action 3)。
+func BuildLingDaoOneKeyAwardPacket() *Packet {
+	return NewPacket(ActionIDLingDaoOneKeyAward, nil)
+}
+
+// BuildLingDaoComprehendPacket 构造查询灵道战斗通行证面板封包 (Module 711, Action 0)。
 func BuildLingDaoComprehendPacket(prevAct uint32) *Packet {
 	w := NewWriter()
 	if prevAct == 0 {

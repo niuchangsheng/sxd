@@ -113,6 +113,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return minigame.NewFindImmortalRoutine()
 	case "wufa_field":
 		return minigame.NewWuFaRoutine()
+	case "lingdao_practice":
+		return minigame.NewLingDaoRoutine()
 	case "pilgrimage":
 		pcfg := farming.DefaultPilgrimageConfig()
 		if os.Getenv("SXD_PROBE_FORCE_SA") == "1" {
@@ -151,8 +153,18 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return minigame.NewEraCreationRoutine()
 	case "partner_practice":
 		return daily.NewPartnerPracticeRoutine()
+	case "expedition":
+		return daily.NewExpeditionRoutine()
 	case "cultivation_card":
 		return minigame.NewCultivationCardRoutine()
+	case "fortune_box":
+		return minigame.NewFortuneBoxRoutine()
+	case "fairyland_dispatch":
+		return daily.NewFairylandDispatchRoutine()
+	case "three_world":
+		return daily.NewThreeWorldRoutine()
+	case "sa_world_tower":
+		return social.NewSaWorldTowerRoutine()
 	default:
 		return nil
 	}

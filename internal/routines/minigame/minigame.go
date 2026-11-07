@@ -1202,10 +1202,33 @@ func NewLingDaoRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			slog.Info("灵道初解阶段动作已提交",
-				"role_id", session.RoleID(),
-				"reply_len", len(compResp.Payload),
-			)
+			slog.Info("灵道初解战斗通行证面板", "role_id", session.RoleID(),
+				"reply_len", len(compResp.Payload))
+
+			// 3. 一键领取战斗通行证免费奖励 (Mod 711, Act 3)。
+			awardPkt := protocol.BuildLingDaoOneKeyAwardPacket()
+			aCtx, aCancel := context.WithTimeout(ctx, 8*time.Second)
+			awardResp, aErr := session.Call(aCtx, awardPkt, protocol.ActionIDLingDaoOneKeyAward)
+			aCancel()
+			if aErr != nil || awardResp == nil {
+				slog.Info("灵道初解一键领取无回包", "role_id", session.RoleID(), "err", aErr)
+				return nil
+			}
+			code, pErr := protocol.ParseActionFirstByte(awardResp.Payload, "灵道初解一键领取")
+			if pErr != nil {
+				slog.Warn("灵道初解一键领取解析失败", "role_id", session.RoleID(), "err", pErr)
+				return nil
+			}
+			switch code {
+			case 0:
+				slog.Info("灵道初解战斗通行证奖励领取成功", "role_id", session.RoleID())
+			case 8, 11:
+				slog.Info("灵道初解暂无可领取奖励", "role_id", session.RoleID(), "result", code)
+			case 10:
+				return scheduler.ErrBagFull
+			default:
+				slog.Info("灵道初解一键领取未成功", "role_id", session.RoleID(), "result", code)
+			}
 			return nil
 		},
 	)

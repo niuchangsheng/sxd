@@ -37,6 +37,10 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "vip_welfare", Name: "VIP特权与俸禄", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取VIP每日礼包与官职俸禄", DefaultOn: false},
 		{ID: "god_bless", Name: "跨服天神赐福", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领用跨服天神赐福增益点数", DefaultOn: false},
 		{ID: "online_reward", Name: "在线奖励一键领取", Domain: "daily", Schedule: scheduler.ScheduleLoop, Description: "按当日在线时长一键领取在线奖励 (含元宝档位，不消耗元宝)", DefaultOn: false},
+		{ID: "partner_practice", Name: "幻境修炼", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "开始/结算幻境修炼免费收益 (不加速、不雇佣)", DefaultOn: false},
+		{ID: "fairyland_dispatch", Name: "宠物仙域游历", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "免费派遣宠物游历并领取任务奖励 (不买礼包)", DefaultOn: false},
+		{ID: "three_world", Name: "三界修炼", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "人界修炼开始/结算 (不使用加速)", DefaultOn: false},
+		{ID: "expedition", Name: "仙界远征任务", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "派遣 5 条远征任务 (免费, 不消耗元宝)", DefaultOn: false},
 		{ID: "courtyard_pet", Name: "宠物灵符召唤", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "循环 call(NORMAL) 消耗全部灵符召唤宠物 (不消耗元宝)", DefaultOn: false},
 		{ID: "weekend_event", Name: "周末狂欢礼与水果机", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "周末领取狂欢礼并用免费次数抽水果机 (不消耗元宝)", DefaultOn: false},
 		{ID: "daoyuan_vip_shop", Name: "精品杂货 VIP 商店", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "VIP5/VIP8 购买神甲晶石/天魂自选包 (仅低价货币档)", DefaultOn: false},
@@ -70,6 +74,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "friendship", Name: "好友结义与送花", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "好友自动送花互动与结义羁绊维护", DefaultOn: false},
 		{ID: "fame_blessing", Name: "仙界尊像膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "仙界膜拜前三名霸主大神与声望祝福获取", DefaultOn: false},
 		{ID: "void_worship", Name: "仙界虚空膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "大神榜每日免费膜拜 (不消耗元宝)", DefaultOn: false},
+		{ID: "sa_world_tower", Name: "全网幻魔塔", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "开放时按塔编号免费挑战 (不买次数)", DefaultOn: false},
 		{ID: "sa_union_worship", Name: "万古神墟膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "圣盟膜拜面板铜钱/免费档 (不使用元宝档)", DefaultOn: false},
 		{ID: "jieyuan_box", Name: "结缘宝箱开启", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "批量开启结缘宝箱 (除了传说，其他都开)", DefaultOn: false},
 		{ID: "faction_blessing", Name: "帮派祭神", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "每日帮派上香祭神，获取祝福、声望与神像灵气", DefaultOn: false},
@@ -129,6 +134,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "bailian", Name: "百炼乾坤一/二", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "百炼乾坤一 (272) 与二 (320) 一键挑战 (不消耗元宝)", DefaultOn: false},
 		{ID: "soul_hunt", Name: "灵域猎妖", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "灵域猎妖关卡挑战 (仅免费次数, 不买次数)", DefaultOn: false},
 		{ID: "era_creation", Name: "纪元造化秘境", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "先探索再挑战事件并领取战斗奖励 (不消耗元宝)", DefaultOn: false},
+		{ID: "fortune_box", Name: "奇缘宝藏", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "开放时免费开启宝箱 (不买每日礼包)", DefaultOn: false},
 		{ID: "cultivation_card", Name: "神仙卡牌收藏集", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "觅寻仙踪任务、铜钱卡包商城与叩寻仙踪开包 (不消耗元宝)", DefaultOn: false},
 		{ID: "era_treasure", Name: "纪元秘藏与轮回图录", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "领取纪元秘藏/轮回图录免费奖励 (不消耗元宝)", DefaultOn: false},
 		{ID: "mystic_hunt", Name: "仙幽猎境", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "仙幽猎境入口开放时免费进入一次 (按活动时段)", DefaultOn: false},
@@ -299,6 +305,12 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewWeekendEventRoutine()
 	case "partner_practice":
 		return daily.NewPartnerPracticeRoutine()
+	case "expedition":
+		return daily.NewExpeditionRoutine()
+	case "fairyland_dispatch":
+		return daily.NewFairylandDispatchRoutine()
+	case "three_world":
+		return daily.NewThreeWorldRoutine()
 	case "daoyuan_vip_shop":
 		return daily.NewDaoyuanVipShopRoutine()
 	case "device_bind_reward":
@@ -355,6 +367,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewFriendshipRoutine()
 	case "sa_union_worship":
 		return social.NewSaUnionWorshipRoutine()
+	case "sa_world_tower":
+		return social.NewSaWorldTowerRoutine()
 	case "void_worship":
 		return social.NewVoidWorshipRoutine()
 	case "fame_blessing":
@@ -479,6 +493,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewEraCreationRoutine()
 	case "cultivation_card":
 		return minigame.NewCultivationCardRoutine()
+	case "fortune_box":
+		return minigame.NewFortuneBoxRoutine()
 	case "era_treasure":
 		return minigame.NewEraTreasureRoutine()
 	case "mystic_hunt":
