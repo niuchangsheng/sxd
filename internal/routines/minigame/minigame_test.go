@@ -132,7 +132,7 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 	})
 }
 
-// TestWuFaRoutine_FunctionClosedSkips 验证原生功能开放探测返回 FALSE 时，
+// TestWuFaRoutine_FunctionClosedSkips 验证功能列表为空 (悟法未开放) 时，
 // 不再发送悟法领域面板等业务请求。
 func TestWuFaRoutine_FunctionClosedSkips(t *testing.T) {
 	c1, c2 := net.Pipe()
@@ -147,10 +147,12 @@ func TestWuFaRoutine_FunctionClosedSkips(t *testing.T) {
 				return
 			}
 			actions <- pkt.ActionID
-			if pkt.ActionID == protocol.ActionIDPlayerCheckFunctionOpen {
+			if pkt.ActionID == protocol.ActionIDPlayerGetFunctions {
+				// 功能列表为空：悟法领域未开放。
+				w := protocol.NewWriter()
+				w.WriteUint16(0)
 				_ = protocol.WritePacket(c2, protocol.NewPacket(
-					protocol.ActionIDPlayerCheckFunctionOpen,
-					[]byte{protocol.PlayerFunctionOpenFalse},
+					protocol.ActionIDPlayerGetFunctions, w.Bytes(),
 				))
 			}
 		}
@@ -176,11 +178,11 @@ func TestWuFaRoutine_FunctionClosedSkips(t *testing.T) {
 
 	select {
 	case got := <-actions:
-		if got != protocol.ActionIDPlayerCheckFunctionOpen {
-			t.Fatalf("期望先发送功能开放探测, 实际 0x%08X", got)
+		if got != protocol.ActionIDPlayerGetFunctions {
+			t.Fatalf("期望先发送功能列表查询, 实际 0x%08X", got)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("未收到功能开放探测请求")
+		t.Fatal("未收到功能列表查询请求")
 	}
 	select {
 	case got := <-actions:

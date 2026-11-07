@@ -21,7 +21,7 @@ const playerFunctionsCacheTTL = 5 * time.Minute
 // RefreshPlayerFunctions 拉取当前角色已开放功能列表并刷新本地缓存。
 func (s *RoleSession) RefreshPlayerFunctions(ctx context.Context) (map[int32]bool, error) {
 	pkt := protocol.BuildGetPlayerFunctionsPacket(s.LastActionID())
-	timeout := 3 * time.Second
+	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}

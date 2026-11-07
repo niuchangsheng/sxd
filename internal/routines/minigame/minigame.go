@@ -550,12 +550,26 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			// 0. 功能开放检查：未开放时服务端会静默丢弃钓鱼请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDFishing)
+			if fErr != nil {
+				slog.Info("查询钓鱼功能开放状态失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("钓鱼功能未开放，跳过", "role_id", session.RoleID(),
+					"function_id", protocol.FunctionIDFishing)
+				return nil
+			}
+
 			// 1. 查询鱼钩数量；为 0 时说明免费次数已用尽。
 			hCtx, hCancel := context.WithTimeout(ctx, callTimeout)
 			hooksResp, err := session.Call(hCtx, protocol.BuildFishHooksPacket(), protocol.ActionIDFishHooks)
 			hCancel()
 			if err != nil {
-				return fmt.Errorf("查询鱼钩数量失败: %w", err)
+				// 功能已开放但查询无回包，通常是服务端状态/场景不满足；跳过本轮。
+				slog.Info("查询鱼钩数量失败/服务端未响应，跳过", "role_id", session.RoleID(), "err", err)
+				return nil
 			}
 			hooks, err := protocol.ParseFishHooksResult(hooksResp.Payload)
 			if err != nil {
@@ -1201,16 +1215,11 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			// 0. 原生探测功能开放状态 (Mod_Player_Base.check_function_open)。
-			// 未解锁模块服务端会静默丢弃业务请求，先查询可避免空等超时。
-			// 线上实测：例程在会话运行一段时间后，check_function_open 偶发被服务端
-			// 静默丢弃；面板查询本身即可判定玩法可用性，因此探测失败时仅告警并继续，
-			// 避免整轮被误跳过（功能确实未开放时，面板查询会失败并退出）。
-			chkCtx, chkCancel := context.WithTimeout(ctx, wuFaCallTimeout)
-			open, chkErr := session.CheckFunctionOpen(chkCtx, protocol.FunctionIDWuFaField)
-			chkCancel()
+			// 0. 功能开放检查：使用 Mod 0 Act 6 的会话缓存 (一次查询覆盖整轮日常)。
+			// 逐功能的 check_function_open 在部分状态下会被服务端静默丢弃，不能再作为唯一判定。
+			open, chkErr := session.IsFunctionOpen(ctx, protocol.FunctionIDWuFaField)
 			if chkErr != nil {
-				slog.Warn("查询悟法领域功能开放状态失败，继续尝试面板查询",
+				slog.Info("查询悟法领域功能开放状态失败，继续尝试面板查询",
 					"role_id", session.RoleID(), "err", chkErr)
 			} else if !open {
 				slog.Info("悟法领域功能未开启，跳过", "role_id", session.RoleID())
@@ -2219,9 +2228,10 @@ func classifyMasterPracticeChallengeResult(code uint8) (masterPracticeChallengeO
 // AwardSelectorFunc 允许注入自定义交互选择器（例如命令行交互、Web交互回调或自动化测试桩）。
 type AwardSelectorFunc func(ctx context.Context, pool *protocol.TreasureHousePool, dict dictionary.Repository) ([]protocol.TreasureAwardSelect, error)
 
-// treasureHousePriority 天帝宝库调度优先级：高于 PriorityHigh (100)，
-// 必须在本轮任何会产生队伍/战场上下文的玩法之前执行。
-const treasureHousePriority scheduler.RoutinePriority = 110
+// treasureHousePriority 天帝宝库调度优先级：高于孩子日常 (120) 与 PriorityHigh (100)。
+// Act 4 set_use_free_flag 会严格校验城镇/战场上下文，服务端在前置状态被污染时会
+// 静默丢弃该请求；因此宝库必须排在本轮所有场景/队伍类玩法之前执行。
+const treasureHousePriority scheduler.RoutinePriority = 200
 
 // 天帝宝库非交互模式选奖策略。
 const (
@@ -2495,6 +2505,27 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				return nil
 			}
 
+			// 0.1 清理上一轮/上一会话可能遗留的魔王试炼队伍。
+			// 服务端在保留战场上下文时会静默丢弃 Act4 set_use_free_flag；
+			// 先退队/离场可避免宝库抽奖链路被污染。
+			if bOpen, bErr := session.IsFunctionOpen(ctx, protocol.FunctionIDBeelzebubTrials); bErr == nil && bOpen {
+				// 该清理只读查询使用短超时，避免在 Act4 前额外阻塞 8 秒。
+				teamCtx, teamCancel := context.WithTimeout(ctx, 3*time.Second)
+				teamID, _, tErr := session.BeelzebubTrialsGetPlayerTeamInfo(teamCtx)
+				teamCancel()
+				if tErr == nil && teamID > 0 {
+					slog.Info("天帝宝库前发现遗留魔王试炼队伍，先清理",
+						"role_id", session.RoleID(), "team_id", teamID)
+					_ = session.BeelzebubTrialsExitTeam(ctx)
+					_ = session.BeelzebubTrialsLeaveWar(ctx, 0)
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(200 * time.Millisecond):
+					}
+				}
+			}
+
 			prevAct := session.LastActionID()
 			if prevAct == 0 {
 				prevAct = protocol.ActionIDTownEnter
@@ -2674,6 +2705,13 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			flagCode, fErr := protocol.ParseTreasureHouseResultCode(flagResp.Payload)
 			if fErr != nil {
 				slog.Warn("解析设置免费次数优先回包失败，跳过抽奖", "err", fErr)
+				return nil
+			}
+			if flagCode == protocol.TreasureHouseResultNoFreeItem {
+				// 今日无免费钥匙：服务端正常返回该业务码，不是协议失败。
+				slog.Info("天帝宝库无免费次数，跳过抽奖以免误消耗元宝",
+					"result", flagCode,
+					"meaning", protocol.TreasureHouseResultName(flagCode))
 				return nil
 			}
 			if flagCode != protocol.TreasureHouseResultSuccess {
@@ -3596,7 +3634,10 @@ func NewAskFairyRoutine() scheduler.ActivityRoutine {
 
 			info, err := fetchInfo()
 			if err != nil {
-				return fmt.Errorf("查询问灵状态失败: %w", err)
+				// 活动未开放/已结束时服务端会静默丢弃信息查询；按暂不可用跳过。
+				slog.Info("问灵活动未开放或状态查询被服务端丢弃，跳过",
+					"role_id", session.RoleID(), "err", err)
+				return nil
 			}
 			if info.LeftDay <= 0 {
 				slog.Info("问灵活动已结束，跳过", "role_id", session.RoleID(), "left_day", info.LeftDay)

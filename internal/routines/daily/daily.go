@@ -674,9 +674,12 @@ func NewOnlineRewardRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			panelResp, err := callDaily(ctx, session, protocol.BuildOnlineRewardPanelPacket(), protocol.ActionIDOnlineRewardPanel, 3*time.Second)
+			panelResp, err := callDaily(ctx, session, protocol.BuildOnlineRewardPanelPacket(), protocol.ActionIDOnlineRewardPanel, 8*time.Second)
 			if err != nil {
-				return fmt.Errorf("查询在线奖励面板失败: %w", err)
+				// 活动未开放时服务端会静默丢弃面板请求；按“暂不可用”跳过，由 Loop 下次重试。
+				slog.Info("在线奖励活动未开放或面板请求被服务端丢弃，跳过",
+					"role_id", session.RoleID(), "err", err)
+				return nil
 			}
 			panel, err := protocol.ParseOnlineRewardPanelResult(panelResp.Payload)
 			if err != nil {

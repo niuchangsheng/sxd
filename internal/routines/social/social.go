@@ -895,16 +895,14 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			// 0. 原生探测功能开放状态 (Mod_Player_Base.check_function_open)。
-			// 未解锁模块服务端会静默丢弃业务请求，先查询可避免空等超时。
-			chkCtx, chkCancel := context.WithTimeout(ctx, callTimeout)
-			open, chkErr := session.CheckFunctionOpen(chkCtx, protocol.FunctionIDWorshipMars)
-			chkCancel()
+			// 0. 功能开放检查：使用 Mod 0 Act 6 的会话缓存。
+			// 逐功能的 check_function_open 会被服务端静默丢弃，探测失败时继续走面板查询，
+			// 由面板结果判定玩法可用性 (线上 s0 已实测面板可正常返回)。
+			open, chkErr := session.IsFunctionOpen(ctx, protocol.FunctionIDWorshipMars)
 			if chkErr != nil {
-				slog.Warn("查询膜拜功能开放状态失败，跳过", "role_id", session.RoleID(), "err", chkErr)
-				return nil
-			}
-			if !open {
+				slog.Info("查询膜拜功能开放状态失败，继续尝试面板查询",
+					"role_id", session.RoleID(), "err", chkErr)
+			} else if !open {
 				slog.Info("膜拜功能未开启，跳过", "role_id", session.RoleID())
 				return nil
 			}

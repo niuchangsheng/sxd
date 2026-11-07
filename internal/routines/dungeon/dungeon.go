@@ -2798,7 +2798,15 @@ func advanceQuestMission(
 				if errSessionTerminated(ctx, secErr) {
 					return clearedPrereq || lastCount > initialCount
 				}
-				slog.Warn("激活章节关卡列表上下文失败", "role_id", session.RoleID(), "map_id", mapID, "err", secErr)
+				if isEliteQuest {
+					// 精英副本本就不在 get_sections 列表中，继续走 Module 4 首通状态机。
+					slog.Debug("精英副本跳过章节列表查询", "role_id", session.RoleID(), "map_id", mapID, "err", secErr)
+				} else {
+					// 非精英关卡：get_sections 失败说明章节/地图上下文不可用，
+					// 继续盲发 enter_mission 会被服务端静默丢弃，直接跳过本轮该关卡。
+					slog.Warn("激活章节关卡列表上下文失败，跳过该关卡", "role_id", session.RoleID(), "map_id", mapID, "err", secErr)
+					return clearedPrereq || lastCount > initialCount
+				}
 			} else if secResp != nil {
 				if sections, pErr := protocol.ParseMissionGetSectionsResponse(secResp.Payload); pErr == nil {
 					clearedCount, otherCount := 0, 0

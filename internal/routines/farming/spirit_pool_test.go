@@ -146,13 +146,17 @@ func startSpiritPoolSession(t *testing.T, gw *spiritPoolGateway) (*client.RoleSe
 				}))
 			case protocol.ActionHeartbeat:
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
-			case protocol.ActionIDPlayerCheckFunctionOpen:
+			case protocol.ActionIDPlayerGetFunctions:
 				gw.checkCalls.Add(1)
-				flag := protocol.PlayerFunctionOpenTrue
+				w := protocol.NewWriter()
 				if gw.functionClosed {
-					flag = protocol.PlayerFunctionOpenFalse
+					w.WriteUint16(0)
+				} else {
+					w.WriteUint16(1)
+					w.WriteInt32(protocol.FunctionIDRefinePool)
+					w.WriteUint8(0) // isPlayed
 				}
-				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerCheckFunctionOpen, []byte{flag}))
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerGetFunctions, w.Bytes()))
 			case protocol.ActionIDRefinePoolOpen:
 				gw.openCalls.Add(1)
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDRefinePoolOpen, buildSpiritPoolPanelPayload()))

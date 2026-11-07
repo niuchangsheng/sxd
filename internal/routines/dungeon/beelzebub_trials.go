@@ -63,6 +63,19 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 				_ = jitter.Wait(ctx)
 			}
 
+			// 功能开放检查 (Mod 0 Act 6 会话缓存)：未开放时服务端会静默丢弃 Module 57 请求。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDBeelzebubTrials)
+			if fErr != nil {
+				slog.Info("魔王试炼功能开放状态查询失败，本轮跳过",
+					"role_id", session.RoleID(), "error", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("魔王试炼功能未开放，跳过",
+					"role_id", session.RoleID(), "function_id", protocol.FunctionIDBeelzebubTrials)
+				return nil
+			}
+
 			slog.Info("正在执行副本任务: 魔王试炼自动挑战与道行领取", "role_id", session.RoleID())
 
 			// 3. 检查今日挑战资格
@@ -87,6 +100,11 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 				if errors.Is(err, client.ErrBeelzebubTrialsNoResponse) {
 					// 客户端已记录具体关卡与原因；这里按业务条件跳过，避免调度器再报一次 WARN。
 					slog.Info("魔王试炼服务端连续无响应，本轮跳过", "role_id", session.RoleID(), "error", err)
+					return nil
+				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					// 服务端静默丢弃或会话抖动均可能表现为超时；本轮跳过，等待下次调度。
+					slog.Info("魔王试炼请求超时/被服务端丢弃，本轮跳过", "role_id", session.RoleID(), "error", err)
 					return nil
 				}
 				return fmt.Errorf("魔王试炼自动挑战流程执行失败: %w", err)

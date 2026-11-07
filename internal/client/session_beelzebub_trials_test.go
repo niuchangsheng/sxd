@@ -181,6 +181,14 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll(t *testing.T) {
 					protocol.ActionIDBeelzebubTrialsCheckCanChallenge,
 					[]byte{protocol.BeelzebubTrialsSuccess},
 				))
+			case protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo:
+				// 无遗留队伍，允许 AutoChallengeAll 继续建队。
+				tw := protocol.NewWriter()
+				tw.WriteInt32(0)
+				tw.WriteUint16(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo, tw.Bytes(),
+				))
 			case protocol.ActionIDBeelzebubTrialsOpen:
 				// 不关卡卡状态（与 runMockGameServer 一致），跳过可用性预检。
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
@@ -335,6 +343,14 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll_SilentDropCircuitBreaker(t 
 					protocol.ActionIDBeelzebubTrialsCheckCanChallenge,
 					[]byte{protocol.BeelzebubTrialsSuccess},
 				))
+			case protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo:
+				// 无遗留队伍，允许 AutoChallengeAll 继续建队。
+				tw := protocol.NewWriter()
+				tw.WriteInt32(0)
+				tw.WriteUint16(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo, tw.Bytes(),
+				))
 			case protocol.ActionIDBeelzebubTrialsOpen:
 				// 不关卡卡状态（与 runMockGameServer 一致），跳过可用性预检。
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
@@ -487,6 +503,14 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll_AllBossesCleared(t *testing
 					protocol.ActionIDBeelzebubTrialsCheckCanChallenge,
 					[]byte{protocol.BeelzebubTrialsSuccess},
 				))
+			case protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo:
+				// 无遗留队伍，允许 AutoChallengeAll 继续建队。
+				tw := protocol.NewWriter()
+				tw.WriteInt32(0)
+				tw.WriteUint16(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo, tw.Bytes(),
+				))
 			case protocol.ActionIDBeelzebubTrialsOpen:
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
 					protocol.ActionIDBeelzebubTrialsOpen,
@@ -583,6 +607,14 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll_FiltersClearedBosses(t *tes
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
 					protocol.ActionIDBeelzebubTrialsCheckCanChallenge,
 					[]byte{protocol.BeelzebubTrialsSuccess},
+				))
+			case protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo:
+				// 无遗留队伍，允许 AutoChallengeAll 继续建队。
+				tw := protocol.NewWriter()
+				tw.WriteInt32(0)
+				tw.WriteUint16(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsGetPlayerTeamInfo, tw.Bytes(),
 				))
 			case protocol.ActionIDBeelzebubTrialsOpen:
 				// 71 累计次数已达上限；72 今日未挑战且次数未达上限；1 未出现在面板（视为新解锁，保持可挑战）。

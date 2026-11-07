@@ -1276,11 +1276,9 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				"target", targetName,
 			)
 
-			// 1. 探测功能是否开放 (Mod 0, Act 69)。未解锁模块服务端会静默丢弃业务请求,
-			// 先查询可避免每个周期都等待 open_panel 超时。
-			chkCtx, chkCancel := context.WithTimeout(ctx, callTimeout)
-			open, chkErr := session.CheckFunctionOpen(chkCtx, protocol.FunctionIDRefinePool)
-			chkCancel()
+			// 1. 功能开放检查：使用 Mod 0 Act 6 会话缓存。
+			// 逐功能 check_function_open 会被服务端静默丢弃，不能作为唯一判定。
+			open, chkErr := session.IsFunctionOpen(ctx, protocol.FunctionIDRefinePool)
 			if chkErr != nil {
 				if errors.Is(chkErr, context.DeadlineExceeded) {
 					slog.Info("查询粗铁淬炼池开放状态无回包, 本轮跳过",

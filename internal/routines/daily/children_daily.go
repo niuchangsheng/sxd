@@ -33,7 +33,7 @@ const (
 //
 // 线上实测：同一会话调用过活跃度面板 (Mod 0 Act 42) 后，Module 312/315 的
 // 子面板请求会被服务端静默丢弃。因此孩子任务必须排在所有会读取活跃度的
-// 例程之前 (高于天帝宝库的 110)。
+// 例程之前；天帝宝库 Act 4 对城镇上下文更敏感，使用 200 排在最前，孩子使用 120。
 const childrenPriority scheduler.RoutinePriority = 120
 
 // NewChildrenDailyRoutine 构造孩子每日学习与任务奖励领取任务。
