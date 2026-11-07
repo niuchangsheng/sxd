@@ -59,6 +59,7 @@ scheduler:
     weekend_event: true           # 周末狂欢礼 + 水果机 (仅免费次数, 不消耗元宝)
     daoyuan_vip_shop: true        # 精品杂货 VIP5/VIP8 购买 (仅低价档, 不消耗元宝)
     void_worship: true            # 仙界虚空/大神榜膜拜 (每日免费一次)
+    sa_union_worship: true        # 万古神墟/圣盟膜拜 (仅铜钱档)
     device_bind_reward: true      # 手机绑定首绑/月度奖励
     town_practice: true           # 城镇打坐离线经验结算
     destiny_sword: true           # 飞剑剑意淬炼
