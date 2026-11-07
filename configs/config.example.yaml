@@ -113,6 +113,7 @@ scheduler:
     xunxian_road: false           # 寻仙之路推图 (当前关闭)
     beelzebub_trials: true        # 魔王试炼与道行奖励
     tong_tian_tower: true         # 通天塔逐层挑战/突破
+    nine_regions: true            # 九空无界: 自动建队/助战并挑战当前关卡 (不消耗元宝)
 
     # 【竞技 pvp】竞技场、阵营、Boss、天梯
     arena: true                   # 本服竞技场

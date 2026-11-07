@@ -117,6 +117,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return social.NewNpcFriendshipRoutine()
 	case "dragonball_offer":
 		return daily.NewDragonballOfferRoutine()
+	case "nine_regions":
+		return dungeon.NewNineRegionsRoutine()
 	case "lingdao_practice":
 		return minigame.NewLingDaoRoutine()
 	case "pilgrimage":
