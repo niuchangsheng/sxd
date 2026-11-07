@@ -43,22 +43,31 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 			// 服务端对批次做整体校验：只要混入一条失效/过期记录，整批都会返回
 			// INVALID_DRAGONBALL(2)。因此这里逐颗发送，跳过失效记录，只要至少
 			// 收取成功一颗就视为腾出了空间。
-			collectTmp := func() (bool, error) {
+			//
+			// 返回 (是否腾出空间, 剩余普通上供次数, error)。剩余次数来自
+			// get_tmp_dragonball_basic_info 的 remain_normal_count；sacrifice
+			// 回包本身不含剩余次数（第三个 UByte 是动画标记）。
+			collectTmp := func() (bool, int16, error) {
 				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				infoResp, err := session.Call(cCtx, protocol.BuildDragonballTmpInfoPacket(), protocol.ActionIDDragonballTmpInfo)
 				cancel()
 				if err != nil || infoResp == nil {
-					return false, err
+					return false, -1, err
 				}
-				balls, err := protocol.ParseDragonballTmpInfoResult(infoResp.Payload)
-				if err != nil || len(balls) == 0 {
-					return false, err
+				info, err := protocol.ParseDragonballTmpInfoDetail(infoResp.Payload)
+				if err != nil {
+					return false, -1, err
+				}
+				remainNormal := info.RemainNormalCount
+				balls := info.Balls
+				if len(balls) == 0 {
+					return false, remainNormal, nil
 				}
 				collected, invalid := 0, 0
 				invalidIDs := make([]int32, 0)
 				for _, b := range balls {
 					if err := ctx.Err(); err != nil {
-						return collected > 0, nil
+						return collected > 0, remainNormal, nil
 					}
 					cCtx2, cancel2 := context.WithTimeout(ctx, 6*time.Second)
 					resp, cErr := session.Call(cCtx2, protocol.BuildDragonballCollectPacket([]int32{b.PlayerDBID}), protocol.ActionIDDragonballCollect)
@@ -108,7 +117,7 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 				slog.Info("神龙祭坛临时格收取完成",
 					"role_id", session.RoleID(), "requested", len(balls),
 					"collected", collected, "invalid", invalid, "sold", sold)
-				return collected > 0 || sold > 0, nil
+				return collected > 0 || sold > 0, remainNormal, nil
 			}
 
 			// mergeQualities 按品质一键合成龙珠。
@@ -144,12 +153,28 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 0. 先拾取祭坛临时格中的龙珠，并做一次合成，再进入上供循环。
-			_, _ = collectTmp()
+			_, remainNormal, collectErr := collectTmp()
+			if collectErr != nil {
+				slog.Info("神龙祭坛临时格查询失败", "role_id", session.RoleID(), "err", collectErr)
+			}
 			mergeAll()
+
+			// 以面板的 remain_normal_count 作为本轮上限；该字段缺失 (-1/0)
+			// 时退回游戏每日上限 20，最终仍由服务端 TIMES_USE_UP 兜底。
+			limit := maxDragonballOffers
+			if remainNormal > 0 && int(remainNormal) < limit {
+				limit = int(remainNormal)
+			}
+			slog.Info("神龙普通上供次数", "role_id", session.RoleID(),
+				"remain_normal_count", remainNormal, "limit", limit)
+			if remainNormal == 0 {
+				slog.Info("神龙普通上供今日次数已用尽", "role_id", session.RoleID())
+				return nil
+			}
 
 			offers := 0
 			collections := 0
-			for i := 0; i < maxDragonballOffers; i++ {
+			for i := 0; i < limit; i++ {
 				if err := ctx.Err(); err != nil {
 					return nil
 				}
@@ -173,15 +198,14 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 					slog.Info("神龙普通上供成功",
 						"role_id", session.RoleID(),
 						"times", offers,
-						"remain_times", res.RemainTimes,
-						"score", res.Score,
-						"alerts", len(res.Alerts),
+						"altar_balls", len(res.AltarBalls),
+						"play_flag", res.PlayFlag,
+						"skill_level", res.SkillLevel,
+						"skill_exp", res.SkillExp,
+						"chip", res.Chip,
 					)
-					if res.RemainTimes == 0 {
-						slog.Info("神龙普通上供今日次数已用尽", "role_id", session.RoleID())
-						mergeAll()
-						return nil
-					}
+					// sacrifice 回包不携带剩余次数，不能在这里用 play_flag 判断结束；
+					// 继续上供，由 TIMES_USE_UP(12) / 铜钱不足 / 次数上限终止。
 				case protocol.DragonballResultTimesUseUp:
 					slog.Info("神龙普通上供今日次数已用尽", "role_id", session.RoleID())
 					mergeAll()
@@ -200,7 +224,7 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 						return scheduler.ErrBagFull
 					}
 					collections++
-					ok, cErr := collectTmp()
+					ok, _, cErr := collectTmp()
 					if cErr != nil || !ok {
 						slog.Info("神龙祭坛临时格收取失败，停止上供", "role_id", session.RoleID(), "err", cErr)
 						return scheduler.ErrBagFull

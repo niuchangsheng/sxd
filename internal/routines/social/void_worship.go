@@ -1,7 +1,14 @@
-// 本文件实现仙界虚空/大神榜膜拜 (Mod_GodRankRank_Base, Module 500)。
+// 本文件实现仙界虚空/大神榜膜拜 (Mod_StVoid_Base 652 + Mod_GodRankRank_Base 500)。
 //
-// 每日一次免费膜拜；HAS_WORSHIPED 视为已完成。当前仅接入 500/1 worship，
-// 652 Mod_StVoid 的 like 需要玩家 ID，待探针确认后再接入。
+// 652 的正确 Socket 流程是:
+//
+//	open_panel (652/1) -> 返回 st_info_list 与 like_list
+//	like       (652/2) -> 对 st_info_list 中尚未膜拜的 st_uid 点赞，领取奖励
+//
+// 注意: 652/4 get_world_pk_rank 与 652/3 get_war_power_rank 在官方客户端中
+// 由 StVoidRankView 通过 HTTP (server-web/route.php?m=svs|svp) 获取排行榜，
+// 不是游戏 Socket 动作；向主服长连接发送 652/4 必然无回包。
+// 652 不可用或没有可膜拜对象时，回退到 500/1 大神榜膜拜。
 package social
 
 import (
@@ -41,41 +48,61 @@ func NewVoidWorshipRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
-			// 1. 优先走仙界虚空 652：世界 PK 榜取玩家 ID → like 膜拜。
-			if rankResp := call(protocol.BuildStVoidWorldPkRankPacket(), protocol.ActionIDStVoidWorldPkRank); rankResp != nil {
-				if ids, err := protocol.ParseStVoidRankPlayerIDs(rankResp.Payload); err == nil && len(ids) > 0 {
-					slog.Info("仙界虚空排行榜", "role_id", session.RoleID(), "players", len(ids))
+			// 1. 优先走仙界虚空 652：open_panel 取 st_info_list → like 膜拜。
+			if openResp := call(protocol.BuildStVoidOpenPacket(), protocol.ActionIDStVoidOpen); openResp != nil {
+				panel, pErr := protocol.ParseStVoidPanelResult(openResp.Payload)
+				if pErr != nil {
+					slog.Warn("解析仙界虚空面板失败", "role_id", session.RoleID(), "err", pErr)
+				} else if panel.Result != protocol.StVoidResultSuccess {
+					slog.Info("仙界虚空面板未开放", "role_id", session.RoleID(),
+						"result", panel.Result, "result_text", protocol.StVoidResultText(panel.Result))
+				} else {
+					slog.Info("仙界虚空面板", "role_id", session.RoleID(),
+						"st_name", panel.StName, "members", len(panel.Members),
+						"liked", len(panel.LikedUIDs))
+					liked := make(map[int32]bool, len(panel.LikedUIDs))
+					for _, uid := range panel.LikedUIDs {
+						liked[uid] = true
+					}
 					attempts := 0
-					for _, id := range ids {
+					for _, member := range panel.Members {
 						if attempts >= 3 {
 							break
 						}
+						if member.StUID == 0 || liked[member.StUID] {
+							continue
+						}
 						attempts++
-						resp := call(protocol.BuildStVoidLikePacket(id), protocol.ActionIDStVoidLike)
+						resp := call(protocol.BuildStVoidLikePacket(member.StUID), protocol.ActionIDStVoidLike)
 						if resp == nil {
 							break
 						}
-						code, pErr := protocol.ParseStVoidResult(resp.Payload)
-						if pErr != nil {
+						got, lErr := protocol.ParseStVoidLikeResult(resp.Payload)
+						if lErr != nil {
+							slog.Warn("解析仙界虚空膜拜回包失败", "role_id", session.RoleID(), "err", lErr)
 							break
 						}
-						switch code {
+						switch got.Result {
 						case protocol.StVoidResultSuccess:
-							slog.Info("仙界虚空膜拜成功", "role_id", session.RoleID(), "player_id", id)
+							slog.Info("仙界虚空膜拜成功", "role_id", session.RoleID(),
+								"st_uid", member.StUID, "nickname", member.Nickname,
+								"awards", got.Awards)
 							return nil
 						case protocol.StVoidResultIsLiked:
 							slog.Info("仙界虚空该玩家已膜拜，尝试下一位",
-								"role_id", session.RoleID(), "player_id", id)
+								"role_id", session.RoleID(), "st_uid", member.StUID)
 							continue
 						case protocol.StVoidResultPackFull:
 							return scheduler.ErrBagFull
 						default:
 							slog.Info("仙界虚空膜拜未成功",
-								"role_id", session.RoleID(), "player_id", id, "result", code)
+								"role_id", session.RoleID(), "st_uid", member.StUID,
+								"result", got.Result, "result_text", protocol.StVoidResultText(got.Result))
 						}
-						break
 					}
 				}
+			} else {
+				slog.Info("仙界虚空主面板无回包，回退大神榜膜拜", "role_id", session.RoleID())
 			}
 
 			// 2. 兜底：大神榜 500/1 worship。

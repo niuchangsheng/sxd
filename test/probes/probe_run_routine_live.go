@@ -113,6 +113,10 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return minigame.NewFindImmortalRoutine()
 	case "wufa_field":
 		return minigame.NewWuFaRoutine()
+	case "npc_friendship":
+		return social.NewNpcFriendshipRoutine()
+	case "dragonball_offer":
+		return daily.NewDragonballOfferRoutine()
 	case "lingdao_practice":
 		return minigame.NewLingDaoRoutine()
 	case "pilgrimage":

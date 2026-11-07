@@ -26,18 +26,20 @@ func respondDragonballMerge(conn net.Conn, pkt *protocol.Packet) []int32 {
 func TestDragonballOfferRoutine_StopsWhenTimesUp(t *testing.T) {
 	var calls atomic.Int32
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
-		if pkt.ActionID != protocol.ActionIDDragonballSacrifice {
-			return
+		switch pkt.ActionID {
+		case protocol.ActionIDDragonballTmpInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildDragonballTmpInfoDetailResultPacket(
+				protocol.DragonballTmpInfo{NormalCount: 20, RemainNormalCount: 20}))
+		case protocol.ActionIDDragonballSacrifice:
+			n := calls.Add(1)
+			code := protocol.DragonballResultSuccess
+			if n >= 3 {
+				code = protocol.DragonballResultTimesUseUp
+			}
+			_ = protocol.WritePacket(conn, protocol.BuildDragonballSacrificeResultPacket(protocol.DragonballSacrificeResult{
+				Result: code, PlayFlag: protocol.DragonballNotPlay,
+			}))
 		}
-		n := calls.Add(1)
-		code := protocol.DragonballResultSuccess
-		remain := uint8(3 - n)
-		if n >= 3 {
-			code = protocol.DragonballResultTimesUseUp
-		}
-		_ = protocol.WritePacket(conn, protocol.BuildDragonballSacrificeResultPacket(protocol.DragonballSacrificeResult{
-			Result: code, RemainTimes: remain,
-		}))
 	})
 	defer sess.Close()
 
@@ -49,16 +51,50 @@ func TestDragonballOfferRoutine_StopsWhenTimesUp(t *testing.T) {
 	}
 }
 
+// TestDragonballOfferRoutine_ContinuesWhenPlayFlagNotPlay 验证 sacrifice 回包中的
+// 第三个 UByte 是动画标记 (PLAY=14/NOT_PLAY=15)，不是剩余次数。旧实现把它当
+// remain_times，NOT_PLAY(15) 或 0 会误判为次数耗尽，导致只上供一次。
+func TestDragonballOfferRoutine_ContinuesWhenPlayFlagNotPlay(t *testing.T) {
+	var calls atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDDragonballTmpInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildDragonballTmpInfoDetailResultPacket(
+				protocol.DragonballTmpInfo{NormalCount: 20, RemainNormalCount: 20}))
+		case protocol.ActionIDDragonballSacrifice:
+			n := calls.Add(1)
+			code := protocol.DragonballResultSuccess
+			if n >= 20 {
+				code = protocol.DragonballResultTimesUseUp
+			}
+			_ = protocol.WritePacket(conn, protocol.BuildDragonballSacrificeResultPacket(protocol.DragonballSacrificeResult{
+				Result: code, PlayFlag: protocol.DragonballNotPlay,
+			}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewDragonballOfferRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("dragonball offer: %v", err)
+	}
+	if got := calls.Load(); got != 20 {
+		t.Fatalf("应连续上供至 20 次, 实际 %d 次", got)
+	}
+}
+
 func TestDragonballOfferRoutine_NoCoinStops(t *testing.T) {
 	var calls atomic.Int32
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
-		if pkt.ActionID != protocol.ActionIDDragonballSacrifice {
-			return
+		switch pkt.ActionID {
+		case protocol.ActionIDDragonballTmpInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildDragonballTmpInfoDetailResultPacket(
+				protocol.DragonballTmpInfo{NormalCount: 20, RemainNormalCount: 20}))
+		case protocol.ActionIDDragonballSacrifice:
+			calls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildDragonballSacrificeResultPacket(protocol.DragonballSacrificeResult{
+				Result: protocol.DragonballResultNoEnoughCoin,
+			}))
 		}
-		calls.Add(1)
-		_ = protocol.WritePacket(conn, protocol.BuildDragonballSacrificeResultPacket(protocol.DragonballSacrificeResult{
-			Result: protocol.DragonballResultNoEnoughCoin,
-		}))
 	})
 	defer sess.Close()
 

@@ -60,30 +60,48 @@ const (
 	DragonballResultFailure uint8 = 29
 )
 
-// DragonballAlert 表示上供后临时格中的龙珠提示。
-type DragonballAlert struct {
-	// ItemID 龙珠道具 ID
-	ItemID int32
-	// Num 数量
-	Num int16
-	// Flag 状态标志
-	Flag uint8
+// 神龙上供动画标记 (Mod_Dragonball_Base)。
+const (
+	// DragonballPlay 播放祭坛动画
+	DragonballPlay uint8 = 14
+	// DragonballNotPlay 不播放祭坛动画
+	DragonballNotPlay uint8 = 15
+)
+
+// DragonballAltarBall 表示上供后祭坛上的龙珠。
+//
+// 官方 DragonBallData.sacrifice 将该数组解析为
+// [player_d_b_id, d_b_id, lv]，不是道具提示。
+type DragonballAltarBall struct {
+	// PlayerDBID 玩家龙珠实例 ID
+	PlayerDBID int32
+	// DragonballID 龙珠配置 ID
+	DragonballID int16
+	// Level 龙珠等级
+	Level uint8
 }
 
 // DragonballSacrificeResult 表示一次神龙上供结果。
+//
+// 线格式 (Mod_Dragonball_Base.sacrifice):
+// UByte result, [Int player_d_b_id, Short d_b_id, Byte lv] altar_list,
+// UByte play_flag, Short skill_level, Int skill_exp, Int chip。
+//
+// 注意: 回包中没有“剩余上供次数”。剩余次数需通过
+// get_tmp_dragonball_basic_info (111/0) 的 remain_normal_count 获取。
 type DragonballSacrificeResult struct {
 	// Result 结果码
 	Result uint8
-	// Alerts 临时格龙珠提示
-	Alerts []DragonballAlert
-	// RemainTimes 今日剩余上供次数
-	RemainTimes uint8
-	// Score 龙珠经验
-	Score int16
-	// TotalScore 累计龙珠经验
-	TotalScore int32
-	// EventID 事件 ID
-	EventID int32
+	// AltarBalls 上供后祭坛上的龙珠
+	AltarBalls []DragonballAltarBall
+	// PlayFlag 动画标记 (DragonballPlay / DragonballNotPlay)
+	PlayFlag uint8
+	// SkillLevel 龙珠技能等级
+	SkillLevel int16
+	// SkillExp 龙珠技能经验
+	SkillExp int32
+	// Chip 龙珠碎片
+	Chip int32
 }
 
 // BuildDragonballSacrificePacket 构造神龙上供封包 (0x006F0002)。
@@ -104,32 +122,32 @@ func ParseDragonballSacrificeResult(payload []byte) (*DragonballSacrificeResult,
 	}
 	count, err := r.ReadUint16()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read dragonball alert count: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: failed to read dragonball altar count: %v", ErrInvalidPayload, err)
 	}
 	for i := 0; i < int(count); i++ {
-		var a DragonballAlert
-		if a.ItemID, err = r.ReadInt32(); err != nil {
-			return nil, fmt.Errorf("%w: failed to read alert[%d].item_id: %v", ErrInvalidPayload, i, err)
+		var b DragonballAltarBall
+		if b.PlayerDBID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read altar[%d].player_d_b_id: %v", ErrInvalidPayload, i, err)
 		}
-		if a.Num, err = r.ReadInt16(); err != nil {
-			return nil, fmt.Errorf("%w: failed to read alert[%d].num: %v", ErrInvalidPayload, i, err)
+		if b.DragonballID, err = r.ReadInt16(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read altar[%d].d_b_id: %v", ErrInvalidPayload, i, err)
 		}
-		if a.Flag, err = r.ReadUint8(); err != nil {
-			return nil, fmt.Errorf("%w: failed to read alert[%d].flag: %v", ErrInvalidPayload, i, err)
+		if b.Level, err = r.ReadUint8(); err != nil {
+			return nil, fmt.Errorf("%w: failed to read altar[%d].lv: %v", ErrInvalidPayload, i, err)
 		}
-		res.Alerts = append(res.Alerts, a)
+		res.AltarBalls = append(res.AltarBalls, b)
 	}
-	if res.RemainTimes, err = r.ReadUint8(); err != nil {
-		return nil, fmt.Errorf("%w: failed to read dragonball remain times: %v", ErrInvalidPayload, err)
+	if res.PlayFlag, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read dragonball play flag: %v", ErrInvalidPayload, err)
 	}
-	if res.Score, err = r.ReadInt16(); err != nil {
-		return nil, fmt.Errorf("%w: failed to read dragonball score: %v", ErrInvalidPayload, err)
+	if res.SkillLevel, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read dragonball skill level: %v", ErrInvalidPayload, err)
 	}
-	if res.TotalScore, err = r.ReadInt32(); err != nil {
-		return nil, fmt.Errorf("%w: failed to read dragonball total score: %v", ErrInvalidPayload, err)
+	if res.SkillExp, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read dragonball skill exp: %v", ErrInvalidPayload, err)
 	}
-	if res.EventID, err = r.ReadInt32(); err != nil {
-		return nil, fmt.Errorf("%w: failed to read dragonball event: %v", ErrInvalidPayload, err)
+	if res.Chip, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read dragonball chip: %v", ErrInvalidPayload, err)
 	}
 	return res, nil
 }
@@ -139,16 +157,16 @@ func BuildDragonballSacrificeResultPacket(res DragonballSacrificeResult) *Packet
 	w := NewWriter()
 	w.WriteUint8(res.Result)
 	if res.Result == DragonballResultSuccess {
-		w.WriteUint16(uint16(len(res.Alerts)))
-		for _, a := range res.Alerts {
-			w.WriteInt32(a.ItemID)
-			w.WriteInt16(a.Num)
-			w.WriteUint8(a.Flag)
+		w.WriteUint16(uint16(len(res.AltarBalls)))
+		for _, b := range res.AltarBalls {
+			w.WriteInt32(b.PlayerDBID)
+			w.WriteInt16(b.DragonballID)
+			w.WriteUint8(b.Level)
 		}
-		w.WriteUint8(res.RemainTimes)
-		w.WriteInt16(res.Score)
-		w.WriteInt32(res.TotalScore)
-		w.WriteInt32(res.EventID)
+		w.WriteUint8(res.PlayFlag)
+		w.WriteInt16(res.SkillLevel)
+		w.WriteInt32(res.SkillExp)
+		w.WriteInt32(res.Chip)
 	}
 	return NewPacket(ActionIDDragonballSacrifice, w.Bytes())
 }
@@ -168,29 +186,57 @@ func BuildDragonballTmpInfoPacket() *Packet {
 	return NewPacket(ActionIDDragonballTmpInfo, nil)
 }
 
-// ParseDragonballTmpInfoResult 解析祭坛临时格龙珠列表。
-func ParseDragonballTmpInfoResult(payload []byte) ([]DragonballTmpBall, error) {
+// DragonballTmpInfo 表示神龙祭坛临时格面板。
+//
+// 线格式 (get_tmp_dragonball_basic_info):
+// Short normal_count, Short high_level_count, Byte buff_id, Short buff_time,
+// Short remain_normal_count, Short remain_high_level_count,
+// [Int player_d_b_id, Short d_b_id, Byte lv] tmp_grid_d_b_list。
+type DragonballTmpInfo struct {
+	// NormalCount 今日普通上供总次数
+	NormalCount int16
+	// HighLevelCount 今日高级上供总次数
+	HighLevelCount int16
+	// BuffID 祝福 ID
+	BuffID uint8
+	// BuffTime 祝福剩余时间
+	BuffTime int16
+	// RemainNormalCount 今日剩余普通上供次数
+	RemainNormalCount int16
+	// RemainHighLevelCount 今日剩余高级上供次数
+	RemainHighLevelCount int16
+	// Balls 祭坛临时格龙珠
+	Balls []DragonballTmpBall
+}
+
+// ParseDragonballTmpInfoDetail 解析祭坛临时格面板 (含剩余上供次数)。
+func ParseDragonballTmpInfoDetail(payload []byte) (*DragonballTmpInfo, error) {
 	r := NewReader(payload)
-	// 6 个标量字段: Short, Short, Byte, Short, Short, Short。
-	if _, err := r.ReadInt16(); err != nil {
-		return nil, fmt.Errorf("%w: failed to read tmp dragonball field0: %v", ErrInvalidPayload, err)
+	info := &DragonballTmpInfo{}
+	var err error
+	if info.NormalCount, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read tmp normal_count: %v", ErrInvalidPayload, err)
 	}
-	if _, err := r.ReadInt16(); err != nil {
-		return nil, fmt.Errorf("%w: failed to read tmp dragonball field1: %v", ErrInvalidPayload, err)
+	if info.HighLevelCount, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read tmp high_level_count: %v", ErrInvalidPayload, err)
 	}
-	if _, err := r.ReadUint8(); err != nil {
-		return nil, fmt.Errorf("%w: failed to read tmp dragonball field2: %v", ErrInvalidPayload, err)
+	if info.BuffID, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read tmp buff_id: %v", ErrInvalidPayload, err)
 	}
-	for i := 3; i < 6; i++ {
-		if _, err := r.ReadInt16(); err != nil {
-			return nil, fmt.Errorf("%w: failed to read tmp dragonball field%d: %v", ErrInvalidPayload, i, err)
-		}
+	if info.BuffTime, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read tmp buff_time: %v", ErrInvalidPayload, err)
+	}
+	if info.RemainNormalCount, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read tmp remain_normal_count: %v", ErrInvalidPayload, err)
+	}
+	if info.RemainHighLevelCount, err = r.ReadInt16(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read tmp remain_high_level_count: %v", ErrInvalidPayload, err)
 	}
 	count, err := r.ReadUint16()
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to read tmp dragonball count: %v", ErrInvalidPayload, err)
 	}
-	balls := make([]DragonballTmpBall, 0, count)
+	info.Balls = make([]DragonballTmpBall, 0, count)
 	for i := 0; i < int(count); i++ {
 		var b DragonballTmpBall
 		if b.PlayerDBID, err = r.ReadInt32(); err != nil {
@@ -202,9 +248,18 @@ func ParseDragonballTmpInfoResult(payload []byte) ([]DragonballTmpBall, error) {
 		if b.Quality, err = r.ReadUint8(); err != nil {
 			return nil, fmt.Errorf("%w: failed to read tmp ball[%d].quality: %v", ErrInvalidPayload, i, err)
 		}
-		balls = append(balls, b)
+		info.Balls = append(info.Balls, b)
 	}
-	return balls, nil
+	return info, nil
+}
+
+// ParseDragonballTmpInfoResult 解析祭坛临时格龙珠列表。
+func ParseDragonballTmpInfoResult(payload []byte) ([]DragonballTmpBall, error) {
+	info, err := ParseDragonballTmpInfoDetail(payload)
+	if err != nil {
+		return nil, err
+	}
+	return info.Balls, nil
 }
 
 // BuildDragonballCollectPacket 构造收取临时格龙珠封包 (0x006F0001)。
@@ -341,22 +396,34 @@ func BuildDragonballOneKeyMergeResultPacket(result uint8, ids []int32) *Packet {
 	return NewPacket(ActionIDDragonballOneKeyMerge, w.Bytes())
 }
 
-// BuildDragonballTmpInfoResultPacket 构造临时格回包，供离线 mock 与单测使用。
-func BuildDragonballTmpInfoResultPacket(balls []DragonballTmpBall) *Packet {
+// BuildDragonballTmpInfoDetailResultPacket 构造临时格面板回包 (含剩余次数)，
+// 供离线 mock 与单测使用。
+func BuildDragonballTmpInfoDetailResultPacket(info DragonballTmpInfo) *Packet {
 	w := NewWriter()
-	w.WriteInt16(10)
-	w.WriteInt16(0)
-	w.WriteUint8(7)
-	for i := 0; i < 3; i++ {
-		w.WriteInt16(0)
-	}
-	w.WriteUint16(uint16(len(balls)))
-	for _, b := range balls {
+	w.WriteInt16(info.NormalCount)
+	w.WriteInt16(info.HighLevelCount)
+	w.WriteUint8(info.BuffID)
+	w.WriteInt16(info.BuffTime)
+	w.WriteInt16(info.RemainNormalCount)
+	w.WriteInt16(info.RemainHighLevelCount)
+	w.WriteUint16(uint16(len(info.Balls)))
+	for _, b := range info.Balls {
 		w.WriteInt32(b.PlayerDBID)
 		w.WriteInt16(b.Level)
 		w.WriteUint8(b.Quality)
 	}
 	return NewPacket(ActionIDDragonballTmpInfo, w.Bytes())
+}
+
+// BuildDragonballTmpInfoResultPacket 构造临时格回包，供离线 mock 与单测使用。
+// 默认剩余普通上供次数为 10，避免例程因 0 次数提前结束。
+func BuildDragonballTmpInfoResultPacket(balls []DragonballTmpBall) *Packet {
+	return BuildDragonballTmpInfoDetailResultPacket(DragonballTmpInfo{
+		NormalCount:       10,
+		BuffID:            7,
+		RemainNormalCount: 10,
+		Balls:             balls,
+	})
 }
 
 // BuildDragonballCollectResultPacket 构造收取回包，供离线 mock 与单测使用。

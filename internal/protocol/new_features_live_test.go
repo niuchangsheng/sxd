@@ -559,16 +559,16 @@ func TestMasterPracticeDeployInfoRoundTrip(t *testing.T) {
 
 func TestDragonballSacrificeProtocol(t *testing.T) {
 	res, err := protocol.ParseDragonballSacrificeResult(protocol.BuildDragonballSacrificeResultPacket(protocol.DragonballSacrificeResult{
-		Result:      protocol.DragonballResultSuccess,
-		Alerts:      []protocol.DragonballAlert{{ItemID: 1655, Num: 1, Flag: 1}},
-		RemainTimes: 19,
-		Score:       50,
-		TotalScore:  1234,
+		Result:     protocol.DragonballResultSuccess,
+		AltarBalls: []protocol.DragonballAltarBall{{PlayerDBID: 1655, DragonballID: 12, Level: 1}},
+		PlayFlag:   protocol.DragonballPlay,
+		SkillLevel: 50,
+		SkillExp:   1234,
 	}).Payload)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if res.Result != protocol.DragonballResultSuccess || res.RemainTimes != 19 || len(res.Alerts) != 1 {
+	if res.Result != protocol.DragonballResultSuccess || res.PlayFlag != protocol.DragonballPlay || len(res.AltarBalls) != 1 {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 	for _, code := range []uint8{

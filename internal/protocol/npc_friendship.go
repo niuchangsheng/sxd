@@ -29,8 +29,18 @@ const (
 	ActionIDNpcFriendshipGivePresent uint32 = 0x01B40003
 	// ActionIDNpcFriendshipMakeFriend 结交 NPC (Action 4 -> 0x01B40004)
 	ActionIDNpcFriendshipMakeFriend uint32 = 0x01B40004
+	// ActionIDNpcFriendshipTakeMission 接取结交任务 (Action 6 -> 0x01B40006)
+	ActionIDNpcFriendshipTakeMission uint32 = 0x01B40006
 	// ActionIDNpcFriendshipGainMissionAward 领取结交任务奖励 (Action 7 -> 0x01B40007)
 	ActionIDNpcFriendshipGainMissionAward uint32 = 0x01B40007
+	// ActionIDNpcFriendshipAnswerQuestion 回答 NPC 每日问答 (Action 8 -> 0x01B40008)
+	ActionIDNpcFriendshipAnswerQuestion uint32 = 0x01B40008
+	// ActionIDNpcFriendshipCompleteMission 完成结交任务 (Action 9 -> 0x01B40009)
+	ActionIDNpcFriendshipCompleteMission uint32 = 0x01B40009
+	// ActionIDNpcFriendshipFingerGuess 猜拳 (Action 10 -> 0x01B4000A)
+	ActionIDNpcFriendshipFingerGuess uint32 = 0x01B4000A
+	// ActionIDNpcFriendshipDiceGuess 掷骰子 (Action 12 -> 0x01B4000C)
+	ActionIDNpcFriendshipDiceGuess uint32 = 0x01B4000C
 )
 
 // NPC 结交礼物编号 (NpcFriendShipType.PresentList)。
@@ -83,6 +93,26 @@ const (
 	NpcFriendshipResultHasAlreadyReceive uint8 = 11
 	// NpcFriendshipResultPackFull 背包已满
 	NpcFriendshipResultPackFull uint8 = 12
+	// NpcFriendshipResultErrorQuestID 问题/任务编号错误
+	NpcFriendshipResultErrorQuestID uint8 = 16
+	// NpcFriendshipResultHasAlreadyComplete 任务已完成
+	NpcFriendshipResultHasAlreadyComplete uint8 = 17
+	// NpcFriendshipResultCompleteNoEnough 任务进度/交付物不足
+	NpcFriendshipResultCompleteNoEnough uint8 = 18
+	// NpcFriendshipResultNpcError NPC 状态错误
+	NpcFriendshipResultNpcError uint8 = 19
+	// NpcFriendshipResultAnswerA 回答 A
+	NpcFriendshipResultAnswerA uint8 = 13
+	// NpcFriendshipResultAnswerB 回答 B
+	NpcFriendshipResultAnswerB uint8 = 14
+	// NpcFriendshipResultAnswerC 回答 C
+	NpcFriendshipResultAnswerC uint8 = 15
+	// NpcFriendshipResultWin 猜拳/掷骰子胜利
+	NpcFriendshipResultWin uint8 = 20
+	// NpcFriendshipResultLose 猜拳/掷骰子失败
+	NpcFriendshipResultLose uint8 = 21
+	// NpcFriendshipResultTie 猜拳/掷骰子平局
+	NpcFriendshipResultTie uint8 = 22
 )
 
 // NpcFriendshipInfo 表示一个 NPC 的结交状态。
@@ -182,6 +212,215 @@ func BuildNpcFriendshipGainMissionAwardPacket(npcID int32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(npcID)
 	return NewPacket(ActionIDNpcFriendshipGainMissionAward, w.Bytes())
+}
+
+// BuildNpcFriendshipTakeMissionPacket 构造接取结交任务封包 (0x01B40006)。
+func BuildNpcFriendshipTakeMissionPacket(npcID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(npcID)
+	return NewPacket(ActionIDNpcFriendshipTakeMission, w.Bytes())
+}
+
+// BuildNpcFriendshipAnswerQuestionPacket 构造回答 NPC 问题封包 (0x01B40008)。
+//
+// 线格式: Int32 question_id, Int32 npc_id, UByte answer。
+// 2026-11-08 线上探针确认参数顺序为 question_id 在前；反过来发送会返回
+// ERROR_QUEST_ID(16)。answer 使用 ANSWER_A(13)/ANSWER_B(14)/ANSWER_C(15)。
+func BuildNpcFriendshipAnswerQuestionPacket(questionID, npcID int32, answer uint8) *Packet {
+	w := NewWriter()
+	w.WriteInt32(questionID)
+	w.WriteInt32(npcID)
+	w.WriteUint8(answer)
+	return NewPacket(ActionIDNpcFriendshipAnswerQuestion, w.Bytes())
+}
+
+// BuildNpcFriendshipCompleteMissionPacket 构造完成结交任务封包 (0x01B40009)。
+//
+// 线格式: Int32 npc_id, Int32 mission_type, Int32 town_npc_id。
+func BuildNpcFriendshipCompleteMissionPacket(npcID, missionType, townNPCID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(npcID)
+	w.WriteInt32(missionType)
+	w.WriteInt32(townNPCID)
+	return NewPacket(ActionIDNpcFriendshipCompleteMission, w.Bytes())
+}
+
+// BuildNpcFriendshipFingerGuessPacket 构造猜拳封包 (0x01B4000A)。
+//
+// 线格式: Int32 npc_id, Int32 quest_id(mission_type), Int32 town_npc_id, Int32 my_guess。
+// my_guess: 0/1/2 分别对应石头/剪刀/布。
+func BuildNpcFriendshipFingerGuessPacket(npcID, questID, townNPCID, myGuess int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(npcID)
+	w.WriteInt32(questID)
+	w.WriteInt32(townNPCID)
+	w.WriteInt32(myGuess)
+	return NewPacket(ActionIDNpcFriendshipFingerGuess, w.Bytes())
+}
+
+// BuildNpcFriendshipDiceGuessPacket 构造掷骰子封包 (0x01B4000C)。
+//
+// 线格式: Int32 npc_id, Int32 quest_id(mission_type), Int32 town_npc_id。
+func BuildNpcFriendshipDiceGuessPacket(npcID, questID, townNPCID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(npcID)
+	w.WriteInt32(questID)
+	w.WriteInt32(townNPCID)
+	return NewPacket(ActionIDNpcFriendshipDiceGuess, w.Bytes())
+}
+
+// NpcFriendshipTakeMissionResult 表示接取任务结果。
+type NpcFriendshipTakeMissionResult struct {
+	// Result 结果码
+	Result uint8
+	// HasTakeMission 接取后的状态 (1 已接取)
+	HasTakeMission uint8
+	// NpcID NPC 编号
+	NpcID int32
+	// MissionCount 当前进行中的任务数
+	MissionCount int32
+}
+
+// NpcFriendshipAnswerResult 表示回答 NPC 问题结果。
+type NpcFriendshipAnswerResult struct {
+	// Result 结果码
+	Result uint8
+	// NewExp 回答后的好感度经验
+	NewExp int32
+	// NpcID NPC 编号
+	NpcID int32
+}
+
+// NpcFriendshipCompleteResult 表示完成结交任务结果。
+type NpcFriendshipCompleteResult struct {
+	// Result 结果码
+	Result uint8
+	// NpcID NPC 编号
+	NpcID int32
+}
+
+// NpcFriendshipGuessResult 表示猜拳/掷骰子结果。
+type NpcFriendshipGuessResult struct {
+	// Result WIN(20) / LOSE(21) / TIE(22)
+	Result uint8
+	// MyGuess 我方出拳/点数 (服务端回显)
+	MyGuess int32
+	// NpcGuess NPC 出拳/点数
+	NpcGuess int32
+}
+
+// NpcFriendshipMissionAwardResult 表示领取任务奖励结果。
+type NpcFriendshipMissionAwardResult struct {
+	// Result 结果码
+	Result uint8
+	// IsReceive 奖励领取状态
+	IsReceive uint8
+	// NewExp 领取后的好感度经验
+	NewExp int32
+	// NpcID NPC 编号
+	NpcID int32
+}
+
+// ParseNpcFriendshipTakeMissionResult 解析接取任务回包。
+func ParseNpcFriendshipTakeMissionResult(payload []byte) (*NpcFriendshipTakeMissionResult, error) {
+	r := NewReader(payload)
+	res := &NpcFriendshipTakeMissionResult{}
+	var err error
+	if res.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read take mission result: %v", ErrInvalidPayload, err)
+	}
+	if res.HasTakeMission, err = r.ReadUint8(); err != nil {
+		return res, nil
+	}
+	if res.NpcID, err = r.ReadInt32(); err != nil {
+		return res, nil
+	}
+	if res.MissionCount, err = r.ReadInt32(); err != nil {
+		return res, nil
+	}
+	return res, nil
+}
+
+// ParseNpcFriendshipAnswerResult 解析回答 NPC 问题回包。
+func ParseNpcFriendshipAnswerResult(payload []byte) (*NpcFriendshipAnswerResult, error) {
+	r := NewReader(payload)
+	res := &NpcFriendshipAnswerResult{}
+	var err error
+	if res.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read answer result: %v", ErrInvalidPayload, err)
+	}
+	if res.NewExp, err = r.ReadInt32(); err != nil {
+		return res, nil
+	}
+	if res.NpcID, err = r.ReadInt32(); err != nil {
+		return res, nil
+	}
+	return res, nil
+}
+
+// ParseNpcFriendshipCompleteResult 解析完成结交任务回包。
+func ParseNpcFriendshipCompleteResult(payload []byte) (*NpcFriendshipCompleteResult, error) {
+	r := NewReader(payload)
+	res := &NpcFriendshipCompleteResult{}
+	var err error
+	if res.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read complete mission result: %v", ErrInvalidPayload, err)
+	}
+	if res.NpcID, err = r.ReadInt32(); err != nil {
+		return res, nil
+	}
+	return res, nil
+}
+
+// ParseNpcFriendshipGuessResult 解析猜拳/掷骰子回包。
+func ParseNpcFriendshipGuessResult(payload []byte) (*NpcFriendshipGuessResult, error) {
+	r := NewReader(payload)
+	res := &NpcFriendshipGuessResult{}
+	var err error
+	if res.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read guess result: %v", ErrInvalidPayload, err)
+	}
+	if res.MyGuess, err = r.ReadInt32(); err != nil {
+		return res, nil
+	}
+	if res.NpcGuess, err = r.ReadInt32(); err != nil {
+		return res, nil
+	}
+	return res, nil
+}
+
+// ParseNpcFriendshipMissionAwardResult 解析领取任务奖励回包。
+func ParseNpcFriendshipMissionAwardResult(payload []byte) (*NpcFriendshipMissionAwardResult, error) {
+	r := NewReader(payload)
+	res := &NpcFriendshipMissionAwardResult{}
+	var err error
+	if res.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read mission award result: %v", ErrInvalidPayload, err)
+	}
+	if res.IsReceive, err = r.ReadUint8(); err != nil {
+		return res, nil
+	}
+	if res.NewExp, err = r.ReadInt32(); err != nil {
+		return res, nil
+	}
+	if res.NpcID, err = r.ReadInt32(); err != nil {
+		return res, nil
+	}
+	return res, nil
+}
+
+// NpcFriendshipGuessResultText 返回猜拳/掷骰子结果的可读文本。
+func NpcFriendshipGuessResultText(code uint8) string {
+	switch code {
+	case NpcFriendshipResultWin:
+		return "胜利"
+	case NpcFriendshipResultLose:
+		return "失败"
+	case NpcFriendshipResultTie:
+		return "平局"
+	default:
+		return fmt.Sprintf("未知结果码(%d)", code)
+	}
 }
 
 // ParseNpcFriendshipInfoResult 解析 NPC 结交总览。
@@ -351,4 +590,50 @@ func BuildNpcFriendshipFriendResultPacket(res NpcFriendshipFriendResult) *Packet
 // BuildNpcFriendshipActionCodePacket 构造单结果码回包，供离线 mock 与单测使用。
 func BuildNpcFriendshipActionCodePacket(actionID uint32, code uint8) *Packet {
 	return NewPacket(actionID, []byte{code})
+}
+
+// BuildNpcFriendshipTakeMissionResultPacket 构造接取任务回包，供离线 mock 与单测使用。
+func BuildNpcFriendshipTakeMissionResultPacket(res NpcFriendshipTakeMissionResult) *Packet {
+	w := NewWriter()
+	w.WriteUint8(res.Result)
+	w.WriteUint8(res.HasTakeMission)
+	w.WriteInt32(res.NpcID)
+	w.WriteInt32(res.MissionCount)
+	return NewPacket(ActionIDNpcFriendshipTakeMission, w.Bytes())
+}
+
+// BuildNpcFriendshipAnswerResultPacket 构造回答问答回包，供离线 mock 与单测使用。
+func BuildNpcFriendshipAnswerResultPacket(res NpcFriendshipAnswerResult) *Packet {
+	w := NewWriter()
+	w.WriteUint8(res.Result)
+	w.WriteInt32(res.NewExp)
+	w.WriteInt32(res.NpcID)
+	return NewPacket(ActionIDNpcFriendshipAnswerQuestion, w.Bytes())
+}
+
+// BuildNpcFriendshipCompleteResultPacket 构造完成任务回包，供离线 mock 与单测使用。
+func BuildNpcFriendshipCompleteResultPacket(res NpcFriendshipCompleteResult) *Packet {
+	w := NewWriter()
+	w.WriteUint8(res.Result)
+	w.WriteInt32(res.NpcID)
+	return NewPacket(ActionIDNpcFriendshipCompleteMission, w.Bytes())
+}
+
+// BuildNpcFriendshipGuessResultPacket 构造猜拳/掷骰子回包，供离线 mock 与单测使用。
+func BuildNpcFriendshipGuessResultPacket(actionID uint32, res NpcFriendshipGuessResult) *Packet {
+	w := NewWriter()
+	w.WriteUint8(res.Result)
+	w.WriteInt32(res.MyGuess)
+	w.WriteInt32(res.NpcGuess)
+	return NewPacket(actionID, w.Bytes())
+}
+
+// BuildNpcFriendshipMissionAwardResultPacket 构造领取任务奖励回包，供离线 mock 与单测使用。
+func BuildNpcFriendshipMissionAwardResultPacket(res NpcFriendshipMissionAwardResult) *Packet {
+	w := NewWriter()
+	w.WriteUint8(res.Result)
+	w.WriteUint8(res.IsReceive)
+	w.WriteInt32(res.NewExp)
+	w.WriteInt32(res.NpcID)
+	return NewPacket(ActionIDNpcFriendshipGainMissionAward, w.Bytes())
 }
