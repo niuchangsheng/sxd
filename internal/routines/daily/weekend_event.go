@@ -44,7 +44,13 @@ func NewWeekendEventRoutine() scheduler.ActivityRoutine {
 			// 1. 周末狂欢礼：逐个槽位领取免费奖励。
 			if panelResp := call(protocol.BuildWeekendGiftPanelPacket(), protocol.ActionIDWeekendGiftPanel); panelResp != nil {
 				slog.Info("周末狂欢礼面板", "role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
-				for idx := int32(0); idx < 4; idx++ {
+				giftIDs, pErr := protocol.ParseWeekendGiftIDs(panelResp.Payload)
+				if pErr != nil {
+					slog.Warn("解析周末狂欢礼面板失败", "role_id", session.RoleID(), "err", pErr)
+					goto fruit
+				}
+				slog.Info("周末狂欢礼可领取档位", "role_id", session.RoleID(), "gift_ids", giftIDs)
+				for _, idx := range giftIDs {
 					if ctx.Err() != nil {
 						return nil
 					}

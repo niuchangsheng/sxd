@@ -87,3 +87,29 @@ func ParseFirstByteResult(payload []byte, scene string) (uint8, error) {
 	}
 	return payload[0], nil
 }
+
+// ParseWeekendGiftIDs 解析狂欢礼面板 [Int day, [Int gain_id, Int,Int,Int], Int]。
+func ParseWeekendGiftIDs(payload []byte) ([]int32, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	if _, err := r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("周末狂欢礼天数读取失败: %w", err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, nil
+	}
+	ids := make([]int32, 0, count)
+	for i := 0; i < int(count); i++ {
+		id, err := r.ReadInt32()
+		if err != nil {
+			return ids, fmt.Errorf("周末狂欢礼[%d] id 读取失败: %w", i, err)
+		}
+		for j := 0; j < 3; j++ {
+			if _, err = r.ReadInt32(); err != nil {
+				return ids, fmt.Errorf("周末狂欢礼[%d] 字段读取失败: %w", i, err)
+			}
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}

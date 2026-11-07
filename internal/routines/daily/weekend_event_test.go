@@ -15,11 +15,9 @@ func TestWeekendEventRoutine_ClaimsGiftAndFruit(t *testing.T) {
 		switch pkt.ActionID {
 		case protocol.ActionIDWeekendGiftPanel:
 			w := protocol.NewWriter()
+			w.WriteInt32(1).WriteUint16(1)
+			w.WriteInt32(6).WriteInt32(0).WriteInt32(0).WriteInt32(1)
 			w.WriteInt32(1)
-			for i := 0; i < 4; i++ {
-				w.WriteInt32(0)
-			}
-			w.WriteInt32(0)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDWeekendGiftAward:
 			n := giftCalls.Add(1)
@@ -55,8 +53,8 @@ func TestWeekendEventRoutine_ClaimsGiftAndFruit(t *testing.T) {
 	if err := NewWeekendEventRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("weekend: %v", err)
 	}
-	if got := giftCalls.Load(); got != 4 {
-		t.Fatalf("周末礼应尝试 4 个槽位, 实际 %d 次", got)
+	if got := giftCalls.Load(); got != 1 {
+		t.Fatalf("周末礼应按面板 gift_id 尝试 1 个档位, 实际 %d 次", got)
 	}
 	if got := drawCalls.Load(); got != 2 {
 		t.Fatalf("水果机应抽 2 次 (成功+次数用尽), 实际 %d 次", got)
