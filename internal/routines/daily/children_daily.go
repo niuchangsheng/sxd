@@ -60,7 +60,7 @@ func NewChildrenDailyRoutine() scheduler.ActivityRoutine {
 				defer cancel()
 				resp, err := session.Call(cCtx, pkt, act)
 				if err != nil {
-					slog.Warn("孩子协议无回包", "role_id", session.RoleID(),
+					slog.Info("孩子协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
 					return nil
 				}

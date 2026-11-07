@@ -84,7 +84,7 @@ func TestConfig_LoadExample(t *testing.T) {
 		t.Errorf("unexpected treasure awards: %+v", awards)
 	}
 
-	// 验证副本扫荡配置: 去掉 sweep_highest_main, 仅保留 sweep_elite, 开启 sell_swept_items
+	// 验证副本扫荡配置: 仅保留精英扫荡 sweep_elite, 开启 sell_swept_items
 	if !cfg.Scheduler.Dungeon.Sweep.Enabled {
 		t.Errorf("expected dungeon.sweep to be enabled")
 	}
@@ -123,12 +123,7 @@ server:
 		t.Errorf("expected default jitter [1.0, 3.0], got [%v, %v]",
 			cfg.Scheduler.Jitter.MinSeconds, cfg.Scheduler.Jitter.MaxSeconds)
 	}
-	for _, p := range cfg.Scheduler.Dungeon.Pipeline {
-		if p == "sweep_highest_main" {
-			t.Errorf("expected default dungeon pipeline not to contain sweep_highest_main, got %v", cfg.Scheduler.Dungeon.Pipeline)
-		}
 	}
-}
 
 func TestConfig_LoadConfigYamlIfExists(t *testing.T) {
 	configPath := filepath.Join("..", "..", "configs", "config.yaml")

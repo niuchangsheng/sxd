@@ -35,8 +35,7 @@ type QuestCycleFeatureConfig struct {
 type SweepFeatureConfig struct {
 	Enabled               bool     `json:"enabled"`
 	Pipeline              []string `json:"pipeline"`                // 扫荡流水线优先级: "sweep_elite"
-	MaxBatchTimes         int      `json:"max_batch_times"`         // 已废弃: 主线扫荡已下线，精英副本按城镇全量扫荡
-	PreferPracticeQuickly bool     `json:"prefer_practice_quickly"` // 优先使用 Module 25 秒完成协议 (仅作用于扫荡)
+	PreferPracticeQuickly bool     `json:"prefer_practice_quickly"` // 兼容旧配置字段
 	SellSweptItems        bool     `json:"sell_swept_items"`        // 扫荡精英副本后是否自动卖掉扫荡物
 	AutoSellSweptItems    bool     `json:"auto_sell_swept_items"`   // 别名
 }
@@ -48,17 +47,7 @@ type SweepConfig struct {
 	// 功能二: 关卡扫荡 (扫荡精英副本)
 	Sweep SweepFeatureConfig `json:"sweep"`
 
-	// Mode 扫荡模式 (默认 ModeAutoRecommend)
-	Mode SweepMode
-	// Category 副本三大分类 (CategoryMainline, CategoryElite, CategorySide，默认 CategoryMainline)
-	Category DungeonCategory
-	// SweepElite 是否扫精英关卡 (默认 false，对齐 01.ini 扫精英=否)
-	SweepElite bool
-	// TargetMissionID 目标指定关卡 ID (0 表示自动选最高等级关卡)
-	TargetMissionID int
-	// MaxBatchTimes 单次执行最大扫荡次数 (默认 10)
-	MaxBatchTimes int
-	// PreferPracticeQuickly 是否优先使用 Module 25 秒扫荡 (默认为 false 以保障存量测试与原版辅助兼容)
+	// PreferPracticeQuickly 兼容旧配置字段 (英雄副本固定使用 quickly)
 	PreferPracticeQuickly bool
 	// AutoReplenishStamina 当主线或支线等副本无体力继续时，是否自动按 [包子 > 粽子 > 茶叶蛋] 优先级吃道具补充体力 (默认 true)
 	AutoReplenishStamina bool
@@ -85,72 +74,15 @@ func DefaultSweepConfig() SweepConfig {
 			MaxReplenishTimes:    10,
 		},
 		Sweep: SweepFeatureConfig{
-			Enabled:               true,
-			Pipeline:              []string{"sweep_elite"},
-			MaxBatchTimes:         10,
-			PreferPracticeQuickly: false, // 默认为 false 以保障存量测试与原版辅助兼容
-			SellSweptItems:        false,
+			Enabled:        true,
+			Pipeline:       []string{"sweep_elite"},
+			SellSweptItems: false,
 		},
-		Mode:                  ModeAutoRecommend,
-		Category:              CategoryMainline,
-		SweepElite:            false,
-		MaxBatchTimes:         10,
-		PreferPracticeQuickly: false,
-		AutoReplenishStamina:  true,
-		MaxReplenishStamina:   200,
-		MaxReplenishTimes:     10,
-		Pipeline:              nil,
-		SellSweptItems:        false,
-	}
-}
-
-// ToDungeonSweepConfig 转换为标准的双模配置模型。
-func (c SweepConfig) ToDungeonSweepConfig() DungeonSweepConfig {
-	mode := c.Mode
-	if mode == "" {
-		if c.TargetMissionID > 0 {
-			mode = ModeExpertOverride
-		} else {
-			mode = ModeAutoRecommend
-		}
-	}
-	cat := c.Category
-	if cat == "" {
-		if c.SweepElite {
-			cat = CategoryElite
-		} else {
-			cat = CategoryMainline
-		}
-	}
-	maxBatch := c.MaxBatchTimes
-	if maxBatch <= 0 {
-		maxBatch = 10
-	}
-	maxReplenishStamina := c.MaxReplenishStamina
-	if maxReplenishStamina <= 0 {
-		if c.MaxReplenishTimes > 0 {
-			maxReplenishStamina = c.MaxReplenishTimes * 10
-		} else {
-			maxReplenishStamina = 200
-		}
-	}
-	maxReplenish := c.MaxReplenishTimes
-	if maxReplenish <= 0 {
-		maxReplenish = 10
-	}
-	return DungeonSweepConfig{
-		Mode:                  mode,
-		Category:              cat,
-		TargetMissionID:       c.TargetMissionID,
-		SweepElite:            c.SweepElite,
-		AutoReplenishStamina:  c.AutoReplenishStamina,
-		MaxReplenishStamina:   maxReplenishStamina,
-		MaxReplenishTimes:     maxReplenish,
-		MaxBatchTimes:         maxBatch,
-		RequiredPowerPerSweep: 5,
-		PreferPracticeQuickly: c.PreferPracticeQuickly,
-		Pipeline:              c.Pipeline,
-		SellSweptItems:        c.Sweep.SellSweptItems || c.Sweep.AutoSellSweptItems || c.SellSweptItems || c.AutoSellSweptItems,
+		AutoReplenishStamina: true,
+		MaxReplenishStamina:  200,
+		MaxReplenishTimes:    10,
+		Pipeline:             nil,
+		SellSweptItems:       false,
 	}
 }
 
@@ -302,7 +234,7 @@ func sellPackItem(ctx context.Context, session *client.RoleSession, it protocol.
 	sellResp, callErr := session.Call(sellCtx, sellPkt, protocol.ActionIDItemSell)
 	sellCancel()
 	if callErr != nil || sellResp == nil {
-		slog.Warn("自动卖出扫荡物无回包", "role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID, "err", callErr)
+		slog.Info("自动卖出扫荡物无回包", "role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID, "err", callErr)
 		return false, true
 	}
 	ok, code, pErr := protocol.ParseSellItemResponse(sellResp.Payload)
@@ -545,7 +477,7 @@ func performEliteTownSweep(
 //
 // 关键点:
 //  1. 扫荡入口是城镇 (town_id)，不是单个副本实例；一个城镇一次 start_practice 即排队该城镇可扫荡副本。
-//  2. 不允许通过 max_batch_times 截断城镇数量，否则无法覆盖全部精英副本；体力/每日次数由服务端熔断。
+//  2. 按城镇全量扫荡，不使用本地轮数上限截断；体力/每日次数由服务端熔断。
 //  3. 只使用免费扫荡 (auto_num=0)，绝不自动购买翻牌奖励或消耗元宝。
 func executeEliteMissionSweep(
 	ctx context.Context,
@@ -799,7 +731,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 		c := cfgs[0]
 		hasSubConfig = c.QuestCycle.Enabled || c.QuestCycle.AutoReplenishStamina ||
 			c.QuestCycle.MaxReplenishStamina > 0 || c.QuestCycle.MaxReplenishTimes > 0 ||
-			c.Sweep.Enabled || c.Sweep.MaxBatchTimes > 0 || len(c.Sweep.Pipeline) > 0 ||
+			c.Sweep.Enabled || len(c.Sweep.Pipeline) > 0 ||
 			c.Sweep.SellSweptItems || c.Sweep.AutoSellSweptItems || c.SellSweptItems || c.AutoSellSweptItems
 
 		// 继承外层顶层兼容字段到子功能
@@ -818,19 +750,14 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			}
 		} else {
 			// 若未显式配置子块，从顶层兼容字段继承
+			cfg.QuestCycle.Enabled = c.QuestCycle.Enabled
 			cfg.QuestCycle.AutoReplenishStamina = c.AutoReplenishStamina
 			if c.MaxReplenishStamina > 0 {
 				cfg.QuestCycle.MaxReplenishStamina = c.MaxReplenishStamina
 			} else if c.MaxReplenishTimes > 0 {
 				cfg.QuestCycle.MaxReplenishStamina = c.MaxReplenishTimes * 10
 			}
-			if c.Category == CategorySide || (c.Category == CategoryMainline && c.AutoReplenishStamina) {
-				cfg.QuestCycle.Enabled = true
-			}
-			if c.MaxBatchTimes > 0 {
-				cfg.Sweep.MaxBatchTimes = c.MaxBatchTimes
-			}
-			cfg.Sweep.PreferPracticeQuickly = c.PreferPracticeQuickly
+			cfg.Sweep.PreferPracticeQuickly = c.Sweep.PreferPracticeQuickly
 			if c.SellSweptItems || c.AutoSellSweptItems {
 				cfg.Sweep.SellSweptItems = true
 			}
@@ -852,23 +779,15 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 		}
 
 		cfg.Pipeline = c.Pipeline
-		cfg.MaxBatchTimes = c.MaxBatchTimes
 		cfg.AutoReplenishStamina = c.AutoReplenishStamina
 		cfg.MaxReplenishStamina = c.MaxReplenishStamina
 		cfg.MaxReplenishTimes = c.MaxReplenishTimes
 		cfg.PreferPracticeQuickly = c.PreferPracticeQuickly
-		cfg.SweepElite = c.SweepElite
-		cfg.Category = c.Category
-		cfg.Mode = c.Mode
-		cfg.TargetMissionID = c.TargetMissionID
 		cfg.SellSweptItems = cfg.Sweep.SellSweptItems
 	}
 
 	if cfg.Sweep.SellSweptItems || cfg.Sweep.AutoSellSweptItems || cfg.SellSweptItems || cfg.AutoSellSweptItems {
 		cfg.Sweep.SellSweptItems = true
-	}
-	if cfg.Sweep.MaxBatchTimes <= 0 {
-		cfg.Sweep.MaxBatchTimes = 10
 	}
 	if len(cfg.Sweep.Pipeline) == 0 {
 		cfg.Sweep.Pipeline = []string{"sweep_elite"}
@@ -917,7 +836,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			// =========================================================================
 			// 功能一：主线/支线剧情推图 (quest_cycle)
 			// 特性：循环接任务/做任务/交任务直至无可做任务 break；
-			// 约束：auto_replenish_stamina 仅作用于推图；推图不受 max_batch_times 限制！
+			// 约束：auto_replenish_stamina 仅作用于推图。
 			// =========================================================================
 			isExplicitPipeline := len(cfg.Pipeline) > 0
 			shouldRunQuest := cfg.QuestCycle.Enabled
@@ -999,7 +918,6 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			// =========================================================================
 			// 功能二：关卡扫荡 (sweep)
 			// 特性：扫荡精英副本 (sweep_elite)；
-			// 约束：max_batch_times 仅作用于扫荡；prefer_practice_quickly 仅作用于扫荡；
 			// 保护：扫荡阶段不吃体力药，仅消耗自然体力！
 			// =========================================================================
 			shouldRunSweep := false
@@ -1007,7 +925,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			if isExplicitPipeline {
 				var filteredSweep []string
 				for _, p := range cfg.Pipeline {
-					if p == "sweep_elite" || p == "sweep_highest_main" {
+					if p == "sweep_elite" {
 						filteredSweep = append(filteredSweep, p)
 					}
 				}
@@ -1015,12 +933,8 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 					sweepPipeline = filteredSweep
 					shouldRunSweep = true
 				}
-			} else {
-				if cfg.Sweep.Enabled {
-					shouldRunSweep = true
-				} else if !hasSubConfig && (cfg.Category == CategoryElite || cfg.SweepElite || (cfg.Category == CategoryMainline && !cfg.QuestCycle.Enabled)) {
-					shouldRunSweep = true
-				}
+			} else if cfg.Sweep.Enabled {
+				shouldRunSweep = true
 			}
 
 			sweepSuccessRounds := 0
@@ -1065,145 +979,6 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						}
 						if !isExplicitPipeline {
 							break sweepLoop
-						}
-
-					case "sweep_highest_main":
-						// 扫荡当前角色最高级主线副本 (显式流水线冲级)
-						resolver := NewMissionResolver(dictRepo)
-						resolved, resErr := resolver.Resolve(cfg.ToDungeonSweepConfig(), state.Level, session.GetStamina())
-						missionID := 43
-						missionName := "扬州城-万妖皇"
-						if resErr == nil && resolved != nil {
-							missionID = resolved.MissionID
-							missionName = resolved.MissionName
-						} else if cfg.TargetMissionID > 0 {
-							missionID = cfg.TargetMissionID
-						}
-
-						for round := 1; round <= cfg.Sweep.MaxBatchTimes; round++ {
-							if !sweepHasStamina() {
-								break
-							}
-
-							var cost = powerPerSweep
-							var exp = int64(2500)
-							var coins = int64(12000)
-							var sweepSucceeded = false
-							var callErr error
-
-							// 主线扫荡统一使用官方 Module 25 (Mod_MissionPractice_Base.start_practice)。
-							// 说明: 0x00230002 实际属于英雄副本 start_practice，不能用于主线扫荡。
-							{
-								statusPkt, _ := protocol.BuildPracticeGetStatusPacket(int32(missionID), 0)
-								statusCtx, statusCancel := context.WithTimeout(ctx, 8*time.Second)
-								statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
-								statusCancel()
-
-								var currentMissionID = int32(missionID)
-								if statusErr == nil && statusResp != nil {
-									if status, pErr := protocol.ParsePracticeStatusResult(statusResp.Payload); pErr == nil && status != nil {
-										if status.IsPracticing == 1 {
-											quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
-											_ = session.Send(quickPkt)
-											time.Sleep(100 * time.Millisecond)
-										}
-										if len(status.Missions) > 0 {
-											found := false
-											for _, sm := range status.Missions {
-												if sm.MissionID == currentMissionID {
-													found = true
-													break
-												}
-											}
-											if !found {
-												currentMissionID = status.Missions[0].MissionID
-											}
-										}
-									}
-								}
-
-								m25Req := protocol.StartPracticeRequest{
-									MissionID: currentMissionID,
-									Count:     1,
-									AutoSale:  1,
-								}
-								m25Pkt, _ := protocol.BuildStartPracticePacket(m25Req)
-
-								callCtx, callCancel := context.WithTimeout(ctx, 8*time.Second)
-								var respPkt *protocol.Packet
-								respPkt, callErr = session.Call(callCtx, m25Pkt, protocol.ActionIDPracticeStart)
-								callCancel()
-
-								if callErr == nil && respPkt != nil {
-									m25Res, pErr := protocol.ParseStartPracticeResult(respPkt.Payload)
-									if pErr == nil && m25Res != nil {
-										switch m25Res.Result {
-										case protocol.PracticeResultSuccess:
-											quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
-											_ = session.Send(quickPkt)
-											sweepSucceeded = true
-											missionID = int(currentMissionID)
-										case protocol.PracticeResultNotEnoughPower:
-											slog.Info("服务端返回体力不足，扫荡终止", "role_id", session.RoleID(), "round", round)
-											session.SetStamina(0)
-											session.SetExtraStamina(0)
-											break sweepLoop
-										case protocol.PracticeResultBagFull:
-											slog.Warn("服务端返回背包已满，触发智能熔断", "role_id", session.RoleID(), "round", round)
-											if sweepSuccessRounds == 0 && totalCostStamina == 0 {
-												return scheduler.ErrBagFull
-											}
-											break sweepLoop
-										default:
-											slog.Warn("Module 25 秒扫荡受限", "result", m25Res.Result)
-										}
-									}
-								} else {
-									slog.Warn("Module 25 秒扫荡未收到服务端响应", "mission_id", currentMissionID, "err", callErr)
-								}
-
-								if !sweepSucceeded && currentMissionID != 1 && callErr != nil {
-									fbReq := protocol.StartPracticeRequest{
-										MissionID: 1,
-										Count:     1,
-										AutoSale:  1,
-									}
-									fbPkt, _ := protocol.BuildStartPracticePacket(fbReq)
-									fbCtx, fbCancel := context.WithTimeout(ctx, 8*time.Second)
-									fbResp, fbErr := session.Call(fbCtx, fbPkt, protocol.ActionIDPracticeStart)
-									fbCancel()
-									if fbErr == nil && fbResp != nil {
-										quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
-										_ = session.Send(quickPkt)
-										sweepSucceeded = true
-										missionID = 1
-										missionName = "浮月林道(1)"
-									}
-								}
-							}
-
-							if !sweepSucceeded {
-								break
-							}
-
-							remStamina, err := session.ConsumeStamina(cost)
-							if err != nil {
-								return err
-							}
-							session.AddRewards(exp, coins)
-
-							totalCostStamina += cost
-							totalGainExp += exp
-							totalGainCoins += coins
-							sweepSuccessRounds++
-
-							slog.Info("关卡单次扫荡完成",
-								"role_id", session.RoleID(),
-								"mission_id", missionID,
-								"mission_name", missionName,
-								"round", round,
-								"remaining_stamina", remStamina,
-							)
 						}
 					}
 				}
@@ -2026,7 +1801,7 @@ func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
 					resp, cErr := session.Call(cCtx, protocol.BuildStTrialsChallengePacket(mode.ModeType), protocol.ActionIDStTrialsChallenge)
 					cCancel()
 					if cErr != nil {
-						slog.Warn("精灵试炼挑战无应答", "role_id", session.RoleID(), "mode", mode.ModeType, "err", cErr)
+						slog.Info("精灵试炼挑战无应答", "role_id", session.RoleID(), "mode", mode.ModeType, "err", cErr)
 						break
 					}
 					result, pErr := protocol.ParseStTrialsChallengeResult(resp.Payload)
@@ -2499,7 +2274,7 @@ func acceptQuestWithRecovery(ctx context.Context, session *client.RoleSession, q
 				if errSessionTerminated(ctx, npcErr) {
 					return false, 0, npcErr
 				}
-				slog.Warn("兜底 NPC 对话打开失败，任务接取无回包",
+				slog.Info("兜底 NPC 对话打开失败，任务接取无回包",
 					"role_id", session.RoleID(), "quest_id", questID, "npc_id", beginNPCID, "err", npcErr)
 			} else if npcState != nil && (*npcState == 1 || *npcState == 2) {
 				// QuestType.Accepted(1) / Completed(2): 服务端已受理，幂等返回成功。
@@ -2523,7 +2298,7 @@ func acceptQuestWithRecovery(ctx context.Context, session *client.RoleSession, q
 		}
 
 		if attempt == 1 {
-			slog.Warn("接取任务未收到回包，复核未生效后重试一次",
+			slog.Info("接取任务未收到回包，复核未生效后重试一次",
 				"role_id", session.RoleID(), "quest_id", questID, "err", accErr)
 		}
 	}

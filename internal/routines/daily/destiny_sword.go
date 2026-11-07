@@ -101,7 +101,7 @@ func NewDestinySwordRoutine() scheduler.ActivityRoutine {
 							protocol.ActionIDDestinySwordOneClickTemperPanel,
 						)
 						if pErr != nil || pResp == nil {
-							slog.Warn("查询飞剑淬炼消耗无回包", "role_id", session.RoleID(), "err", pErr)
+							slog.Info("查询飞剑淬炼消耗无回包", "role_id", session.RoleID(), "err", pErr)
 							return nil
 						}
 						cost, cErr := protocol.ParseDestinySwordTemperPanelResult(pResp.Payload)
@@ -137,7 +137,7 @@ func NewDestinySwordRoutine() scheduler.ActivityRoutine {
 							protocol.ActionIDDestinySwordOneClickTemper,
 						)
 						if tErr != nil || tResp == nil {
-							slog.Warn("执行飞剑淬炼无回包", "role_id", session.RoleID(), "err", tErr)
+							slog.Info("执行飞剑淬炼无回包", "role_id", session.RoleID(), "err", tErr)
 							return nil
 						}
 						code, pErr := protocol.ParseDestinySwordActionCode(tResp.Payload)

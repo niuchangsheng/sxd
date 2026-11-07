@@ -89,7 +89,7 @@ func NewFindBeastRoutine() scheduler.ActivityRoutine {
 
 				doResp, dErr := call(protocol.BuildSpaceFindDoPacket(protocol.SpaceFindUseNormal), protocol.ActionIDSpaceFindDo, 5*time.Second)
 				if dErr != nil || doResp == nil {
-					slog.Warn("寻找异兽请求无回包", "role_id", session.RoleID(), "err", dErr)
+					slog.Info("寻找异兽请求无回包", "role_id", session.RoleID(), "err", dErr)
 					return nil
 				}
 				doRes, pErr := protocol.ParseSpaceFindDoResult(doResp.Payload)
@@ -123,7 +123,7 @@ func NewFindBeastRoutine() scheduler.ActivityRoutine {
 				// 领取本次结果；成功后再继续下一次寻找。
 				getResp, gErr := call(protocol.BuildSpaceFindGetPacket(), protocol.ActionIDSpaceFindGet, 5*time.Second)
 				if gErr != nil || getResp == nil {
-					slog.Warn("领取寻找异兽结果无回包", "role_id", session.RoleID(), "err", gErr)
+					slog.Info("领取寻找异兽结果无回包", "role_id", session.RoleID(), "err", gErr)
 					return nil
 				}
 				got, pErr := protocol.ParseSpaceFindGetResult(getResp.Payload)

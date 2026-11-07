@@ -139,7 +139,7 @@ func NewFactionLuckyStarRoutine() scheduler.ActivityRoutine {
 				rollResp, err := session.Call(rollCtx, rollPkt, protocol.ActionIDFactionRollCake)
 				rollCancel()
 				if err != nil || rollResp == nil {
-					slog.Warn("吉星高照投掷未收到回包", "role_id", session.RoleID(), "err", err)
+					slog.Info("吉星高照投掷未收到回包", "role_id", session.RoleID(), "err", err)
 					return nil
 				}
 
@@ -523,7 +523,7 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 				startResp, sErr := session.Call(sCtx, protocol.BuildGuessPartnerStartPacket(), protocol.ActionIDGuessPartnerStart)
 				sCancel()
 				if sErr != nil {
-					slog.Warn("伙伴猜猜看开局无应答", "role_id", session.RoleID(), "err", sErr)
+					slog.Info("伙伴猜猜看开局无应答", "role_id", session.RoleID(), "err", sErr)
 					break
 				}
 				rd, pErr := protocol.ParseGuessPartnerStartResult(startResp.Payload)
@@ -562,7 +562,7 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 				gResp, gErr := session.Call(gCtx, protocol.BuildGuessPartnerGuessPacket(rd.RoleIDs[0]), protocol.ActionIDGuessPartnerGuess)
 				gCancel()
 				if gErr != nil {
-					slog.Warn("伙伴猜猜看作答无应答", "role_id", session.RoleID(), "err", gErr)
+					slog.Info("伙伴猜猜看作答无应答", "role_id", session.RoleID(), "err", gErr)
 					break
 				}
 				gr, gpErr := protocol.ParseGuessPartnerGuessResult(gResp.Payload)
@@ -654,7 +654,7 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(fCtx, protocol.BuildFishDoPacket(), protocol.ActionIDFishDo)
 				fCancel()
 				if cErr != nil {
-					slog.Warn("钓鱼无应答", "role_id", session.RoleID(), "index", i+1, "err", cErr)
+					slog.Info("钓鱼无应答", "role_id", session.RoleID(), "index", i+1, "err", cErr)
 					break
 				}
 				result, pErr := protocol.ParseFishDoResult(resp.Payload)
@@ -754,7 +754,7 @@ func NewScratchCardRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(sCtx, protocol.BuildScratchCardShavePacket(), protocol.ActionIDScratchCardShave)
 				sCancel()
 				if cErr != nil {
-					slog.Warn("刮卡无应答", "role_id", session.RoleID(), "index", i+1, "err", cErr)
+					slog.Info("刮卡无应答", "role_id", session.RoleID(), "index", i+1, "err", cErr)
 					break
 				}
 				result, pErr := protocol.ParseScratchCardShaveResult(resp.Payload)
@@ -878,7 +878,7 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(hCtx, protocol.BuildIceCaveHitPacket(slot.Ice, slot.IsIron), protocol.ActionIDIceCaveHit)
 				hCancel()
 				if cErr != nil {
-					slog.Warn("冰窟敲击无应答", "role_id", session.RoleID(), "ice", slot.Ice, "err", cErr)
+					slog.Info("冰窟敲击无应答", "role_id", session.RoleID(), "ice", slot.Ice, "err", cErr)
 					break
 				}
 				result, pErr := protocol.ParseIceCaveHitResult(resp.Payload)
@@ -916,7 +916,7 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 				gResp, gErr := session.Call(gCtx, protocol.BuildIceCaveGetGiftPacket(), protocol.ActionIDIceCaveGetGift)
 				gCancel()
 				if gErr != nil {
-					slog.Warn("冰窟奖励兑换无应答", "role_id", session.RoleID(), "err", gErr)
+					slog.Info("冰窟奖励兑换无应答", "role_id", session.RoleID(), "err", gErr)
 					return nil
 				}
 				result, pErr := protocol.ParseIceCaveGiftResult(gResp.Payload)
@@ -990,7 +990,7 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				qResp, qErr := session.Call(qCtx, protocol.BuildImperialExamStartPacket(), protocol.ActionIDImperialExamStart)
 				qCancel()
 				if qErr != nil {
-					slog.Warn("金榜题名开始答题无应答", "role_id", session.RoleID(), "err", qErr)
+					slog.Info("金榜题名开始答题无应答", "role_id", session.RoleID(), "err", qErr)
 					break
 				}
 				q, pErr := protocol.ParseImperialExamQuestionResult(qResp.Payload)
@@ -1045,7 +1045,7 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				sResp, sErr := session.Call(sCtx, protocol.BuildImperialExamSubmitPacket(q.CurAnswerSeq, seq), protocol.ActionIDImperialExamSubmit)
 				sCancel()
 				if sErr != nil {
-					slog.Warn("金榜题名提交答案无应答", "role_id", session.RoleID(), "err", sErr)
+					slog.Info("金榜题名提交答案无应答", "role_id", session.RoleID(), "err", sErr)
 					break
 				}
 				sub, spErr := protocol.ParseImperialExamSubmitResult(sResp.Payload)
@@ -1301,7 +1301,7 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, infoPkt, protocol.ActionIDWuFaFieldInfo)
 			iCancel()
 			if err != nil || infoResp == nil {
-				slog.Warn("查询悟法领域面板未收到回包", "role_id", session.RoleID(), "err", err)
+				slog.Info("查询悟法领域面板未收到回包", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 
@@ -1321,7 +1321,7 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 			actResp, actErr := session.Call(actCtx, protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			actCancel()
 			if actErr != nil || actResp == nil {
-				slog.Warn("查询每日活跃度失败，跳过悟法领域抽卡",
+				slog.Info("查询每日活跃度失败，跳过悟法领域抽卡",
 					"role_id", session.RoleID(), "err", actErr)
 				return nil
 			}
@@ -1362,7 +1362,7 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 				drawResp, err := session.Call(dCtx, drawPkt, protocol.ActionIDWuFaDrawCard)
 				dCancel()
 				if err != nil || drawResp == nil {
-					slog.Warn("悟法领域感悟抽卡未收到回包",
+					slog.Info("悟法领域感悟抽卡未收到回包",
 						"role_id", session.RoleID(),
 						"field_type", fieldType,
 						"draw_type", drawType,
@@ -2096,7 +2096,7 @@ func masterPracticeStepUpJob(
 		protocol.ActionIDMasterPracticeStepUp,
 	)
 	if err != nil || resp == nil {
-		slog.Warn("宗师境界突破无回包", "role_id", roleID, "job_id", jobID, "err", err)
+		slog.Info("宗师境界突破无回包", "role_id", roleID, "job_id", jobID, "err", err)
 		return panel
 	}
 	code, pErr := protocol.ParseMasterPracticeActionCode(resp.Payload)
@@ -3399,7 +3399,7 @@ func executeFindImmortalFish(ctx context.Context, session *client.RoleSession, j
 	pResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDFindImmortalOpen)
 	pCancel()
 	if pErr != nil || pResp == nil {
-		slog.Warn("查询喜从天降面板未收到回包", "role_id", session.RoleID(), "err", pErr)
+		slog.Info("查询喜从天降面板未收到回包", "role_id", session.RoleID(), "err", pErr)
 		return
 	}
 	panel, err := protocol.ParseFindImmortalPanelResult(pResp.Payload)
@@ -3453,7 +3453,7 @@ func executeFindImmortalFish(ctx context.Context, session *client.RoleSession, j
 		beforeTokens := tokens
 		start, sErr := summonFindImmortalFish(ctx, session, prevAct)
 		if sErr != nil {
-			slog.Warn("喜从天降召唤龙鱼未收到回包或解析失败", "role_id", session.RoleID(), "err", sErr)
+			slog.Info("喜从天降召唤龙鱼未收到回包或解析失败", "role_id", session.RoleID(), "err", sErr)
 			return
 		}
 		prevAct = protocol.ActionIDFindImmortalStart
@@ -3550,7 +3550,7 @@ func pickupFindImmortal(ctx context.Context, session *client.RoleSession, prevAc
 	kCancel()
 	*prevAct = protocol.ActionIDFindImmortalPickupAward
 	if kErr != nil || kResp == nil {
-		slog.Warn("喜从天降收取龙鱼奖励未收到回包", "role_id", session.RoleID(), "err", kErr)
+		slog.Info("喜从天降收取龙鱼奖励未收到回包", "role_id", session.RoleID(), "err", kErr)
 		return
 	}
 	pickup, err := protocol.ParseFindImmortalPickupResult(kResp.Payload)
@@ -3593,7 +3593,7 @@ func queryFindImmortalTokens(ctx context.Context, session *client.RoleSession, p
 	resp, err := session.Call(qCtx, pkt, protocol.ActionIDFindImmortalGetXunXianLing)
 	qCancel()
 	if err != nil || resp == nil {
-		slog.Warn("查询喜从天降龙鱼令数量未收到回包", "role_id", session.RoleID(), "err", err)
+		slog.Info("查询喜从天降龙鱼令数量未收到回包", "role_id", session.RoleID(), "err", err)
 		return 0, false
 	}
 	tokens, err := protocol.ParseFindImmortalXunXianLingResult(resp.Payload)
@@ -3645,16 +3645,18 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 		slog.Debug("查询五福临门开启状态未收到回包", "role_id", session.RoleID(), "err", fErr)
 		return
 	}
-	// 线上实测：Act 14 返回 12 (官方常量 NO)，但活动实际已开启且 start_bless
-	// 可正常获得活跃度（面板 bless_number=10）。因此该标志不可作为门禁，
-	// 仅记录日志，是否可祈福以面板返回的 bless_number 为准。
+	// 线上实测：Act 14 返回 12 (官方常量 NO) 时，后续 start_bless 会被服务端
+	// 静默丢弃（context deadline exceeded）。曾尝试以面板 bless_number 兜底，
+	// 但该值在非活动期仍可能是上一期残留，导致每轮都发一个必被丢弃的请求。
+	// 因此以增生活动开启标志作为门禁：NO 即视为当前不可祈福，直接跳过。
 	open, err := protocol.ParseFiveBlessingsOpenFlagResult(fResp.Payload)
 	if err != nil {
 		slog.Warn("解析五福临门开启状态回包失败", "role_id", session.RoleID(), "err", err)
 		return
 	}
 	if !open {
-		slog.Info("五福临门开启标志返回 NO，改以面板次数为准继续", "role_id", session.RoleID())
+		slog.Info("五福临门当前未开启，跳过本轮祈福", "role_id", session.RoleID())
+		return
 	}
 	prevAct = protocol.ActionIDFindImmortalIsFiveBlessingsOpen
 
@@ -3664,7 +3666,7 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 	iResp, iErr := session.Call(iCtx, infoPkt, protocol.ActionIDFindImmortalOpenFiveBlessings)
 	iCancel()
 	if iErr != nil || iResp == nil {
-		slog.Warn("查询五福临门面板未收到回包", "role_id", session.RoleID(), "err", iErr)
+		slog.Info("查询五福临门面板未收到回包", "role_id", session.RoleID(), "err", iErr)
 		return
 	}
 	info, err := protocol.ParseFiveBlessingsInfoResult(iResp.Payload)
@@ -3746,7 +3748,7 @@ func endFiveBlessings(ctx context.Context, session *client.RoleSession, prevAct 
 	eResp, eErr := session.Call(eCtx, endPkt, protocol.ActionIDFindImmortalEndBless)
 	eCancel()
 	if eErr != nil || eResp == nil {
-		slog.Warn("五福临门结束祈福请求未收到回包", "role_id", session.RoleID(), "scene", scene, "err", eErr)
+		slog.Info("五福临门结束祈福请求未收到回包", "role_id", session.RoleID(), "scene", scene, "err", eErr)
 		return
 	}
 	end, err := protocol.ParseFiveBlessingsEndResult(eResp.Payload)
@@ -3978,7 +3980,7 @@ func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
 			if status == protocol.GoldenTouchStoneStatusInit {
 				initResp, iErr := call(protocol.BuildGoldenTouchStoneInitPacket(), protocol.ActionIDGoldenTouchStoneInit)
 				if iErr != nil || initResp == nil || len(initResp.Payload) == 0 {
-					slog.Warn("点金石初始化无应答", "role_id", session.RoleID(), "err", iErr)
+					slog.Info("点金石初始化无应答", "role_id", session.RoleID(), "err", iErr)
 					return nil
 				}
 				slog.Info("点金石初始化成功", "role_id", session.RoleID())
@@ -4020,7 +4022,7 @@ func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
 
 			touchResp, err := call(protocol.BuildGoldenTouchStoneTouchPacket(), protocol.ActionIDGoldenTouchStoneTouch)
 			if err != nil || touchResp == nil {
-				slog.Warn("点金石点化无应答", "role_id", session.RoleID(), "err", err)
+				slog.Info("点金石点化无应答", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 			result, exp, luck, pErr := protocol.ParseGoldenTouchStoneTouchResult(touchResp.Payload)
@@ -4065,6 +4067,19 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			// 功能未开放时服务端会静默丢弃 Module 199 请求，先用 Action 6 缓存判定。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDAwakeForbiddenBook)
+			if fErr != nil {
+				slog.Info("禁地之书功能开放状态查询失败，跳过",
+					"role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("禁地之书功能未开放，跳过",
+					"role_id", session.RoleID(), "function_id", protocol.FunctionIDAwakeForbiddenBook)
+				return nil
+			}
+
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
 				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
 				defer cancel()
@@ -4095,7 +4110,7 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 				for area.CurNumber > 0 && explored < 30 {
 					resp, eErr := call(protocol.BuildForbiddenBookExplorePacket(area.ForbiddenType, area.ExploreType), protocol.ActionIDForbiddenBookExplore)
 					if eErr != nil {
-						slog.Warn("禁地之书探索无应答", "role_id", session.RoleID(), "type", area.ForbiddenType, "err", eErr)
+						slog.Info("禁地之书探索无应答", "role_id", session.RoleID(), "type", area.ForbiddenType, "err", eErr)
 						return
 					}
 					result, pErr := protocol.ParseForbiddenBookExploreResult(resp.Payload)
@@ -4170,7 +4185,7 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 					}
 					resp, xErr := call(protocol.BuildForbiddenBookExchangePacket(price.ForbiddenType), protocol.ActionIDForbiddenBookExchange)
 					if xErr != nil {
-						slog.Warn("禁地之书铜钱兑换无应答", "role_id", session.RoleID(), "type", price.ForbiddenType, "err", xErr)
+						slog.Info("禁地之书铜钱兑换无应答", "role_id", session.RoleID(), "type", price.ForbiddenType, "err", xErr)
 						break
 					}
 					result, pErr := protocol.ParseForbiddenBookExchangeResult(resp.Payload)
@@ -4229,7 +4244,7 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 						protocol.ActionIDForbiddenBookExplore,
 					)
 					if eErr != nil {
-						slog.Warn("禁地之书兑换次数探索无应答", "role_id", session.RoleID(), "type", target.ForbiddenType, "err", eErr)
+						slog.Info("禁地之书兑换次数探索无应答", "role_id", session.RoleID(), "type", target.ForbiddenType, "err", eErr)
 						break
 					}
 					eResult, pErr := protocol.ParseForbiddenBookExploreResult(eResp.Payload)

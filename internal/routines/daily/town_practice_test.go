@@ -96,6 +96,15 @@ func TestTownPracticeRoutine_ExecutionFlow(t *testing.T) {
 	_ = session.Start(ctx)
 	defer session.Close()
 
+	// Routine 仅在会话激活态下发业务包。
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("会话未激活: %s", session.State())
+	}
+
 	// 模拟已进入主城场景
 	session.UpdatePlayerState(func(ps *client.PlayerState) {
 		ps.TownID = 4879

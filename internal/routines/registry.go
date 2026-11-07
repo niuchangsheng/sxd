@@ -71,6 +71,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "collection_booklets", Name: "神仙收藏册", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "领取声望档位奖励并拜访好友获得声望 (不消耗元宝)", DefaultOn: false},
 		{ID: "npc_friendship", Name: "NPC结交", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "结交 NPC、领取任务奖励并赠送铜钱伴手礼 (不消耗元宝)", DefaultOn: false},
 		{ID: "marry_home", Name: "家园奖励", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "领取自家小蛋糕家园奖励 (免费, 非活动时间自动跳过)", DefaultOn: false},
+		{ID: "sect_monster", Name: "宗门灵兽喂养", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "经仙盟城镇会话免费喂养宗门灵兽 (type=0, 不消耗元宝)", DefaultOn: false},
 
 		// 4. Dungeon 领域 (8)
 		{ID: "dungeon", Name: "副本推图与扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/支线任务闭环推图与关卡扫荡", DefaultOn: true},
@@ -118,6 +119,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "eudemons", Name: "幻兽经脉", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动激活幻兽经脉并维护幻兽面板 (不消耗元宝)", DefaultOn: false},
 		{ID: "partner_link", Name: "灵结", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "自动激活灵结 (仅消耗伙伴灵契，不消耗元宝)", DefaultOn: false},
 		{ID: "star_picture", Name: "法力星图占星", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日消耗免费次数占星 (free 用尽即停止，不消耗元宝)", DefaultOn: false},
+		{ID: "era_yanjie", Name: "纪元湮劫战斗", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "纪元湮劫每日推进一关战斗 (免费, 不加体力/元宝)", DefaultOn: false},
 	}
 }
 
@@ -341,6 +343,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewNpcFriendshipRoutine()
 	case "marry_home":
 		return social.NewMarryHomeRoutine()
+	case "sect_monster":
+		return social.NewSectMonsterRoutine()
 
 	// 4. Dungeon
 	case "dungeon", "dungeon_sweep":
@@ -437,6 +441,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewPartnerLinkRoutine()
 	case "star_picture":
 		return minigame.NewStarPictureRoutine()
+	case "era_yanjie":
+		return minigame.NewEraYanjieRoutine()
 
 	default:
 		return nil

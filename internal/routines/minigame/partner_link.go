@@ -87,7 +87,7 @@ func NewPartnerLinkRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDPartnerLinkActivate,
 				)
 				if aErr != nil || aResp == nil {
-					slog.Warn("激活灵结无回包", "role_id", session.RoleID(), "link_type_id", link.LinkTypeID, "err", aErr)
+					slog.Info("激活灵结无回包", "role_id", session.RoleID(), "link_type_id", link.LinkTypeID, "err", aErr)
 					return nil
 				}
 				got, pErr := protocol.ParsePartnerLinkActivateResult(aResp.Payload)

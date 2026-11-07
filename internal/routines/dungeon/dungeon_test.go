@@ -163,68 +163,6 @@ func startMockDungeonServerWithFunctions(srvConn net.Conn, functionIDs []int32, 
 	}()
 }
 
-func TestDungeonSweep_NormalExecution(t *testing.T) {
-	sess, srvConn := createTestSession(t, 70) // 70 体力，扫 10 次消耗 50，剩余 20
-	defer sess.Close()
-	defer srvConn.Close()
-
-	// 模拟服务端接收扫荡包并响应结算回包
-	pktCh := make(chan *protocol.Packet, 10)
-	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		if pkt.ActionID == protocol.ActionIDPracticeStart {
-			select {
-			case pktCh <- pkt:
-			default:
-			}
-		}
-		return false
-	})
-
-	dictRepo, err := dictionary.NewRepository("")
-	if err != nil {
-		t.Logf("本地未找到 Pieb.db，将使用降级关卡模式测试: %v", err)
-	}
-
-	routine := dungeon.NewDungeonSweepRoutine(dictRepo, dungeon.SweepConfig{
-		Pipeline: []string{"sweep_highest_main"},
-	})
-	ctx := context.Background()
-
-	err = routine.Execute(ctx, sess, nil)
-	if err != nil {
-		t.Fatalf("执行关卡扫荡失败: %v", err)
-	}
-
-	// 验证向服务器发送了官方 Module 25 主线扫荡封包
-	select {
-	case pkt := <-pktCh:
-		if pkt.ActionID != protocol.ActionIDPracticeStart {
-			t.Errorf("期望 ActionID 0x%04X, 实际 0x%04X", protocol.ActionIDPracticeStart, pkt.ActionID)
-		}
-		req, err := protocol.ParseStartPracticeRequest(pkt.Payload)
-		if err != nil {
-			t.Fatalf("解析服务端收到的请求包失败: %v", err)
-		}
-		if req.Count != 1 { // 对齐真实网关单次请求发 1
-			t.Errorf("期望单次请求扫荡 1 次, 实际 %d 次", req.Count)
-		}
-	default:
-		t.Error("未收到向服务端发送的扫荡封包")
-	}
-
-	// 验证体力扣除 (70 - 50 = 20)
-	remStamina := sess.GetStamina()
-	if remStamina != 20 {
-		t.Errorf("期望剩余体力为 20, 实际为 %d", remStamina)
-	}
-
-	// 验证收益增加 (初始 1,000,000 + 10 * 12000 = 1,120,000)
-	state := sess.GetPlayerState()
-	if state.Coins <= 1000000 {
-		t.Errorf("期望获得铜钱收益, 实际为 %d", state.Coins)
-	}
-}
-
 func TestDungeonSweep_StaminaDepleted_SmartCooling(t *testing.T) {
 	sess, srvConn := createTestSession(t, 2) // 体力仅有 2 点，不足 5 点
 	defer sess.Close()
@@ -261,107 +199,6 @@ func TestDungeonSweep_BagFull(t *testing.T) {
 	err := routine.Execute(ctx, sess, nil)
 	if !errors.Is(err, scheduler.ErrBagFull) {
 		t.Fatalf("期望返回 ErrBagFull, 实际返回: %v", err)
-	}
-}
-
-// TestDungeonSweep_201Stamina_MultiBatchDepletion 验证角色拥有实机 201 点体力时，多轮批量扫荡消耗至耗尽熔断的完整闭环。
-func TestDungeonSweep_201Stamina_MultiBatchDepletion(t *testing.T) {
-	// 初始 201 点体力，单次最大 10 轮 (50 点体力)
-	sess, srvConn := createTestSession(t, 201)
-	defer sess.Close()
-	defer srvConn.Close()
-
-	// 服务端异步接收通道并响应扫荡结果
-	startMockDungeonServer(srvConn, nil)
-
-	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
-		MaxBatchTimes: 10,
-		Pipeline:      []string{"sweep_highest_main"},
-	})
-	ctx := context.Background()
-
-	// 前 3 轮正常消耗 50 点体力，剩余体力充足 (>5 点)，返回 nil
-	for round := 0; round < 3; round++ {
-		err := routine.Execute(ctx, sess, nil)
-		if err != nil {
-			t.Fatalf("第 %d 轮扫荡执行失败: %v", round+1, err)
-		}
-	}
-	if rem := sess.GetStamina(); rem != 51 {
-		t.Fatalf("前 3 轮扫荡后期望剩余 51 点体力, 实际 %d", rem)
-	}
-
-	// 第 4 轮：从 51 点消耗 50 点后剩余 1 点，完成扫荡并即时触发 ErrStaminaDepleted 告知调度器进入冷却
-	err := routine.Execute(ctx, sess, nil)
-	if !errors.Is(err, scheduler.ErrStaminaDepleted) {
-		t.Fatalf("第 4 轮扫荡消耗后期望返回 ErrStaminaDepleted, 实际返回: %v", err)
-	}
-	if rem := sess.GetStamina(); rem != 1 {
-		t.Errorf("第 4 轮扫荡后期望剩余体力 1, 实际为 %d", rem)
-	}
-
-	// 第 5 轮：当剩余 1 点体力时再次调度，前置拦截直接拒绝并返回 ErrStaminaDepleted
-	err = routine.Execute(ctx, sess, nil)
-	if !errors.Is(err, scheduler.ErrStaminaDepleted) {
-		t.Fatalf("第 5 轮前置拦截期望返回 ErrStaminaDepleted, 实际返回: %v", err)
-	}
-
-	// 最终体力仍应保持为 1 点
-	if rem := sess.GetStamina(); rem != 1 {
-		t.Errorf("熔断后期望体力仍为 1, 实际为 %d", rem)
-	}
-
-	// 验证 4 轮累计消耗体力 = 4 * 50 = 200 点
-	totalCost := 201 - sess.GetStamina()
-	if totalCost != 200 {
-		t.Errorf("期望累计消耗体力 200, 实际消耗 %d", totalCost)
-	}
-
-	// 验证 4 轮累计经验收益 = 4 * 10 * 2500 = 100,000
-	// 验证 4 轮累计铜钱收益 = 4 * 10 * 12000 = 480,000
-	state := sess.GetPlayerState()
-	expectedCoins := int64(36226117234 + 480000)
-	if state.Coins != expectedCoins {
-		t.Errorf("期望铜钱累计达到 %d, 实际为 %d", expectedCoins, state.Coins)
-	}
-}
-
-// TestDungeonSweep_CustomBatchAndExactDeduction 验证自定义小批次与零头体力的精准扣除。
-func TestDungeonSweep_CustomBatchAndExactDeduction(t *testing.T) {
-	sess, srvConn := createTestSession(t, 23) // 23 点体力，配置最大批次为 3 次 (15 点)
-	defer sess.Close()
-	defer srvConn.Close()
-
-	startMockDungeonServer(srvConn, nil)
-
-	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
-		MaxBatchTimes: 3,
-		Pipeline:      []string{"sweep_highest_main"},
-	})
-	ctx := context.Background()
-
-	// 第 1 轮：23 体力可扫 4 次，但被 MaxBatchTimes=3 限制，扫 3 次消耗 15 点，剩余 8 点 (>5)，返回 nil
-	err := routine.Execute(ctx, sess, nil)
-	if err != nil {
-		t.Fatalf("第 1 轮执行失败: %v", err)
-	}
-	if rem := sess.GetStamina(); rem != 8 {
-		t.Errorf("第 1 轮期望剩余 8 点体力, 实际 %d", rem)
-	}
-
-	// 第 2 轮：剩余 8 点体力，扫 1 次 (消耗 5 点)，剩余 3 点 (<5 点)，完成扫荡并即时触发 ErrStaminaDepleted
-	err = routine.Execute(ctx, sess, nil)
-	if !errors.Is(err, scheduler.ErrStaminaDepleted) {
-		t.Fatalf("第 2 轮期望返回 ErrStaminaDepleted, 实际返回: %v", err)
-	}
-	if rem := sess.GetStamina(); rem != 3 {
-		t.Errorf("第 2 轮期望剩余 3 点体力, 实际 %d", rem)
-	}
-
-	// 第 3 轮：剩余 3 点不足 5 点，前置熔断拦截
-	err = routine.Execute(ctx, sess, nil)
-	if !errors.Is(err, scheduler.ErrStaminaDepleted) {
-		t.Fatalf("第 3 轮期望返回 ErrStaminaDepleted, 实际返回: %v", err)
 	}
 }
 
@@ -463,106 +300,6 @@ func TestDungeonSweep_ServerPropUpdateSync(t *testing.T) {
 	}
 }
 
-// TestDungeonSweep_ServerResponse_RewardSync 验证接收到服务端真实扫荡结算回包时的收益同步与精准扣减
-func TestDungeonSweep_ServerResponse_RewardSync(t *testing.T) {
-	sess, srvConn := createTestSession(t, 100)
-	defer sess.Close()
-	defer srvConn.Close()
-
-	initialCoins := sess.GetPlayerState().Coins
-
-	// 模拟服务端接收主线扫荡并回复成功
-	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		if pkt.ActionID == protocol.ActionIDPracticeStart {
-			req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
-			respPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
-				Result:    protocol.PracticeResultSuccess,
-				MissionID: req.MissionID,
-				Count:     req.Count,
-			})
-			_ = protocol.WritePacket(srvConn, respPkt)
-			return true
-		}
-		return false
-	})
-
-	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
-		Pipeline: []string{"sweep_highest_main"},
-	})
-	err := routine.Execute(context.Background(), sess, nil)
-	if err != nil {
-		t.Fatalf("扫荡执行失败: %v", err)
-	}
-
-	// 验证体力扣减
-	if rem := sess.GetStamina(); rem != 50 {
-		t.Errorf("期望剩余体力 50, 实际为 %d", rem)
-	}
-
-	// 验证铜钱收益按每轮固定结算增加 (10 * 12000 = 120,000)
-	if currentCoins := sess.GetPlayerState().Coins; currentCoins != initialCoins+120000 {
-		t.Errorf("期望铜钱增加 120,000, 实际为 %d (初始: %d)", currentCoins, initialCoins)
-	}
-}
-
-// TestDungeonSweep_ServerRejection_StaminaDepleted 验证当服务端返回“体力不足”时触发语义智能熔断
-func TestDungeonSweep_ServerRejection_StaminaDepleted(t *testing.T) {
-	sess, srvConn := createTestSession(t, 50)
-	defer sess.Close()
-	defer srvConn.Close()
-
-	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		if pkt.ActionID == protocol.ActionIDPracticeStart {
-			req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
-			respPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
-				Result:    protocol.PracticeResultNotEnoughPower,
-				MissionID: req.MissionID,
-				Count:     req.Count,
-			})
-			_ = protocol.WritePacket(srvConn, respPkt)
-			return true
-		}
-		return false
-	})
-
-	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
-		Pipeline: []string{"sweep_highest_main"},
-	})
-	err := routine.Execute(context.Background(), sess, nil)
-	if !errors.Is(err, scheduler.ErrStaminaDepleted) {
-		t.Fatalf("期望服务端拒绝时触发 ErrStaminaDepleted, 实际返回: %v", err)
-	}
-}
-
-// TestDungeonSweep_ServerRejection_BagFull 验证当服务端返回“背包已满”时触发背包语义熔断
-func TestDungeonSweep_ServerRejection_BagFull(t *testing.T) {
-	sess, srvConn := createTestSession(t, 50)
-	defer sess.Close()
-	defer srvConn.Close()
-
-	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		if pkt.ActionID == protocol.ActionIDPracticeStart {
-			req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
-			respPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
-				Result:    protocol.PracticeResultBagFull,
-				MissionID: req.MissionID,
-				Count:     req.Count,
-			})
-			_ = protocol.WritePacket(srvConn, respPkt)
-			return true
-		}
-		return false
-	})
-
-	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
-		Pipeline: []string{"sweep_highest_main"},
-	})
-	err := routine.Execute(context.Background(), sess, nil)
-	if !errors.Is(err, scheduler.ErrBagFull) {
-		t.Fatalf("期望服务端拒绝时触发 ErrBagFull, 实际返回: %v", err)
-	}
-}
-
 // TestDungeonSweep_HeroMission_FullWorkflow 验证官方 Module 35 英雄副本扫荡全流程:
 // get_hero_mission_list(town_id) -> start_practice -> quickly -> notify FINISH。
 func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
@@ -661,498 +398,6 @@ func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
 	}
 	if quickCount.Load() != 1 {
 		t.Errorf("期望快速完成 1 次, 实际 %d 次", quickCount.Load())
-	}
-}
-
-// TestDungeonSweep_Module25_PracticeQuickly 验证当启用 PreferPracticeQuickly 时，
-// 发送 Module 25 (0x00190001) 开始扫荡并紧跟 Action 3 (0x00190003) 极速秒完成的完整闭环。
-func TestDungeonSweep_Module25_PracticeQuickly(t *testing.T) {
-	sess, srvConn := createTestSession(t, 20) // 20 点体力
-	defer sess.Close()
-	defer srvConn.Close()
-
-	var m25StartCount atomic.Int32
-	var m25QuicklyCount atomic.Int32
-
-	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		switch pkt.ActionID {
-		case protocol.ActionIDPracticeStart:
-			m25StartCount.Add(1)
-			req, _ := protocol.ParseStartPracticeRequest(pkt.Payload)
-			mid := int32(854)
-			if req != nil {
-				mid = req.MissionID
-			}
-			resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
-				Result:    protocol.PracticeResultSuccess,
-				MissionID: mid,
-				Count:     1,
-			})
-			_ = protocol.WritePacket(srvConn, resPkt)
-			return true
-
-		case protocol.ActionIDPracticeQuickly:
-			m25QuicklyCount.Add(1)
-			resPkt, _ := protocol.BuildQuicklyResultPacket(protocol.QuicklyResult{
-				Result: protocol.PracticeResultSuccess,
-				Count:  1,
-			})
-			_ = protocol.WritePacket(srvConn, resPkt)
-			return true
-		}
-		return false
-	})
-
-	cfg := dungeon.SweepConfig{
-		MaxBatchTimes:         2,
-		PreferPracticeQuickly: true,
-		Pipeline:              []string{"sweep_highest_main"},
-	}
-	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
-	err := routine.Execute(context.Background(), sess, nil)
-	if err != nil {
-		t.Fatalf("执行 Module 25 秒扫荡失败: %v", err)
-	}
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for (m25StartCount.Load() < 2 || m25QuicklyCount.Load() < 2) && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	if m25StartCount.Load() != 2 {
-		t.Errorf("期望调用 Module 25 开始扫荡 2 次, 实际 %d 次", m25StartCount.Load())
-	}
-	if m25QuicklyCount.Load() != 2 {
-		t.Errorf("期望调用 Module 25 极速秒完成 2 次, 实际 %d 次", m25QuicklyCount.Load())
-	}
-	if rem := sess.GetStamina(); rem != 10 {
-		t.Errorf("期望剩余体力 10 (20 - 2*5), 实际 %d", rem)
-	}
-}
-
-// TestDungeonSweep_Module25_NoLegacyFallback 验证 Module 25 返回受限状态码时不再降级到
-// 0x00230002 (该动作实际属于英雄副本 start_practice)，避免误触发英雄副本扫荡/误扣体力。
-func TestDungeonSweep_Module25_NoLegacyFallback(t *testing.T) {
-	sess, srvConn := createTestSession(t, 10)
-	defer sess.Close()
-	defer srvConn.Close()
-
-	var m25Attempted atomic.Bool
-	var legacyExecuted atomic.Bool
-
-	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		switch pkt.ActionID {
-		case protocol.ActionIDPracticeStart:
-			m25Attempted.Store(true)
-			resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
-				Result:    protocol.PracticeResultNotEnoughIngot,
-				MissionID: 854,
-				Count:     1,
-			})
-			_ = protocol.WritePacket(srvConn, resPkt)
-			return true
-
-		case protocol.ActionMissionSweep:
-			// 0x00230002 是英雄副本 start_practice，主线扫荡不得降级到该动作。
-			legacyExecuted.Store(true)
-			return true
-		}
-		return false
-	})
-
-	cfg := dungeon.SweepConfig{
-		MaxBatchTimes:         1,
-		PreferPracticeQuickly: true,
-		Pipeline:              []string{"sweep_highest_main"},
-	}
-	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
-	if err := routine.Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("扫荡执行失败: %v", err)
-	}
-
-	if !m25Attempted.Load() {
-		t.Errorf("期望前置尝试 Module 25 扫荡")
-	}
-	if legacyExecuted.Load() {
-		t.Errorf("不得降级到 Module 35 英雄副本动作 0x00230002")
-	}
-	if rem := sess.GetStamina(); rem != 10 {
-		t.Errorf("未成功扫荡时不应扣减体力, 期望 10, 实际 %d", rem)
-	}
-}
-
-// TestDungeonSweep_SemanticCoolingOff_Module25 验证 Module 25 明确返回体力不足或背包满时，
-// 立即触发 ErrStaminaDepleted 或 ErrBagFull 语义智能熔断，杜绝无意义降级重试。
-func TestDungeonSweep_SemanticCoolingOff_Module25(t *testing.T) {
-	t.Run("StaminaDepleted_CoolingOff", func(t *testing.T) {
-		sess, srvConn := createTestSession(t, 20)
-		defer sess.Close()
-		defer srvConn.Close()
-
-		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-			if pkt.ActionID == protocol.ActionIDPracticeStart {
-				resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
-					Result:    protocol.PracticeResultNotEnoughPower,
-					MissionID: 854,
-					Count:     1,
-				})
-				_ = protocol.WritePacket(srvConn, resPkt)
-				return true
-			}
-			return false
-		})
-
-		cfg := dungeon.SweepConfig{
-			MaxBatchTimes:         1,
-			PreferPracticeQuickly: true,
-			Pipeline:              []string{"sweep_highest_main"},
-		}
-		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
-		err := routine.Execute(context.Background(), sess, nil)
-		if !errors.Is(err, scheduler.ErrStaminaDepleted) {
-			t.Fatalf("期望触发 ErrStaminaDepleted 语义熔断, 实际返回: %v", err)
-		}
-	})
-
-	t.Run("BagFull_CoolingOff", func(t *testing.T) {
-		sess, srvConn := createTestSession(t, 20)
-		defer sess.Close()
-		defer srvConn.Close()
-
-		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-			if pkt.ActionID == protocol.ActionIDPracticeStart {
-				resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
-					Result:    protocol.PracticeResultBagFull,
-					MissionID: 854,
-					Count:     1,
-				})
-				_ = protocol.WritePacket(srvConn, resPkt)
-				return true
-			}
-			return false
-		})
-
-		cfg := dungeon.SweepConfig{
-			MaxBatchTimes:         1,
-			PreferPracticeQuickly: true,
-			Pipeline:              []string{"sweep_highest_main"},
-		}
-		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
-		err := routine.Execute(context.Background(), sess, nil)
-		if !errors.Is(err, scheduler.ErrBagFull) {
-			t.Fatalf("期望触发 ErrBagFull 语义熔断, 实际返回: %v", err)
-		}
-	})
-}
-
-// TestDungeonSweep_AutoReplenishStamina_Priority 验证主线/支线副本无体力时自动检查背包，
-// 且严格按照 [包子 > 粽子 > 茶叶蛋] 优先级使用道具补充体力并完成扫荡。
-func TestDungeonSweep_AutoReplenishStamina_Priority(t *testing.T) {
-	t.Run("Priority1_SteamedBun", func(t *testing.T) {
-		// 初始体力为 0，背包里同时有包子(Grid 1)、粽子(Grid 2)、茶叶蛋(Grid 3)
-		sess, srvConn := createTestSession(t, 0)
-		defer sess.Close()
-		defer srvConn.Close()
-
-		usedGridCh := make(chan int16, 5)
-
-		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-			if pkt.ActionID == protocol.ActionIDItemGetPackList {
-				buf := new(bytes.Buffer)
-				_ = binary.Write(buf, binary.BigEndian, int16(30))
-				_ = binary.Write(buf, binary.BigEndian, int32(27))
-				_ = binary.Write(buf, binary.BigEndian, uint16(3))
-
-				// 格位 1: 包子 (ID 1488)
-				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
-					PlayerItemID: 101,
-					ItemID:       protocol.ItemIDSteamedBun,
-					GridID:       1,
-				})
-				// 格位 2: 粽子 (ID 1444)
-				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
-					PlayerItemID: 102,
-					ItemID:       protocol.ItemIDRiceDumpling,
-					GridID:       2,
-				})
-				// 格位 3: 茶叶蛋 (ID 2016)
-				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
-					PlayerItemID: 103,
-					ItemID:       protocol.ItemIDTeaEgg,
-					GridID:       3,
-				})
-
-				_ = binary.Write(buf, binary.BigEndian, int16(10))
-				_ = binary.Write(buf, binary.BigEndian, uint16(0))
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
-				return true
-			}
-
-			if pkt.ActionID == protocol.ActionIDItemUseGrid {
-				var gridID int16
-				_ = binary.Read(bytes.NewReader(pkt.Payload), binary.BigEndian, &gridID)
-				usedGridCh <- gridID
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemUseGrid, []byte{protocol.ItemActionSuccess}))
-				return true
-			}
-
-			return false
-		})
-
-		cfg := dungeon.SweepConfig{
-			Category:             dungeon.CategoryMainline,
-			MaxBatchTimes:        1,
-			AutoReplenishStamina: true,
-		}
-		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
-		err := routine.Execute(context.Background(), sess, nil)
-		if err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
-			t.Fatalf("扫荡执行失败: %v", err)
-		}
-
-		select {
-		case gridID := <-usedGridCh:
-			if gridID != 1 {
-				t.Errorf("期望最高优先级优先使用包子 (Grid 1), 实际使用了格位 %d", gridID)
-			}
-		case <-time.After(1 * time.Second):
-			t.Fatal("未收到使用道具协议调用")
-		}
-	})
-
-	t.Run("Priority2_RiceDumpling_WhenNoBun", func(t *testing.T) {
-		// 背包中无包子，仅有粽子(Grid 2)和茶叶蛋(Grid 3)
-		sess, srvConn := createTestSession(t, 0)
-		defer sess.Close()
-		defer srvConn.Close()
-
-		usedGridCh := make(chan int16, 5)
-
-		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-			if pkt.ActionID == protocol.ActionIDItemGetPackList {
-				buf := new(bytes.Buffer)
-				_ = binary.Write(buf, binary.BigEndian, int16(30))
-				_ = binary.Write(buf, binary.BigEndian, int32(28))
-				_ = binary.Write(buf, binary.BigEndian, uint16(2))
-
-				// 格位 2: 粽子 (ID 1444)
-				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
-					PlayerItemID: 102,
-					ItemID:       protocol.ItemIDRiceDumpling,
-					GridID:       2,
-				})
-				// 格位 3: 茶叶蛋 (ID 2016)
-				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
-					PlayerItemID: 103,
-					ItemID:       protocol.ItemIDTeaEgg,
-					GridID:       3,
-				})
-
-				_ = binary.Write(buf, binary.BigEndian, int16(10))
-				_ = binary.Write(buf, binary.BigEndian, uint16(0))
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
-				return true
-			}
-
-			if pkt.ActionID == protocol.ActionIDItemUseGrid {
-				var gridID int16
-				_ = binary.Read(bytes.NewReader(pkt.Payload), binary.BigEndian, &gridID)
-				usedGridCh <- gridID
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemUseGrid, []byte{protocol.ItemActionSuccess}))
-				return true
-			}
-
-			return false
-		})
-
-		cfg := dungeon.SweepConfig{
-			Category:             dungeon.CategorySide,
-			MaxBatchTimes:        1,
-			AutoReplenishStamina: true,
-		}
-		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
-		err := routine.Execute(context.Background(), sess, nil)
-		if err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
-			t.Fatalf("扫荡执行失败: %v", err)
-		}
-
-		select {
-		case gridID := <-usedGridCh:
-			if gridID != 2 {
-				t.Errorf("无包子时期望优先使用粽子 (Grid 2), 实际使用了格位 %d", gridID)
-			}
-		case <-time.After(1 * time.Second):
-			t.Fatal("未收到使用道具协议调用")
-		}
-	})
-
-	t.Run("Priority3_TeaEgg_WhenNoBunOrDumpling", func(t *testing.T) {
-		// 背包中仅有茶叶蛋(Grid 3)
-		sess, srvConn := createTestSession(t, 0)
-		defer sess.Close()
-		defer srvConn.Close()
-
-		usedGridCh := make(chan int16, 5)
-
-		startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-			if pkt.ActionID == protocol.ActionIDItemGetPackList {
-				buf := new(bytes.Buffer)
-				_ = binary.Write(buf, binary.BigEndian, int16(30))
-				_ = binary.Write(buf, binary.BigEndian, int32(29))
-				_ = binary.Write(buf, binary.BigEndian, uint16(1))
-
-				// 格位 3: 茶叶蛋 (ID 2016)
-				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
-					PlayerItemID: 103,
-					ItemID:       protocol.ItemIDTeaEgg,
-					GridID:       3,
-				})
-
-				_ = binary.Write(buf, binary.BigEndian, int16(10))
-				_ = binary.Write(buf, binary.BigEndian, uint16(0))
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemGetPackList, buf.Bytes()))
-				return true
-			}
-
-			if pkt.ActionID == protocol.ActionIDItemUseGrid {
-				var gridID int16
-				_ = binary.Read(bytes.NewReader(pkt.Payload), binary.BigEndian, &gridID)
-				usedGridCh <- gridID
-				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDItemUseGrid, []byte{protocol.ItemActionSuccess}))
-				return true
-			}
-
-			return false
-		})
-
-		cfg := dungeon.SweepConfig{
-			Category:             dungeon.CategoryMainline,
-			MaxBatchTimes:        1,
-			AutoReplenishStamina: true,
-		}
-		routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
-		err := routine.Execute(context.Background(), sess, nil)
-		if err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
-			t.Fatalf("扫荡执行失败: %v", err)
-		}
-
-		select {
-		case gridID := <-usedGridCh:
-			if gridID != 3 {
-				t.Errorf("无包子粽子时期望使用茶叶蛋 (Grid 3), 实际使用了格位 %d", gridID)
-			}
-		case <-time.After(1 * time.Second):
-			t.Fatal("未收到使用道具协议调用")
-		}
-	})
-}
-
-// TestDungeonSweep_PipelineExecutionOrder 验证配置流水线严格按照:
-// 优先推主线 -> 再推支线 -> 再扫荡精英 -> 最后兜底扫荡最高级主线 的时序流转。
-func TestDungeonSweep_PipelineExecutionOrder(t *testing.T) {
-	sess, srvConn := createTestSession(t, 20)
-	defer sess.Close()
-	defer srvConn.Close()
-
-	var sequence []string
-	var seqMu sync.Mutex
-	record := func(action string) {
-		seqMu.Lock()
-		defer seqMu.Unlock()
-		sequence = append(sequence, action)
-	}
-
-	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
-		switch pkt.ActionID {
-		case protocol.ActionIDPracticeStart:
-			// 主线最高级副本扫荡 (Module 25)
-			record("mission_sweep")
-			resPkt, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
-				Result:    protocol.PracticeResultSuccess,
-				MissionID: 43,
-				Count:     1,
-			})
-			_ = protocol.WritePacket(srvConn, resPkt)
-			return true
-
-		case protocol.ActionHeroMissionList:
-			record("hero_list")
-			townID := uint16(0)
-			if len(pkt.Payload) >= 2 {
-				townID = binary.BigEndian.Uint16(pkt.Payload[:2])
-			}
-			w := protocol.NewWriter()
-			if townID == 4 {
-				w.WriteUint16(1)
-				w.WriteInt32(166)
-				w.WriteInt8(1)
-				w.WriteUint8(0)
-				w.WriteInt8(1)
-				w.WriteInt8(0)
-				w.WriteInt8(0)
-				w.WriteInt16(0)
-				w.WriteInt32(1)
-			} else {
-				w.WriteUint16(0)
-				w.WriteInt8(0)
-				w.WriteInt8(0)
-				w.WriteInt16(0)
-				w.WriteInt32(0)
-			}
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
-			return true
-
-		case protocol.ActionHeroMissionStartPractice:
-			record("hero_sweep")
-			w := protocol.NewWriter()
-			w.WriteUint8(protocol.HeroMissionResultSuccess)
-			w.WriteInt32(30)
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
-			return true
-
-		case protocol.ActionHeroMissionQuickly:
-			record("hero_quickly")
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
-			w := protocol.NewWriter()
-			w.WriteUint8(protocol.HeroMissionNotifyFinish)
-			w.WriteUint16(0)
-			w.WriteUint16(0)
-			w.WriteInt16(30)
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
-			return true
-		}
-		return false
-	})
-
-	cfg := dungeon.SweepConfig{
-		MaxBatchTimes: 3,
-		Pipeline: []string{
-			"sweep_elite",
-			"sweep_highest_main",
-		},
-	}
-	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
-	err := routine.Execute(context.Background(), sess, nil)
-	if err != nil && !errors.Is(err, scheduler.ErrStaminaDepleted) {
-		t.Fatalf("流水线执行失败: %v", err)
-	}
-
-	seqMu.Lock()
-	defer seqMu.Unlock()
-	// 期望先执行英雄/精英副本，再执行最高主线扫荡
-	hasHeroFirst := false
-	hasSweepAfter := false
-	for _, act := range sequence {
-		if act == "hero_sweep" {
-			hasHeroFirst = true
-		}
-		if hasHeroFirst && act == "mission_sweep" {
-			hasSweepAfter = true
-			break
-		}
-	}
-	if !hasHeroFirst || !hasSweepAfter {
-		t.Errorf("期望流水线先扫荡精英再扫荡主线, 实际时序: %v", sequence)
 	}
 }
 
@@ -1369,12 +614,10 @@ func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
 	})
 
 	cfg := dungeon.SweepConfig{
-		MaxBatchTimes: 5,
 		Pipeline: []string{
 			"push_mainline",
 			"push_side",
 			"sweep_elite",
-			"sweep_highest_main",
 		},
 	}
 	routine := dungeon.NewDungeonSweepRoutine(repo, cfg)
@@ -1386,14 +629,13 @@ func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
 	eventsMu.Lock()
 	defer eventsMu.Unlock()
 
-	// 验证关键时序: get_npc_quests -> accept_quest -> mission_sweep -> complete_quest -> hero_sweep -> mission_sweep (最高主线)
+	// 验证关键时序: get_npc_quests -> accept_quest -> mission_sweep -> complete_quest -> hero_sweep
 	expectedOrder := []string{
 		"get_npc_quests",
 		"accept_quest",
 		"mission_sweep",
 		"complete_quest",
 		"hero_sweep",
-		"mission_sweep",
 	}
 
 	currentIdx := 0
@@ -1890,7 +1132,6 @@ func TestDungeonSweep_SweepElite_SellSweptItems(t *testing.T) {
 		})
 
 		cfg := dungeon.SweepConfig{
-			MaxBatchTimes: 5,
 			Sweep: dungeon.SweepFeatureConfig{
 				Enabled:        true,
 				Pipeline:       []string{"sweep_elite"},
@@ -1975,7 +1216,6 @@ func TestDungeonSweep_SweepElite_SellSweptItems(t *testing.T) {
 		})
 
 		cfg := dungeon.SweepConfig{
-			MaxBatchTimes: 5,
 			Sweep: dungeon.SweepFeatureConfig{
 				Enabled:        true,
 				Pipeline:       []string{"sweep_elite"},
@@ -2240,7 +1480,6 @@ func TestDungeonSweep_MaxReplenishStamina_Limit(t *testing.T) {
 			AutoReplenishStamina: true,
 			MaxReplenishStamina:  10, // 上限 10 点，吃一个粽子(+10)后即达到上限，不能再吃茶叶蛋(+50)
 		},
-		Category: dungeon.CategoryMainline,
 	}
 
 	routine := dungeon.NewDungeonSweepRoutine(nil, cfg)
@@ -2652,10 +1891,10 @@ func TestSpiritTrialRoutine_Execute(t *testing.T) {
 	}
 }
 
-// TestDungeonSweep_EliteSweep_NotCappedByMaxBatchTimes 回归验证:
-// 精英副本扫荡按城镇逐个执行，不受 max_batch_times（仅作用于主线最高关扫荡）截断。
-// 数据字典不可用时使用 22 个内置精英城镇，MaxBatchTimes=5 仍应扫荡全部城镇。
-func TestDungeonSweep_EliteSweep_NotCappedByMaxBatchTimes(t *testing.T) {
+// TestDungeonSweep_EliteSweep_AllTowns 回归验证:
+// 精英副本扫荡按城镇逐个执行，不设本地轮数上限。
+// 数据字典不可用时使用 22 个内置精英城镇，仍应扫荡全部城镇。
+func TestDungeonSweep_EliteSweep_AllTowns(t *testing.T) {
 	sess, srvConn := createTestSession(t, 200)
 	defer sess.Close()
 	defer srvConn.Close()
@@ -2697,7 +1936,6 @@ func TestDungeonSweep_EliteSweep_NotCappedByMaxBatchTimes(t *testing.T) {
 	})
 
 	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
-		MaxBatchTimes: 5, // 不应限制精英副本城镇数量
 		Sweep: dungeon.SweepFeatureConfig{
 			Enabled:  true,
 			Pipeline: []string{"sweep_elite"},

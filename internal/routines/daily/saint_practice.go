@@ -107,7 +107,7 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 					}
 					sitResp, sErr := call(protocol.BuildSaPracticeRoomSitDownPacket(saintPracticeRoomQuality, uint8(seat)), protocol.ActionIDSaPracticeRoomSitDown)
 					if sErr != nil || sitResp == nil {
-						slog.Warn("圣域修炼房入座无回包", "role_id", session.RoleID(), "seat", seat, "err", sErr)
+						slog.Info("圣域修炼房入座无回包", "role_id", session.RoleID(), "seat", seat, "err", sErr)
 						break
 					}
 					code, pErr := protocol.ParseSaPracticeRoomActionResult(sitResp.Payload)
@@ -156,7 +156,7 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 			}
 			expResp, err := call(protocol.BuildSaPracticeRoomGetExpPacket(0), protocol.ActionIDSaPracticeRoomGetExp)
 			if err != nil || expResp == nil {
-				slog.Warn("领取圣域修炼经验无回包", "role_id", session.RoleID(), "err", err)
+				slog.Info("领取圣域修炼经验无回包", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 			code, exp, pErr := protocol.ParseSaPracticeRoomExpResult(expResp.Payload)

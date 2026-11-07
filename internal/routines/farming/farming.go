@@ -557,7 +557,7 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, crossCall crossTakeBibleCallFunc, normalize func(uint8) uint8) {
 	infoResp, err := crossCall(protocol.BuildStTakeBibleCrossGetInfoPacket(), protocol.ActionIDStTakeBibleCrossGetInfo, 3*time.Second)
 	if err != nil {
-		slog.Warn("跨服取经详情无应答", "role_id", session.RoleID(), "error", err)
+		slog.Info("跨服取经详情无应答", "role_id", session.RoleID(), "error", err)
 		return
 	}
 	info, err := protocol.ParseStTakeBibleCrossInfoResult(infoResp.Payload)
@@ -616,7 +616,7 @@ func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, cro
 
 	startResp, err := crossCall(protocol.BuildStTakeBibleCrossStartPacket(), protocol.ActionIDStTakeBibleCrossStart, 3*time.Second)
 	if err != nil {
-		slog.Warn("跨服取经启程无应答", "role_id", session.RoleID(), "error", err)
+		slog.Info("跨服取经启程无应答", "role_id", session.RoleID(), "error", err)
 		return
 	}
 	startMsg, itemID, err := protocol.ParseStTakeBibleCrossStartResult(startResp.Payload)
@@ -662,7 +662,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 	}
 	openResp, err := crossCall(protocol.BuildStTakeBibleCrossOpenPacket(), protocol.ActionIDStTakeBibleCrossOpen, 3*time.Second)
 	if err != nil {
-		slog.Warn("跨服取经路况查询无应答", "role_id", session.RoleID(), "error", err)
+		slog.Info("跨服取经路况查询无应答", "role_id", session.RoleID(), "error", err)
 		return
 	}
 	road, err := parseRoad(openResp.Payload)
@@ -844,7 +844,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 			// 冷却仍为 0 才说明请求确实未被受理，可安全尝试下一个目标。
 			accepted, known := crossTakeBibleRobReconcile(session, crossCall)
 			if !known {
-				slog.Warn("跨服取经打劫无应答且冷却复核失败，保守结束本轮打劫",
+				slog.Info("跨服取经打劫无应答且冷却复核失败，保守结束本轮打劫",
 					"role_id", session.RoleID(),
 					"target_player_id", target.team.PlayerID,
 					"error", cErr,
@@ -852,14 +852,14 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 				break
 			}
 			if accepted {
-				slog.Warn("跨服取经打劫无应答但服务端已进入冷却，按已受理结束本轮打劫",
+				slog.Info("跨服取经打劫无应答但服务端已进入冷却，按已受理结束本轮打劫",
 					"role_id", session.RoleID(),
 					"target_player_id", target.team.PlayerID,
 					"error", cErr,
 				)
 				break
 			}
-			slog.Warn("跨服取经打劫无应答且服务端未进入冷却，跳过该目标",
+			slog.Info("跨服取经打劫无应答且服务端未进入冷却，跳过该目标",
 				"role_id", session.RoleID(),
 				"target_player_id", target.team.PlayerID,
 				"error", cErr,
@@ -983,7 +983,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 func crossTakeBibleRobCD(session *client.RoleSession, crossCall crossTakeBibleCallFunc) (*protocol.StTakeBibleCrossRobCD, bool) {
 	resp, err := crossCall(protocol.BuildStTakeBibleCrossGetRobCDPacket(), protocol.ActionIDStTakeBibleCrossGetRobCD, crossTakeBibleRobCDTimeout)
 	if err != nil {
-		slog.Warn("跨服取经打劫冷却查询无应答", "role_id", session.RoleID(), "error", err)
+		slog.Info("跨服取经打劫冷却查询无应答", "role_id", session.RoleID(), "error", err)
 		return nil, false
 	}
 	cd, err := protocol.ParseStTakeBibleCrossRobCDResult(resp.Payload)
@@ -998,7 +998,7 @@ func crossTakeBibleRobCD(session *client.RoleSession, crossCall crossTakeBibleCa
 func crossTakeBibleRobTimes(session *client.RoleSession, crossCall crossTakeBibleCallFunc) (*protocol.StTakeBibleCrossUpdateData, error) {
 	resp, err := crossCall(protocol.BuildStTakeBibleCrossUpdateDataPacket(), protocol.ActionIDStTakeBibleCrossUpdateData, crossTakeBibleRobCDTimeout)
 	if err != nil {
-		slog.Warn("跨服取经剩余次数查询无应答", "role_id", session.RoleID(), "error", err)
+		slog.Info("跨服取经剩余次数查询无应答", "role_id", session.RoleID(), "error", err)
 		return nil, err
 	}
 	update, err := protocol.ParseStTakeBibleCrossUpdateDataResult(resp.Payload)
@@ -1231,7 +1231,7 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 			rewardResp, err := session.Call(rCtx, protocol.BuildStMineReceiveAwardPacket(), protocol.ActionIDStMineReceiveAward)
 			rCancel()
 			if err != nil {
-				slog.Warn("矿山收益领取无应答", "role_id", session.RoleID(), "err", err)
+				slog.Info("矿山收益领取无应答", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 			rewardResult, err := protocol.ParseStMineActionResult(rewardResp.Payload)
@@ -1497,7 +1497,7 @@ func NewGourdRealmRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 				resp, cErr := session.Call(cCtx, protocol.BuildFairyGourdClaimPacket(entry.Date), protocol.ActionIDFairyGourdClaim)
 				cCancel()
 				if cErr != nil {
-					slog.Warn("仙葫芦领取无应答", "role_id", session.RoleID(), "date", entry.Date, "err", cErr)
+					slog.Info("仙葫芦领取无应答", "role_id", session.RoleID(), "date", entry.Date, "err", cErr)
 					break
 				}
 				result, pErr := protocol.ParseFairyGourdClaimResult(resp.Payload)

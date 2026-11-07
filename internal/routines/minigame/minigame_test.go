@@ -11,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -121,6 +122,20 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 		// Mock 提供 2 次免费占星，执行后最后动作必须是占星结算。
 		if got := session.LastActionID(); got != protocol.ActionIDStarPictureDivination {
 			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDStarPictureDivination, got)
+		}
+	})
+
+	t.Run("纪元湮劫每日战斗", func(t *testing.T) {
+		r := NewEraYanjieRoutine()
+		if r.Name() != "era_yanjie" {
+			t.Fatalf("任务名称不匹配: %s", r.Name())
+		}
+		if err := r.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("纪元湮劫执行失败: %v", err)
+		}
+		// Mock 关卡可战且战斗胜利，最后动作必须是 fight。
+		if got := session.LastActionID(); got != protocol.ActionIDEraYanjieFight {
+			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDEraYanjieFight, got)
 		}
 	})
 
@@ -363,6 +378,32 @@ func TestResolveFindImmortalRemain(t *testing.T) {
 					gotTokens, gotMore, tc.wantTokens, tc.wantMore)
 			}
 		})
+	}
+}
+
+// TestFiveBlessingsRoutine_SkipsWhenActivityClosed 验证开启标志为 NO 时
+// 不再发送必被服务端静默丢弃的 start_bless 请求。
+func TestFiveBlessingsRoutine_SkipsWhenActivityClosed(t *testing.T) {
+	var startBlessCalls int32
+	session := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFindImmortalIsFiveBlessingsOpen:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(
+				pkt.ActionID, []byte{protocol.FindImmortalResultNo}))
+		case protocol.ActionIDFindImmortalStartBless:
+			atomic.AddInt32(&startBlessCalls, 1)
+		}
+	})
+
+	if err := NewFiveBlessingsRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("五福临门任务执行失败: %v", err)
+	}
+	if got := atomic.LoadInt32(&startBlessCalls); got != 0 {
+		t.Fatalf("活动未开启时不应发送 start_bless, 实际 %d 次", got)
+	}
+	if got := session.LastActionID(); got != protocol.ActionIDFindImmortalIsFiveBlessingsOpen {
+		t.Errorf("期望最后动作 0x%08X, 实际 0x%08X",
+			protocol.ActionIDFindImmortalIsFiveBlessingsOpen, got)
 	}
 }
 

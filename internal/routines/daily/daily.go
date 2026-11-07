@@ -114,7 +114,7 @@ func NewSignInRoutine() scheduler.ActivityRoutine {
 			if info.ContinueState == protocol.SignInStateCanGet {
 				resp, err := callDaily(ctx, session, protocol.BuildSignInContinuePacket(), protocol.ActionIDSignInContinue, 8*time.Second)
 				if err != nil {
-					slog.Warn("领取连签奖励无应答", "role_id", session.RoleID(), "err", err)
+					slog.Info("领取连签奖励无应答", "role_id", session.RoleID(), "err", err)
 				} else if result, day, pErr := protocol.ParseSignInContinueResult(resp.Payload); pErr != nil {
 					slog.Warn("解析连签奖励回包失败", "role_id", session.RoleID(), "err", pErr)
 				} else if result == protocol.SignInResultSuccess {
@@ -131,7 +131,7 @@ func NewSignInRoutine() scheduler.ActivityRoutine {
 				}
 				resp, err := callDaily(ctx, session, protocol.BuildSignInTotalAwardPacket(tier.Tier), protocol.ActionIDSignInTotalAward, 8*time.Second)
 				if err != nil {
-					slog.Warn("领取累计签到奖励无应答", "role_id", session.RoleID(), "tier", tier.Tier, "err", err)
+					slog.Info("领取累计签到奖励无应答", "role_id", session.RoleID(), "tier", tier.Tier, "err", err)
 					continue
 				}
 				act, pErr := protocol.ParseSignInActionResult(resp.Payload)
@@ -532,7 +532,7 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 			// 2. 查询等级奖励列表 (Mod 328, Act 1)
 			listResp, err := call(protocol.BuildGodWelfareLevelAwardInfoPacket(), protocol.ActionIDGodWelfareLevelAwardInfo)
 			if err != nil || listResp == nil {
-				slog.Warn("查询天神赐福等级奖励无回包", "role_id", session.RoleID(), "err", err)
+				slog.Info("查询天神赐福等级奖励无回包", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 			awards, pErr := protocol.ParseGodWelfareLevelAwardInfoResult(listResp.Payload)
@@ -551,7 +551,7 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 				}
 				cResp, cErr := call(protocol.BuildGodWelfareGetAwardPacket(award.Level), protocol.ActionIDGodWelfareGetAward)
 				if cErr != nil || cResp == nil {
-					slog.Warn("领取天神赐福等级奖励无回包", "role_id", session.RoleID(), "level", award.Level, "err", cErr)
+					slog.Info("领取天神赐福等级奖励无回包", "role_id", session.RoleID(), "level", award.Level, "err", cErr)
 					return nil
 				}
 				code, cpErr := protocol.ParseGodWelfareGetAwardResult(cResp.Payload)
@@ -626,7 +626,7 @@ func NewVIPWelfareRoutine() scheduler.ActivityRoutine {
 				}
 				resp, cErr := callDaily(ctx, session, protocol.BuildVIPSendGiftPacket(gift.Level), protocol.ActionIDVIPSendGift, 8*time.Second)
 				if cErr != nil {
-					slog.Warn("VIP礼包领取无应答", "role_id", session.RoleID(), "level", gift.Level, "err", cErr)
+					slog.Info("VIP礼包领取无应答", "role_id", session.RoleID(), "level", gift.Level, "err", cErr)
 					continue
 				}
 				result, pErr := protocol.ParseVIPGiftResult(resp.Payload)
@@ -800,7 +800,7 @@ func NewDeviceBindRewardRoutine() scheduler.ActivityRoutine {
 			claim := func(pkt *protocol.Packet, actionID uint32, name string) error {
 				resp, cErr := callDaily(ctx, session, pkt, actionID, 8*time.Second)
 				if cErr != nil {
-					slog.Warn(name+"无应答", "role_id", session.RoleID(), "err", cErr)
+					slog.Info(name+"无应答", "role_id", session.RoleID(), "err", cErr)
 					return nil
 				}
 				result, pErr := protocol.ParseDeviceBindRewardResult(resp.Payload)

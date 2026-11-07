@@ -87,7 +87,7 @@ func NewNpcFriendshipRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDNpcFriendshipGainMissionAward,
 				)
 				if aErr != nil || aResp == nil {
-					slog.Warn("领取 NPC 结交任务奖励无回包", "role_id", session.RoleID(), "npc_id", npc.NpcID, "err", aErr)
+					slog.Info("领取 NPC 结交任务奖励无回包", "role_id", session.RoleID(), "npc_id", npc.NpcID, "err", aErr)
 					continue
 				}
 				if len(aResp.Payload) == 0 {
@@ -121,7 +121,7 @@ func NewNpcFriendshipRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDNpcFriendshipMakeFriend,
 				)
 				if mErr != nil || mResp == nil {
-					slog.Warn("结交 NPC 无回包", "role_id", session.RoleID(), "npc_id", npc.NpcID, "err", mErr)
+					slog.Info("结交 NPC 无回包", "role_id", session.RoleID(), "npc_id", npc.NpcID, "err", mErr)
 					continue
 				}
 				got, pErr := protocol.ParseNpcFriendshipFriendResult(mResp.Payload)
@@ -147,7 +147,7 @@ func NewNpcFriendshipRoutine() scheduler.ActivityRoutine {
 			// 3. 赠送伴手礼 (铜钱系礼物)。
 			pResp, pErr := call(protocol.BuildNpcFriendshipPresentInfoPacket(), protocol.ActionIDNpcFriendshipPresentInfo)
 			if pErr != nil || pResp == nil {
-				slog.Warn("查询 NPC 送礼信息无回包", "role_id", session.RoleID(), "err", pErr)
+				slog.Info("查询 NPC 送礼信息无回包", "role_id", session.RoleID(), "err", pErr)
 				return nil
 			}
 			used, maxGive, pErr := protocol.ParseNpcFriendshipPresentInfoResult(pResp.Payload)
@@ -188,7 +188,7 @@ func NewNpcFriendshipRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDNpcFriendshipGivePresent,
 				)
 				if gErr != nil || gResp == nil {
-					slog.Warn("赠送 NPC 伴手礼无回包", "role_id", session.RoleID(), "npc_id", npc.NpcID, "err", gErr)
+					slog.Info("赠送 NPC 伴手礼无回包", "role_id", session.RoleID(), "npc_id", npc.NpcID, "err", gErr)
 					return nil
 				}
 				got, pParseErr := protocol.ParseNpcFriendshipGiveResult(gResp.Payload)

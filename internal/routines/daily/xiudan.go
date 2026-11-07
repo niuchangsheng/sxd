@@ -50,7 +50,7 @@ func NewXiuDanRoutine() scheduler.ActivityRoutine {
 				defer cancel()
 				resp, err := session.Call(cCtx, pkt, act)
 				if err != nil {
-					slog.Warn("修为丹协议无回包", "role_id", session.RoleID(),
+					slog.Info("修为丹协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
 					return nil
 				}
@@ -59,7 +59,7 @@ func NewXiuDanRoutine() scheduler.ActivityRoutine {
 
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
-				slog.Warn("查询每日活跃度失败，跳过服用修为丹", "role_id", session.RoleID())
+				slog.Info("查询每日活跃度失败，跳过服用修为丹", "role_id", session.RoleID())
 				return nil
 			}
 			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)

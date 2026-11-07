@@ -38,6 +38,17 @@ func NewMarryHomeRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			// 家园功能未开放时服务端会静默丢弃 Module 210 请求，先用 Action 6 缓存判定。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDMarryHome)
+			if fErr != nil {
+				slog.Info("家园功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("家园功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDMarryHome)
+				return nil
+			}
+
 			// 1. 领取自家小蛋糕奖励 (免费)。
 			//
 			// 注意: 不要在此之前调用活跃度面板 0x0000002A。线上实测该面板会污染

@@ -228,7 +228,7 @@ func NewFactionBlessingRoutine(cfgs ...FactionBlessingConfig) scheduler.Activity
 							case protocol.FactionIncenseResultCountUsed:
 								slog.Info("今日帮派祭神上香次数已用尽", "role_id", session.RoleID())
 							default:
-								slog.Warn("帮派祭神面板无回包，上香探测返回未知结果码",
+								slog.Info("帮派祭神面板无回包，上香探测返回未知结果码",
 									"role_id", session.RoleID(), "result_code", code)
 							}
 							return nil
@@ -327,7 +327,7 @@ func NewFactionBlessingRoutine(cfgs ...FactionBlessingConfig) scheduler.Activity
 				incenseResp, err := session.Call(incenseCtx, incensePkt, protocol.ActionIDFactionIncense)
 				incenseCancel()
 				if err != nil || incenseResp == nil {
-					slog.Warn("帮派祭神上香未收到回包", "role_id", session.RoleID(), "err", err)
+					slog.Info("帮派祭神上香未收到回包", "role_id", session.RoleID(), "err", err)
 					return nil
 				}
 
@@ -476,7 +476,7 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 				startResp, err := session.Call(startCtx, startPkt, protocol.ActionIDLuckyWheelStart)
 				startCancel()
 				if err != nil || startResp == nil {
-					slog.Warn("帮派转盘抽奖未收到回包", "role_id", session.RoleID(), "err", err)
+					slog.Info("帮派转盘抽奖未收到回包", "role_id", session.RoleID(), "err", err)
 					return nil
 				}
 
@@ -639,7 +639,7 @@ func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 						gResp, gErr := town.Call(gCtx, protocol.BuildSectBonusGetGiftPacket(cred.SectID), 0x024F0003)
 						gCancel()
 						if gErr != nil {
-							slog.Warn("领取仙盟福利无应答", "role_id", session.RoleID(), "err", gErr)
+							slog.Info("领取仙盟福利无应答", "role_id", session.RoleID(), "err", gErr)
 							break
 						}
 						result, rErr := protocol.ParseSectActionResult(gResp.Payload)
@@ -678,7 +678,7 @@ func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 			wResp, err := town.Call(wCtx, protocol.BuildSectWorshipPacket(cred.SectID), 0x023C000D)
 			wCancel()
 			if err != nil {
-				slog.Warn("仙盟膜拜无应答", "role_id", session.RoleID(), "err", err)
+				slog.Info("仙盟膜拜无应答", "role_id", session.RoleID(), "err", err)
 			} else if result, rErr := protocol.ParseSectActionResult(wResp.Payload); rErr != nil {
 				slog.Warn("解析仙盟膜拜回包失败", "role_id", session.RoleID(), "err", rErr)
 			} else if result == 0 {
@@ -825,7 +825,7 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 				openResp, oErr := session.Call(octx, protocol.BuildFriendsSentOpenPacket(l.ID), protocol.ActionIDFriendsSentOpen)
 				ocancel()
 				if oErr != nil {
-					slog.Warn("打开好友来信无应答", "role_id", session.RoleID(), "letter_id", l.ID, "err", oErr)
+					slog.Info("打开好友来信无应答", "role_id", session.RoleID(), "letter_id", l.ID, "err", oErr)
 					continue
 				}
 				detail, pErr := protocol.ParseFriendsSentOpenResult(openResp.Payload)
@@ -848,7 +848,7 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 					aResp, aErr := session.Call(actx, protocol.BuildFriendsSentAwardPacket(l.ID), protocol.ActionIDFriendsSentAward)
 					acancel()
 					if aErr != nil {
-						slog.Warn("领取好友来信奖励无应答", "role_id", session.RoleID(), "letter_id", l.ID, "err", aErr)
+						slog.Info("领取好友来信奖励无应答", "role_id", session.RoleID(), "letter_id", l.ID, "err", aErr)
 						continue
 					}
 					result, e := protocol.ParseFriendsSentActionResult(aResp.Payload)
@@ -912,7 +912,8 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildWorshipMarsInfoPacket(), protocol.ActionIDWorshipMarsInfo)
 			iCancel()
 			if err != nil {
-				slog.Warn("查询膜拜信息失败，跳过", "role_id", session.RoleID(), "err", err)
+				// 断线重连或活动上下文不匹配都会表现为无回包，跳过本轮即可。
+				slog.Info("查询膜拜信息无回包，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 			info, err := protocol.ParseWorshipMarsInfoResult(infoResp.Payload)
@@ -951,7 +952,7 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(cCtx, protocol.BuildWorshipMarsIncensePacket(protocol.WorshipMarsOfferingFree), protocol.ActionIDWorshipMarsIncense)
 				cCancel()
 				if cErr != nil {
-					slog.Warn("上香无应答", "role_id", session.RoleID(), "done", done, "err", cErr)
+					slog.Info("上香无应答", "role_id", session.RoleID(), "done", done, "err", cErr)
 					break
 				}
 				result, pErr := protocol.ParseWorshipMarsIncenseResult(resp.Payload)

@@ -135,7 +135,7 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 				}
 				resp, rErr := call(protocol.BuildSaArenaRobSeatPacket(seat.Seq), protocol.ActionIDSaArenaRobSeat)
 				if rErr != nil || resp == nil {
-					slog.Warn("圣域竞技场抢占无回包", "role_id", session.RoleID(), "seq", seat.Seq, "err", rErr)
+					slog.Info("圣域竞技场抢占无回包", "role_id", session.RoleID(), "seq", seat.Seq, "err", rErr)
 					return nil
 				}
 				res, pErr := protocol.ParseSaArenaRobResult(resp.Payload)

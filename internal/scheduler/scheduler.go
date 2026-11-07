@@ -195,6 +195,19 @@ func (s *RoleScheduler) runLoop() {
 					"routine", item.routine.Name(),
 					"cooling_until", item.coolingUntil,
 				)
+			} else if errors.Is(execErr, client.ErrNotConnected) {
+				// 重连窗口内的确定性失败：本轮跳过，不进入冷却、不产生告警。
+				slog.Info("会话重连中，任务本轮跳过",
+					"role_id", s.roleID,
+					"routine", item.routine.Name(),
+				)
+			} else if errors.Is(execErr, context.DeadlineExceeded) {
+				// 超时多数源于服务端对不满足条件请求的静默丢弃，按本轮跳过处理。
+				slog.Info("任务请求超时/被服务端静默丢弃，本轮跳过",
+					"role_id", s.roleID,
+					"routine", item.routine.Name(),
+					"error", execErr,
+				)
 			} else if errors.Is(execErr, ErrBagFull) {
 				// 背包已满：挂起 10 分钟
 				item.coolingUntil = time.Now().Add(10 * time.Minute)

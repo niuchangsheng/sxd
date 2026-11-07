@@ -59,6 +59,10 @@ const (
 	FunctionIDFindImmortal int32 = 70
 	// FunctionIDFishing 钓鱼功能编号 (FunctionTypeData: Fishing)
 	FunctionIDFishing int32 = 134
+	// FunctionIDMarryHome 家园功能编号 (FunctionTypeData: MarryHome)
+	FunctionIDMarryHome int32 = 131
+	// FunctionIDAwakeForbiddenBook 禁地之书功能编号 (FunctionTypeData: AwakeForbiddenBook)
+	FunctionIDAwakeForbiddenBook int32 = 308
 )
 
 // BuildCheckFunctionOpenPacket 构造功能开放状态查询封包。

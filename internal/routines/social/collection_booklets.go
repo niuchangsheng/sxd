@@ -78,7 +78,7 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDCollectionBookletsGetPopularityAward,
 				)
 				if aErr != nil || aResp == nil {
-					slog.Warn("领取神仙收藏册声望奖励无回包", "role_id", session.RoleID(), "award_id", award.ID, "err", aErr)
+					slog.Info("领取神仙收藏册声望奖励无回包", "role_id", session.RoleID(), "award_id", award.ID, "err", aErr)
 					return nil
 				}
 				code, pErr := protocol.ParseCollectionBookletsActionCode(aResp.Payload)
@@ -107,7 +107,7 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 			// 2. 拜访好友获得声望。
 			fResp, fErr := call(protocol.BuildCollectionBookletsMyFriendPacket(), protocol.ActionIDCollectionBookletsMyFriend)
 			if fErr != nil || fResp == nil {
-				slog.Warn("查询神仙收藏册好友列表无回包", "role_id", session.RoleID(), "err", fErr)
+				slog.Info("查询神仙收藏册好友列表无回包", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			}
 			friendResult, friends, pErr := protocol.ParseCollectionBookletsMyFriendResult(fResp.Payload)
@@ -135,7 +135,7 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDCollectionBookletsApprove,
 				)
 				if apErr != nil || approveResp == nil {
-					slog.Warn("拜访神仙收藏册好友无回包", "role_id", session.RoleID(), "player_id", friend.PlayerID, "err", apErr)
+					slog.Info("拜访神仙收藏册好友无回包", "role_id", session.RoleID(), "player_id", friend.PlayerID, "err", apErr)
 					return nil
 				}
 				got, apParseErr := protocol.ParseCollectionBookletsApproveResult(approveResp.Payload)

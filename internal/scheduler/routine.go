@@ -180,6 +180,10 @@ func (b *BaseRoutine) Execute(ctx context.Context, session *client.RoleSession, 
 	if b.fn == nil {
 		return nil
 	}
+	// 零假动作铁律：调度前置检查与真正执行之间可能发生断线重连，
+	// 此处再确认一次会话状态，避免在连接中断窗口内向服务端发送注定超时的业务包。
+	if session != nil && session.State() != client.StateActive {
+		return nil
+	}
 	return b.fn(ctx, session, jitter)
 }
-

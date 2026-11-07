@@ -78,11 +78,17 @@ func main() {
 		return resp
 	}
 	zero := []byte{0, 0, 0, 0}
-	if r := call(0x02400004, zero); r != nil {
-		slog.Info("通用灵兽列表", "hex", hex.EncodeToString(r.Payload))
+	if r := call(protocol.ActionIDSectOpenStatus, nil); r != nil {
+		slog.Info("仙盟开放状态", "hex", hex.EncodeToString(r.Payload))
+	}
+	if r := call(protocol.ActionIDSectPanelInfo, zero); r != nil {
+		slog.Info("仙盟面板", "hex", hex.EncodeToString(r.Payload))
 	}
 	if r := call(0x02400001, zero); r != nil {
 		slog.Info("宗门灵兽列表", "hex", hex.EncodeToString(r.Payload))
+	}
+	if r := call(0x02400004, zero); r != nil {
+		slog.Info("通用灵兽列表", "hex", hex.EncodeToString(r.Payload))
 	}
 	if r := call(0x02400000, zero); r != nil {
 		slog.Info("灵兽蛋面板", "hex", hex.EncodeToString(r.Payload))

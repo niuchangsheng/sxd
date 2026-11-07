@@ -7,7 +7,6 @@
 package main
 
 import (
-	"log/slog"
 	"strings"
 
 	"sxd-pie-ng/internal/config"
@@ -75,17 +74,17 @@ func newRegistryFactory(
 	}
 	if hasSubDungeon {
 		dCfg.Sweep.Enabled = sc.Dungeon.Sweep.Enabled
-		dCfg.Sweep.Pipeline = filterDeprecatedDungeonPipeline(sc.Dungeon.Sweep.Pipeline)
+		dCfg.Sweep.Pipeline = sc.Dungeon.Sweep.Pipeline
 		dCfg.Sweep.PreferPracticeQuickly = sc.Dungeon.Sweep.PreferPracticeQuickly
 		dCfg.Sweep.SellSweptItems = sc.Dungeon.Sweep.SellSweptItems || sc.Dungeon.Sweep.AutoSellSweptItems || sc.Dungeon.SellSweptItems || sc.Dungeon.AutoSellSweptItems
 	} else {
 		if len(sc.Dungeon.Pipeline) > 0 {
-			dCfg.Sweep.Pipeline = filterDeprecatedDungeonPipeline(sc.Dungeon.Pipeline)
+			dCfg.Sweep.Pipeline = sc.Dungeon.Pipeline
 		}
 		dCfg.Sweep.PreferPracticeQuickly = sc.Dungeon.PreferPracticeQuickly
 		dCfg.Sweep.SellSweptItems = sc.Dungeon.SellSweptItems || sc.Dungeon.AutoSellSweptItems
 	}
-	dCfg.Pipeline = filterDeprecatedDungeonPipeline(sc.Dungeon.Pipeline)
+	dCfg.Pipeline = sc.Dungeon.Pipeline
 	dCfg.PreferPracticeQuickly = sc.Dungeon.PreferPracticeQuickly
 	dCfg.AutoReplenishStamina = sc.Dungeon.AutoReplenishStamina
 	dCfg.MaxReplenishStamina = sc.Dungeon.MaxReplenishStamina
@@ -223,23 +222,6 @@ func newRegistryFactory(
 }
 
 // resolveServerAddr 解析区服网关地址；sandbox/空值走已知静态映射。
-// filterDeprecatedDungeonPipeline 移除已下线的主线扫荡步骤。
-// 兼容旧配置：即便 yaml 中仍残留 sweep_highest_main，也不会再执行主线扫荡。
-func filterDeprecatedDungeonPipeline(pipeline []string) []string {
-	if len(pipeline) == 0 {
-		return pipeline
-	}
-	out := make([]string, 0, len(pipeline))
-	for _, step := range pipeline {
-		if step == "sweep_highest_main" {
-			slog.Warn("主线扫荡功能已下线，忽略配置中的 sweep_highest_main")
-			continue
-		}
-		out = append(out, step)
-	}
-	return out
-}
-
 func resolveServerAddr(role config.RoleConfig) string {
 	serverAddr := role.ServerAddr
 	if serverAddr != "" && serverAddr != "sandbox" {

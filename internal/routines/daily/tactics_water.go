@@ -45,7 +45,7 @@ func NewTacticsWaterRoutine() scheduler.ActivityRoutine {
 				defer cancel()
 				resp, err := session.Call(cCtx, pkt, act)
 				if err != nil {
-					slog.Warn("兵法协议无回包", "role_id", session.RoleID(),
+					slog.Info("兵法协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
 					return nil
 				}
@@ -54,7 +54,7 @@ func NewTacticsWaterRoutine() scheduler.ActivityRoutine {
 
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
-				slog.Warn("查询每日活跃度失败，跳过兵法圣水", "role_id", session.RoleID())
+				slog.Info("查询每日活跃度失败，跳过兵法圣水", "role_id", session.RoleID())
 				return nil
 			}
 			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)

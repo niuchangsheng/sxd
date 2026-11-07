@@ -51,7 +51,7 @@ func NewFateHuntRoutine() scheduler.ActivityRoutine {
 			actResp, err := session.Call(actCtx, protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			actCancel()
 			if err != nil || actResp == nil {
-				slog.Warn("查询每日活跃度失败，跳过猎命任务", "role_id", session.RoleID(), "err", err)
+				slog.Info("查询每日活跃度失败，跳过猎命任务", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)
@@ -84,7 +84,7 @@ func runFreeFateAppoint(ctx context.Context, session *client.RoleSession, callTi
 	resp, err := session.Call(cCtx, protocol.BuildFateGetNPCPacket(), protocol.ActionIDFateGetNPC)
 	cancel()
 	if err != nil || resp == nil {
-		slog.Warn("查询猎命师列表失败，跳过免费猎命", "role_id", session.RoleID(), "err", err)
+		slog.Info("查询猎命师列表失败，跳过免费猎命", "role_id", session.RoleID(), "err", err)
 		return
 	}
 	panel, err := protocol.ParseFateHunterPanel(resp.Payload)
@@ -123,7 +123,7 @@ func runFreeFateAppoint(ctx context.Context, session *client.RoleSession, callTi
 		apptResp, aErr := session.Call(aCtx, protocol.BuildFateAppointNPCPacket(npcID), protocol.ActionIDFateAppointNPC)
 		cancel()
 		if aErr != nil || apptResp == nil {
-			slog.Warn("指定猎命师无回包", "role_id", session.RoleID(), "npc_id", npcID, "err", aErr)
+			slog.Info("指定猎命师无回包", "role_id", session.RoleID(), "npc_id", npcID, "err", aErr)
 			return
 		}
 		result, pErr := protocol.ParseFateAppointResult(apptResp.Payload)
@@ -182,7 +182,7 @@ func runMingGongScrapExchange(ctx context.Context, session *client.RoleSession, 
 	exResp, err := session.Call(eCtx, protocol.BuildFateExchangeMingGongScrapPacket(1), protocol.ActionIDFateExchangeMingGongScrap)
 	cancel()
 	if err != nil || exResp == nil {
-		slog.Warn("购买命宫碎片无回包", "role_id", session.RoleID(), "err", err)
+		slog.Info("购买命宫碎片无回包", "role_id", session.RoleID(), "err", err)
 		return
 	}
 	result, err := protocol.ParseFateMingGongExchangeResult(exResp.Payload)

@@ -118,7 +118,6 @@ func main() {
 	sweepCfg.QuestCycle.MaxReplenishStamina = 200
 	sweepCfg.Sweep.Enabled = false
 	sweepCfg.Pipeline = []string{"quest_cycle"}
-	sweepCfg.Category = dungeon.CategoryMainline
 
 	routine := dungeon.NewDungeonSweepRoutine(dictRepo, sweepCfg)
 	if err := routine.Execute(execCtx, sess, nil); err != nil {

@@ -92,7 +92,7 @@ func NewEudemonsRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDEudemonsActivateMeridians,
 				)
 				if aErr != nil || aResp == nil {
-					slog.Warn("激活幻兽经脉无回包", "role_id", session.RoleID(), "meridian_id", meridian.ID, "err", aErr)
+					slog.Info("激活幻兽经脉无回包", "role_id", session.RoleID(), "meridian_id", meridian.ID, "err", aErr)
 					return nil
 				}
 				code, pErr := protocol.ParseEudemonsActionCode(aResp.Payload)

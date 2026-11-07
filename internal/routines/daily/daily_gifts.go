@@ -46,7 +46,7 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 
 			// 1. 每日俸禄。
 			if resp, err := call(protocol.BuildCampSalaryPacket(), protocol.ActionIDPlayerCampSalary); err != nil || resp == nil {
-				slog.Warn("领取每日俸禄无回包", "role_id", session.RoleID(), "err", err)
+				slog.Info("领取每日俸禄无回包", "role_id", session.RoleID(), "err", err)
 			} else if result, coin, pErr := protocol.ParseCampSalaryResult(resp.Payload); pErr != nil {
 				slog.Warn("解析每日俸禄回包失败", "role_id", session.RoleID(), "err", pErr)
 			} else {
@@ -66,7 +66,7 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 
 			// 2. 每日灵石 (免费档)。
 			if resp, err := call(protocol.BuildSealSoulDayStonePacket(0), protocol.ActionIDSealSoulDayStone); err != nil || resp == nil {
-				slog.Warn("领取每日灵石无回包", "role_id", session.RoleID(), "err", err)
+				slog.Info("领取每日灵石无回包", "role_id", session.RoleID(), "err", err)
 			} else if state, count, pErr := protocol.ParseSealSoulDayStoneResult(resp.Payload); pErr != nil {
 				slog.Warn("解析每日灵石回包失败", "role_id", session.RoleID(), "err", pErr)
 			} else {
@@ -86,7 +86,7 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 
 			// 3. PC 微端礼包。
 			if resp, err := call(protocol.BuildClientGiftInfoPacket(), protocol.ActionIDPlayerClientGiftInfo); err != nil || resp == nil {
-				slog.Warn("查询 PC 微端礼包无回包", "role_id", session.RoleID(), "err", err)
+				slog.Info("查询 PC 微端礼包无回包", "role_id", session.RoleID(), "err", err)
 			} else if info, pErr := protocol.ParseClientGiftInfoResult(resp.Payload); pErr != nil {
 				slog.Warn("解析 PC 微端礼包失败", "role_id", session.RoleID(), "err", pErr)
 			} else if info.Status == 0 {
@@ -94,7 +94,7 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 			} else {
 				rResp, rErr := call(protocol.BuildClientGiftReceivePacket(), protocol.ActionIDPlayerReceiveClientGift)
 				if rErr != nil || rResp == nil {
-					slog.Warn("领取 PC 微端礼包无回包", "role_id", session.RoleID(), "err", rErr)
+					slog.Info("领取 PC 微端礼包无回包", "role_id", session.RoleID(), "err", rErr)
 				} else if result, rpErr := protocol.ParseClientGiftReceiveResult(rResp.Payload); rpErr != nil {
 					slog.Warn("解析 PC 微端礼包领取回包失败", "role_id", session.RoleID(), "err", rpErr)
 				} else {

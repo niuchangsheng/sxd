@@ -50,7 +50,11 @@ const beelzebubMaxChallenges = 256
 func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, preferBossID int32) ([]*protocol.BeelzebubTrialsWarResult, error) {
 	// 清理上一轮/上一会话可能遗留的队伍与战场。
 	// 服务端对“已在队伍中”的 create_team 会静默丢弃；先退队可避免被误判为玩法被拒。
-	if teamID, _, tErr := s.BeelzebubTrialsGetPlayerTeamInfo(ctx); tErr == nil && teamID > 0 {
+	if teamID, _, tErr := s.BeelzebubTrialsGetPlayerTeamInfo(ctx); tErr != nil {
+		// 连队伍信息都拿不到说明当前不在可建队的场景/状态；继续发 create_team 只会被静默丢弃。
+		slog.Info("查询魔王试炼队伍状态无回包，本轮跳过", "role_id", s.RoleID(), "err", tErr)
+		return nil, nil
+	} else if teamID > 0 {
 		slog.Info("发现遗留魔王试炼队伍，先退队再开始挑战", "role_id", s.RoleID(), "team_id", teamID)
 		_ = s.BeelzebubTrialsExitTeam(ctx)
 		_ = s.BeelzebubTrialsLeaveWar(ctx, 0)

@@ -13,4 +13,3 @@ type BaseRoutine = scheduler.BaseRoutine
 
 // NewBaseRoutine 构造新的标准化 Routine 实例。
 var NewBaseRoutine = scheduler.NewBaseRoutine
-

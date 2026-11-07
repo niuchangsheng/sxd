@@ -135,7 +135,7 @@ stateDiagram-v2
   > 导致紧接着的 Module 2 `player_sell_item` 被静默丢弃（8 秒无回包），精英扫荡物因此全部出售失败。
   > 所有 Module 35 构造器必须写入 4 字节占位并设置 `HasPrevAct=true`，由会话层在发包时填充真实动作号。
 - **结果码分流**：`3=SUCCESS`、`6=BAG_FULL`、`7=NOT_ENOUGH_POWER`、`8=NO_MISSION`、`4=NOT_ENOUGH_INGOT`。收到 `4` 必须立即停止，避免误消耗元宝。
-- **城镇全量覆盖**：扫荡入口是城镇而非单个副本实例；`Pieb.db` 中 `Missions.MissionType=1` 的 `map` 去重即为全部精英副本城镇。自动化逐城镇执行 `list -> start_practice -> quickly`，**不得用 `max_batch_times` 截断城镇数量**，否则无法覆盖全部精英副本；体力与每日次数由服务端熔断。
+- **城镇全量覆盖**：扫荡入口是城镇而非单个副本实例；`Pieb.db` 中 `Missions.MissionType=1` 的 `map` 去重即为全部精英副本城镇。自动化逐城镇执行 `list -> start_practice -> quickly`，不设本地轮数上限；体力与每日次数由服务端熔断。
 - **自动出售**：每个城镇结束后对比背包 `PlayerItemID -> Field5 数量` 基线，卖出新增格位；已有格位数量增加时，仅对精英副本主要掉落类型（`item.type_id=1002` 制作卷）整格出售，避免误卖玩家原有的包子/粽子/茶叶蛋等消耗品库存。刚结束扫荡时首个出售请求可能超时，需以 8 秒超时并短暂等待后重试一次。背包满时先 `stop_practice` 并卖出已结算掉落，再重试当前城镇；仍无法腾出空间才返回 `scheduler.ErrBagFull`。
 - **瞬时超时**：单个城镇的列表/扫荡请求超时需短暂退避后重试（最多 4 次），避免偶发网络抖动导致整座城镇漏扫。
 

@@ -7,6 +7,7 @@ package social
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -220,6 +221,59 @@ func TestHomesteadRoutine_Execute(t *testing.T) {
 	}
 }
 
+// TestMarryHomeRoutine_SkipsWhenFunctionClosed 验证家园功能未开放时
+// 不再发送会被服务端静默丢弃的 Module 210 请求。
+func TestMarryHomeRoutine_SkipsWhenFunctionClosed(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	var cakeCalls int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerGetFunctions:
+				// 开放列表中不含家园 131。
+				_ = protocol.WritePacket(serverConn,
+					protocol.BuildPlayerFunctionsResultPacket([]int32{protocol.FunctionIDFaction}))
+			case protocol.ActionIDMarryHomeGetCake:
+				atomic.AddInt32(&cakeCalls, 1)
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_marry_home_closed",
+		RoleName:   "测试家园角色",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("家园奖励执行失败: %v", err)
+	}
+	if got := atomic.LoadInt32(&cakeCalls); got != 0 {
+		t.Fatalf("家园未开放时不应发送蛋糕领取请求, 实际 %d 次", got)
+	}
+}
+
 // TestMarryHomeRoutine_Execute 使用内置 mock 验证家园奖励领取链路。
 func TestMarryHomeRoutine_Execute(t *testing.T) {
 	session := client.NewRoleSession(client.SessionConfig{
@@ -238,5 +292,27 @@ func TestMarryHomeRoutine_Execute(t *testing.T) {
 	}
 	if got := session.LastActionID(); got != protocol.ActionIDMarryHomeGetCake {
 		t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDMarryHomeGetCake, got)
+	}
+}
+
+// TestSectMonsterRoutine_NoSectSession 验证无仙盟城镇会话时安全跳过。
+func TestSectMonsterRoutine_NoSectSession(t *testing.T) {
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_sect_monster",
+		RoleName:   "测试宗门灵兽角色",
+		ServerAddr: "mock",
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r := NewSectMonsterRoutine()
+	if r.Name() != "sect_monster" {
+		t.Fatalf("任务名称不匹配: %s", r.Name())
+	}
+	if err := r.Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("宗门灵兽任务应安全跳过, 实际: %v", err)
 	}
 }

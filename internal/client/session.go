@@ -2386,6 +2386,8 @@ func runMockGameServer(conn net.Conn) {
 				protocol.FunctionIDWuFaField,
 				protocol.FunctionIDWorshipMars,
 				protocol.FunctionIDRefinePool,
+				protocol.FunctionIDMarryHome,
+				protocol.FunctionIDAwakeForbiddenBook,
 			}
 			w := protocol.NewWriter()
 			w.WriteUint16(uint16(len(ids)))
@@ -3655,6 +3657,28 @@ func runMockGameServer(conn net.Conn) {
 			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDStarPictureDivination, []byte{code}))
 
+		case protocol.ActionIDEraYanjiePanel:
+			// 纪元湮劫主面板: 已通关关卡 0, 纪元等级 1。
+			_ = protocol.WritePacket(conn, protocol.BuildEraYanjiePanelResultPacket(protocol.EraYanjiePanel{
+				EraLevel:     1,
+				MissionLevel: 0,
+				EraZone:      1,
+			}))
+
+		case protocol.ActionIDEraYanjieMonsterTeam:
+			// 关卡可战。
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDEraYanjieMonsterTeam, []byte{protocol.EraYanjieResultSuccess}))
+
+		case protocol.ActionIDEraYanjieFight:
+			// 战斗胜利。
+			_ = protocol.WritePacket(conn, protocol.BuildEraYanjieFightResultPacket(protocol.EraYanjieFightResult{
+				Result: protocol.EraYanjieResultSuccess,
+				Battles: []protocol.EraYanjieBattle{
+					{Seq: 1, IsWin: 1, WarReportID: 1, ReportVersion: "2026110501"},
+				},
+				IsWin: 1,
+			}))
+
 		case protocol.ActionIDMarryHomeGetCake:
 			// 家园小蛋糕: 领取成功并返回 1 件奖励。
 			_ = protocol.WritePacket(conn, protocol.BuildMarryHomeCakeResultPacket(protocol.MarryHomeCakeResult{
@@ -3666,6 +3690,7 @@ func runMockGameServer(conn net.Conn) {
 			// 每日活跃度面板: 仅返回「悟法领域冥想」任务，剩余 20 次。
 			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
 				{TaskID: 69, CurTimes: 0, MaxTimes: 20, PerActiveAdd: 10},
+				{TaskID: 71, CurTimes: 0, MaxTimes: 1, PerActiveAdd: 20},
 			}))
 
 		case protocol.ActionIDWuFaDrawCard:

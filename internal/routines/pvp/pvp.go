@@ -843,7 +843,7 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 				defer cancel()
 				resp, err := session.Call(cCtx, pkt, act)
 				if err != nil {
-					slog.Warn("劫镖协议无回包", "role_id", session.RoleID(),
+					slog.Info("劫镖协议无回包", "role_id", session.RoleID(),
 						"action", fmt.Sprintf("0x%08X", act), "err", err)
 					return nil
 				}

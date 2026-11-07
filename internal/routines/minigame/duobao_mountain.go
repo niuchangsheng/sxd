@@ -94,7 +94,7 @@ func NewDuobaoMountainRoutine() scheduler.ActivityRoutine {
 				}
 				resp, dErr := call(protocol.BuildMysticalTreasureDigPacket(), protocol.ActionIDMysticalTreasureDig)
 				if dErr != nil || resp == nil {
-					slog.Warn("多宝山挖掘无回包", "role_id", session.RoleID(), "err", dErr)
+					slog.Info("多宝山挖掘无回包", "role_id", session.RoleID(), "err", dErr)
 					return nil
 				}
 				res, pErr := protocol.ParseMysticalTreasureDigResult(resp.Payload)

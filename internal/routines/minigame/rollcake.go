@@ -148,7 +148,7 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 				beforeRemain := remain
 				rollPayload, err := call(protocol.BuildRollCakeRollPacket(prevAct), protocol.ActionIDRollCakeRoll)
 				if err != nil {
-					slog.Warn("吉星高照投掷未收到回包", "role_id", session.RoleID(), "err", err)
+					slog.Info("吉星高照投掷未收到回包", "role_id", session.RoleID(), "err", err)
 					return nil
 				}
 				roll, err := protocol.ParseRollCakeRollResult(rollPayload)
@@ -178,7 +178,7 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 
 						rrPayload, err := call(protocol.BuildRollCakeRerollPacket(prevAct), protocol.ActionIDRollCakeReroll)
 						if err != nil {
-							slog.Warn("吉星高照逆天改运未收到回包", "role_id", session.RoleID(), "err", err)
+							slog.Info("吉星高照逆天改运未收到回包", "role_id", session.RoleID(), "err", err)
 							return nil
 						}
 						rr, err := protocol.ParseRollCakeRerollResult(rrPayload)
@@ -217,7 +217,7 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 				// 领取本次投掷奖励，未领奖会阻塞下一次投掷。
 				awardPayload, err := call(protocol.BuildRollCakeGetAwardPacket(prevAct), protocol.ActionIDRollCakeGetAward)
 				if err != nil {
-					slog.Warn("吉星高照领取奖励未收到回包", "role_id", session.RoleID(), "err", err)
+					slog.Info("吉星高照领取奖励未收到回包", "role_id", session.RoleID(), "err", err)
 					return nil
 				}
 				award, err := protocol.ParseRollCakeAwardResult(awardPayload)

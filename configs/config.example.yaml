@@ -89,6 +89,7 @@ scheduler:
     collection_booklets: true     # 神仙收藏册声望奖励
     npc_friendship: true          # NPC结交与铜钱伴手礼
     marry_home: true              # 家园小蛋糕奖励 (免费, 非活动时间跳过)
+    sect_monster: true            # 宗门灵兽免费喂养 (仙盟城镇会话)
 
     # 【副本 dungeon】推图、扫荡、爬塔、练功房、试炼
     dungeon: true                 # 剧情推图 + 精英副本扫荡
@@ -136,6 +137,7 @@ scheduler:
     eudemons: true                # 幻兽经脉激活
     partner_link: true            # 灵结激活
     star_picture: false           # 法力星图占星: 首次免费但面板 free 计数与扣费不同步, 可能扣 50 元宝, 默认关闭
+    era_yanjie: true               # 纪元湮劫每日一关战斗 (免费)
 
   # ── 副本 / 挑战策略 ─────────────────────────────────────────
   dungeon:

@@ -22,6 +22,7 @@ var minigameAutomationFunctionIDs = []int32{
 	protocol.FunctionIDStTrials, protocol.FunctionIDStPracticeRoom,
 	protocol.FunctionIDTravelEvent, protocol.FunctionIDRollCake,
 	protocol.FunctionIDFindImmortal, protocol.FunctionIDFishing,
+	protocol.FunctionIDAwakeForbiddenBook,
 }
 
 func newMinigameMockSession(t *testing.T, handler func(net.Conn, *protocol.Packet)) *client.RoleSession {

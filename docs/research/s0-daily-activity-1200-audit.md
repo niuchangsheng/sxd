@@ -218,6 +218,33 @@
 - 其余入口复核：琳琅阁（100/80 与 2/76 + 神秘商人 npc 38）均无回包；
   回忆之境 `get_bind_award` 全超时、`backtrack` 返回 `FAILED(1)`。
 
+## 10. 2026-11-07 下午：纪元湮劫（任务 71）实现
+
+- 协议：`Mod_EraInfiniteMission_Base` (Module 853)
+  - `get_panel_info (853/1)` → `[era_level, mission_level, rank_perc, rank, fight_end_ts, era_zone]`
+  - `fight (853/4)` 请求 `[level, [deploy_type, seq]]`，回包
+    `[UByte result, [seq,is_win,war_report_id,report_version], is_win, [seq,item_id]]`
+- 规则：可战关卡 = `mission_level + 1`；胜利后 `mission_level` 推进，无效关卡返回
+  `WRONG_ID(6)` 且无任何消耗。实测 level 1/2/3 连续胜利，元宝、铜钱、体力 delta 均为 0。
+- **会话链约束**：先调用活跃度面板 `0x2A` 后，`853/2`(章节) 与 `853/3`(敌方队伍) 会被
+  静默丢弃，但 `853/1`(主面板) 与 `853/4`(战斗) 不受影响。因此例程不做敌方队伍预检，
+  直接用 `[mission_level+1, mission_level+2, mission_level]` 依次尝试战斗并按结果码分流。
+- 每日任务 71 门禁：以 `0x2A` 的 `RemainingTimesFor(71)` 判定，完成后跳过，避免重复推进。
+- 例程：`internal/routines/minigame/era_yanjie.go`，配置项 `era_yanjie: true`。
+
+## 11. 2026-11-07 下午：宗门灵兽（任务 77）实现
+
+- 角色在仙盟「闲散道门」：local sect_id=7，跨服 sect_id=10000007，group=1。
+- 协议：`Mod_SectMonster_Base (576)`
+  - `get_monster_list (576/1)` 请求 `[Int sect_id]`
+  - `feed (576/3)` 请求 `[Int monster_type, Int feed_type]`（feed_type=0 免费，1 为高级档）
+- **关键约束**：576 必须通过**仙盟城镇会话**发送（`OpenSectTownSession`），且请求
+  **不能带 PrevAct 尾部**；带 PrevAct 时服务端静默丢弃（表现为超时）。主服会话调用同样无回包。
+- 线上实测：`get_monster_list(7)` 返回 3 只灵兽（type 3/1/2, level 100）；`feed(type=1, 0)`
+  返回成功并奖励 2471×10，任务 77 由 0/1 → 1/1（+20），元宝/铜钱/体力不变。
+- 例程：`internal/routines/social/sect_monster.go`，配置项 `sect_monster: true`；
+  以任务 77 剩余次数为门禁，只使用免费档。
+
 ## 5. 已知缺陷
 
 ### 5.1 禁地之书元宝泄漏（已修复）

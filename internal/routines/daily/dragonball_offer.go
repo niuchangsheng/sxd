@@ -91,7 +91,7 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 						protocol.ActionIDDragonballSell)
 					sCancel()
 					if sErr != nil || sellResp == nil {
-						slog.Warn("出售失效龙珠无回包",
+						slog.Info("出售失效龙珠无回包",
 							"role_id", session.RoleID(), "count", len(invalidIDs), "err", sErr)
 					} else if code, pErr := protocol.ParseDragonballSellResult(sellResp.Payload); pErr != nil {
 						slog.Warn("解析出售失效龙珠回包失败",
@@ -120,7 +120,7 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDDragonballOneKeyMerge)
 				cancel()
 				if err != nil || resp == nil {
-					slog.Warn("神龙龙珠一键合成无回包",
+					slog.Info("神龙龙珠一键合成无回包",
 						"role_id", session.RoleID(), "label", label, "qualities", qualities, "err", err)
 					return
 				}
@@ -159,7 +159,7 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDDragonballSacrifice)
 				cancel()
 				if err != nil || resp == nil {
-					slog.Warn("神龙普通上供无回包", "role_id", session.RoleID(), "err", err)
+					slog.Info("神龙普通上供无回包", "role_id", session.RoleID(), "err", err)
 					return nil
 				}
 				res, pErr := protocol.ParseDragonballSacrificeResult(resp.Payload)
