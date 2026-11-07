@@ -43,6 +43,12 @@ func newDailyMockSession(t *testing.T, handler func(net.Conn, *protocol.Packet))
 				_ = protocol.WritePacket(serverConn, protocol.BuildPlayerFunctionsResultPacket(dailyAutomationFunctionIDs))
 				continue
 			}
+			// 神龙龙珠一键合成默认成功，避免各例程单测等待超时；
+			// 需要断言合并品质的用例请自建 mock 会话。
+			if pkt.ActionID == protocol.ActionIDDragonballOneKeyMerge {
+				_ = protocol.WritePacket(serverConn, protocol.BuildDragonballOneKeyMergeResultPacket(protocol.DragonballResultSuccess, nil))
+				continue
+			}
 			handler(serverConn, pkt)
 		}
 	}()

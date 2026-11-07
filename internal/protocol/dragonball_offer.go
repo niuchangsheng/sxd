@@ -19,6 +19,10 @@ const (
 	ActionIDDragonballCollect uint32 = 0x006F0001
 	// ActionIDDragonballSacrifice 上供/祭坛 (Module 111, Action 2 -> 0x006F0002)
 	ActionIDDragonballSacrifice uint32 = 0x006F0002
+	// ActionIDDragonballOneKeyMerge 按品质一键合成龙珠 (Module 111, Action 6 -> 0x006F0006)
+	ActionIDDragonballOneKeyMerge uint32 = 0x006F0006
+	// ActionIDDragonballSell 出售祭坛/背包龙珠 (Module 111, Action 7 -> 0x006F0007)
+	ActionIDDragonballSell uint32 = 0x006F0007
 
 	// DragonballSacrificeNormal 普通上供 (消耗铜钱)
 	DragonballSacrificeNormal uint8 = 4
@@ -238,6 +242,103 @@ func ParseDragonballCollectResult(payload []byte) (uint8, []int32, error) {
 		ids = append(ids, id)
 	}
 	return result, ids, nil
+}
+
+// 龙珠品质编号 (对齐 Pieb.db DragonBall.quality_id)。
+const (
+	// DragonballQualityGreen 绿色 (quality_id=1)
+	DragonballQualityGreen int32 = 1
+	// DragonballQualityBlue 蓝色 (quality_id=2)
+	DragonballQualityBlue int32 = 2
+	// DragonballQualityPurple 紫色 (quality_id=3)
+	DragonballQualityPurple int32 = 3
+	// DragonballQualityOrange 橙色 (quality_id=4，不合成)
+	DragonballQualityOrange int32 = 4
+	// DragonballQualityRed 红色 (quality_id=5，不合成)
+	DragonballQualityRed int32 = 5
+	// DragonballQualityFire 火龙珠 (quality_id=6，单独合并)
+	DragonballQualityFire int32 = 6
+)
+
+// DragonballNormalMergeQualities 返回「紫色及以下」普通龙珠的品质列表。
+func DragonballNormalMergeQualities() []int32 {
+	return []int32{DragonballQualityGreen, DragonballQualityBlue, DragonballQualityPurple}
+}
+
+// BuildDragonballSellPacket 构造出售龙珠封包 (0x006F0007)。
+//
+// 官方 request=[[IntUtil]]，与 collect 相同的扁平编码：Uint16 count + Int32
+// player_d_b_id。用于清理祭坛临时格中长期占位的失效龙珠。
+func BuildDragonballSellPacket(ids []int32) *Packet {
+	w := NewWriter()
+	w.WriteUint16(uint16(len(ids)))
+	for _, id := range ids {
+		w.WriteInt32(id)
+	}
+	return NewPacket(ActionIDDragonballSell, w.Bytes())
+}
+
+// ParseDragonballSellResult 解析出售龙珠回包 (仅一个结果码)。
+func ParseDragonballSellResult(payload []byte) (uint8, error) {
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("%w: empty sell result", ErrInvalidPayload)
+	}
+	return payload[0], nil
+}
+
+// BuildDragonballSellResultPacket 构造出售龙珠回包，供离线 mock 与单测使用。
+func BuildDragonballSellResultPacket(result uint8) *Packet {
+	return NewPacket(ActionIDDragonballSell, []byte{result})
+}
+
+// BuildDragonballOneKeyMergePacket 构造按品质一键合成龙珠封包 (0x006F0006)。
+//
+// 官方 request=[[IntUtil]]，线上实测与收取一致采用「Uint16 count + Int32 quality」
+// 的扁平编码；末尾追加 4 字节 PrevAct 占位，由会话层用最近动作号覆盖，
+// 避免占位缺失时最后一个品质被覆盖。
+func BuildDragonballOneKeyMergePacket(qualities []int32) *Packet {
+	w := NewWriter()
+	w.WriteUint16(uint16(len(qualities)))
+	for _, q := range qualities {
+		w.WriteInt32(q)
+	}
+	w.WriteUint32(0)
+	pkt := NewPacket(ActionIDDragonballOneKeyMerge, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// ParseDragonballOneKeyMergeResult 解析一键合成回包: UByte result, [Int id]。
+func ParseDragonballOneKeyMergeResult(payload []byte) (uint8, []int32, error) {
+	r := NewReader(payload)
+	result, err := r.ReadUint8()
+	if err != nil {
+		return 0, nil, fmt.Errorf("%w: failed to read merge result: %v", ErrInvalidPayload, err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return result, nil, nil
+	}
+	ids := make([]int32, 0, count)
+	for i := 0; i < int(count); i++ {
+		id, err := r.ReadInt32()
+		if err != nil {
+			return result, ids, fmt.Errorf("%w: failed to read merged[%d]: %v", ErrInvalidPayload, i, err)
+		}
+		ids = append(ids, id)
+	}
+	return result, ids, nil
+}
+
+// BuildDragonballOneKeyMergeResultPacket 构造一键合成回包，供离线 mock 与单测使用。
+func BuildDragonballOneKeyMergeResultPacket(result uint8, ids []int32) *Packet {
+	w := NewWriter()
+	w.WriteUint8(result)
+	w.WriteUint16(uint16(len(ids)))
+	for _, id := range ids {
+		w.WriteInt32(id)
+	}
+	return NewPacket(ActionIDDragonballOneKeyMerge, w.Bytes())
 }
 
 // BuildDragonballTmpInfoResultPacket 构造临时格回包，供离线 mock 与单测使用。

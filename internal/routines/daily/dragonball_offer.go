@@ -55,6 +55,7 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 					return false, err
 				}
 				collected, invalid := 0, 0
+				invalidIDs := make([]int32, 0)
 				for _, b := range balls {
 					if err := ctx.Err(); err != nil {
 						return collected > 0, nil
@@ -76,14 +77,75 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 							"role_id", session.RoleID(), "player_d_b_id", b.PlayerDBID, "collected", ids)
 					case protocol.DragonballResultInvalidDragonball:
 						invalid++
-						slog.Info("神龙祭坛临时格跳过失效龙珠",
+						invalidIDs = append(invalidIDs, b.PlayerDBID)
+						slog.Info("神龙祭坛临时格发现失效龙珠，稍后出售",
 							"role_id", session.RoleID(), "player_d_b_id", b.PlayerDBID)
 					}
 				}
+				// 失效龙珠会长期占住祭坛格子，必须出售才能腾出空间。
+				sold := 0
+				if len(invalidIDs) > 0 {
+					sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
+					sellResp, sErr := session.Call(sCtx,
+						protocol.BuildDragonballSellPacket(invalidIDs),
+						protocol.ActionIDDragonballSell)
+					sCancel()
+					if sErr != nil || sellResp == nil {
+						slog.Warn("出售失效龙珠无回包",
+							"role_id", session.RoleID(), "count", len(invalidIDs), "err", sErr)
+					} else if code, pErr := protocol.ParseDragonballSellResult(sellResp.Payload); pErr != nil {
+						slog.Warn("解析出售失效龙珠回包失败",
+							"role_id", session.RoleID(), "err", pErr)
+					} else if code == protocol.DragonballResultSuccess {
+						sold = len(invalidIDs)
+						slog.Info("神龙祭坛失效龙珠出售成功",
+							"role_id", session.RoleID(), "count", sold)
+					} else {
+						slog.Info("出售失效龙珠未成功",
+							"role_id", session.RoleID(), "count", len(invalidIDs), "result", code)
+					}
+				}
 				slog.Info("神龙祭坛临时格收取完成",
-					"role_id", session.RoleID(), "requested", len(balls), "collected", collected, "invalid", invalid)
-				return collected > 0, nil
+					"role_id", session.RoleID(), "requested", len(balls),
+					"collected", collected, "invalid", invalid, "sold", sold)
+				return collected > 0 || sold > 0, nil
 			}
+
+			// mergeQualities 按品质一键合成龙珠。
+			// 普通龙珠只合成紫色及以下 (1/2/3)；火龙珠 (quality=6) 单独合并。
+			mergeQualities := func(qualities []int32, label string) {
+				mCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				resp, err := session.Call(mCtx,
+					protocol.BuildDragonballOneKeyMergePacket(qualities),
+					protocol.ActionIDDragonballOneKeyMerge)
+				cancel()
+				if err != nil || resp == nil {
+					slog.Warn("神龙龙珠一键合成无回包",
+						"role_id", session.RoleID(), "label", label, "qualities", qualities, "err", err)
+					return
+				}
+				result, ids, pErr := protocol.ParseDragonballOneKeyMergeResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析神龙龙珠一键合成回包失败",
+						"role_id", session.RoleID(), "label", label, "err", pErr)
+					return
+				}
+				slog.Info("神龙龙珠一键合成完成",
+					"role_id", session.RoleID(),
+					"label", label,
+					"qualities", qualities,
+					"result", result,
+					"merged", len(ids),
+				)
+			}
+			mergeAll := func() {
+				mergeQualities(protocol.DragonballNormalMergeQualities(), "紫及以下")
+				mergeQualities([]int32{protocol.DragonballQualityFire}, "火龙珠")
+			}
+
+			// 0. 先拾取祭坛临时格中的龙珠，并做一次合成，再进入上供循环。
+			_, _ = collectTmp()
+			mergeAll()
 
 			offers := 0
 			collections := 0
@@ -117,10 +179,12 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 					)
 					if res.RemainTimes == 0 {
 						slog.Info("神龙普通上供今日次数已用尽", "role_id", session.RoleID())
+						mergeAll()
 						return nil
 					}
 				case protocol.DragonballResultTimesUseUp:
 					slog.Info("神龙普通上供今日次数已用尽", "role_id", session.RoleID())
+					mergeAll()
 					return nil
 				case protocol.DragonballResultNoEnoughCoin:
 					slog.Info("铜钱不足，停止神龙普通上供", "role_id", session.RoleID())
@@ -129,7 +193,9 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 					slog.Info("龙珠背包已满，停止神龙普通上供", "role_id", session.RoleID())
 					return scheduler.ErrBagFull
 				case protocol.DragonballResultTmpGridFull:
-					if collections >= 3 {
+					// 每次收取会把祭坛龙珠移入背包并出售失效龙珠，循环内最多
+					// 与上供次数同量处理，避免过早中止。
+					if collections >= maxDragonballOffers {
 						slog.Info("神龙祭坛临时格多次收取后仍满，停止本轮", "role_id", session.RoleID())
 						return scheduler.ErrBagFull
 					}
@@ -139,7 +205,8 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 						slog.Info("神龙祭坛临时格收取失败，停止上供", "role_id", session.RoleID(), "err", cErr)
 						return scheduler.ErrBagFull
 					}
-					// 收取后立即重试当前上供，不消耗循环次数。
+					// 收取后立即合成并重试当前上供，不消耗循环次数。
+					mergeAll()
 					i--
 					continue
 				case protocol.DragonballResultFunctionNoOpen:
@@ -162,6 +229,7 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 				case <-time.After(150 * time.Millisecond):
 				}
 			}
+			mergeAll()
 			slog.Info("神龙普通上供巡检完成", "role_id", session.RoleID(), "offers", offers)
 			return nil
 		},
