@@ -121,6 +121,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 			pcfg.SaintAreaFallback = farming.SaintAreaForceOnly
 		}
 		return farming.NewPilgrimageRoutine(pcfg)
+	case "six_realms":
+		return dungeon.NewSixRealmsRoutine(dungeon.DefaultSixRealmsConfig())
 	case "demon_tower":
 		return dungeon.NewDemonTowerRoutine()
 	case "online_reward":
