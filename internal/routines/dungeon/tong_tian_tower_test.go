@@ -86,6 +86,56 @@ func TestTongTianTowerRoutine_ChallengeSuccessAdvances(t *testing.T) {
 	}
 }
 
+// TestTongTianTowerRoutine_RetriesAfterCooldown 验证 CD_TIME 不消耗次数:
+// 同一层冷却后重试成功，随后继续消耗剩余 15 次中的下一次。
+func TestTongTianTowerRoutine_RetriesAfterCooldown(t *testing.T) {
+	sess, srvConn := createTestSession(t, 5000)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var panelCalls, challengeCalls atomic.Int32
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDTongTianTowerPanel:
+			n := panelCalls.Add(1)
+			panel := protocol.TongTianTowerPanel{
+				Heaven: 1, Floor: 1, ChallengeTimes: 2, CurHeaven: 1, CurFloor: 1,
+			}
+			switch {
+			case n >= 3:
+				panel.Floor = 3
+				panel.ChallengeTimes = 0
+			case n == 2:
+				panel.Floor = 2
+				panel.ChallengeTimes = 1
+			}
+			_ = protocol.WritePacket(srvConn, protocol.BuildTongTianTowerPanelResultPacket(panel))
+			return true
+		case protocol.ActionIDTongTianTowerChallenge:
+			n := challengeCalls.Add(1)
+			result := protocol.TongTianTowerResultSuccess
+			if n == 1 {
+				result = protocol.TongTianTowerResultCDTime
+			}
+			_ = protocol.WritePacket(srvConn, protocol.BuildTongTianTowerChallengeResultPacket(
+				protocol.TongTianTowerChallengeResult{
+					Result:      result,
+					DeployType:  3,
+					WinPlayerID: sess.PlayerID(),
+				}))
+			return true
+		}
+		return false
+	})
+
+	if err := dungeon.NewTongTianTowerRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("冷却重试后应正常完成: %v", err)
+	}
+	if got := challengeCalls.Load(); got != 3 {
+		t.Fatalf("期望 1 次冷却 + 2 次成功挑战共 3 次请求, 实际 %d", got)
+	}
+}
+
 func TestTongTianTowerRoutine_NotEnoughPowerBranchesToCircuitBreaker(t *testing.T) {
 	sess, srvConn := createTestSession(t, 5000)
 	defer sess.Close()

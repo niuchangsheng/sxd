@@ -48,17 +48,18 @@ func TestHeroMissionList_OfficialSchema(t *testing.T) {
 	}
 }
 
-// TestHeroMissionListPacket_RequestLayout 验证列表请求严格为 2 字节 town_id (实机验证不追加 PrevAct)。
+// TestHeroMissionListPacket_RequestLayout 验证列表请求载荷:
+// [town_id u16][PrevAct 4 字节占位]，并标记 HasPrevAct 由会话层动态覆盖。
 func TestHeroMissionListPacket_RequestLayout(t *testing.T) {
 	pkt := protocol.BuildHeroMissionListPacket(13)
 	if pkt.ActionID != protocol.ActionHeroMissionList {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionHeroMissionList, pkt.ActionID)
 	}
-	if len(pkt.Payload) != 2 {
-		t.Fatalf("期望 2 字节 town_id 载荷, 实际 %d 字节", len(pkt.Payload))
+	if len(pkt.Payload) != 6 {
+		t.Fatalf("期望 6 字节载荷 (town_id + PrevAct), 实际 %d 字节", len(pkt.Payload))
 	}
-	if pkt.HasPrevAct {
-		t.Errorf("实机验证列表请求不应追加 PrevAct")
+	if !pkt.HasPrevAct {
+		t.Errorf("Module 35 请求必须标记 HasPrevAct 以维持动作链")
 	}
 	if got := binary.BigEndian.Uint16(pkt.Payload[:2]); got != 13 {
 		t.Errorf("期望 town_id=13, 实际 %d", got)

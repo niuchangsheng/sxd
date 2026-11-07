@@ -15,8 +15,14 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
-// tongTianTowerMaxLoops 单轮调度的最大挑战次数，防止服务端异常时死循环。
-const tongTianTowerMaxLoops = 40
+// 通天塔每日可挑战 15 次；挑战成功后服务端可能立即返回 CD_TIME，
+// 需短暂等待后重试同层，CD 拒绝不消耗挑战次数。
+const (
+	tongTianTowerDailyChallenges = 15
+	tongTianTowerMaxCDRetries    = 5
+	tongTianTowerCDBaseWait      = 2 * time.Second
+	tongTianTowerCDMaxWait       = 10 * time.Second
+)
 
 // NewTongTianTowerRoutine 构造通天塔自动挑战任务。
 //
@@ -124,9 +130,9 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			loops := 0
-			for panel.ChallengeTimes > 0 && loops < tongTianTowerMaxLoops {
-				loops++
+			challenged := 0
+			cdRetries := 0
+			for panel.ChallengeTimes > 0 && challenged < tongTianTowerDailyChallenges {
 				if err := ctx.Err(); err != nil {
 					return nil
 				}
@@ -181,6 +187,8 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 						)
 						return nil
 					}
+					challenged++
+					cdRetries = 0
 					slog.Info("通天塔挑战通关",
 						"role_id", session.RoleID(),
 						"heaven", oldHeaven,
@@ -189,6 +197,7 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 						"next_floor", panel.Floor,
 						"award_items", result.AwardItemIDs,
 						"award_nums", result.AwardItemNums,
+						"today_challenged", challenged,
 					)
 				case protocol.TongTianTowerResultTopFloor:
 					slog.Info("通天塔已到达最高层", "role_id", session.RoleID())
@@ -201,8 +210,30 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 					slog.Info("通天塔挑战次数已用尽", "role_id", session.RoleID())
 					return nil
 				case protocol.TongTianTowerResultCDTime:
-					slog.Info("通天塔挑战冷却中，稍后再试", "role_id", session.RoleID())
-					return nil
+					if cdRetries >= tongTianTowerMaxCDRetries {
+						slog.Warn("通天塔挑战连续冷却，结束本轮",
+							"role_id", session.RoleID(), "retries", cdRetries, "today_challenged", challenged)
+						return nil
+					}
+					wait := tongTianTowerCDBaseWait << cdRetries
+					if wait > tongTianTowerCDMaxWait {
+						wait = tongTianTowerCDMaxWait
+					}
+					cdRetries++
+					slog.Info("通天塔挑战冷却中，等待后重试同层",
+						"role_id", session.RoleID(),
+						"heaven", panel.Heaven,
+						"floor", panel.Floor,
+						"wait", wait,
+						"retry", cdRetries,
+						"today_challenged", challenged,
+					)
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(wait):
+					}
+					continue
 				case protocol.TongTianTowerResultNeedBreakUp:
 					code, bErr := breakUp()
 					if bErr != nil {
@@ -251,10 +282,14 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 					}
 				}
 			}
-			if loops >= tongTianTowerMaxLoops {
-				slog.Warn("通天塔单轮挑战达到上限，提前结束", "role_id", session.RoleID())
+			if challenged >= tongTianTowerDailyChallenges && panel.ChallengeTimes > 0 {
+				slog.Warn("通天塔已达到每日 15 次挑战上限，结束本轮",
+					"role_id", session.RoleID(), "today_challenged", challenged)
 			}
-			slog.Info("通天塔巡检完成", "role_id", session.RoleID(), "loops", loops)
+			slog.Info("通天塔巡检完成",
+				"role_id", session.RoleID(),
+				"today_challenged", challenged,
+				"remaining_times", panel.ChallengeTimes)
 			return nil
 		},
 	)

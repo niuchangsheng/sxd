@@ -123,11 +123,17 @@ stateDiagram-v2
 #### 3.1.1 精英副本扫荡 (`sweep_elite`)
 
 - **协议归属**：精英/英雄副本属于 `Mod_HeroMission_Base`（**Module 35 / 0x0023**），与主线 `Module 25` 完全异构；旧实现的 `Module 111 / 0x006F` 与 `0x00230002` 主线降级均属误用，已移除。
-- **实机验证的严格载荷**（`test/probes/probe_hero_practice_live.go`）：
-  1. `get_hero_mission_list` (`0x00230000`)：`Uint16 town_id`，**严格 2 字节，不追加 PrevAct**；
-  2. `start_practice` (`0x00230002`)：`Uint16 town_id, UByte auto_num, UByte hero_type`，**严格 4 字节，不追加 PrevAct**；
-  3. `quickly` (`0x00230007`)：**空载荷**；
-  4. `stop_practice` (`0x00230003`)：空载荷。
+- **实机验证的载荷布局**（`test/probes/probe_hero_practice_live.go`）：
+  1. `get_hero_mission_list` (`0x00230000`)：`Uint16 town_id` + 4 字节 PrevAct；
+  2. `start_practice` (`0x00230002`)：`Uint16 town_id, UByte auto_num, UByte hero_type` + 4 字节 PrevAct；
+  3. `quickly` (`0x00230007`)：业务载荷为空 + 4 字节 PrevAct；
+  4. `stop_practice` (`0x00230003`)：业务载荷为空 + 4 字节 PrevAct。
+
+  > [!IMPORTANT]
+  > 官方 `DataBase.netCall` 会在**每个请求**末尾追加 4 字节前序动作 (tmpBuff)。
+  > 2026-11-07 实机验证：Module 35 请求省略该尾部虽能被服务端受理，但会使服务端动作链失步，
+  > 导致紧接着的 Module 2 `player_sell_item` 被静默丢弃（8 秒无回包），精英扫荡物因此全部出售失败。
+  > 所有 Module 35 构造器必须写入 4 字节占位并设置 `HasPrevAct=true`，由会话层在发包时填充真实动作号。
 - **结果码分流**：`3=SUCCESS`、`6=BAG_FULL`、`7=NOT_ENOUGH_POWER`、`8=NO_MISSION`、`4=NOT_ENOUGH_INGOT`。收到 `4` 必须立即停止，避免误消耗元宝。
 - **城镇全量覆盖**：扫荡入口是城镇而非单个副本实例；`Pieb.db` 中 `Missions.MissionType=1` 的 `map` 去重即为全部精英副本城镇。自动化逐城镇执行 `list -> start_practice -> quickly`，**不得用 `max_batch_times` 截断城镇数量**，否则无法覆盖全部精英副本；体力与每日次数由服务端熔断。
 - **自动出售**：每个城镇结束后对比背包 `PlayerItemID -> Field5 数量` 基线，卖出新增格位；已有格位数量增加时，仅对精英副本主要掉落类型（`item.type_id=1002` 制作卷）整格出售，避免误卖玩家原有的包子/粽子/茶叶蛋等消耗品库存。刚结束扫荡时首个出售请求可能超时，需以 8 秒超时并短暂等待后重试一次。背包满时先 `stop_practice` 并卖出已结算掉落，再重试当前城镇；仍无法腾出空间才返回 `scheduler.ErrBagFull`。

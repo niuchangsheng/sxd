@@ -214,13 +214,18 @@ func ParseQuicklyResult(payload []byte) (*QuicklyResult, error) {
 }
 
 // BuildHeroPracticePacket 构造英雄副本扫荡请求封包 (Module 35, Action 2)。
-// 实机验证严格 4 字节业务载荷: [town_id u16][auto_num u8][hero_type u8]，不追加 PrevAct。
+//
+// 业务载荷: [town_id u16][auto_num u8][hero_type u8]，之后追加 4 字节 PrevAct 占位。
+// 官方 netCall 统一携带前序动作链；省略尾部会导致后续 Module 2 出售被静默丢弃。
 func BuildHeroPracticePacket(req HeroPracticeRequest) (*Packet, error) {
 	w := NewWriter()
 	w.WriteUint16(req.TownID)
 	w.WriteUint8(req.AutoNum)
 	w.WriteUint8(req.HeroType)
-	return NewPacket(ActionHeroMissionStartPractice, w.Bytes()), nil
+	w.WriteUint32(0) // PrevAct 占位，发送时由 RoleSession.Send 动态覆盖
+	pkt := NewPacket(ActionHeroMissionStartPractice, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt, nil
 }
 
 // ParseHeroPracticeResult 解析英雄副本扫荡启动响应回包。
@@ -244,9 +249,12 @@ func ParseHeroPracticeResult(payload []byte) (*HeroPracticeResult, error) {
 }
 
 // BuildHeroQuicklyPacket 构造英雄副本扫荡快速完成请求封包 (Module 35, Action 7)。
-// 实机验证严格空载荷，不追加 PrevAct。
+//
+// 业务 request 为空，但仍需携带 4 字节 PrevAct 尾部以维持服务端动作链。
 func BuildHeroQuicklyPacket() *Packet {
-	return NewPacket(ActionHeroMissionQuickly, nil)
+	pkt := NewPacket(ActionHeroMissionQuickly, NewWriter().WriteUint32(0).Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // ParseHeroQuicklyResponse 解析英雄副本扫荡快速完成响应。
@@ -258,9 +266,12 @@ func ParseHeroQuicklyResponse(payload []byte) (*HeroQuicklyResult, error) {
 }
 
 // BuildHeroStopPracticePacket 构造停止英雄副本扫荡请求封包 (Module 35, Action 3)。
-// 官方请求 schema 为空，实机验证不追加 PrevAct。
+//
+// 业务 request 为空，但仍需携带 4 字节 PrevAct 尾部以维持服务端动作链。
 func BuildHeroStopPracticePacket() *Packet {
-	return NewPacket(ActionHeroMissionStopPractice, nil)
+	pkt := NewPacket(ActionHeroMissionStopPractice, NewWriter().WriteUint32(0).Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // PracticeStatusMissionItem 代表扫荡状态中的单个关卡配置项。

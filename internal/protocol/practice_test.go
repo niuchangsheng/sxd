@@ -392,11 +392,11 @@ func TestHeroPractice_OfficialProtocol(t *testing.T) {
 	if pkt.ActionID != protocol.ActionHeroMissionStartPractice {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionHeroMissionStartPractice, pkt.ActionID)
 	}
-	if len(pkt.Payload) != 4 {
-		t.Fatalf("期望 4 字节严格业务载荷 (实机验证不追加 PrevAct), 实际 %d: %X", len(pkt.Payload), pkt.Payload)
+	if len(pkt.Payload) != 8 {
+		t.Fatalf("期望 8 字节载荷 (4 字节业务 + 4 字节 PrevAct), 实际 %d: %X", len(pkt.Payload), pkt.Payload)
 	}
-	if pkt.HasPrevAct {
-		t.Errorf("实机验证 start_practice 不应追加 PrevAct")
+	if !pkt.HasPrevAct {
+		t.Errorf("start_practice 必须标记 HasPrevAct 以维持动作链")
 	}
 	if got := int(pkt.Payload[0])<<8 | int(pkt.Payload[1]); got != 13 {
 		t.Errorf("期望 town_id=13, 实际 %d", got)
@@ -429,17 +429,17 @@ func TestHeroPractice_OfficialProtocol(t *testing.T) {
 	}
 }
 
-// TestHeroQuickly_OfficialProtocol 验证英雄副本快速完成请求为空载荷。
+// TestHeroQuickly_OfficialProtocol 验证英雄副本快速完成请求仅携带 4 字节 PrevAct 占位。
 func TestHeroQuickly_OfficialProtocol(t *testing.T) {
 	pkt := protocol.BuildHeroQuicklyPacket()
 	if pkt.ActionID != protocol.ActionHeroMissionQuickly {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionHeroMissionQuickly, pkt.ActionID)
 	}
-	if len(pkt.Payload) != 0 {
-		t.Errorf("实机验证 quickly 必须为空载荷, 实际 %X", pkt.Payload)
+	if len(pkt.Payload) != 4 {
+		t.Errorf("期望 4 字节 PrevAct 占位, 实际 %X", pkt.Payload)
 	}
-	if pkt.HasPrevAct {
-		t.Errorf("实机验证 quickly 不应追加 PrevAct")
+	if !pkt.HasPrevAct {
+		t.Errorf("quickly 必须标记 HasPrevAct 以维持动作链")
 	}
 
 	res, err := protocol.ParseHeroQuicklyResponse([]byte{protocol.HeroMissionResultSuccess})
