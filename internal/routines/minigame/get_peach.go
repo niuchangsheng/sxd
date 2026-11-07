@@ -26,6 +26,12 @@ const (
 	getPeachCallTimeout = 10 * time.Second
 	// getPeachWarTimeout 摘取仙桃包含战报下发，超时放宽。
 	getPeachWarTimeout = 20 * time.Second
+	// getPeachWarCDQueryTimeout 战斗冷却查询超时。
+	getPeachWarCDQueryTimeout = 6 * time.Second
+	// maxGetPeachWarCDWait 单次战斗冷却的最大等待时长。
+	// 线上实测摘取后 CD 仅 2 秒；超过该上限说明服务端处于异常长冷却，
+	// 直接结束本轮，交由下一次定点唤醒继续。
+	maxGetPeachWarCDWait = 15 * time.Second
 	// getPeachPriority 摘仙桃调度优先级。
 	//
 	// 召唤仙桃对应每日活跃度任务 64，需要在长耗时日常任务之前尽早完成，
@@ -142,6 +148,51 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 				}
 			}
 
+			// waitHarvestCD 对齐官方客户端 get_peach 前的战斗冷却检查。
+			// 官方 GetPeachView.get_peach 会先调用
+			// toolbar.checkWarCdTime(callBack, WarCdTimeType.Peach)，
+			// 冷却未结束时不会发包；否则第二次摘取会被服务端判为失败。
+			waitHarvestCD := func() bool {
+				query := func() int32 {
+					resp := call(protocol.BuildPlayerGetWarCdTimePacket(
+						protocol.WarCdTypePeach, session.LastActionID()),
+						protocol.ActionIDPlayerGetWarCdTime, getPeachWarCDQueryTimeout)
+					if resp == nil {
+						// 冷却诊断接口异常时不阻断摘取主流程。
+						return -1
+					}
+					cd, err := protocol.ParsePlayerGetWarCdTimeResult(resp.Payload)
+					if err != nil {
+						slog.Warn("解析摘仙桃战斗冷却失败", "role_id", session.RoleID(), "err", err)
+						return -1
+					}
+					return cd
+				}
+
+				cd := query()
+				if cd <= 0 {
+					return true
+				}
+				wait := time.Duration(cd)*time.Second + 300*time.Millisecond
+				if wait > maxGetPeachWarCDWait {
+					slog.Info("摘仙桃战斗冷却较长，结束本轮",
+						"role_id", session.RoleID(), "cd_seconds", cd)
+					return false
+				}
+				slog.Info("摘仙桃等待战斗冷却", "role_id", session.RoleID(), "cd_seconds", cd)
+				select {
+				case <-ctx.Done():
+					return false
+				case <-time.After(wait):
+				}
+				if remaining := query(); remaining > 0 {
+					slog.Info("摘仙桃战斗冷却仍未结束，结束本轮",
+						"role_id", session.RoleID(), "cd_seconds", remaining)
+					return false
+				}
+				return true
+			}
+
 			// harvestAll 摘取面板上已召唤的全部仙桃。
 			harvestAll := func(panel *protocol.GetPeachPanel) (int, bool) {
 				if panel == nil {
@@ -150,6 +201,9 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 				done := 0
 				for done < int(panel.PeachNum) && done < maxGetPeachHarvest {
 					if ctx.Err() != nil {
+						return done, false
+					}
+					if !waitHarvestCD() {
 						return done, false
 					}
 					cont, ok := harvestOnce()

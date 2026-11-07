@@ -43,6 +43,18 @@ const (
 	NpcFriendshipPresentOrchid int32 = 3
 )
 
+// NpcFriendShipMakeFriendMinExp 结义所需的最低好感度经验。
+//
+// 客户端 NpcFriendShipType.LevelList:
+//
+//	Lv4 患难与共 min_exp=671  max_exp=1070
+//	Lv5 义结金兰 min_exp=1070 max_exp=99999
+//
+// 服务端仅在 Lv5(义结金兰) 时允许 make_friend；好感度不足返回 EXP_NO_ENOUGH(6)。
+// 由于 1070 在 LevelList 中同时命中 Lv4，自动化使用严格大于 1070 的阈值，
+// 即好感度达到 1071 后再发起结义。
+const NpcFriendShipMakeFriendMinExp int32 = 1071
+
 // NPC 结交结果码 (Mod_NpcFriendship_Base)。
 const (
 	// NpcFriendshipResultSuccess 成功

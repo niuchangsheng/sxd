@@ -115,6 +115,89 @@ func TestCollectionBookletsRoutine_ApproveTimesLimitStops(t *testing.T) {
 	}
 }
 
+func TestNpcFriendshipRoutine_SkipsMakeFriendBelowExpThreshold(t *testing.T) {
+	var makeCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDNpcFriendshipInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildNpcFriendshipInfoResultPacket(protocol.NpcFriendshipSnapshot{
+				Npcs: []protocol.NpcFriendshipInfo{{NpcID: 13, CurExp: 500, IsFriend: 0}},
+			}))
+		case protocol.ActionIDNpcFriendshipPresentInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildNpcFriendshipPresentInfoResultPacket(map[int32]int32{}, 0))
+		case protocol.ActionIDNpcFriendshipMakeFriend:
+			makeCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+
+	if err := NewNpcFriendshipRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("npc friendship: %v", err)
+	}
+	if got := makeCalls.Load(); got != 0 {
+		t.Fatalf("好感度不足时不得发起结义, 实际 %d 次", got)
+	}
+}
+
+func TestNpcFriendshipRoutine_GivesPresentToNonFriend(t *testing.T) {
+	var makeCalls, giveCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDNpcFriendshipInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildNpcFriendshipInfoResultPacket(protocol.NpcFriendshipSnapshot{
+				Npcs: []protocol.NpcFriendshipInfo{{NpcID: 13, CurExp: 1000, IsFriend: 0}},
+			}))
+		case protocol.ActionIDNpcFriendshipPresentInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildNpcFriendshipPresentInfoResultPacket(map[int32]int32{}, 1))
+		case protocol.ActionIDNpcFriendshipMakeFriend:
+			makeCalls.Add(1)
+		case protocol.ActionIDNpcFriendshipGivePresent:
+			giveCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildNpcFriendshipGiveResultPacket(protocol.NpcFriendshipGiveResult{
+				Result: protocol.NpcFriendshipResultSuccess, NewExp: 1004, NpcID: 13,
+			}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewNpcFriendshipRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("npc friendship: %v", err)
+	}
+	if got := makeCalls.Load(); got != 0 {
+		t.Fatalf("好感度不足时不得发起结义, 实际 %d 次", got)
+	}
+	if got := giveCalls.Load(); got != 1 {
+		t.Fatalf("未结义 NPC 也应收到伴手礼以提升好感度, 实际 %d 次", got)
+	}
+}
+
+func TestNpcFriendshipRoutine_MakesFriendAboveExpThreshold(t *testing.T) {
+	var makeCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDNpcFriendshipInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildNpcFriendshipInfoResultPacket(protocol.NpcFriendshipSnapshot{
+				Npcs: []protocol.NpcFriendshipInfo{{NpcID: 13, CurExp: 1100, IsFriend: 0}},
+			}))
+		case protocol.ActionIDNpcFriendshipPresentInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildNpcFriendshipPresentInfoResultPacket(map[int32]int32{}, 0))
+		case protocol.ActionIDNpcFriendshipMakeFriend:
+			makeCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildNpcFriendshipFriendResultPacket(protocol.NpcFriendshipFriendResult{
+				Result: protocol.NpcFriendshipResultSuccess, IsFriend: 1, NpcID: 13,
+			}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewNpcFriendshipRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("npc friendship: %v", err)
+	}
+	if got := makeCalls.Load(); got != 1 {
+		t.Fatalf("好感度达标时应发起结义, 实际 %d 次", got)
+	}
+}
+
 func TestNpcFriendshipRoutine_GiveSouvenir(t *testing.T) {
 	var giveCalls atomic.Int32
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {

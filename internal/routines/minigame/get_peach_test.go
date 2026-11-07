@@ -36,6 +36,8 @@ func TestGetPeachRoutine_HarvestAndCall(t *testing.T) {
 				CallCoinTimes: coinTimes, CallIngotTimes: 0,
 				CallNeedCoin: 10000000, CallNeedIngot: 100,
 			}))
+		case protocol.ActionIDPlayerGetWarCdTime:
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerGetWarCdTimeResultPacket(0))
 		case protocol.ActionIDGetPeachHarvest:
 			harvestCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.BuildGetPeachHarvestResultPacket(protocol.GetPeachResultSuccess, 1000))
@@ -124,6 +126,8 @@ func TestGetPeachRoutine_HarvestFailureStops(t *testing.T) {
 			_ = protocol.WritePacket(conn, protocol.BuildGetPeachPanelResultPacket(protocol.GetPeachPanel{
 				PeachLv: 2, PeachNum: 1, CanCall: false,
 			}))
+		case protocol.ActionIDPlayerGetWarCdTime:
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerGetWarCdTimeResultPacket(0))
 		case protocol.ActionIDGetPeachHarvest:
 			harvestCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.BuildGetPeachHarvestResultPacket(
@@ -146,6 +150,64 @@ func TestGetPeachRoutine_HarvestFailureStops(t *testing.T) {
 	}
 	if got := callCalls.Load(); got != 0 {
 		t.Fatalf("面板不允许召唤时不得调用, 实际 %d 次", got)
+	}
+}
+
+func TestGetPeachRoutine_WaitsForWarCDThenHarvests(t *testing.T) {
+	var cdQueries, harvestCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDGetPeachInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildGetPeachPanelResultPacket(protocol.GetPeachPanel{
+				PeachLv: 2, PeachNum: 1, CanCall: false,
+			}))
+		case protocol.ActionIDPlayerGetWarCdTime:
+			// 第一次返回 1 秒冷却，等待后的复查返回 0。
+			if cdQueries.Add(1) == 1 {
+				_ = protocol.WritePacket(conn, protocol.BuildPlayerGetWarCdTimeResultPacket(1))
+			} else {
+				_ = protocol.WritePacket(conn, protocol.BuildPlayerGetWarCdTimeResultPacket(0))
+			}
+		case protocol.ActionIDGetPeachHarvest:
+			harvestCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildGetPeachHarvestResultPacket(protocol.GetPeachResultSuccess, 1000))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewGetPeachRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("get peach: %v", err)
+	}
+	if got := harvestCalls.Load(); got != 1 {
+		t.Fatalf("等待冷却后应摘取 1 次, 实际 %d 次", got)
+	}
+	if got := cdQueries.Load(); got < 2 {
+		t.Fatalf("冷却后应复查, 实际查询 %d 次", got)
+	}
+}
+
+func TestGetPeachRoutine_WarCDTooLongSkipsHarvest(t *testing.T) {
+	var harvestCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDGetPeachInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildGetPeachPanelResultPacket(protocol.GetPeachPanel{
+				PeachLv: 2, PeachNum: 2, CanCall: false,
+			}))
+		case protocol.ActionIDPlayerGetWarCdTime:
+			// 超过 maxGetPeachWarCDWait，应放弃本轮而非长时间阻塞。
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerGetWarCdTimeResultPacket(60))
+		case protocol.ActionIDGetPeachHarvest:
+			harvestCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+
+	if err := NewGetPeachRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("get peach: %v", err)
+	}
+	if got := harvestCalls.Load(); got != 0 {
+		t.Fatalf("战斗冷却过长时不得继续摘取, 实际 %d 次", got)
 	}
 }
 

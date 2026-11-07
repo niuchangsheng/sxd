@@ -40,7 +40,7 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
-			if panelResp := call(protocol.BuildSaUnionWorshipPanelPacket(), protocol.ActionIDSaUnionWorshipPanel); panelResp != nil {
+			if panelResp := call(protocol.BuildSaUnionWorshipPanelPacketWithPrev(session.LastActionID()), protocol.ActionIDSaUnionWorshipPanel); panelResp != nil {
 				slog.Info("圣盟膜拜面板", "role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
 			}
 			resp := call(protocol.BuildSaUnionWorshipPacket(protocol.SaUnionWorshipUseCoin), protocol.ActionIDSaUnionWorship)

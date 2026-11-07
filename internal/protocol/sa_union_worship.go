@@ -38,6 +38,17 @@ func BuildSaUnionWorshipPanelPacket() *Packet {
 	return pkt
 }
 
+// BuildSaUnionWorshipPanelPacketWithPrev 构造带显式 PrevAct 的面板查询封包。
+//
+// 线上实测空载荷会被静默丢弃，必须携带 4 字节 PrevAct。
+func BuildSaUnionWorshipPanelPacketWithPrev(prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint32(prevAct)
+	pkt := NewPacket(ActionIDSaUnionWorshipPanel, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
+}
+
 // BuildSaUnionWorshipPacket 构造膜拜封包。
 func BuildSaUnionWorshipPacket(useType uint8) *Packet {
 	return NewPacket(ActionIDSaUnionWorship, []byte{useType})

@@ -105,12 +105,32 @@ func NewNpcFriendshipRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 2. 结交尚未成为好友的 NPC (免费)。
+			//
+			// 服务端仅在好感度达到 Lv5「义结金兰」(exp > 1070) 时允许结义，
+			// 低于门槛会返回 EXP_NO_ENOUGH(6)。先统计并跳过未达标 NPC，
+			// 避免每轮对全部 NPC 发送必然失败的请求。
+			belowThreshold := 0
+			for _, npc := range snap.Npcs {
+				if npc.IsFriend == 0 && npc.CurExp < protocol.NpcFriendShipMakeFriendMinExp {
+					belowThreshold++
+				}
+			}
+			if belowThreshold > 0 {
+				slog.Info("NPC 结交好感度门槛",
+					"role_id", session.RoleID(),
+					"min_exp", protocol.NpcFriendShipMakeFriendMinExp,
+					"below_threshold", belowThreshold,
+				)
+			}
 			made := 0
 			for _, npc := range snap.Npcs {
 				if made >= maxNpcFriendshipMakeFriends {
 					break
 				}
 				if npc.IsFriend == 1 {
+					continue
+				}
+				if npc.CurExp < protocol.NpcFriendShipMakeFriendMinExp {
 					continue
 				}
 				if err := ctx.Err(); err != nil {
@@ -161,14 +181,26 @@ func NewNpcFriendshipRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 好感度从高到低排序；满级 NPC 由服务端 EXP_MAX 分支跳过。
+			// 未结义 NPC 优先 (送礼提升好感度直至可结义)，其次按好感度从高到低。
+			// 官方 NpcFriendShipPresentView 允许对任意 NPC 送礼，不要求已结义；
+			// 旧实现只给已结义 NPC 送礼，导致未达标 NPC 永远无法达到结义门槛。
 			candidates := make([]protocol.NpcFriendshipInfo, 0, len(snap.Npcs))
 			for _, npc := range snap.Npcs {
+				if npc.IsFriend == 0 && npc.CurExp < protocol.NpcFriendShipMakeFriendMinExp {
+					candidates = append(candidates, npc)
+					continue
+				}
 				if npc.IsFriend == 1 {
 					candidates = append(candidates, npc)
 				}
 			}
-			sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].CurExp > candidates[j].CurExp })
+			sort.SliceStable(candidates, func(i, j int) bool {
+				if (candidates[i].IsFriend == 1) != (candidates[j].IsFriend == 1) {
+					// IsFriend=0 的未结义 NPC 排在前面。
+					return candidates[i].IsFriend < candidates[j].IsFriend
+				}
+				return candidates[i].CurExp > candidates[j].CurExp
+			})
 
 			given := 0
 			for _, npc := range candidates {
