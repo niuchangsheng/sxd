@@ -184,6 +184,15 @@ scheduler:
     allow_cover: false                # 剩余祝福更高时是否仍覆盖 (默认 false)
 
   # ── 小游戏 / 福利策略 ───────────────────────────────────────
+  # 宗师修行：每日最多 3 次挑战；当前职业满星后按 practice_order 切换职业。
+  master_practice:
+    practice_order: []               # 留空=只练主角当前职业；示例 [15, 1, 2, 3, 6, 5]
+    max_challenges_per_day: 3        # 每日挑战次数上限 (线上实测 3 次)
+    max_stars_per_job: 30            # 单方向累计星数上限
+    auto_normalize_deploy: true      # 自动下阵异职业伙伴、上阵同职业伙伴
+    allow_switch_stunt: true         # 允许切换主角神器绝技转换职业
+    allow_step_up: true              # 挑战后自动尝试境界突破
+
   # 天帝宝库三档自选大奖
   treasure_house:
     # auto: 按账号养成进度动态计算需求分；prefer_awards 为采集失败时的兜底顺序

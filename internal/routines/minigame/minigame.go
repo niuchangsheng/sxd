@@ -1487,6 +1487,8 @@ type MasterPracticeConfig struct {
 	PracticeOrder []int32
 	// MaxStarsPerJob 单方向累计星数上限 (默认 30)。
 	MaxStarsPerJob int32
+	// MaxChallengesPerDay 每日挑战次数上限 (默认 3，线上实测每天 3 次)。
+	MaxChallengesPerDay int32
 	// AutoNormalizeDeploy 是否自动下阵异职业伙伴、上阵同职业伙伴 (默认 true)。
 	AutoNormalizeDeploy bool
 	// AllowSwitchStunt 是否允许通过切换主角神器绝技来转换职业 (默认 true)。
@@ -1499,6 +1501,7 @@ type MasterPracticeConfig struct {
 func DefaultMasterPracticeConfig() MasterPracticeConfig {
 	return MasterPracticeConfig{
 		MaxStarsPerJob:      30,
+		MaxChallengesPerDay: 3,
 		AutoNormalizeDeploy: true,
 		AllowSwitchStunt:    true,
 		AllowStepUp:         true,
@@ -1512,6 +1515,9 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 		cfg = cfgs[0]
 		if cfg.MaxStarsPerJob <= 0 {
 			cfg.MaxStarsPerJob = 30
+		}
+		if cfg.MaxChallengesPerDay <= 0 {
+			cfg.MaxChallengesPerDay = 3
 		}
 	}
 	return scheduler.NewBaseRoutine(
@@ -1586,6 +1592,7 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 
 			totalChallenged := 0
 			switchedAny := false
+			var usedToday int32
 
 			for _, requestedJob := range order {
 				if err := ctx.Err(); err != nil {
@@ -1595,6 +1602,13 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 				// 每个职业开始前刷新面板，确保星数与今日完成状态是最新的。
 				if fresh := masterPracticeFetchPanel(call); fresh != nil {
 					panel = fresh
+				}
+				usedToday = panel.TodayChallengeTimes
+				if usedToday >= cfg.MaxChallengesPerDay {
+					slog.Info("宗师修行今日挑战次数已用尽，结束本轮",
+						"role_id", session.RoleID(),
+						"used", usedToday, "limit", cfg.MaxChallengesPerDay)
+					return nil
 				}
 				job, found := masterPracticeJobByID(panel, requestedJob)
 				if !found {
@@ -1679,9 +1693,16 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 					continue
 				}
 
-				// 5. 挑战尚未完成的星级。
-				challenged, full, chErr := masterPracticeChallengeJob(ctx, job, session.RoleID(), call)
-				totalChallenged += challenged
+				// 5. 挑战尚未完成的星级；每日最多 3 次，用尽前主动停止。
+				remaining := cfg.MaxChallengesPerDay - usedToday
+				if remaining <= 0 {
+					slog.Info("宗师修行今日挑战次数已用尽，结束本轮",
+						"role_id", session.RoleID(), "used", usedToday, "limit", cfg.MaxChallengesPerDay)
+					return nil
+				}
+				challenged, full, chErr := masterPracticeChallengeJob(ctx, job, remaining, session.RoleID(), call)
+				usedToday += challenged
+				totalChallenged += int(challenged)
 				if chErr != nil {
 					if errors.Is(chErr, scheduler.ErrAttemptsExhausted) {
 						slog.Info("宗师修行今日挑战次数已用尽", "role_id", session.RoleID())
@@ -1812,13 +1833,15 @@ func masterPracticeEnsureStunt(
 }
 
 // masterPracticeChallengeJob 挑战指定职业今日尚未完成的星级。
-// 返回 challenged=实际发起的挑战次数, full=该方向已累计满星。
+// remaining 为今日剩余挑战次数；只有服务端返回 SUCCESS 才扣减一次。
+// 返回 consumed=本次实际消耗的次数, full=该方向已累计满星。
 func masterPracticeChallengeJob(
 	ctx context.Context,
 	job protocol.MasterPracticeJobInfo,
+	remaining int32,
 	roleID string,
 	call func(*protocol.Packet, uint32) (*protocol.Packet, error),
-) (challenged int, full bool, err error) {
+) (consumed int32, full bool, err error) {
 	challengedToday := make(map[int32]bool, len(job.TodayChallenge))
 	for _, star := range job.TodayChallenge {
 		challengedToday[star] = true
@@ -1828,8 +1851,13 @@ func masterPracticeChallengeJob(
 		if challengedToday[star] {
 			continue
 		}
+		if remaining > 0 && consumed >= remaining {
+			slog.Info("宗师修行今日挑战次数已用尽，停止发送挑战",
+				"role_id", roleID, "job_id", job.JobID, "remaining", remaining)
+			return consumed, false, scheduler.ErrAttemptsExhausted
+		}
 		if ctx.Err() != nil {
-			return challenged, false, nil
+			return consumed, false, nil
 		}
 		resp, callErr := call(
 			protocol.BuildMasterPracticeChallengePacket(uint32(job.JobID), uint32(star), 0),
@@ -1837,46 +1865,47 @@ func masterPracticeChallengeJob(
 		)
 		if callErr != nil || resp == nil {
 			slog.Warn("宗师修行挑战无回包", "role_id", roleID, "job_id", job.JobID, "star", star, "err", callErr)
-			return challenged, false, nil
+			return consumed, false, nil
 		}
 		code, pErr := protocol.ParseMasterPracticeActionCode(resp.Payload)
 		if pErr != nil {
 			slog.Warn("解析宗师修行挑战回包失败", "role_id", roleID, "err", pErr)
-			return challenged, false, nil
+			return consumed, false, nil
 		}
 		outcome, outcomeErr := classifyMasterPracticeChallengeResult(code)
 		switch outcome {
 		case masterPracticeChallengeContinue:
-			challenged++
 			if code == protocol.MasterPracticeResultSuccess {
+				consumed++
 				slog.Info("宗师修行挑战成功", "role_id", roleID, "job_id", job.JobID, "star", star)
 			} else {
+				// 今日已挑战过该星级，不再重复消耗全局次数。
 				slog.Info("宗师修行该星级今日已挑战", "role_id", roleID, "job_id", job.JobID, "star", star)
 			}
 		case masterPracticeChallengeFull:
 			slog.Info("宗师修行方向累计星数已满", "role_id", roleID, "job_id", job.JobID, "result", code)
-			return challenged, true, nil
+			return consumed, true, nil
 		case masterPracticeChallengeNoTimes:
-			return challenged, false, scheduler.ErrAttemptsExhausted
+			return consumed, false, scheduler.ErrAttemptsExhausted
 		case masterPracticeChallengeJobError:
 			slog.Warn("宗师修行职业不匹配 (请上阵相同职业的角色)",
 				"role_id", roleID, "job_id", job.JobID, "result", code)
-			return challenged, false, scheduler.ErrConditionNotMet
+			return consumed, false, scheduler.ErrConditionNotMet
 		default:
 			if outcomeErr != nil {
 				slog.Warn("宗师修行挑战业务失败",
 					"role_id", roleID, "job_id", job.JobID, "star", star, "result", code, "err", outcomeErr)
-				return challenged, false, outcomeErr
+				return consumed, false, outcomeErr
 			}
-			return challenged, false, nil
+			return consumed, false, nil
 		}
 		select {
 		case <-ctx.Done():
-			return challenged, false, nil
+			return consumed, false, nil
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	return challenged, false, nil
+	return consumed, false, nil
 }
 
 // masterPracticeStepUpJob 刷新面板并在星数满足时尝试升阶，返回刷新后的面板。

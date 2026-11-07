@@ -136,6 +136,9 @@ func newRegistryFactory(
 	if sc.MasterPractice.MaxStarsPerJob > 0 {
 		mpCfg.MaxStarsPerJob = sc.MasterPractice.MaxStarsPerJob
 	}
+	if sc.MasterPractice.MaxChallengesPerDay > 0 {
+		mpCfg.MaxChallengesPerDay = sc.MasterPractice.MaxChallengesPerDay
+	}
 	if sc.MasterPractice.AutoNormalizeDeploy != nil {
 		mpCfg.AutoNormalizeDeploy = *sc.MasterPractice.AutoNormalizeDeploy
 	}

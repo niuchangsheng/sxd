@@ -146,6 +146,9 @@ func main() {
 	if cfg.Scheduler.MasterPractice.MaxStarsPerJob > 0 {
 		mpCfg.MaxStarsPerJob = cfg.Scheduler.MasterPractice.MaxStarsPerJob
 	}
+	if cfg.Scheduler.MasterPractice.MaxChallengesPerDay > 0 {
+		mpCfg.MaxChallengesPerDay = cfg.Scheduler.MasterPractice.MaxChallengesPerDay
+	}
 	if cfg.Scheduler.MasterPractice.AutoNormalizeDeploy != nil {
 		mpCfg.AutoNormalizeDeploy = *cfg.Scheduler.MasterPractice.AutoNormalizeDeploy
 	}

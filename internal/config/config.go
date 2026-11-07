@@ -142,6 +142,9 @@ type MasterPracticeConfig struct {
 	// MaxStarsPerJob 单方向累计星数上限 (默认 30)。
 	// 服务端返回 MAX_STARS(10) 时会立即视为满星并切换到下一职业，因此该值只是本地快速判断上限。
 	MaxStarsPerJob int32 `yaml:"max_stars_per_job"`
+	// MaxChallengesPerDay 每日挑战次数上限 (默认 3，线上实测宗师修行每天 3 次)。
+	// 用尽后必须停止挑战；继续发送会被服务端静默丢弃并表现为 context deadline exceeded。
+	MaxChallengesPerDay int32 `yaml:"max_challenges_per_day"`
 	// AutoNormalizeDeploy 是否自动调整宗师修行阵容：
 	// 下阵异职业伙伴、上阵同职业伙伴，使整队满足服务端同职业要求 (默认 true)。
 	AutoNormalizeDeploy *bool `yaml:"auto_normalize_deploy"`
@@ -580,9 +583,12 @@ func applySchedulerDefaults(sc *SchedulerConfig) {
 		sc.BeelzebubTrials.MinLevel = 0
 	}
 
-	// 宗师修行: 单方向星数上限 30；默认自动整理阵容并允许升阶。
+	// 宗师修行: 单方向星数上限 30；每天最多挑战 3 次；默认自动整理阵容并允许升阶。
 	if sc.MasterPractice.MaxStarsPerJob <= 0 {
 		sc.MasterPractice.MaxStarsPerJob = 30
+	}
+	if sc.MasterPractice.MaxChallengesPerDay <= 0 {
+		sc.MasterPractice.MaxChallengesPerDay = 3
 	}
 	if sc.MasterPractice.AutoNormalizeDeploy == nil {
 		autoNormalize := true

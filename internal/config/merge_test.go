@@ -207,6 +207,9 @@ server:
 	if mp.MaxStarsPerJob != 30 {
 		t.Errorf("expected default max_stars_per_job 30, got %d", mp.MaxStarsPerJob)
 	}
+	if mp.MaxChallengesPerDay != 3 {
+		t.Errorf("expected default max_challenges_per_day 3, got %d", mp.MaxChallengesPerDay)
+	}
 	if mp.AutoNormalizeDeploy == nil || !*mp.AutoNormalizeDeploy {
 		t.Error("expected auto_normalize_deploy default true")
 	}
