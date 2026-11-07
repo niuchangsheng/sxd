@@ -123,7 +123,7 @@ server:
 		t.Errorf("expected default jitter [1.0, 3.0], got [%v, %v]",
 			cfg.Scheduler.Jitter.MinSeconds, cfg.Scheduler.Jitter.MaxSeconds)
 	}
-	}
+}
 
 func TestConfig_LoadConfigYamlIfExists(t *testing.T) {
 	configPath := filepath.Join("..", "..", "configs", "config.yaml")

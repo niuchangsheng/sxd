@@ -1838,7 +1838,7 @@ func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
 }
 
 // executeQuestCycle 任务闭环状态机:
-// 循环接任务、完成任务，一直到没有任务可做了再 break，随后流转执行后续流水线 (精英扫荡与最高主线扫荡)。
+// 循环接任务、完成任务，一直到没有任务可做了再 break，随后流转执行精英副本扫荡。
 func executeQuestCycle(
 	ctx context.Context,
 	session *client.RoleSession,
@@ -2073,7 +2073,7 @@ func executeQuestCycle(
 
 			challengeSuccess := false
 			// 主线任务关卡推进统一使用官方 Module 25 扫荡协议。
-			// 注意: 0x00230002 属于英雄副本 start_practice，不能用于主线扫荡。
+			// 注意: 0x00230002 属于英雄副本 start_practice，不能用于主线推图关卡。
 			m25Req := protocol.StartPracticeRequest{
 				MissionID: int32(mid),
 				Count:     1,
