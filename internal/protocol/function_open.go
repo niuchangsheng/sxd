@@ -63,6 +63,10 @@ const (
 	FunctionIDMarryHome int32 = 131
 	// FunctionIDAwakeForbiddenBook 禁地之书功能编号 (FunctionTypeData: AwakeForbiddenBook)
 	FunctionIDAwakeForbiddenBook int32 = 308
+	// FunctionIDGetPeach 摘仙桃功能编号 (FunctionTypeData: GetPeach)
+	FunctionIDGetPeach int32 = 56
+	// FunctionIDPetAnimal 叶公好龙培养功能编号 (FunctionTypeData: PetAnimal)
+	FunctionIDPetAnimal int32 = 60
 )
 
 // BuildCheckFunctionOpenPacket 构造功能开放状态查询封包。

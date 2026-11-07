@@ -285,7 +285,11 @@ type PilgrimageConfig struct {
 	MaxRobAttempts int `yaml:"max_rob_attempts"`
 	// MaxProbeTargets 单轮最多探测的目标队伍数量 (1-50，默认 8)
 	MaxProbeTargets int `yaml:"max_probe_targets"`
-	// ForceSaintArea 固定走圣域取经；圣域不可用时跳过本轮，不回退仙界跨服或主服协议 (默认 false)
+	// ForceSaintArea 圣域取经回退策略 (默认不配置，即自动判定):
+	//   - 不配置: 自动。圣域功能已开放的角色只走圣域，圣域关闭/维护时跳过本轮；
+	//     圣域功能未开放的角色回退仙界跨服/主服取经。
+	//   - true: 固定圣域，圣域不可用时跳过本轮，绝不回退。
+	//   - false: 总是允许回退仙界跨服/主服取经。
 	ForceSaintArea *bool `yaml:"force_saint_area"`
 }
 

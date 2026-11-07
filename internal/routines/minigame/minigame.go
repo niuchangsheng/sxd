@@ -3691,29 +3691,14 @@ func NewFiveBlessingsRoutine() scheduler.ActivityRoutine {
 func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) {
 	prevAct := session.LastActionID()
 
-	// 1. 检查五福临门是否开启 (Mod 68, Act 14)
-	flagPkt := protocol.BuildFindImmortalIsFiveBlessingsOpenPacket(prevAct)
-	fCtx, fCancel := context.WithTimeout(ctx, 8*time.Second)
-	fResp, fErr := session.Call(fCtx, flagPkt, protocol.ActionIDFindImmortalIsFiveBlessingsOpen)
-	fCancel()
-	if fErr != nil || fResp == nil {
-		slog.Debug("查询五福临门开启状态未收到回包", "role_id", session.RoleID(), "err", fErr)
-		return
-	}
-	// 线上实测：Act 14 返回 12 (官方常量 NO) 时，后续 start_bless 会被服务端
-	// 静默丢弃（context deadline exceeded）。曾尝试以面板 bless_number 兜底，
-	// 但该值在非活动期仍可能是上一期残留，导致每轮都发一个必被丢弃的请求。
-	// 因此以增生活动开启标志作为门禁：NO 即视为当前不可祈福，直接跳过。
-	open, err := protocol.ParseFiveBlessingsOpenFlagResult(fResp.Payload)
-	if err != nil {
-		slog.Warn("解析五福临门开启状态回包失败", "role_id", session.RoleID(), "err", err)
-		return
-	}
-	if !open {
-		slog.Info("五福临门当前未开启，跳过本轮祈福", "role_id", session.RoleID())
-		return
-	}
-	prevAct = protocol.ActionIDFindImmortalIsFiveBlessingsOpen
+	// 1. 不再调用 Act 14 is_five_blessings_open。
+	//
+	// 审计文档（docs/research/s0-daily-activity-1200-audit.md 第 7 节）与线上
+	// 2026-11-07 21:42 实测均确认：Act 14 在活动实际开启时仍返回 12(NO)，
+	// 且该动作会污染同一会话的动作链，紧随其后的 start_bless 被静默丢弃
+	// (context deadline exceeded)。因此这里直接跳过 Act 14，以 Act 10 面板
+	// bless_number 作为唯一门禁。
+	prevAct = session.LastActionID()
 
 	// 2. 查询祈福面板 (Mod 68, Act 10)
 	infoPkt := protocol.BuildFindImmortalOpenFiveBlessingsPacket(prevAct)

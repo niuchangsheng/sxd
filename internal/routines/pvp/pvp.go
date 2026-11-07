@@ -862,9 +862,56 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			if state != protocol.CaravanStateSearched {
-				slog.Info("劫镖当前无可劫目标（搜索可能消耗元宝，自动化不发起搜索）",
-					"role_id", session.RoleID(), "state", state)
-				return nil
+				if state != protocol.CaravanStateNotSearch {
+					slog.Info("劫镖面板返回未知状态，跳过", "role_id", session.RoleID(), "state", state)
+					return nil
+				}
+				// 官方流程：未勘察时先点“开始勘察” search (314/1)，成功后再劫镖。
+				// 每日首次勘察为免费档；若服务端返回元宝不足/勘察次数不足则立即停止，
+				// 绝不调用 buy_rob_times (314/3)。
+				searchResp := call(protocol.BuildCaravanSearchPacket(session.LastActionID()), protocol.ActionIDCaravanGetList)
+				if searchResp == nil {
+					slog.Info("劫镖开始勘察无回包，终止本轮", "role_id", session.RoleID())
+					return nil
+				}
+				searchRes, sErr := protocol.ParseCaravanSearchResult(searchResp.Payload)
+				if sErr != nil {
+					slog.Warn("解析劫镖勘察回包失败", "role_id", session.RoleID(), "err", sErr)
+					return nil
+				}
+				switch searchRes.Result {
+				case protocol.CaravanResultSuccess:
+					slog.Info("劫镖开始勘察成功",
+						"role_id", session.RoleID(), "targets", searchRes.Targets)
+				case protocol.CaravanResultNotEnoughIngot, protocol.CaravanResultNotEnoughBuyTimes:
+					slog.Info("劫镖勘察需要付费次数/元宝，自动化停止",
+						"role_id", session.RoleID(), "result", searchRes.Result,
+						"result_text", protocol.CaravanResultText(searchRes.Result))
+					return nil
+				default:
+					slog.Info("劫镖开始勘察未成功",
+						"role_id", session.RoleID(), "result", searchRes.Result,
+						"result_text", protocol.CaravanResultText(searchRes.Result))
+					return nil
+				}
+
+				// 勘察成功后重新读取面板，确认 state=SEARCHED。
+				infoResp = call(protocol.BuildCaravanGetDetailPacket(protocol.ActionIDCaravanGetList),
+					protocol.ActionIDCaravanGetDetail)
+				if infoResp == nil {
+					slog.Info("劫镖勘察后读取面板无回包，终止本轮", "role_id", session.RoleID())
+					return nil
+				}
+				state, err = protocol.ParseCaravanInfoResultCode(infoResp.Payload)
+				if err != nil {
+					slog.Warn("解析劫镖面板失败", "role_id", session.RoleID(), "err", err)
+					return nil
+				}
+				if state != protocol.CaravanStateSearched {
+					slog.Info("劫镖勘察后仍无可劫目标，跳过",
+						"role_id", session.RoleID(), "state", state)
+					return nil
+				}
 			}
 
 			// 2. 对已搜索到的目标发起劫镖。

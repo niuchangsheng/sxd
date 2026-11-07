@@ -50,8 +50,8 @@ func TestParseDemonTowerPanelResult_LivePayload(t *testing.T) {
 	if panel.LayerList[0] != (protocol.DemonTowerLayer{LayerID: 4, FastestRound: 10}) {
 		t.Errorf("layer_list[0] 不匹配: %+v", panel.LayerList[0])
 	}
-	if got := panel.NextLayerID(); got != 5 {
-		t.Errorf("下一层目标应为 5, 实际 %d", got)
+	if got := panel.NextLayerID(); got != 4 {
+		t.Errorf("当前可挑战层应为 4, 实际 %d", got)
 	}
 }
 
@@ -77,8 +77,8 @@ func TestParseDemonTowerPanelResult_Truncated(t *testing.T) {
 func TestDemonTowerPanel_NextLayerIDFallback(t *testing.T) {
 	// layer_list 为空但已通关 4 层时，仍应从第 5 层继续。
 	panel := &protocol.DemonTowerPanel{NowFinishLayer: 4}
-	if got := panel.NextLayerID(); got != 5 {
-		t.Errorf("下一层目标应为 5, 实际 %d", got)
+	if got := panel.NextLayerID(); got != 4 {
+		t.Errorf("当前可挑战层应为 4, 实际 %d", got)
 	}
 	// 新赛季无任何记录时从第 1 层开始。
 	panel = &protocol.DemonTowerPanel{}

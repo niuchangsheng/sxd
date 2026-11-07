@@ -15,13 +15,14 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
-// 通天塔每日可挑战 15 次；挑战成功后服务端可能立即返回 CD_TIME，
-// 需短暂等待后重试同层，CD 拒绝不消耗挑战次数。
+// 通天塔每日挑战次数由服务端面板给出（ChallengeTimes 为剩余次数）；
+// 挑战成功后服务端可能立即返回 CD_TIME，需短暂等待后重试同层，CD 拒绝不消耗挑战次数。
+// 本地仅保留一个远高于正常每日次数的安全上限，防止服务端次数异常导致死循环。
 const (
-	tongTianTowerDailyChallenges = 15
-	tongTianTowerMaxCDRetries    = 5
-	tongTianTowerCDBaseWait      = 2 * time.Second
-	tongTianTowerCDMaxWait       = 10 * time.Second
+	tongTianTowerMaxChallengesPerRun = 200
+	tongTianTowerMaxCDRetries        = 5
+	tongTianTowerCDBaseWait          = 2 * time.Second
+	tongTianTowerCDMaxWait           = 10 * time.Second
 )
 
 // NewTongTianTowerRoutine 构造通天塔自动挑战任务。
@@ -132,7 +133,7 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 
 			challenged := 0
 			cdRetries := 0
-			for panel.ChallengeTimes > 0 && challenged < tongTianTowerDailyChallenges {
+			for panel.ChallengeTimes > 0 && challenged < tongTianTowerMaxChallengesPerRun {
 				if err := ctx.Err(); err != nil {
 					return nil
 				}
@@ -282,9 +283,10 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 					}
 				}
 			}
-			if challenged >= tongTianTowerDailyChallenges && panel.ChallengeTimes > 0 {
-				slog.Warn("通天塔已达到每日 15 次挑战上限，结束本轮",
-					"role_id", session.RoleID(), "today_challenged", challenged)
+			if challenged >= tongTianTowerMaxChallengesPerRun && panel.ChallengeTimes > 0 {
+				slog.Warn("通天塔达到单轮安全上限，结束本轮",
+					"role_id", session.RoleID(), "today_challenged", challenged,
+					"remaining_times", panel.ChallengeTimes)
 			}
 			slog.Info("通天塔巡检完成",
 				"role_id", session.RoleID(),

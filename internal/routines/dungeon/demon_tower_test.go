@@ -67,7 +67,7 @@ func (s *demonTowerMockState) challengLayers() []int32 {
 }
 
 // TestDemonTowerRoutine_ChallengesUntilTicketsExhausted 覆盖成功路径:
-// 面板按 layer_list 最高层 +1 连续挑战，次数耗尽后停止。
+// 面板按当前可挑战层（layer_list 最高层）连续挑战，次数耗尽后停止。
 func TestDemonTowerRoutine_ChallengesUntilTicketsExhausted(t *testing.T) {
 	sess, srvConn := createTestSession(t, 100)
 	defer sess.Close()
@@ -110,7 +110,7 @@ func TestDemonTowerRoutine_ChallengesUntilTicketsExhausted(t *testing.T) {
 	}
 
 	got := state.challengLayers()
-	want := []int32{3, 4}
+	want := []int32{2, 3}
 	if len(got) != len(want) {
 		t.Fatalf("挑战层数不匹配: got=%v want=%v", got, want)
 	}
@@ -206,7 +206,7 @@ func TestDemonTowerRoutine_ItemPackFullStops(t *testing.T) {
 }
 
 // TestDemonTowerRoutine_EmptyLayerListUsesRankSelfLayer 覆盖跨阶次场景:
-// layer_list 为空且 now_finish_layer 归零时，用排行榜 self_layer 推导下一层。
+// layer_list 为空且 now_finish_layer 归零时，用排行榜 self_layer 作为当前可挑战层。
 func TestDemonTowerRoutine_EmptyLayerListUsesRankSelfLayer(t *testing.T) {
 	sess, srvConn := createTestSession(t, 100)
 	defer sess.Close()
@@ -250,8 +250,8 @@ func TestDemonTowerRoutine_EmptyLayerListUsesRankSelfLayer(t *testing.T) {
 	}
 
 	got := state.challengLayers()
-	if len(got) != 1 || got[0] != 41 {
-		t.Fatalf("应挑战第 41 层, got=%v", got)
+	if len(got) != 1 || got[0] != 40 {
+		t.Fatalf("应挑战当前可挑战层 40, got=%v", got)
 	}
 }
 

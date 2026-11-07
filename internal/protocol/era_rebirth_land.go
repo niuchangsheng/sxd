@@ -18,6 +18,12 @@ const (
 	ActionIDEraRebirthLandFreeBack uint32 = 0x03540006
 	// ActionIDEraRebirthLandAutoProfit 查询挂机收益 (Module 852, Action 9 -> 0x03540009)
 	ActionIDEraRebirthLandAutoProfit uint32 = 0x03540009
+	// ActionIDEraRebirthLandPoolPanel 渡业台/渡业仙池面板 (Module 852, Action 12 -> 0x0354000C)
+	ActionIDEraRebirthLandPoolPanel uint32 = 0x0354000C
+	// ActionIDEraRebirthLandFreeAward 领取渡业仙池免费奖励 (Module 852, Action 13 -> 0x0354000D)
+	ActionIDEraRebirthLandFreeAward uint32 = 0x0354000D
+	// ActionIDEraRebirthLandTodayAward 领取渡业仙池今日奖励 (Module 852, Action 14 -> 0x0354000E)
+	ActionIDEraRebirthLandTodayAward uint32 = 0x0354000E
 )
 
 // 轮回净地结果码 (Mod_EraRebirthLandAuto_Base)。
@@ -26,20 +32,38 @@ const (
 	EraRebirthResultSuccess uint8 = 0
 	// EraRebirthResultFuncNotOpen 功能未开放
 	EraRebirthResultFuncNotOpen uint8 = 1
+	// EraRebirthResultAlreadyStart 已在挂机
+	EraRebirthResultAlreadyStart uint8 = 2
 	// EraRebirthResultFailed 失败
 	EraRebirthResultFailed uint8 = 3
 	// EraRebirthResultNoCanGetGift 暂无可领取奖励
 	EraRebirthResultNoCanGetGift uint8 = 4
 	// EraRebirthResultPackageFull 背包已满
 	EraRebirthResultPackageFull uint8 = 5
+	// EraRebirthResultNoStorage 无储物
+	EraRebirthResultNoStorage uint8 = 6
 	// EraRebirthResultNotEnoughIngot 元宝不足
 	EraRebirthResultNotEnoughIngot uint8 = 7
+	// EraRebirthResultNoFreeStorage 无免费储物
+	EraRebirthResultNoFreeStorage uint8 = 8
 	// EraRebirthResultNoTimes 次数不足
 	EraRebirthResultNoTimes uint8 = 9
 	// EraRebirthResultNoProfit 暂无收益
 	EraRebirthResultNoProfit uint8 = 10
+	// EraRebirthResultNotEnoughItem 道具不足
+	EraRebirthResultNotEnoughItem uint8 = 11
+	// EraRebirthResultNotStart 未开始挂机
+	EraRebirthResultNotStart uint8 = 12
+	// EraRebirthResultNotMatchCon 条件不匹配
+	EraRebirthResultNotMatchCon uint8 = 13
 	// EraRebirthResultAlreadyGet 已领取
 	EraRebirthResultAlreadyGet uint8 = 14
+	// EraRebirthResultAlreadyBuy 已购买
+	EraRebirthResultAlreadyBuy uint8 = 15
+	// EraRebirthResultNotEnoughTodayIngot 今日元宝不足
+	EraRebirthResultNotEnoughTodayIngot uint8 = 16
+	// EraRebirthResultNotEnoughFu 渡业符不足
+	EraRebirthResultNotEnoughFu uint8 = 17
 )
 
 // EraRebirthReward 表示轮回净地领取的一笔奖励。
@@ -79,6 +103,35 @@ func BuildEraRebirthLandFreeBackPacket() *Packet {
 	return pkt
 }
 
+// BuildEraRebirthLandPoolPanelPacket 构造渡业台/渡业仙池面板查询封包 (852/12)。
+func BuildEraRebirthLandPoolPanelPacket() *Packet {
+	pkt := NewPacket(ActionIDEraRebirthLandPoolPanel, []byte{0, 0, 0, 0})
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// BuildEraRebirthLandFreeAwardPacket 构造领取渡业仙池免费奖励封包 (852/13)。
+func BuildEraRebirthLandFreeAwardPacket() *Packet {
+	pkt := NewPacket(ActionIDEraRebirthLandFreeAward, []byte{0, 0, 0, 0})
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// BuildEraRebirthLandTodayAwardPacket 构造领取渡业仙池今日奖励封包 (852/14)。
+func BuildEraRebirthLandTodayAwardPacket() *Packet {
+	pkt := NewPacket(ActionIDEraRebirthLandTodayAward, []byte{0, 0, 0, 0})
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// ParseEraRebirthSimpleResult 解析仅含单字节结果码的 852 回包。
+func ParseEraRebirthSimpleResult(payload []byte) (uint8, error) {
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("轮回净地结果码为空")
+	}
+	return payload[0], nil
+}
+
 // ParseEraRebirthFreeBackResult 解析免费一键领取回包 [UByte result, [Int, Long]]。
 func ParseEraRebirthFreeBackResult(payload []byte) (*EraRebirthFreeBackResult, error) {
 	r := NewReader(payload)
@@ -112,20 +165,38 @@ func EraRebirthResultText(code uint8) string {
 		return "成功"
 	case EraRebirthResultFuncNotOpen:
 		return "功能未开放"
+	case EraRebirthResultAlreadyStart:
+		return "已在挂机"
 	case EraRebirthResultFailed:
 		return "失败"
 	case EraRebirthResultNoCanGetGift:
 		return "暂无可领取奖励"
 	case EraRebirthResultPackageFull:
 		return "背包已满"
+	case EraRebirthResultNoStorage:
+		return "无储物"
 	case EraRebirthResultNotEnoughIngot:
 		return "元宝不足"
+	case EraRebirthResultNoFreeStorage:
+		return "无免费储物"
 	case EraRebirthResultNoTimes:
 		return "次数不足"
 	case EraRebirthResultNoProfit:
 		return "暂无收益"
+	case EraRebirthResultNotEnoughItem:
+		return "道具不足"
+	case EraRebirthResultNotStart:
+		return "未开始挂机"
+	case EraRebirthResultNotMatchCon:
+		return "条件不匹配"
 	case EraRebirthResultAlreadyGet:
 		return "已领取"
+	case EraRebirthResultAlreadyBuy:
+		return "已购买"
+	case EraRebirthResultNotEnoughTodayIngot:
+		return "今日元宝不足"
+	case EraRebirthResultNotEnoughFu:
+		return "渡业符不足"
 	default:
 		return fmt.Sprintf("未知结果码(%d)", code)
 	}

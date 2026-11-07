@@ -62,6 +62,68 @@ func TestFindBeastRoutine_PackFullBranchesToCircuitBreaker(t *testing.T) {
 	}
 }
 
+// TestFindBeastRoutine_ConsumesAllFreeCount 验证修复后的循环会消耗全部免费次数，
+// 而不是旧实现中只跑约一半。
+func TestFindBeastRoutine_ConsumesAllFreeCount(t *testing.T) {
+	var doCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDSpaceFindOpen:
+			_ = protocol.WritePacket(conn, protocol.BuildSpaceFindOpenResultPacket(protocol.SpaceFindOpenInfo{Count: 10}))
+		case protocol.ActionIDSpaceFindDo:
+			doCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildSpaceFindDoResultPacket(protocol.SpaceFindDoResult{
+				Result: protocol.SpaceFindResultSuccess, ItemID: 1825, Golden: 5,
+			}))
+		case protocol.ActionIDSpaceFindGet:
+			remain := int16(10) - int16(doCalls.Load())
+			_ = protocol.WritePacket(conn, protocol.BuildSpaceFindGetResultPacket(protocol.SpaceFindGetResult{
+				Result: protocol.SpaceFindResultSuccess,
+				Goods:  []protocol.SpaceFindGoods{{ItemID: 1860, Num: 4}},
+				Count:  remain,
+			}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewFindBeastRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("find beast: %v", err)
+	}
+	if got := doCalls.Load(); got != 10 {
+		t.Fatalf("free_count=10 时应执行 10 次寻找, 实际 %d 次", got)
+	}
+}
+
+// TestFindBeastRoutine_StopsWhenCountNotDecrease 验证服务端未扣减次数时熔断。
+func TestFindBeastRoutine_StopsWhenCountNotDecrease(t *testing.T) {
+	var doCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDSpaceFindOpen:
+			_ = protocol.WritePacket(conn, protocol.BuildSpaceFindOpenResultPacket(protocol.SpaceFindOpenInfo{Count: 5}))
+		case protocol.ActionIDSpaceFindDo:
+			doCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildSpaceFindDoResultPacket(protocol.SpaceFindDoResult{
+				Result: protocol.SpaceFindResultSuccess, ItemID: 1825, Golden: 5,
+			}))
+		case protocol.ActionIDSpaceFindGet:
+			_ = protocol.WritePacket(conn, protocol.BuildSpaceFindGetResultPacket(protocol.SpaceFindGetResult{
+				Result: protocol.SpaceFindResultSuccess,
+				Goods:  []protocol.SpaceFindGoods{{ItemID: 1860, Num: 4}},
+				Count:  5,
+			}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewFindBeastRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("find beast: %v", err)
+	}
+	if got := doCalls.Load(); got != 1 {
+		t.Fatalf("次数未递减时应熔断, 实际执行 %d 次", got)
+	}
+}
+
 func TestDuobaoMountainRoutine_DigFreeCount(t *testing.T) {
 	var digCalls atomic.Int32
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {

@@ -81,7 +81,9 @@ func NewFindBeastRoutine() scheduler.ActivityRoutine {
 			}
 
 			rounds := 0
-			for rounds < int(info.Count) && rounds < maxSpaceFindRounds {
+			// info.Count 每轮领取后会被更新为“剩余次数”，因此循环条件必须用
+			// 剩余次数本身判断；旧实现用 rounds < info.Count 会在第 N/2 轮提前退出。
+			for info.Count > 0 && rounds < maxSpaceFindRounds {
 				rounds++
 				if err := ctx.Err(); err != nil {
 					return nil
@@ -134,7 +136,17 @@ func NewFindBeastRoutine() scheduler.ActivityRoutine {
 				switch got.Result {
 				case protocol.SpaceFindResultSuccess:
 					slog.Info("寻找异兽奖励领取成功", "role_id", session.RoleID(), "goods", got.Goods)
+					prevRemain := info.Count
 					info.Count = got.Count
+					// 服务端未扣减剩余次数时立即熔断，避免死循环。
+					if info.Count >= prevRemain {
+						slog.Warn("寻找异兽剩余次数未扣减，熔断退出",
+							"role_id", session.RoleID(),
+							"before", prevRemain, "after", info.Count,
+							"rounds", rounds,
+						)
+						return nil
+					}
 				case protocol.SpaceFindResultPackFull:
 					return scheduler.ErrBagFull
 				case protocol.SpaceFindResultNotHaveFind:

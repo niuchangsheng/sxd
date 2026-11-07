@@ -515,6 +515,22 @@ func normalizeSpiritPoolConfig(cfg SpiritPoolConfig) SpiritPoolConfig {
 	return cfg
 }
 
+// SaintAreaFallbackMode 圣域取经通道不可用时的回退策略。
+type SaintAreaFallbackMode int
+
+const (
+	// SaintAreaAuto 自动判定 (默认):
+	//   - 圣域功能未开放的角色 (例如尚未解锁圣域的新区角色) 说明取经仍在仙界/主服，
+	//     圣域通道不可用时回退仙界跨服/主服链路；
+	//   - 圣域功能已开放的角色说明取经已迁入圣域，圣域关闭/维护时跳过本轮，
+	//     不再向可能已下线的旧链路发送请求。
+	SaintAreaAuto SaintAreaFallbackMode = iota
+	// SaintAreaForceOnly 固定圣域：圣域不可用时一律跳过，绝不回退。
+	SaintAreaForceOnly
+	// SaintAreaAllowFallback 总是允许回退：圣域不可用时回退仙界跨服/主服链路。
+	SaintAreaAllowFallback
+)
+
 // PilgrimageConfig 西天取经护送与打劫自动化策略配置。
 type PilgrimageConfig struct {
 	// AutoRob 是否在启程护送后自动打劫取经路上其他玩家队伍。
@@ -523,8 +539,8 @@ type PilgrimageConfig struct {
 	MaxRobAttempts int
 	// MaxProbeTargets 单轮最多探测的目标队伍数量 (上限 50)。
 	MaxProbeTargets int
-	// ForceSaintArea 固定走圣域取经；圣域不可用时跳过本轮，不回退仙界跨服或主服协议。
-	ForceSaintArea bool
+	// SaintAreaFallback 圣域取经通道不可用时的回退策略 (默认 SaintAreaAuto)。
+	SaintAreaFallback SaintAreaFallbackMode
 }
 
 // DefaultPilgrimageConfig 返回默认取经策略：自动打劫、最多尝试 5 次、探测 8 支队伍。
@@ -551,6 +567,48 @@ func normalizePilgrimageConfig(cfg PilgrimageConfig) PilgrimageConfig {
 		cfg.MaxProbeTargets = crossTakeBibleRobProbeHardLimit
 	}
 	return cfg
+}
+
+// String 返回圣域回退策略的可读名称，便于日志排查。
+func (m SaintAreaFallbackMode) String() string {
+	switch m {
+	case SaintAreaForceOnly:
+		return "force_saint_area"
+	case SaintAreaAllowFallback:
+		return "allow_fallback"
+	default:
+		return "auto"
+	}
+}
+
+// saintAreaFallbackAllowed 报告圣域通道不可用时是否应回退仙界跨服/主服取经。
+func (cfg PilgrimageConfig) saintAreaFallbackAllowed(ctx context.Context, session *client.RoleSession) bool {
+	switch cfg.SaintAreaFallback {
+	case SaintAreaForceOnly:
+		return false
+	case SaintAreaAllowFallback:
+		return true
+	}
+
+	// 自动模式: 以圣域功能是否开放判定取经链路归属。
+	// 已开放 = 该角色取经已迁入圣域，圣域关闭/维护时等待下一轮，不回退旧链路；
+	// 未开放 = 取经仍在仙界跨服或主服，允许回退。
+	open, err := session.IsFunctionOpen(ctx, protocol.FunctionIDSaintArea)
+	if err != nil {
+		// 无法确认功能开放状态时保守跳过本轮，避免向可能已被服务端静默丢弃的
+		// 旧链路发送请求；下一轮调度会重新探测。
+		slog.Warn("取经: 圣域功能开放状态查询失败, 跳过本轮",
+			"role_id", session.RoleID(), "error", err)
+		return false
+	}
+	if !open {
+		slog.Info("取经: 圣域功能未开放, 回退仙界跨服/主服取经",
+			"role_id", session.RoleID(), "function_id", protocol.FunctionIDSaintArea)
+		return true
+	}
+	slog.Info("取经: 圣域功能已开放但当前未开启, 跳过本轮",
+		"role_id", session.RoleID(), "function_id", protocol.FunctionIDSaintArea)
+	return false
 }
 
 // handleCrossPilgrimage 在官方仙界跨服连接 (Mod 114) 上执行一次取经巡检、启程与打劫。
@@ -598,14 +656,14 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 		}
 	}
 
-	// 固定圣域模式：圣域不可用时直接跳过本轮，绝不回退仙界跨服或主服协议。
-	if cross == nil && cfg.ForceSaintArea {
-		slog.Info("取经已固定为圣域通道，圣域不可用，跳过本轮且不回退仙界",
-			"role_id", session.RoleID())
+	// 2. 圣域通道不可用：按回退策略决定跳过本轮还是回退仙界跨服/主服。
+	if cross == nil && !cfg.saintAreaFallbackAllowed(crossCtx, session) {
+		slog.Info("取经圣域通道不可用，按策略跳过本轮且不回退仙界",
+			"role_id", session.RoleID(), "fallback_mode", cfg.SaintAreaFallback)
 		return true
 	}
 
-	// 2. 圣域不可用时回退仙界跨服取经 (Mod 114)，兼容仍开放跨服取经的区服。
+	// 3. 回退仙界跨服取经 (Mod 114)，兼容仍开放跨服取经的区服。
 	if cross == nil {
 		credCtx, credCancel := context.WithTimeout(crossCtx, 2*time.Second)
 		cred, err := session.FetchCrossServerCredentials(credCtx)
@@ -1443,32 +1501,52 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				slog.Warn("解析粗铁淬炼池面板失败", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
-
-			// 3. 查询淬炼池资源面板 (Mod 534, Act 5), 与实机抓包序列保持一致。
-			// 该动作回包固定 5 字节且不含业务结果码（协议规范 4.7），
-			// 但它是后续一键淬炼 PrevAct 链的一环；缺包时必须终止，
-			// 否则 0x011A0001 会被服务端静默丢弃。
-			panelPkt := protocol.BuildRefinePoolPanelPacket(protocol.ActionIDRefinePoolOpen)
-			pCtx, pCancel := context.WithTimeout(ctx, callTimeout)
-			panelResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDRefinePoolPanel)
-			pCancel()
-			if pErr != nil || panelResp == nil {
-				slog.Info("查询淬炼池资源面板无回包，终止本轮以保护动作链",
-					"role_id", session.RoleID(), "target", targetName, "err", pErr)
-				return nil
-			}
-			if len(panelResp.Payload) < 5 {
-				slog.Warn("淬炼池资源面板回包长度异常，终止本轮",
-					"role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
-				return nil
+			// 诊断：输出每个槽位的生产状态，定位 DoneCount=0 的根因。
+			{
+				statusCounts := make(map[uint8]int, 5)
+				for _, iron := range panel.Irons {
+					statusCounts[iron.ProduceStatus]++
+				}
+				slog.Info("粗铁淬炼池面板状态",
+					"role_id", session.RoleID(),
+					"irons", len(panel.Irons),
+					"status_counts", statusCounts,
+					"level", panel.Level,
+					"lian_qi_jing_hua", panel.LianQiJingHua,
+					"coins_need", panel.CoinsNeed,
+					"one_key_lock_flag", panel.OneKeyLockFlag,
+				)
 			}
 
+			// 3. 线上实测（2026-11-07 22:00，s0-niuchangsheng）：534 资源面板
+			// 在本服可被省略，且该请求经常被静默丢弃。open_panel 之后直接发送
+			// 一键淬炼 (282/1, PrevAct=282/0) 可正常返回 result=11 SUCCESS，
+			// 因此不再把 534 作为必选链路。保留 protocol 层构造器供探针使用。
 			done := panel.DoneCount()
 			if done == 0 {
+				statusCounts := make(map[uint8]int, 5)
+				type ironInfo struct {
+					Seq     int8
+					Status  uint8
+					Need    int32
+					Remain  int32
+					Quality int8
+				}
+				irons := make([]ironInfo, 0, len(panel.Irons))
+				for _, iron := range panel.Irons {
+					statusCounts[iron.ProduceStatus]++
+					irons = append(irons, ironInfo{
+						Seq: iron.Seq, Status: iron.ProduceStatus,
+						Need: iron.ProduceNeedTime, Remain: iron.ProduceRemainTime,
+						Quality: iron.Quality,
+					})
+				}
 				slog.Info("淬炼池暂无已完成的粗铁, 跳过一键操作",
 					"role_id", session.RoleID(),
 					"target", targetName,
 					"iron_count", len(panel.Irons),
+					"status_counts", statusCounts,
+					"irons", irons,
 					"level", panel.Level,
 					"lian_qi_jing_hua", panel.LianQiJingHua,
 				)
@@ -1480,7 +1558,7 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				target,
 				protocol.RefinePoolCostCoins,
 				protocol.RefinePoolTypeOneKey,
-				protocol.ActionIDRefinePoolPanel,
+				protocol.ActionIDRefinePoolOpen,
 			)
 			eCtx, eCancel := context.WithTimeout(ctx, executeTimeout)
 			resp, err := session.Call(eCtx, execPkt, protocol.ActionIDRefineExecute)

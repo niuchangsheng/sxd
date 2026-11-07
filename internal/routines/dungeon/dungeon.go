@@ -1082,11 +1082,12 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 3. 检查灵件背包空间是否已满 (>= 20 为上限预警)
-			if info.BagNum >= 20 {
-				slog.Info("灵件背包已满，暂停六道挑战以防灵件溢出丢弃", "role_id", session.RoleID(), "bag_num", info.BagNum)
-				return nil
-			}
+			// 3. 灵件背包空间：get_tower_info 的 bag_num 字段语义未确认
+			// （线上实测封灵背包为空时仍返回 20，疑为容量而非占用格数）。
+			// 因此不再用 bag_num>=20 预判“已满”，直接发起挑战，
+			// 由服务端 start_challenge 的 FULL_BAG(6) 结果码驱动暂停。
+			slog.Debug("六道轮回面板背包字段（仅诊断，不作为门禁）",
+				"role_id", session.RoleID(), "bag_num", info.BagNum)
 
 			// 4. 判断是否需要重置: 如果当前道已全部通关 (SequenceWar > 25)
 			if info.SequenceWar > 25 {
@@ -1306,7 +1307,6 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 
 			// 2. 循环挑战：每轮以最新面板数据计算下一层目标，成功则继续。
 			challenged := 0
-			var lastTarget int32
 			for round := 0; round < demonTowerMaxChallengesPerRun; round++ {
 				if ctx.Err() != nil {
 					return nil
@@ -1336,18 +1336,13 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 
 				target := panel.NextLayerID()
 				// 跨阶次时 layer_list 可能清空且 now_finish_layer 归零，
-				// 此时用排行榜中的赛季累计层数 self_layer 兜底，避免误从第 1 层重打。
+				// 此时用排行榜中的 self_layer 兜底。线上实测 self_layer 即当前
+				// 可挑战层，不需 +1（+1 会返回 LAYER_ERROR）。
 				if len(panel.LayerList) == 0 && panel.NowFinishLayer <= 0 {
-					if selfLayer, rankErr := fetchDemonTowerSelfLayer(ctx, session); rankErr == nil && selfLayer >= target {
-						target = selfLayer + 1
+					if selfLayer, rankErr := fetchDemonTowerSelfLayer(ctx, session); rankErr == nil && selfLayer > 0 {
+						target = selfLayer
 					}
 				}
-				if challenged > 0 && target == lastTarget {
-					slog.Warn("锁妖塔通关后进度未推进，结束本轮避免重复消耗次数",
-						"role_id", session.RoleID(), "layer", target, "challenged", challenged)
-					return nil
-				}
-				lastTarget = target
 
 				result, err := challengeDemonTowerLayer(ctx, session, target)
 				if err != nil {
@@ -1468,97 +1463,9 @@ func demonTowerResultText(result uint8) string {
 }
 
 // NewQiMenRoutine 构造奇门遁甲阵法星图升级与布设任务 (Feature 4: 奇门遁甲)。
+// NewQiMenRoutine 构造奇门遁甲一/二（Module 251/392）普通修炼与突破试炼任务。
 func NewQiMenRoutine() scheduler.ActivityRoutine {
-	return scheduler.NewBaseRoutine(
-		"qimen_dunjia",
-		"dungeon",
-		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
-		0,
-		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			if session == nil {
-				return client.ErrNotConnected
-			}
-			if jitter != nil {
-				_ = jitter.Wait(ctx)
-			}
-			slog.Info("正在执行玩法任务: 奇门遁甲法阵巡检与星图注灵", "role_id", session.RoleID())
-
-			// 0. 先通过官方功能开放列表判定门槛，未开放时不再发送会被静默丢弃的业务请求。
-			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDMiracleFighters)
-			if fErr != nil {
-				slog.Info("奇门遁甲功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
-				return nil
-			}
-			if !open {
-				slog.Info("奇门遁甲功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDMiracleFighters)
-				return nil
-			}
-
-			// 1. 查询法阵信息 (Mod 486, Act 7)
-			arrayPkt := protocol.BuildQiMenArrayInfoPacket(protocol.ActionIDTownEnter)
-			aCtx, aCancel := context.WithTimeout(ctx, 8*time.Second)
-			arrayResp, aErr := session.Call(aCtx, arrayPkt, protocol.ActionIDQiMenArrayInfo)
-			aCancel()
-			if aErr != nil || arrayResp == nil || len(arrayResp.Payload) == 0 {
-				slog.Info("奇门遁甲功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", aErr)
-				return nil
-			}
-
-			// 2. 查询阵眼傀儡 (Mod 485, Act 0)
-			puppetPkt := protocol.BuildQiMenPuppetInfoPacket(protocol.ActionIDQiMenArrayInfo)
-			pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
-			puppetResp, puppetErr := session.Call(pCtx, puppetPkt, protocol.ActionIDQiMenPuppetInfo)
-			pCancel()
-			if puppetErr != nil || puppetResp == nil {
-				slog.Info("奇门遁甲阵眼查询无回包，终止本轮以保护动作链",
-					"role_id", session.RoleID(), "err", puppetErr)
-				return nil
-			}
-
-			// 3. 升级星图注灵 (Mod 486, Act 1)
-			starPkt := protocol.BuildQiMenUpgradeStarPacket(protocol.ActionIDQiMenPuppetInfo)
-			sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
-			starResp, starErr := session.Call(sCtx, starPkt, protocol.ActionIDQiMenUpgradeStar)
-			sCancel()
-			if starErr != nil || starResp == nil {
-				slog.Info("奇门遁甲星图注灵无回包，终止本轮",
-					"role_id", session.RoleID(), "err", starErr)
-				return nil
-			}
-
-			// 4. 布阵生效与确认 (Mod 584, Act 1 & 3)
-			depPkt := protocol.BuildQiMenFormationDeployPacket(protocol.ActionIDQiMenUpgradeStar)
-			dCtx, dCancel := context.WithTimeout(ctx, 8*time.Second)
-			deployResp, deployErr := session.Call(dCtx, depPkt, protocol.ActionIDQiMenFormationDeploy)
-			dCancel()
-			if deployErr != nil || deployResp == nil {
-				slog.Info("奇门遁甲布阵请求无回包，终止本轮",
-					"role_id", session.RoleID(), "err", deployErr)
-				return nil
-			}
-
-			confPkt := protocol.BuildQiMenFormationConfirmPacket(protocol.ActionIDQiMenFormationDeploy)
-			cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
-			confirmResp, confirmErr := session.Call(cCtx, confPkt, protocol.ActionIDQiMenFormationConfirm)
-			cCancel()
-			if confirmErr != nil || confirmResp == nil {
-				slog.Info("奇门遁甲阵法确认无回包，终止本轮",
-					"role_id", session.RoleID(), "err", confirmErr)
-				return nil
-			}
-
-			slog.Info("奇门遁甲阵法维护完成",
-				"role_id", session.RoleID(),
-				"array_reply_len", len(arrayResp.Payload),
-				"puppet_reply_len", len(puppetResp.Payload),
-				"star_reply_len", len(starResp.Payload),
-				"deploy_reply_len", len(deployResp.Payload),
-				"confirm_reply_len", len(confirmResp.Payload),
-			)
-			return nil
-		},
-	)
+	return newQiMenMiracleRoutine()
 }
 
 // NewXunXianRoutine 构造寻仙之路自动推图与宝箱领用任务 (Feature 8: 寻仙之路)。

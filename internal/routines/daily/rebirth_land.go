@@ -69,7 +69,62 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 2. 免费一键领取挂机奖励。
+			// 2. 查询渡业台/渡业仙池面板（仅诊断，失败不阻断领取）。
+			if poolResp := call(protocol.BuildEraRebirthLandPoolPanelPacket(), protocol.ActionIDEraRebirthLandPoolPanel); poolResp != nil {
+				r := protocol.NewReader(poolResp.Payload)
+				vals := make([]int32, 0, 6)
+				for i := 0; i < 6; i++ {
+					v, rErr := r.ReadInt32()
+					if rErr != nil {
+						break
+					}
+					vals = append(vals, v)
+				}
+				slog.Info("轮回净地渡业仙池面板",
+					"role_id", session.RoleID(), "payload_len", len(poolResp.Payload), "ints", vals)
+			}
+
+			// 3. 领取渡业仙池免费奖励 / 今日奖励 (852/13, 852/14)。
+			claim := func(pkt *protocol.Packet, act uint32, label string) (uint8, bool) {
+				resp := call(pkt, act)
+				if resp == nil {
+					slog.Info("轮回净地领取无回包", "role_id", session.RoleID(), "scene", label)
+					return 0, false
+				}
+				code, pErr := protocol.ParseEraRebirthSimpleResult(resp.Payload)
+				if pErr != nil {
+					slog.Warn("解析轮回净地领取回包失败", "role_id", session.RoleID(), "scene", label, "err", pErr)
+					return 0, false
+				}
+				switch code {
+				case protocol.EraRebirthResultSuccess:
+					slog.Info("轮回净地渡业仙池奖励领取成功", "role_id", session.RoleID(), "scene", label)
+					return code, true
+				case protocol.EraRebirthResultPackageFull:
+					slog.Warn("轮回净地渡业仙池奖励背包已满", "role_id", session.RoleID(), "scene", label)
+					return code, false
+				default:
+					slog.Info("轮回净地渡业仙池暂无可领取奖励",
+						"role_id", session.RoleID(), "scene", label,
+						"result", code, "result_text", protocol.EraRebirthResultText(code))
+					return code, false
+				}
+			}
+			freeCode, freeOK := claim(protocol.BuildEraRebirthLandFreeAwardPacket(),
+				protocol.ActionIDEraRebirthLandFreeAward, "渡业仙池免费奖励")
+			if freeOK {
+				return nil
+			}
+			todayCode, todayOK := claim(protocol.BuildEraRebirthLandTodayAwardPacket(),
+				protocol.ActionIDEraRebirthLandTodayAward, "渡业仙池今日奖励")
+			if todayOK {
+				return nil
+			}
+			if freeCode == protocol.EraRebirthResultPackageFull || todayCode == protocol.EraRebirthResultPackageFull {
+				return scheduler.ErrBagFull
+			}
+
+			// 4. 兜底：免费一键领取挂机奖励 (852/6)。
 			resp := call(protocol.BuildEraRebirthLandFreeBackPacket(), protocol.ActionIDEraRebirthLandFreeBack)
 			if resp == nil {
 				slog.Info("轮回净地不可用或未开放，跳过", "role_id", session.RoleID())
@@ -86,7 +141,7 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 					"role_id", session.RoleID(),
 					"rewards", len(result.Rewards))
 			case protocol.EraRebirthResultNoCanGetGift, protocol.EraRebirthResultAlreadyGet,
-				protocol.EraRebirthResultNoProfit:
+				protocol.EraRebirthResultNoProfit, protocol.EraRebirthResultNoFreeStorage:
 				slog.Info("轮回净地暂无可领取奖励",
 					"role_id", session.RoleID(),
 					"result", result.Result,

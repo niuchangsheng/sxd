@@ -55,6 +55,10 @@ scheduler:
     vip_welfare: true             # VIP每日免费礼包与官职俸禄
     god_bless: true               # 跨服天神赐福
     online_reward: true           # 在线时长奖励一键领取
+    courtyard_pet: true           # 宠物灵符召唤 (仅 call(NORMAL), 不消耗元宝)
+    weekend_event: true           # 周末狂欢礼 + 水果机 (仅免费次数, 不消耗元宝)
+    daoyuan_vip_shop: true        # 精品杂货 VIP5/VIP8 购买 (仅低价档, 不消耗元宝)
+    void_worship: true            # 仙界虚空/大神榜膜拜 (每日免费一次)
     device_bind_reward: true      # 手机绑定首绑/月度奖励
     town_practice: true           # 城镇打坐离线经验结算
     destiny_sword: true           # 飞剑剑意淬炼
@@ -136,9 +140,12 @@ scheduler:
     duobao_mountain: true         # 多宝山免费挖掘
     eudemons: true                # 幻兽经脉激活
     partner_link: true            # 灵结激活
-    star_picture: false           # 法力星图占星: 首次免费但面板 free 计数与扣费不同步, 可能扣 50 元宝, 默认关闭
+    star_picture: true            # 法力星图: 仅 has_divination=0 且 free>0 时占星一次, 不循环不买次数
     era_yanjie: true               # 纪元湮劫每日一关战斗 (免费)
+    era_treasure: true            # 纪元秘藏/轮回图录奖励 (免费)
     mystic_hunt: true              # 仙幽猎境入口开放时免费进入
+    get_peach: true                # 摘仙桃: 摘取已召唤仙桃 + 铜钱/免费次数召唤 (不消耗元宝)
+    pet_animal: true               # 叶公好龙普通培养: 仅铜钱培养 (不消耗元宝)
     lucky_shop: false             # 琳琅阁: 按用户要求禁用 (无实现, 保留开关)
 
   # ── 副本 / 挑战策略 ─────────────────────────────────────────

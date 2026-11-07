@@ -206,8 +206,13 @@ func newRegistryFactory(
 	if sc.Pilgrimage.MaxProbeTargets > 0 {
 		pCfg.MaxProbeTargets = sc.Pilgrimage.MaxProbeTargets
 	}
+	// 未配置 force_saint_area 时保持 SaintAreaAuto (按圣域功能开放自动判定)。
 	if sc.Pilgrimage.ForceSaintArea != nil {
-		pCfg.ForceSaintArea = *sc.Pilgrimage.ForceSaintArea
+		if *sc.Pilgrimage.ForceSaintArea {
+			pCfg.SaintAreaFallback = farming.SaintAreaForceOnly
+		} else {
+			pCfg.SaintAreaFallback = farming.SaintAreaAllowFallback
+		}
 	}
 	factory.SetPilgrimageConfig(pCfg)
 

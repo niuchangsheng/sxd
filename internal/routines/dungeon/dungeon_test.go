@@ -2134,3 +2134,118 @@ func TestSellBagCraftScrolls(t *testing.T) {
 		t.Fatalf("sold grid = %d, want 5", soldGrid)
 	}
 }
+
+// TestSixRealmsRoutine_BagNum20DoesNotBlock 验证 bag_num=20 不再被误判为封灵背包已满，
+// 仍会发起挑战（真正满包由服务端 FULL_BAG 结果码熔断）。
+func TestSixRealmsRoutine_BagNum20DoesNotBlock(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	var challengeCalls atomic.Int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDTowerGetInfo:
+				w := protocol.NewWriter()
+				w.WriteUint8(25) // SequenceMax
+				w.WriteUint8(1)  // Layer
+				w.WriteUint8(1)  // SequenceWar
+				w.WriteUint8(20) // BagNum (线上空背包也返回 20)
+				w.WriteUint8(0)  // ResetNum
+				w.WriteUint16(0) // ResetIngot
+				w.WriteUint8(0)  // HideID
+				w.WriteInt32(20) // HighStone
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerGetInfo, w.Bytes()))
+			case protocol.ActionIDTowerStartChallenge:
+				challengeCalls.Add(1)
+				cw := protocol.NewWriter()
+				cw.WriteUint8(protocol.TowerResultSuccess)
+				cw.WriteInt32(1001)
+				cw.WriteInt32(100000)
+				cw.WriteInt32(200)
+				cw.WriteInt32(10000)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerStartChallenge, cw.Bytes()))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role-six-realms-bag20", RoleName: "六道测试", ServerAddr: "mock-pipe",
+		HeartbeatInterval: time.Second,
+		Dialer:            func(ctx context.Context, network, addr string) (net.Conn, error) { return clientConn, nil },
+		Authenticator:     func(*client.RoleSession) error { return nil },
+	})
+	_ = session.Start(context.Background())
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := dungeon.NewSixRealmsRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("SixRealmsRoutine.Execute failed: %v", err)
+	}
+	if got := challengeCalls.Load(); got == 0 {
+		t.Fatal("bag_num=20 不应阻止六道挑战, 实际挑战 0 次")
+	}
+}
+
+// TestQiMenRoutine_UsesMiracleFightersModules 验证奇门遁甲改走 251/392，
+// 执行一键普通修炼与突破，且不再请求旧的 486/485/584 动作。
+func TestQiMenRoutine_UsesMiracleFightersModules(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var oneKeyCalls, breakCalls, oldModuleCalls atomic.Int32
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDMiracleFightersInfo:
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.MiracleFightersResultSuccess)
+			w.WriteInt32(1)
+			w.WriteUint8(0)
+			w.WriteUint16(1)
+			w.WriteInt32(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+			return true
+		case protocol.ActionIDMiracleFightersOneKey:
+			oneKeyCalls.Add(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, []byte{protocol.MiracleFightersResultSuccess}))
+			return true
+		case protocol.ActionIDMiracleFightersBreakThru:
+			breakCalls.Add(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, []byte{protocol.MiracleFightersResultSuccess}))
+			return true
+		case protocol.ActionIDMiracleFightersTwoInfo:
+			// 奇门遁甲二返回未开放，结束该模块。
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.MiracleFightersResultFuncUnopen)
+			w.WriteInt32(0)
+			w.WriteUint8(0)
+			w.WriteUint16(0)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+			return true
+		case 0x01E60007, 0x01E50000, 0x01E60001, 0x02480001, 0x02480003:
+			oldModuleCalls.Add(1)
+			return true
+		}
+		return false
+	})
+
+	if err := dungeon.NewQiMenRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("qimen: %v", err)
+	}
+	if oneKeyCalls.Load() != 1 || breakCalls.Load() != 1 {
+		t.Fatalf("期望 1 次一键修炼 + 1 次突破, 实际 oneKey=%d break=%d",
+			oneKeyCalls.Load(), breakCalls.Load())
+	}
+	if oldModuleCalls.Load() != 0 {
+		t.Fatalf("不应再使用旧模块 486/485/584, 实际请求 %d 次", oldModuleCalls.Load())
+	}
+}

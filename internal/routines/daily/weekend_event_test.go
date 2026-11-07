@@ -1,0 +1,88 @@
+package daily
+
+import (
+	"context"
+	"net"
+	"sync/atomic"
+	"testing"
+
+	"sxd-pie-ng/internal/protocol"
+)
+
+func TestWeekendEventRoutine_ClaimsGiftAndFruit(t *testing.T) {
+	var giftCalls, drawCalls atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDWeekendGiftPanel:
+			w := protocol.NewWriter()
+			w.WriteInt32(1)
+			for i := 0; i < 4; i++ {
+				w.WriteInt32(0)
+			}
+			w.WriteInt32(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDWeekendGiftAward:
+			n := giftCalls.Add(1)
+			code := protocol.WeekendGiftResultSuccess
+			if n > 1 {
+				code = protocol.WeekendGiftResultHasGet
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{code}))
+		case protocol.ActionIDSundayFruitActive:
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.SundayFruitResultYes)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDSundayFruitInfo:
+			w := protocol.NewWriter()
+			w.WriteInt32(2)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			w.WriteInt32(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDSundayFruitDraw:
+			n := drawCalls.Add(1)
+			code := protocol.SundayFruitResultSuccess
+			if n > 1 {
+				code = protocol.SundayFruitResultTimeUsed
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{code}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewWeekendEventRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("weekend: %v", err)
+	}
+	if got := giftCalls.Load(); got != 4 {
+		t.Fatalf("周末礼应尝试 4 个槽位, 实际 %d 次", got)
+	}
+	if got := drawCalls.Load(); got != 2 {
+		t.Fatalf("水果机应抽 2 次 (成功+次数用尽), 实际 %d 次", got)
+	}
+}
+
+func TestWeekendEventRoutine_SkipsClosedFruit(t *testing.T) {
+	var drawCalls atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDWeekendGiftPanel:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDWeekendGiftAward:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.WeekendGiftResultNotOpen}))
+		case protocol.ActionIDSundayFruitActive:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.SundayFruitResultNo}))
+		case protocol.ActionIDSundayFruitDraw:
+			drawCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+
+	if err := NewWeekendEventRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("weekend: %v", err)
+	}
+	if got := drawCalls.Load(); got != 0 {
+		t.Fatalf("水果机未开启时不应抽奖, 实际 %d 次", got)
+	}
+}

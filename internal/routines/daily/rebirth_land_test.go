@@ -10,17 +10,26 @@ import (
 )
 
 func TestRebirthLandRoutine_ClaimsFreeReward(t *testing.T) {
-	var claimCalls atomic.Int32
+	var freeAwardCalls, freeBackCalls atomic.Int32
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDGameAssistantInfo:
 			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
 				{TaskID: DailyTaskRebirthLand, CurTimes: 0, MaxTimes: 1, PerActiveAdd: 20},
 			}))
+		case protocol.ActionIDEraRebirthLandPoolPanel:
+			w := protocol.NewWriter()
+			for i := 0; i < 6; i++ {
+				w.WriteInt32(int32(i))
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDEraRebirthLandFreeAward:
+			freeAwardCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.EraRebirthResultSuccess}))
+		case protocol.ActionIDEraRebirthLandTodayAward:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.EraRebirthResultNoCanGetGift}))
 		case protocol.ActionIDEraRebirthLandFreeBack:
-			claimCalls.Add(1)
-			_ = protocol.WritePacket(conn, protocol.BuildEraRebirthFreeBackResultPacket(
-				protocol.EraRebirthResultSuccess, []protocol.EraRebirthReward{{ItemID: 10994, Num: 72000}}))
+			freeBackCalls.Add(1)
 		}
 	})
 	defer sess.Close()
@@ -28,8 +37,11 @@ func TestRebirthLandRoutine_ClaimsFreeReward(t *testing.T) {
 	if err := NewRebirthLandRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("rebirth land: %v", err)
 	}
-	if got := claimCalls.Load(); got != 1 {
-		t.Fatalf("claim calls = %d, want 1", got)
+	if got := freeAwardCalls.Load(); got != 1 {
+		t.Fatalf("渡业仙池免费奖励 calls = %d, want 1", got)
+	}
+	if got := freeBackCalls.Load(); got != 0 {
+		t.Fatalf("免费奖励成功后不应再调 852/6, 实际 %d 次", got)
 	}
 }
 
@@ -56,17 +68,25 @@ func TestRebirthLandRoutine_SkipsWhenTaskComplete(t *testing.T) {
 }
 
 func TestRebirthLandRoutine_NoGiftStops(t *testing.T) {
-	var claimCalls atomic.Int32
+	var freeBackCalls atomic.Int32
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDGameAssistantInfo:
 			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
 				{TaskID: DailyTaskRebirthLand, CurTimes: 0, MaxTimes: 1, PerActiveAdd: 20},
 			}))
+		case protocol.ActionIDEraRebirthLandPoolPanel:
+			w := protocol.NewWriter()
+			for i := 0; i < 6; i++ {
+				w.WriteInt32(0)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDEraRebirthLandFreeAward, protocol.ActionIDEraRebirthLandTodayAward:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.EraRebirthResultNoCanGetGift}))
 		case protocol.ActionIDEraRebirthLandFreeBack:
-			claimCalls.Add(1)
+			freeBackCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.BuildEraRebirthFreeBackResultPacket(
-				protocol.EraRebirthResultNoCanGetGift, nil))
+				protocol.EraRebirthResultNoFreeStorage, nil))
 		}
 	})
 	defer sess.Close()
@@ -74,7 +94,7 @@ func TestRebirthLandRoutine_NoGiftStops(t *testing.T) {
 	if err := NewRebirthLandRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("rebirth land: %v", err)
 	}
-	if got := claimCalls.Load(); got != 1 {
-		t.Fatalf("claim calls = %d, want 1", got)
+	if got := freeBackCalls.Load(); got != 1 {
+		t.Fatalf("仙池无奖励时应兜底调用 852/6 一次, 实际 %d 次", got)
 	}
 }

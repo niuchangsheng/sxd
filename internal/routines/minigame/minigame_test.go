@@ -394,15 +394,65 @@ func TestResolveFindImmortalRemain(t *testing.T) {
 	}
 }
 
-// TestFiveBlessingsRoutine_SkipsWhenActivityClosed 验证开启标志为 NO 时
-// 不再发送必被服务端静默丢弃的 start_bless 请求。
-func TestFiveBlessingsRoutine_SkipsWhenActivityClosed(t *testing.T) {
+// TestFiveBlessingsRoutine_OpenFlagNoStillBlesses 验证线上回归：
+// 不再调用 Act 14（其返回 NO 会污染动作链），直接以 Act 10 面板 bless_number
+// 为准执行祈福。
+func TestFiveBlessingsRoutine_OpenFlagNoStillBlesses(t *testing.T) {
+	var startBlessCalls, openFlagCalls int32
+	session := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFindImmortalIsFiveBlessingsOpen:
+			atomic.AddInt32(&openFlagCalls, 1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(
+				pkt.ActionID, []byte{protocol.FindImmortalResultNo}))
+		case protocol.ActionIDFindImmortalOpenFiveBlessings:
+			w := protocol.NewWriter()
+			w.WriteUint16(1) // bless_number
+			w.WriteInt8(1)   // stage
+			w.WriteUint16(0) // award count
+			w.WriteInt8(0)   // total_count
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDFindImmortalStartBless:
+			atomic.AddInt32(&startBlessCalls, 1)
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.FindImmortalResultSuccess)
+			w.WriteInt8(2)
+			w.WriteUint16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDFindImmortalEndBless:
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.FindImmortalResultSuccess)
+			w.WriteUint16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		}
+	})
+
+	if err := NewFiveBlessingsRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("五福临门任务执行失败: %v", err)
+	}
+	if got := atomic.LoadInt32(&openFlagCalls); got != 0 {
+		t.Fatalf("不应再调用 Act14 开启标志, 实际 %d 次", got)
+	}
+	if got := atomic.LoadInt32(&startBlessCalls); got != 1 {
+		t.Fatalf("面板有免费次数时应执行 1 次 start_bless, 实际 %d 次", got)
+	}
+}
+
+// TestFiveBlessingsRoutine_NoBlessSkips 验证面板 bless_number=0 时不发送祈福请求。
+func TestFiveBlessingsRoutine_NoBlessSkips(t *testing.T) {
 	var startBlessCalls int32
 	session := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDFindImmortalIsFiveBlessingsOpen:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(
 				pkt.ActionID, []byte{protocol.FindImmortalResultNo}))
+		case protocol.ActionIDFindImmortalOpenFiveBlessings:
+			w := protocol.NewWriter()
+			w.WriteUint16(0) // bless_number
+			w.WriteInt8(0)
+			w.WriteUint16(0)
+			w.WriteInt8(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDFindImmortalStartBless:
 			atomic.AddInt32(&startBlessCalls, 1)
 		}
@@ -412,11 +462,7 @@ func TestFiveBlessingsRoutine_SkipsWhenActivityClosed(t *testing.T) {
 		t.Fatalf("五福临门任务执行失败: %v", err)
 	}
 	if got := atomic.LoadInt32(&startBlessCalls); got != 0 {
-		t.Fatalf("活动未开启时不应发送 start_bless, 实际 %d 次", got)
-	}
-	if got := session.LastActionID(); got != protocol.ActionIDFindImmortalIsFiveBlessingsOpen {
-		t.Errorf("期望最后动作 0x%08X, 实际 0x%08X",
-			protocol.ActionIDFindImmortalIsFiveBlessingsOpen, got)
+		t.Fatalf("面板无免费次数时不应发送 start_bless, 实际 %d 次", got)
 	}
 }
 

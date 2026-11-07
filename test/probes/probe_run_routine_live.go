@@ -114,11 +114,31 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 	case "pilgrimage":
 		pcfg := farming.DefaultPilgrimageConfig()
 		if os.Getenv("SXD_PROBE_FORCE_SA") == "1" {
-			pcfg.ForceSaintArea = true
+			pcfg.SaintAreaFallback = farming.SaintAreaForceOnly
 		}
 		return farming.NewPilgrimageRoutine(pcfg)
 	case "demon_tower":
 		return dungeon.NewDemonTowerRoutine()
+	case "online_reward":
+		return daily.NewOnlineRewardRoutine()
+	case "rebirth_land":
+		return daily.NewRebirthLandRoutine()
+	case "star_picture":
+		return minigame.NewStarPictureRoutine()
+	case "get_peach":
+		return minigame.NewGetPeachRoutine()
+	case "courtyard_pet":
+		return daily.NewCourtyardPetRoutine()
+	case "weekend_event":
+		return daily.NewWeekendEventRoutine()
+	case "daoyuan_vip_shop":
+		return daily.NewDaoyuanVipShopRoutine()
+	case "void_worship":
+		return social.NewVoidWorshipRoutine()
+	case "marry_home":
+		return social.NewMarryHomeRoutine()
+	case "era_treasure":
+		return minigame.NewEraTreasureRoutine()
 	default:
 		return nil
 	}

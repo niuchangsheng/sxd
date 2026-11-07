@@ -696,10 +696,13 @@ func NewOnlineRewardRoutine() scheduler.ActivityRoutine {
 			now := time.Now().Unix()
 			if panel.StartTime == 0 || panel.EndTime == 0 ||
 				now < int64(panel.StartTime) || now > int64(panel.EndTime) {
-				slog.Debug("在线奖励活动未开放或已结束，跳过",
+				slog.Info("在线奖励活动未开放或已结束，跳过",
 					"role_id", session.RoleID(),
 					"start_time", panel.StartTime,
 					"end_time", panel.EndTime,
+					"now", now,
+					"online_time", panel.OnlineTime,
+					"tiers", len(panel.Tiers),
 				)
 				return nil
 			}

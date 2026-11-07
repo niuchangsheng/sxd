@@ -310,7 +310,10 @@ func BuildQiMenFormationConfirmPacket(prevAct uint32) *Packet {
 // 7. 劫镖
 // --------------------------------------------------------------------------------
 
-// BuildCaravanGetListPacket 构造查询劫镖运送队伍列表封包 (Module 314, Action 1)。
+// BuildCaravanGetListPacket 构造“开始勘察/搜索劫镖目标”封包 (Module 314, Action 1)。
+//
+// 官方 Mod_RobMoney_Base.search: request=[]，载荷仅 PrevAct。
+// 旧命名 GetList 为误读，保函数名以兼容现有调用方。
 func BuildCaravanGetListPacket(prevAct uint32) *Packet {
 	w := NewWriter()
 	if prevAct == 0 {
@@ -318,6 +321,11 @@ func BuildCaravanGetListPacket(prevAct uint32) *Packet {
 	}
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDCaravanGetList, w.Bytes())
+}
+
+// BuildCaravanSearchPacket 构造开始勘察封包，语义同 BuildCaravanGetListPacket。
+func BuildCaravanSearchPacket(prevAct uint32) *Packet {
+	return BuildCaravanGetListPacket(prevAct)
 }
 
 // BuildCaravanGetDetailPacket 构造查询指定劫镖目标详情封包 (Module 314, Action 0)。
@@ -372,7 +380,40 @@ const (
 	CaravanResultHaveApply uint8 = 10
 	// CaravanResultFailure 失败
 	CaravanResultFailure uint8 = 11
+	// CaravanResultNotEnoughBuyTimes 购买勘察次数不足
+	CaravanResultNotEnoughBuyTimes uint8 = 12
 )
+
+// CaravanSearchResult 表示“开始勘察”的结果。
+//
+// 官方 search 回包: [[Int target_id], UByte result]。
+type CaravanSearchResult struct {
+	// Targets 勘察到的目标编号列表
+	Targets []int32
+	// Result 结果码 (CaravanResult*)
+	Result uint8
+}
+
+// ParseCaravanSearchResult 解析开始勘察回包。
+func ParseCaravanSearchResult(payload []byte) (*CaravanSearchResult, error) {
+	r := NewReader(payload)
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("劫镖勘察目标数量读取失败: %w", err)
+	}
+	res := &CaravanSearchResult{Targets: make([]int32, 0, count)}
+	for i := 0; i < int(count); i++ {
+		id, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("劫镖勘察目标[%d]读取失败: %w", i, err)
+		}
+		res.Targets = append(res.Targets, id)
+	}
+	if res.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("劫镖勘察结果码读取失败: %w", err)
+	}
+	return res, nil
+}
 
 // CaravanRobResult 表示一次劫镖的结果。
 type CaravanRobResult struct {
@@ -399,6 +440,17 @@ func ParseCaravanRobResult(payload []byte) (*CaravanRobResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// BuildCaravanSearchResultPacket 构造开始勘察回包，供离线 mock 与单测使用。
+func BuildCaravanSearchResultPacket(targets []int32, result uint8) *Packet {
+	w := NewWriter()
+	w.WriteUint16(uint16(len(targets)))
+	for _, id := range targets {
+		w.WriteInt32(id)
+	}
+	w.WriteUint8(result)
+	return NewPacket(ActionIDCaravanGetList, w.Bytes())
 }
 
 // ParseCaravanInfoResultCode 解析劫镖信息面板首字节状态码。
@@ -437,6 +489,8 @@ func CaravanResultText(code uint8) string {
 		return "已申请"
 	case CaravanResultFailure:
 		return "失败"
+	case CaravanResultNotEnoughBuyTimes:
+		return "勘察次数不足"
 	default:
 		return fmt.Sprintf("未知结果码(%d)", code)
 	}
@@ -581,21 +635,29 @@ type DemonTowerPanel struct {
 	Ranks int32
 }
 
-// NextLayerID 返回下一层挑战目标 ID。
+// NextLayerID 返回当前可挑战的层 ID。
 //
-// 官方客户端以 layer_list 中最高的 layer_id + 1 作为下一层 (RepressDemonTowerData.getMonster)，
-// 无通关记录时从第 1 层开始。这里额外兼容 now_finish_layer 单调递增的语义。
+// 线上实测（2026-11-07 22:14，s0-niuchangsheng）：
+//
+//	now_finish_layer=40 时 challenge(40) 返回 SUCCESS(0)，
+//	challenge(41) 返回 LAYER_ERROR(4)。
+//
+// 因此 now_finish_layer / layer_list 的最大值就是当前可挑战层，
+// 不是“已通关层数 + 1”。无记录时从第 1 层开始。
 func (p *DemonTowerPanel) NextLayerID() int32 {
-	var maxPassed int32
+	var current int32
 	for _, l := range p.LayerList {
-		if l.LayerID > maxPassed {
-			maxPassed = l.LayerID
+		if l.LayerID > current {
+			current = l.LayerID
 		}
 	}
-	if p.NowFinishLayer > maxPassed {
-		maxPassed = p.NowFinishLayer
+	if p.NowFinishLayer > current {
+		current = p.NowFinishLayer
 	}
-	return maxPassed + 1
+	if current <= 0 {
+		return 1
+	}
+	return current
 }
 
 // BuildDemonTowerPanelPacket 构造查询锁妖塔主面板封包 (Module 705, Action 0)。

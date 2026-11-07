@@ -542,6 +542,10 @@ func TestPilgrimageRoutine_FullBusinessFlow(t *testing.T) {
 				w.WriteUint16(0)
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDSaintAreaStatus, w.Bytes()))
 
+			case protocol.ActionIDPlayerGetFunctions:
+				// 圣域功能 (165) 未开放: 该角色取经仍走仙界/主服链路，自动模式应回退。
+				_ = protocol.WritePacket(c2, protocol.BuildPlayerFunctionsResultPacket([]int32{protocol.FunctionIDFaction}))
+
 			// 西天取经业务动作响应
 			case protocol.ActionIDTakeBibleOpen:
 				openCalls.Add(1)
