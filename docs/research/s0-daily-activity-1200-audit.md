@@ -245,6 +245,17 @@
 - 例程：`internal/routines/social/sect_monster.go`，配置项 `sect_monster: true`；
   以任务 77 剩余次数为门禁，只使用免费档。
 
+## 12. 2026-11-07 傍晚：仙幽猎境（任务 73）实现
+
+- 协议：`Mod_MysticCapture_Base (Module 762)`
+  - `is_open_hunt_entrance (762/5)` request=[] → Int（1=开放）
+  - `enter_hunt (762/1)` request=[] → `[UByte result, ...]`；`click_enter_hunt (762/0)` 仅 UI 用
+  - 请求**不带 PrevAct**，空载荷即可；762 不受 `0x2A` 会话链污染影响
+- 线上实测：2026-11-07 17:25 `is_open_hunt_entrance=0`（入口按活动时段开放），
+  `enter_hunt` 在关闭时被静默丢弃。例程以任务 73 剩余次数 + 入口状态双重门禁，
+  开放时免费进入，不消耗元宝/体力。
+- 例程：`internal/routines/minigame/mystic_hunt.go`，配置项 `mystic_hunt: true`。
+
 ## 5. 已知缺陷
 
 ### 5.1 禁地之书元宝泄漏（已修复）

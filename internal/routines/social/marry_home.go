@@ -49,7 +49,31 @@ func NewMarryHomeRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 1. 领取自家小蛋糕奖励 (免费)。
+			// 1. 先查询自身住宅状态 (210/0 get_self_home_info)。
+			//
+			// 线上实测 (s0-tongchen): 未结婚角色的 get_cake 请求会被服务端静默丢弃，
+			// 直到 8s 超时；随后 210 的 PrevAct 链也被污染，导致后续请求继续超时。
+			// 住宅状态查询在未结婚角色上仍能正常回包 (与 homestead 例程一致)，
+			// 因此用它做前置卫语句，未结婚直接跳过，避免空等。
+			selfCtx, selfCancel := context.WithTimeout(ctx, callTimeout)
+			selfResp, selfErr := session.Call(selfCtx,
+				protocol.BuildMarryHomeSelfInfoPacket(session.PlayerID()), protocol.ActionIDMarryHomeSelfInfo)
+			selfCancel()
+			if selfErr != nil {
+				slog.Info("家园状态查询无回包，跳过本轮", "role_id", session.RoleID(), "err", selfErr)
+				return nil
+			}
+			selfResult, pErr := protocol.ParseMarryHomeSelfInfoResult(selfResp.Payload)
+			if pErr != nil {
+				slog.Warn("解析家园状态失败，跳过本轮", "role_id", session.RoleID(), "err", pErr)
+				return nil
+			}
+			if selfResult == protocol.MarryHomeResultNonMarry {
+				slog.Info("账号未处于婚姻状态，跳过家园奖励", "role_id", session.RoleID())
+				return nil
+			}
+
+			// 2. 领取自家小蛋糕奖励 (免费)。
 			//
 			// 注意: 不要在此之前调用活跃度面板 0x0000002A。线上实测该面板会污染
 			// 会话上下文，紧随其后的 Module 210 请求会被静默丢弃 (不回包直至超时)。

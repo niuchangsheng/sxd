@@ -138,6 +138,7 @@ scheduler:
     partner_link: true            # 灵结激活
     star_picture: false           # 法力星图占星: 首次免费但面板 free 计数与扣费不同步, 可能扣 50 元宝, 默认关闭
     era_yanjie: true               # 纪元湮劫每日一关战斗 (免费)
+    mystic_hunt: true              # 仙幽猎境入口开放时免费进入
 
   # ── 副本 / 挑战策略 ─────────────────────────────────────────
   dungeon:

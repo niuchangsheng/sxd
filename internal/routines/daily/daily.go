@@ -527,6 +527,7 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 				"is_geted", info.IsGeted,
 				"point", info.Point,
 				"max_point", info.MaxPoint,
+				"remain_seconds", info.RemainSeconds,
 			)
 
 			// 2. 查询等级奖励列表 (Mod 328, Act 1)
@@ -571,8 +572,11 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 				case protocol.GodWelfareResultItemPackFull:
 					return scheduler.ErrBagFull
 				case protocol.GodWelfareResultFailure:
-					slog.Info("天神赐福等级奖励领取失败", "role_id", session.RoleID(), "level", award.Level)
-					continue
+					// 同一活动状态下各等级奖励会一致失败（例如活动已结束或
+					// 当日整体奖励已领完），继续逐个尝试只会放大无效请求。
+					slog.Info("天神赐福等级奖励领取失败，停止本轮",
+						"role_id", session.RoleID(), "level", award.Level, "result", code)
+					return nil
 				default:
 					slog.Info("天神赐福等级奖励未领取", "role_id", session.RoleID(), "level", award.Level, "result", code)
 					continue

@@ -90,9 +90,9 @@ func TestFarmCodec_ResultsRoundtrip(t *testing.T) {
 	// 1. 验证 FarmGetInfoResult
 	infoRes := FarmGetInfoResult{
 		Fields: []FarmField{
-			{LandID: 10, State: 1, Cooldown: 0, SeedOrRoleID: 0},       // 空闲
-			{LandID: 11, State: 3, Cooldown: 0, SeedOrRoleID: 169},     // 成熟待采摘
-			{LandID: 12, State: 2, Cooldown: 3600, SeedOrRoleID: 169},  // 种植中
+			{LandID: 10, State: 1, Cooldown: 0, SeedOrRoleID: 0},      // 空闲
+			{LandID: 11, State: 3, Cooldown: 0, SeedOrRoleID: 169},    // 成熟待采摘
+			{LandID: 12, State: 2, Cooldown: 3600, SeedOrRoleID: 169}, // 种植中
 		},
 	}
 	pktInfoRes, err := BuildFarmGetInfoResultPacket(infoRes)
@@ -219,3 +219,42 @@ func TestFarmCodec_RealPcapGroundTruth(t *testing.T) {
 	}
 }
 
+// TestFarmRequests_MarkPrevAct 验证所有药园业务请求都标记 HasPrevAct，
+// 由会话层在发包时用真实最近动作号覆盖末尾 4 字节，避免手工链断档被静默丢弃。
+func TestFarmRequests_MarkPrevAct(t *testing.T) {
+	builders := []struct {
+		name  string
+		build func() (*Packet, error)
+	}{
+		{"get_info", func() (*Packet, error) {
+			return BuildFarmGetInfoPacket(FarmGetInfoRequest{PrevAct: ActionIDTownEnter})
+		}},
+		{"plant_state", func() (*Packet, error) {
+			return BuildFarmPlantStatePacket(FarmPlantStateRequest{PrevAct: ActionIDFarmGetInfo})
+		}},
+		{"seeds", func() (*Packet, error) {
+			return BuildFarmSeedsPacket(FarmSeedsRequest{PrevAct: ActionIDFarmGetPlantState})
+		}},
+		{"buy_seed", func() (*Packet, error) {
+			return BuildFarmBuySeedPacket(FarmBuySeedRequest{SeedID: 176, PrevAct: ActionIDFarmGetSeeds})
+		}},
+		{"plant", func() (*Packet, error) {
+			return BuildFarmPlantPacket(FarmPlantRequest{LandID: 10, SeedOrRoleID: 176, PrevAct: ActionIDFarmGetSeeds})
+		}},
+		{"harvest", func() (*Packet, error) {
+			return BuildFarmHarvestPacket(FarmHarvestRequest{LandID: 10, PrevAct: ActionIDFarmPlant})
+		}},
+	}
+	for _, b := range builders {
+		pkt, err := b.build()
+		if err != nil {
+			t.Fatalf("%s: %v", b.name, err)
+		}
+		if !pkt.HasPrevAct {
+			t.Errorf("%s 未标记 HasPrevAct，PrevAct 链可能断档", b.name)
+		}
+		if len(pkt.Payload) < 4 {
+			t.Errorf("%s 载荷不足 4 字节，无法写入 PrevAct", b.name)
+		}
+	}
+}

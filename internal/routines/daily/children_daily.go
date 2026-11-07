@@ -40,7 +40,15 @@ const childrenPriority scheduler.RoutinePriority = 120
 //
 // 全部动作只消耗培养金/免费次数，绝不调用任何元宝接口。
 func NewChildrenDailyRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 10 * time.Second
+	const (
+		// headerTimeout 主面板与活跃度汇总的常规超时。
+		headerTimeout = 10 * time.Second
+		// subPanelTimeout 孩子子面板专用短超时：线上部分角色会被服务端
+		// 确定性静默丢弃，长时间等待没有收益，只会拖慢整轮调度。
+		subPanelTimeout = 5 * time.Second
+		// primerTimeout 学习信息预热请求超时，失败即放弃本轮子面板。
+		primerTimeout = 4 * time.Second
+	)
 	return scheduler.NewBaseRoutine(
 		"children_daily",
 		"daily",
@@ -55,20 +63,20 @@ func NewChildrenDailyRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
+			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
+				cCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
 				resp, err := session.Call(cCtx, pkt, act)
 				if err != nil {
 					slog.Info("孩子协议无回包", "role_id", session.RoleID(),
-						"action", act, "err", err)
+						"action", act, "timeout", timeout, "err", err)
 					return nil
 				}
 				return resp
 			}
 
 			// 1. 读取孩子主面板，获取孩子 role_id。
-			infoResp := call(protocol.BuildChildrenInfoPacket(), protocol.ActionIDChildrenInfo)
+			infoResp := call(protocol.BuildChildrenInfoPacket(), protocol.ActionIDChildrenInfo, headerTimeout)
 			if infoResp == nil {
 				slog.Info("孩子功能不可用或未开放，跳过", "role_id", session.RoleID())
 				return nil
@@ -101,14 +109,34 @@ func NewChildrenDailyRoutine() scheduler.ActivityRoutine {
 				if i >= maxChildrenPerRun || ctx.Err() != nil {
 					break
 				}
+				// 线上实测：主面板之后直接请求学堂 (312/26) 仍可能被静默丢弃；
+				// 先用学习信息 (312/28) 完成一次成功往返，可恢复同一会话的
+				// 312/315 子面板链。预热失败则本轮直接跳过子面板，避免连续空等。
+				if resp := call(protocol.BuildChildrenStudyInfoPacket(childID),
+					protocol.ActionIDChildrenStudyInfo, primerTimeout); resp == nil {
+					slog.Info("孩子子面板会话链预热无回包，跳过本轮孩子操作",
+						"role_id", session.RoleID(), "child_id", childID)
+					break
+				}
 				// 线上实测：先调用孩子任务 (Module 315) 会让后续的学堂 (312)
 				// 子面板请求被静默丢弃，因此学堂必须排在任务之前。
-				attendChildrenSchool(ctx, session, childID, call)
-				claimChildrenTasks(ctx, session, childID, call)
+				// 一旦子面板无回包就跳过同孩子的后续请求，避免链式空等。
+				subPanelDropped := false
+				subCall := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
+					resp := call(pkt, act, subPanelTimeout)
+					if resp == nil {
+						subPanelDropped = true
+					}
+					return resp
+				}
+				attendChildrenSchool(ctx, session, childID, subCall)
+				if !subPanelDropped {
+					claimChildrenTasks(ctx, session, childID, subCall)
+				}
 			}
 
 			// 2. 只读汇总：孩子操作全部结束后再读活跃度，避免污染 312/315 会话状态。
-			if actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo); actResp != nil {
+			if actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo, headerTimeout); actResp != nil {
 				if panel, err := protocol.ParseGameAssistantInfo(actResp.Payload); err == nil {
 					slog.Info("孩子日常完成",
 						"role_id", session.RoleID(),

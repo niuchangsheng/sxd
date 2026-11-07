@@ -52,7 +52,21 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 			callWithTimeout := func(pkt *protocol.Packet, expectedAct uint32) (*protocol.Packet, error) {
 				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				defer cancel()
-				return session.Call(cCtx, pkt, expectedAct)
+				resp, err := session.Call(cCtx, pkt, expectedAct)
+				if err != nil {
+					slog.Info("药园协议无回包（服务端静默丢弃）",
+						"role_id", session.RoleID(),
+						"action", fmt.Sprintf("0x%08X", expectedAct),
+						"err", err,
+					)
+				}
+				return resp, err
+			}
+			// abortOnDrop 统一处理服务端静默丢弃：Module 13 的 PrevAct 链是强校验的，
+			// 一次无回包之后继续发送依赖请求只会连续空等（线上实测每次 8s，
+			// 单块土地可放大到 50s+），因此立即结束本轮等待下次调度。
+			abortOnDrop := func(resp *protocol.Packet, err error) bool {
+				return err != nil || resp == nil
 			}
 
 			// 2. 发送查询土地状态请求 (ActionIDFarmGetInfo 0x000D0000)
@@ -64,7 +78,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 			}
 
 			respPkt, err := callWithTimeout(infoPkt, protocol.ActionIDFarmGetInfo)
-			if err != nil {
+			if abortOnDrop(respPkt, err) {
 				return fmt.Errorf("farming: 查询药园土地状态超时或失败: %w", err)
 			}
 
@@ -84,30 +98,36 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 			plantStatePkt, pErr := protocol.BuildFarmPlantStatePacket(protocol.FarmPlantStateRequest{
 				PrevAct: prevAct,
 			})
-			if pErr == nil {
-				if plantResp, cErr := callWithTimeout(plantStatePkt, protocol.ActionIDFarmGetPlantState); cErr == nil && plantResp != nil {
-					prevAct = protocol.ActionIDFarmGetPlantState
-					if plantStateRes, psErr := protocol.ParseFarmPlantStateResult(plantResp.Payload); psErr == nil && len(plantStateRes.Fields) > 0 {
-						slog.Debug("药园实时作物生长时间同步报文", "fields_count", len(plantStateRes.Fields), "hex", hex.EncodeToString(plantResp.Payload))
-						stateMap := make(map[int32]protocol.FarmField)
-						for _, pf := range plantStateRes.Fields {
-							stateMap[pf.LandID] = pf
-							slog.Debug("土地实时状态数据", "land_id", pf.LandID, "state", pf.State, "cooldown", pf.Cooldown, "seed_id", pf.SeedOrRoleID)
-						}
-						for idx, f := range infoRes.Fields {
-							if realF, ok := stateMap[f.LandID]; ok {
-								infoRes.Fields[idx].State = realF.State
-								infoRes.Fields[idx].Cooldown = realF.Cooldown
-								infoRes.Fields[idx].SeedOrRoleID = realF.SeedOrRoleID
-							} else {
-								slog.Warn("土地ID未在实时状态表中找到", "land_id", f.LandID)
-							}
-						}
+			if pErr != nil {
+				return fmt.Errorf("farming: 构造药园作物状态封包失败: %w", pErr)
+			}
+			plantResp, cErr := callWithTimeout(plantStatePkt, protocol.ActionIDFarmGetPlantState)
+			if abortOnDrop(plantResp, cErr) {
+				return nil
+			}
+			prevAct = protocol.ActionIDFarmGetPlantState
+			if plantStateRes, psErr := protocol.ParseFarmPlantStateResult(plantResp.Payload); psErr != nil {
+				slog.Warn("解析药园作物状态失败，继续使用基础土地状态",
+					"role_id", session.RoleID(), "err", psErr)
+			} else if len(plantStateRes.Fields) > 0 {
+				slog.Debug("药园实时作物生长时间同步报文", "fields_count", len(plantStateRes.Fields), "hex", hex.EncodeToString(plantResp.Payload))
+				stateMap := make(map[int32]protocol.FarmField)
+				for _, pf := range plantStateRes.Fields {
+					stateMap[pf.LandID] = pf
+					slog.Debug("土地实时状态数据", "land_id", pf.LandID, "state", pf.State, "cooldown", pf.Cooldown, "seed_id", pf.SeedOrRoleID)
+				}
+				for idx, f := range infoRes.Fields {
+					if realF, ok := stateMap[f.LandID]; ok {
+						infoRes.Fields[idx].State = realF.State
+						infoRes.Fields[idx].Cooldown = realF.Cooldown
+						infoRes.Fields[idx].SeedOrRoleID = realF.SeedOrRoleID
+					} else {
+						slog.Warn("土地ID未在实时状态表中找到", "land_id", f.LandID)
 					}
 				}
 			}
 
-			// 4. 尝试查询种子库存与单价 (ActionIDFarmGetSeeds 0x000D0016)
+			// 4. 查询种子库存与单价 (ActionIDFarmGetSeeds 0x000D0016)
 			// 确定待种植的种子/伙伴编号 (默认 176 经验丹果树 / 169 仙玲珑经验草)
 			seedID := int32(176) // 0xB0 经验丹果树
 			seedName := "经验丹果树"
@@ -120,40 +140,69 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 			seedsPkt, sErr := protocol.BuildFarmSeedsPacket(protocol.FarmSeedsRequest{
 				PrevAct: prevAct,
 			})
-			if sErr == nil {
-				if seedsResp, scErr := callWithTimeout(seedsPkt, protocol.ActionIDFarmGetSeeds); scErr == nil && seedsResp != nil {
-					prevAct = protocol.ActionIDFarmGetSeeds
-					if seedsRes, sParseErr := protocol.ParseFarmSeedsResult(seedsResp.Payload); sParseErr == nil {
-						ownedMap := make(map[int32]int32)
-						for _, sItem := range seedsRes.Seeds {
-							ownedMap[sItem.SeedID] = sItem.OwnedCount
-						}
+			if sErr != nil {
+				return fmt.Errorf("farming: 构造药园种子查询封包失败: %w", sErr)
+			}
+			seedsResp, scErr := callWithTimeout(seedsPkt, protocol.ActionIDFarmGetSeeds)
+			if abortOnDrop(seedsResp, scErr) {
+				return nil
+			}
+			prevAct = protocol.ActionIDFarmGetSeeds
+			seedsRes, sParseErr := protocol.ParseFarmSeedsResult(seedsResp.Payload)
+			if sParseErr != nil {
+				slog.Warn("解析药园种子库存失败，跳过补仓",
+					"role_id", session.RoleID(), "err", sParseErr)
+			} else {
+				ownedMap := make(map[int32]int32)
+				for _, sItem := range seedsRes.Seeds {
+					ownedMap[sItem.SeedID] = sItem.OwnedCount
+				}
+				slog.Info("药园种子库存",
+					"role_id", session.RoleID(),
+					"seed_176_owned", ownedMap[176],
+					"seed_169_owned", ownedMap[169],
+					"seed_kinds", len(seedsRes.Seeds),
+				)
 
-						// 确保常用主力种子 (176 经验丹果树 与 169 仙玲珑经验草) 库存充足
-						for _, targetSeedID := range []int32{seedID, 169} {
-							owned := ownedMap[targetSeedID]
-							needBuy := 4 - int(owned)
-							if needBuy > 0 {
-								for b := 0; b < needBuy; b++ {
-									buyPkt, bErr := protocol.BuildFarmBuySeedPacket(protocol.FarmBuySeedRequest{
-										SeedID:  targetSeedID,
-										PrevAct: prevAct,
-									})
-									if bErr == nil {
-										if buyResp, bCallErr := callWithTimeout(buyPkt, protocol.ActionIDFarmBuySeed); bCallErr == nil && buyResp != nil {
-											prevAct = protocol.ActionIDFarmBuySeed
-											sName := seedName
-											if dictRepo != nil {
-												if item, dErr := dictRepo.GetItem(int(targetSeedID)); dErr == nil && item != nil {
-													sName = item.Name
-												}
-											}
-											slog.Info("药园种子自动购买成功", "seed_id", targetSeedID, "seed_name", sName)
-										}
-									}
-								}
+				// 确保常用主力种子 (176 经验丹果树 与 169 仙玲珑经验草) 库存充足。
+				// 购买请求一旦无回包立即终止本轮，避免 PrevAct 链被污染后
+				// 后续播种/采摘全部连续超时。
+				for _, targetSeedID := range []int32{seedID, 169} {
+					owned := ownedMap[targetSeedID]
+					if owned >= 4 {
+						continue
+					}
+					for b := int32(0); b < 4-owned; b++ {
+						buyPkt, bErr := protocol.BuildFarmBuySeedPacket(protocol.FarmBuySeedRequest{
+							SeedID:  targetSeedID,
+							PrevAct: prevAct,
+						})
+						if bErr != nil {
+							return fmt.Errorf("farming: 构造药园种子购买封包失败: %w", bErr)
+						}
+						buyResp, bCallErr := callWithTimeout(buyPkt, protocol.ActionIDFarmBuySeed)
+						if abortOnDrop(buyResp, bCallErr) {
+							return nil
+						}
+						prevAct = protocol.ActionIDFarmBuySeed
+						buyRes, bParseErr := protocol.ParseFarmBuySeedResult(buyResp.Payload)
+						if bParseErr != nil {
+							slog.Warn("解析药园种子购买回包失败",
+								"role_id", session.RoleID(), "seed_id", targetSeedID, "err", bParseErr)
+							break
+						}
+						if !buyRes.Success {
+							slog.Info("药园种子购买未成功（铜钱不足或已达上限），跳过该种子",
+								"role_id", session.RoleID(), "seed_id", targetSeedID)
+							break
+						}
+						sName := seedName
+						if dictRepo != nil {
+							if item, dErr := dictRepo.GetItem(int(targetSeedID)); dErr == nil && item != nil {
+								sName = item.Name
 							}
 						}
+						slog.Info("药园种子自动购买成功", "seed_id", targetSeedID, "seed_name", sName)
 					}
 				}
 			}
@@ -175,28 +224,37 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				// 1. 若土地成熟待采摘 (State == 3)
 				if field.State == 3 {
 					harvestPkt, hErr := protocol.BuildFarmHarvestPacket(protocol.FarmHarvestRequest{
-						LandID:  field.LandID,
-						PrevAct: protocol.ActionIDFarmPlant, // 抓包事实: PrevAct 强校验必须为 ActionIDFarmPlant (0x000D0018)
+						LandID: field.LandID,
+						// 使用最近一次成功往返的动作号。旧实现硬编码 ActionIDFarmPlant，
+						// 但本流程中采摘前通常是 Act 21/22，硬编码会直接断链被静默丢弃。
+						PrevAct: prevAct,
 					})
-					if hErr == nil {
-						hResp, callErr := callWithTimeout(harvestPkt, protocol.ActionIDFarmHarvest)
-						prevAct = protocol.ActionIDFarmHarvest
-						if callErr == nil && hResp != nil {
-							if hResult, pErr := protocol.ParseFarmHarvestResult(hResp.Payload); pErr == nil && hResult.Success {
-								harvestedCount++
-								totalGainExp += hResult.GainExp
-								totalGainCoins += hResult.GainCoins
-								session.AddRewards(hResult.GainExp, hResult.GainCoins)
-								slog.Info("药园药草采摘成功",
-									"role_id", session.RoleID(),
-									"land_id", field.LandID,
-									"gain_exp", hResult.GainExp,
-									"gain_coins", hResult.GainCoins,
-								)
-								// 采摘后地块变为空闲状态，可继续播种
-								field.State = 1
-							}
-						}
+					if hErr != nil {
+						return fmt.Errorf("farming: 构造药园采摘封包失败: %w", hErr)
+					}
+					hResp, callErr := callWithTimeout(harvestPkt, protocol.ActionIDFarmHarvest)
+					if abortOnDrop(hResp, callErr) {
+						return nil
+					}
+					prevAct = protocol.ActionIDFarmHarvest
+					if hResult, pErr := protocol.ParseFarmHarvestResult(hResp.Payload); pErr != nil {
+						slog.Warn("解析药园采摘回包失败", "role_id", session.RoleID(), "land_id", field.LandID, "err", pErr)
+					} else if hResult.Success {
+						harvestedCount++
+						totalGainExp += hResult.GainExp
+						totalGainCoins += hResult.GainCoins
+						session.AddRewards(hResult.GainExp, hResult.GainCoins)
+						slog.Info("药园药草采摘成功",
+							"role_id", session.RoleID(),
+							"land_id", field.LandID,
+							"gain_exp", hResult.GainExp,
+							"gain_coins", hResult.GainCoins,
+						)
+						// 采摘后地块变为空闲状态，可继续播种
+						field.State = 1
+					} else {
+						slog.Info("药园土地暂不可采摘",
+							"role_id", session.RoleID(), "land_id", field.LandID)
 					}
 				}
 
@@ -215,55 +273,77 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 							SeedOrRoleID: sID,
 							PrevAct:      prevAct,
 						})
-						if pErr == nil {
-							pResp, callErr := callWithTimeout(plantPkt, protocol.ActionIDFarmPlant)
-							if callErr == nil && pResp != nil {
-								if pResult, parseErr := protocol.ParseFarmPlantResult(pResp.Payload); parseErr == nil && pResult.Success {
-									plantedCount++
-									prevAct = protocol.ActionIDFarmPlant
-									sName := "药草种子"
-									if dictRepo != nil {
-										if item, dErr := dictRepo.GetItem(int(sID)); dErr == nil && item != nil {
-											sName = item.Name
-										}
-									}
-									slog.Info("药园土地播种成功",
-										"role_id", session.RoleID(),
-										"land_id", field.LandID,
-										"seed_name", sName,
-										"seed_id", sID,
-										"cooldown_sec", pResult.Cooldown,
-									)
-									field.State = 2
+						if pErr != nil {
+							return fmt.Errorf("farming: 构造药园播种封包失败: %w", pErr)
+						}
+						pResp, callErr := callWithTimeout(plantPkt, protocol.ActionIDFarmPlant)
+						if abortOnDrop(pResp, callErr) {
+							return nil
+						}
+						prevAct = protocol.ActionIDFarmPlant
+						pResult, parseErr := protocol.ParseFarmPlantResult(pResp.Payload)
+						if parseErr != nil {
+							slog.Warn("解析药园播种回包失败",
+								"role_id", session.RoleID(), "land_id", field.LandID,
+								"seed_id", sID, "err", parseErr)
+							break
+						}
+						if !pResult.Success {
+							slog.Debug("药园播种被服务端拒绝，尝试下一种子",
+								"role_id", session.RoleID(), "land_id", field.LandID, "seed_id", sID)
+							continue
+						}
 
-									// 3. 紧随原版 pie.exe 交互链: 播种成功后立刻执行采摘 (Act 25)，PrevAct=ActionIDFarmPlant
-									harvestPkt, hErr := protocol.BuildFarmHarvestPacket(protocol.FarmHarvestRequest{
-										LandID:  field.LandID,
-										PrevAct: protocol.ActionIDFarmPlant,
-									})
-									if hErr == nil {
-										hResp, hCallErr := callWithTimeout(harvestPkt, protocol.ActionIDFarmHarvest)
-										prevAct = protocol.ActionIDFarmHarvest
-										if hCallErr == nil && hResp != nil {
-											if hResult, hpErr := protocol.ParseFarmHarvestResult(hResp.Payload); hpErr == nil && hResult.Success {
-												harvestedCount++
-												totalGainExp += hResult.GainExp
-												totalGainCoins += hResult.GainCoins
-												session.AddRewards(hResult.GainExp, hResult.GainCoins)
-												slog.Info("药园药草采摘成功",
-													"role_id", session.RoleID(),
-													"land_id", field.LandID,
-													"gain_exp", hResult.GainExp,
-													"gain_coins", hResult.GainCoins,
-												)
-											}
-										}
-									}
-
-									break
-								}
+						plantedCount++
+						sName := "药草种子"
+						if dictRepo != nil {
+							if item, dErr := dictRepo.GetItem(int(sID)); dErr == nil && item != nil {
+								sName = item.Name
 							}
 						}
+						slog.Info("药园土地播种成功",
+							"role_id", session.RoleID(),
+							"land_id", field.LandID,
+							"seed_name", sName,
+							"seed_id", sID,
+							"cooldown_sec", pResult.Cooldown,
+						)
+						field.State = 2
+
+						// 3. 紧随原版 pie.exe 交互链: 播种成功后立刻执行采摘 (Act 25)，
+						// PrevAct 使用刚才成功发送的播种动作 (0x000D0018)。
+						harvestPkt, hErr := protocol.BuildFarmHarvestPacket(protocol.FarmHarvestRequest{
+							LandID:  field.LandID,
+							PrevAct: prevAct,
+						})
+						if hErr != nil {
+							return fmt.Errorf("farming: 构造药园采摘封包失败: %w", hErr)
+						}
+						hResp, hCallErr := callWithTimeout(harvestPkt, protocol.ActionIDFarmHarvest)
+						if abortOnDrop(hResp, hCallErr) {
+							return nil
+						}
+						prevAct = protocol.ActionIDFarmHarvest
+						if hResult, hpErr := protocol.ParseFarmHarvestResult(hResp.Payload); hpErr != nil {
+							slog.Warn("解析药园采摘回包失败",
+								"role_id", session.RoleID(), "land_id", field.LandID, "err", hpErr)
+						} else if hResult.Success {
+							harvestedCount++
+							totalGainExp += hResult.GainExp
+							totalGainCoins += hResult.GainCoins
+							session.AddRewards(hResult.GainExp, hResult.GainCoins)
+							slog.Info("药园药草采摘成功",
+								"role_id", session.RoleID(),
+								"land_id", field.LandID,
+								"gain_exp", hResult.GainExp,
+								"gain_coins", hResult.GainCoins,
+							)
+						} else {
+							slog.Info("药园播种后暂不可采摘",
+								"role_id", session.RoleID(), "land_id", field.LandID)
+						}
+
+						break
 					}
 				} else if field.State == 2 {
 					growingCount++
@@ -1270,6 +1350,9 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 		targetName = "灵材"
 	}
 	const callTimeout = 8 * time.Second
+	// 一键淬炼是一次性结算全部已完成槽位的重操作（线上 done_slots=10 时
+	// 8s 内未能返回），给结算请求更长的等待窗口，避免把慢回包误判为丢包。
+	const executeTimeout = 20 * time.Second
 	return scheduler.NewBaseRoutine(
 		"spirit_pool",
 		"farming",
@@ -1335,11 +1418,24 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 3. 查询淬炼池资源面板 (Mod 534, Act 5), 与实机抓包序列保持一致
+			// 3. 查询淬炼池资源面板 (Mod 534, Act 5), 与实机抓包序列保持一致。
+			// 该动作回包固定 5 字节且不含业务结果码（协议规范 4.7），
+			// 但它是后续一键淬炼 PrevAct 链的一环；缺包时必须终止，
+			// 否则 0x011A0001 会被服务端静默丢弃。
 			panelPkt := protocol.BuildRefinePoolPanelPacket(protocol.ActionIDRefinePoolOpen)
 			pCtx, pCancel := context.WithTimeout(ctx, callTimeout)
-			_, _ = session.Call(pCtx, panelPkt, protocol.ActionIDRefinePoolPanel)
+			panelResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDRefinePoolPanel)
 			pCancel()
+			if pErr != nil || panelResp == nil {
+				slog.Info("查询淬炼池资源面板无回包，终止本轮以保护动作链",
+					"role_id", session.RoleID(), "target", targetName, "err", pErr)
+				return nil
+			}
+			if len(panelResp.Payload) < 5 {
+				slog.Warn("淬炼池资源面板回包长度异常，终止本轮",
+					"role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
+				return nil
+			}
 
 			done := panel.DoneCount()
 			if done == 0 {
@@ -1360,7 +1456,7 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				protocol.RefinePoolTypeOneKey,
 				protocol.ActionIDRefinePoolPanel,
 			)
-			eCtx, eCancel := context.WithTimeout(ctx, callTimeout)
+			eCtx, eCancel := context.WithTimeout(ctx, executeTimeout)
 			resp, err := session.Call(eCtx, execPkt, protocol.ActionIDRefineExecute)
 			eCancel()
 			if err != nil {

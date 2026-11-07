@@ -142,7 +142,11 @@ func BuildFarmGetInfoPacket(req FarmGetInfoRequest) (*Packet, error) {
 		prevAct = ActionIDTownEnter
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDFarmGetInfo, w.Bytes()), nil
+	pkt := NewPacket(ActionIDFarmGetInfo, w.Bytes())
+	// 由会话层在发包瞬间用真实最近动作号覆盖末尾 4 字节（官方 DataBase.netCall 行为），
+	// 避免手工传递的 PrevAct 与实际发送链不一致导致服务端静默丢弃。
+	pkt.HasPrevAct = true
+	return pkt, nil
 }
 
 // ParseFarmGetInfoRequest 从载荷反序列化查询土地信息请求。
@@ -166,7 +170,9 @@ func BuildFarmPlantStatePacket(req FarmPlantStateRequest) (*Packet, error) {
 		prevAct = ActionIDFarmGetInfo
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDFarmGetPlantState, w.Bytes()), nil
+	pkt := NewPacket(ActionIDFarmGetPlantState, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt, nil
 }
 
 // ParseFarmPlantStateResult 从载荷反序列化药园作物生长时间与种植状态。
@@ -245,7 +251,9 @@ func BuildFarmSeedsPacket(req FarmSeedsRequest) (*Packet, error) {
 		prevAct = ActionIDFarmGetPlantState
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDFarmGetSeeds, w.Bytes()), nil
+	pkt := NewPacket(ActionIDFarmGetSeeds, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt, nil
 }
 
 // ParseFarmSeedsResult 从载荷反序列化药园种子列表与价格。
@@ -287,7 +295,9 @@ func BuildFarmBuySeedPacket(req FarmBuySeedRequest) (*Packet, error) {
 		prevAct = ActionIDFarmGetSeeds
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDFarmBuySeed, w.Bytes()), nil
+	pkt := NewPacket(ActionIDFarmBuySeed, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt, nil
 }
 
 // ParseFarmBuySeedResult 从载荷反序列化购买种子响应。
@@ -315,7 +325,9 @@ func BuildFarmPlantPacket(req FarmPlantRequest) (*Packet, error) {
 	}
 	w.WriteUint32(prevAct)
 
-	return NewPacket(ActionIDFarmPlant, w.Bytes()), nil
+	pkt := NewPacket(ActionIDFarmPlant, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt, nil
 }
 
 // ParseFarmPlantRequest 从载荷反序列化播种药草请求。
@@ -356,7 +368,9 @@ func BuildFarmHarvestPacket(req FarmHarvestRequest) (*Packet, error) {
 	}
 	w.WriteUint32(prevAct)
 
-	return NewPacket(ActionIDFarmHarvest, w.Bytes()), nil
+	pkt := NewPacket(ActionIDFarmHarvest, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt, nil
 }
 
 // ParseFarmHarvestRequest 从载荷反序列化收取成熟药草请求。

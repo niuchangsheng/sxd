@@ -3679,6 +3679,14 @@ func runMockGameServer(conn net.Conn) {
 				IsWin: 1,
 			}))
 
+		case protocol.ActionIDMysticHuntEntranceOpen:
+			// 仙幽猎境入口: mock 中视为开放。
+			_ = protocol.WritePacket(conn, protocol.BuildMysticHuntEntranceResultPacket(1))
+
+		case protocol.ActionIDMysticHuntEnter:
+			// 进入猎境成功。
+			_ = protocol.WritePacket(conn, protocol.BuildMysticHuntEnterResultPacket(protocol.MysticHuntResultSuccess))
+
 		case protocol.ActionIDMarryHomeGetCake:
 			// 家园小蛋糕: 领取成功并返回 1 件奖励。
 			_ = protocol.WritePacket(conn, protocol.BuildMarryHomeCakeResultPacket(protocol.MarryHomeCakeResult{
@@ -3691,6 +3699,7 @@ func runMockGameServer(conn net.Conn) {
 			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
 				{TaskID: 69, CurTimes: 0, MaxTimes: 20, PerActiveAdd: 10},
 				{TaskID: 71, CurTimes: 0, MaxTimes: 1, PerActiveAdd: 20},
+				{TaskID: 73, CurTimes: 0, MaxTimes: 1, PerActiveAdd: 20},
 			}))
 
 		case protocol.ActionIDWuFaDrawCard:

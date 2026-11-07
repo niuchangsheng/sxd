@@ -239,6 +239,118 @@ func TestHerbGardenRoutine_FullBusinessFlow(t *testing.T) {
 	serverWg.Wait()
 }
 
+// TestHerbGardenRoutine_AbortsOnSilentDrop 验证服务端静默丢弃购买种子请求后，
+// 例程立即结束本轮，不再对后续 7 个种子/土地连续空等（线上单轮曾放大到 4 分钟）。
+func TestHerbGardenRoutine_AbortsOnSilentDrop(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	var buyCalls, plantCalls, harvestCalls atomic.Int32
+	var serverWg sync.WaitGroup
+	serverWg.Add(1)
+
+	go func() {
+		defer serverWg.Done()
+		for {
+			pkt, err := protocol.ReadPacket(c2)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerLogin:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerLogin, []byte{
+					0x00, 0x00, 0x00, 0x00, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x00, 0x10, 0x85, 0x01,
+				}))
+			case protocol.ActionIDPlayerInitStep1:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep1,
+					[]byte{0x00, 0x00, 0x13, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x13, 0x0f, 0x00, 0x00, 0x13, 0x12}))
+			case protocol.ActionIDPlayerInitStep2:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00}))
+			case protocol.ActionIDPlayerInitStep3:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep3, make([]byte, 8)))
+			case protocol.ActionIDPlayerGetInfo:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerGetInfo, []byte{
+					0x00, 0x09, 0xe6, 0xa2, 0xa6, 0xe4, 0xb8, 0x80, 0xe5, 0x9c, 0xba,
+					0x00, 0x00, 0x01, 0x2c,
+					0x00, 0x00, 0x9a, 0x37,
+					0x00, 0x00, 0x00, 0x08, 0x6f, 0x93, 0xac, 0xf8,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0a, 0xd1,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0f, 0x99,
+					0x00, 0x00, 0x01, 0x2c,
+				}))
+			case protocol.ActionHeartbeat:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+			case protocol.ActionIDSaintAreaStatus:
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.SaintAreaStatusClose)
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDSaintAreaStatus, w.Bytes()))
+			case protocol.ActionIDFarmGetInfo:
+				resp, _ := protocol.BuildFarmGetInfoResultPacket(protocol.FarmGetInfoResult{Fields: []protocol.FarmField{
+					{LandID: 10, State: 1},
+				}})
+				_ = protocol.WritePacket(c2, resp)
+			case protocol.ActionIDFarmGetPlantState:
+				w := protocol.NewWriter()
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetPlantState, w.Bytes()))
+			case protocol.ActionIDFarmGetSeeds:
+				w := protocol.NewWriter()
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetSeeds, w.Bytes()))
+			case protocol.ActionIDFarmBuySeed:
+				buyCalls.Add(1)
+				// 模拟服务端静默丢弃：不回包。
+			case protocol.ActionIDFarmPlant:
+				plantCalls.Add(1)
+			case protocol.ActionIDFarmHarvest:
+				harvestCalls.Add(1)
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role-farmer-drop", RoleName: "静默丢弃测试", Username: "farmer_drop",
+		Hash: "dummy", ServerAddr: "farm-drop-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) { return c1, nil },
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("session.Start 失败: %v", err)
+	}
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("会话未进入激活态: %s", session.State())
+	}
+
+	// 父上下文短超时模拟无回包；例程应在第一次购买超时后立即返回。
+	execCtx, execCancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer execCancel()
+	if err := farming.NewHerbGardenRoutine().Execute(execCtx, session, nil); err != nil {
+		t.Fatalf("药园 Routine 执行失败: %v", err)
+	}
+
+	if got := buyCalls.Load(); got != 1 {
+		t.Errorf("静默丢弃后应只发送 1 次购买请求, 实际 %d 次", got)
+	}
+	if got := plantCalls.Load(); got != 0 {
+		t.Errorf("购买无回包后不应继续播种, 实际 %d 次", got)
+	}
+	if got := harvestCalls.Load(); got != 0 {
+		t.Errorf("购买无回包后不应继续采摘, 实际 %d 次", got)
+	}
+
+	session.Close()
+	c1.Close()
+	c2.Close()
+	serverWg.Wait()
+}
+
 // TestPilgrimageRoutine_Metadata 验证西天取经 Routine 元数据
 func TestPilgrimageRoutine_Metadata(t *testing.T) {
 	routine := farming.NewPilgrimageRoutine()

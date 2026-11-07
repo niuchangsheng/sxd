@@ -102,25 +102,69 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 						openCount = remaining
 					}
 
-					// 2.1 开箱前置握手 (Mod 528, Act 1)
-					prepPkt := protocol.BuildJieYuanBoxOpenContextPacket(prevAct)
-					pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
-					_, _ = session.Call(pCtx, prepPkt, protocol.ActionIDJieYuanBoxOpenContext)
-					pCancel()
-
-					// 2.2 发送批量开启指令 (Mod 232, Act 34: 每批最多10个)
-					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, openCount, protocol.ActionIDJieYuanBoxOpenContext)
+					// 线上实测 (2026-11-07 s0): 旧抓包中 0x02100001 的“开箱前置握手”
+					// 在当前服务端会被静默丢弃，且会把 PrevAct 链指向一个服务端从未处理的
+					// 动作，导致随后的开箱请求也全部超时（每批固定空等 16s）。
+					// 因此不再发送该握手，直接以库存查询动作作为 PrevAct 发起开箱；
+					// 请求失败即终止本轮，避免对其他宝箱重复空等。
+					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, openCount, prevAct)
 					oCtx, oCancel := context.WithTimeout(ctx, 8*time.Second)
 					openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)
 					oCancel()
 
-					prevAct = protocol.ActionIDJieYuanBoxOpen
-					if oErr == nil && openResp != nil {
-						totalOpened += int(openCount)
-						remaining -= openCount
-					} else {
-						break
+					if oErr != nil || openResp == nil {
+						slog.Info("结缘宝箱开启请求无回包（服务端静默丢弃），终止本轮",
+							"role_id", session.RoleID(),
+							"item_id", box.ItemID,
+							"open_count", openCount,
+							"err", oErr,
+						)
+						return nil
 					}
+
+					// 成功也要校验副作用：重新拉取列表，确认道具数量确实减少。
+					// 服务端对无资格请求可能返回空回包，不能仅凭“收到回包”判定成功。
+					verifyPkt := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDJieYuanBoxOpen)
+					vCtx, vCancel := context.WithTimeout(ctx, 8*time.Second)
+					verifyResp, vErr := session.Call(vCtx, verifyPkt, protocol.ActionIDJieYuanBoxList)
+					vCancel()
+					if vErr != nil || verifyResp == nil {
+						slog.Info("结缘宝箱开箱后核对库存无回包，终止本轮",
+							"role_id", session.RoleID(),
+							"item_id", box.ItemID,
+							"err", vErr,
+						)
+						return nil
+					}
+					boxesAfter, parseErr := protocol.ParseJieYuanBoxListResult(verifyResp.Payload)
+					if parseErr != nil {
+						slog.Warn("解析结缘宝箱开箱后库存失败，终止本轮",
+							"role_id", session.RoleID(), "err", parseErr)
+						return nil
+					}
+					afterCount := remaining
+					for _, b := range boxesAfter {
+						if b.ItemID == box.ItemID {
+							afterCount = b.Count
+							break
+						}
+					}
+					if afterCount >= remaining {
+						slog.Warn("结缘宝箱开箱未生效（数量未减少），终止本轮",
+							"role_id", session.RoleID(),
+							"item_id", box.ItemID,
+							"before", remaining,
+							"after", afterCount,
+							"reply_len", len(openResp.Payload),
+						)
+						return nil
+					}
+
+					openedNow := remaining - afterCount
+					totalOpened += int(openedNow)
+					remaining = afterCount
+					// 库存核对查询是本轮最后一个已发送动作，后续开箱以它为 PrevAct。
+					prevAct = protocol.ActionIDJieYuanBoxList
 
 					time.Sleep(50 * time.Millisecond)
 				}

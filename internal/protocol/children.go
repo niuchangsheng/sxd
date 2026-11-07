@@ -19,6 +19,8 @@ const (
 	ActionIDChildrenInfo uint32 = 0x01380000
 	// ActionIDChildrenSchoolInfo 查询孩子学堂信息 (Module 312, Action 26 -> 0x0138001A)
 	ActionIDChildrenSchoolInfo uint32 = 0x0138001A
+	// ActionIDChildrenStudyInfo 查询孩子学习信息 (Module 312, Action 28 -> 0x0138001C)
+	ActionIDChildrenStudyInfo uint32 = 0x0138001C
 	// ActionIDChildrenAttendSchool 孩子上学 (Module 312, Action 27 -> 0x0138001B)
 	ActionIDChildrenAttendSchool uint32 = 0x0138001B
 	// ActionIDChildrenTaskInfo 查询孩子任务 (Module 315, Action 0 -> 0x013B0000)
@@ -104,6 +106,20 @@ func BuildChildrenSchoolInfoPacket(childID int32) *Packet {
 	w.WriteInt32(childID)
 	w.WriteUint32(0)
 	pkt := NewPacket(ActionIDChildrenSchoolInfo, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// BuildChildrenStudyInfoPacket 构造孩子学习信息查询封包 (312/28)。
+//
+// 线上实测：孩子任务/学堂子面板在部分角色上会被服务端静默丢弃，而在
+// 学习信息 (0x0138001C) 成功往返之后，同一会话的 312/315 子面板即可正常回包。
+// 因此例行程序把该动作作为子面板前的会话链预热请求。
+func BuildChildrenStudyInfoPacket(childID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(childID)
+	w.WriteUint32(0)
+	pkt := NewPacket(ActionIDChildrenStudyInfo, w.Bytes())
 	pkt.HasPrevAct = true
 	return pkt
 }

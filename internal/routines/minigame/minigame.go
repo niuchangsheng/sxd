@@ -1113,7 +1113,7 @@ func NewEraTravelRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行益智任务: 山河纪元游历掷骰与寻宝", "role_id", session.RoleID())
 
-			// 1. 查询游历状态 (Mod 850, Act 4)
+			// 1. 查询游历状态 (Mod 850, Act 4)。该回包首字节为业务结果码。
 			statePkt := protocol.BuildEraTravelGetStatePacket(protocol.ActionIDTownEnter)
 			sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
 			resp, err := session.Call(sCtx, statePkt, protocol.ActionIDEraTravelGetState)
@@ -1123,20 +1123,41 @@ func NewEraTravelRoutine() scheduler.ActivityRoutine {
 				slog.Info("山河游历功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
+			if code := resp.Payload[0]; code != 0 {
+				slog.Info("山河游历状态查询返回失败，跳过",
+					"role_id", session.RoleID(), "result", code)
+				return nil
+			}
 
 			// 2. 掷骰移动 (Mod 850, Act 0)
 			rollPkt := protocol.BuildEraTravelRollDicePacket(1, protocol.ActionIDEraTravelGetState)
 			rCtx, rCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(rCtx, rollPkt, protocol.ActionIDEraTravelRollDice)
+			rollResp, rollErr := session.Call(rCtx, rollPkt, protocol.ActionIDEraTravelRollDice)
 			rCancel()
+			if rollErr != nil || rollResp == nil {
+				slog.Info("山河游历掷骰无回包，终止本轮", "role_id", session.RoleID(), "err", rollErr)
+				return nil
+			}
+			if len(rollResp.Payload) == 0 {
+				slog.Info("山河游历掷骰回包为空，终止本轮", "role_id", session.RoleID())
+				return nil
+			}
 
 			// 3. 奇遇画卷事件结算 (Mod 635, Act 0)
 			eventPkt := protocol.NewPacket(protocol.ActionIDEraEventSettle, protocol.NewWriter().WriteUint32(protocol.ActionIDEraTravelRollDice).Bytes())
 			eCtx, eCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(eCtx, eventPkt, protocol.ActionIDEraEventSettle)
+			eventResp, eventErr := session.Call(eCtx, eventPkt, protocol.ActionIDEraEventSettle)
 			eCancel()
+			if eventErr != nil || eventResp == nil {
+				slog.Info("山河游历事件结算无回包，终止本轮", "role_id", session.RoleID(), "err", eventErr)
+				return nil
+			}
 
-			slog.Info("山河游历掷骰与事件结算完成", "role_id", session.RoleID())
+			slog.Info("山河游历掷骰与事件结算完成",
+				"role_id", session.RoleID(),
+				"roll_reply_len", len(rollResp.Payload),
+				"event_reply_len", len(eventResp.Payload),
+			)
 			return nil
 		},
 	)
@@ -1173,10 +1194,18 @@ func NewLingDaoRoutine() scheduler.ActivityRoutine {
 			// 2. 提交初解任务领悟 (Mod 711, Act 0)
 			compPkt := protocol.BuildLingDaoComprehendPacket(protocol.ActionIDLingDaoGetStatus)
 			cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(cCtx, compPkt, protocol.ActionIDLingDaoComprehend)
+			compResp, cErr := session.Call(cCtx, compPkt, protocol.ActionIDLingDaoComprehend)
 			cCancel()
+			if cErr != nil || compResp == nil {
+				slog.Info("灵道初解领悟请求无回包，终止本轮",
+					"role_id", session.RoleID(), "err", cErr)
+				return nil
+			}
 
-			slog.Info("灵道初解阶段领悟完成", "role_id", session.RoleID())
+			slog.Info("灵道初解阶段动作已提交",
+				"role_id", session.RoleID(),
+				"reply_len", len(compResp.Payload),
+			)
 			return nil
 		},
 	)
@@ -1223,36 +1252,62 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			// 2. 选定入侵章节并挑战 (Mod 696, Act 1 & 2)
 			chapPkt := protocol.NewPacket(protocol.ActionIDHuanshouInvadeChapter, protocol.NewWriter().WriteUint32(protocol.ActionIDHuanshouPanel).Bytes())
 			cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(cCtx, chapPkt, protocol.ActionIDHuanshouInvadeChapter)
+			chapResp, chapErr := session.Call(cCtx, chapPkt, protocol.ActionIDHuanshouInvadeChapter)
 			cCancel()
+			if chapErr != nil || chapResp == nil {
+				slog.Info("山海幻兽入侵章节请求无回包，终止本轮",
+					"role_id", session.RoleID(), "err", chapErr)
+				return nil
+			}
 
 			chalPkt := protocol.BuildHuanshouInvadeChallengePacket(protocol.ActionIDHuanshouInvadeChapter)
 			chCtx, chCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(chCtx, chalPkt, protocol.ActionIDHuanshouInvadeChallenge)
+			chalResp, chalErr := session.Call(chCtx, chalPkt, protocol.ActionIDHuanshouInvadeChallenge)
 			chCancel()
+			if chalErr != nil || chalResp == nil {
+				slog.Info("山海幻兽入侵挑战请求无回包，终止本轮",
+					"role_id", session.RoleID(), "err", chalErr)
+				return nil
+			}
 
 			// 3. 极速秒完成扫荡 (Mod 696, Act 3)
 			sweepPkt := protocol.BuildHuanshouInvadeSweepPacket(protocol.ActionIDHuanshouInvadeChallenge)
 			swCtx, swCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(swCtx, sweepPkt, protocol.ActionIDHuanshouInvadeSweep)
+			sweepResp, sweepErr := session.Call(swCtx, sweepPkt, protocol.ActionIDHuanshouInvadeSweep)
 			swCancel()
+			if sweepErr != nil || sweepResp == nil {
+				slog.Info("山海幻兽入侵扫荡请求无回包，终止本轮",
+					"role_id", session.RoleID(), "err", sweepErr)
+				return nil
+			}
 
 			// 4. 逐关扫荡入侵节点 (Mod 696, Act 4: 节点 1~8 依据抓包实采流)
 			prevAct := protocol.ActionIDHuanshouInvadeSweep
 			var clearedNodes int
+			var nodeDrop int
 			for nodeID := int32(1); nodeID <= 8; nodeID++ {
 				nodePkt := protocol.BuildHuanshouInvadeNodePacket(nodeID, prevAct)
 				nCtx, nCancel := context.WithTimeout(ctx, 8*time.Second)
 				nResp, nErr := session.Call(nCtx, nodePkt, protocol.ActionIDHuanshouInvadeSettle)
 				nCancel()
-				if nErr == nil && nResp != nil {
-					clearedNodes++
+				if nErr != nil || nResp == nil {
+					nodeDrop++
+					break
 				}
+				clearedNodes++
 				prevAct = protocol.ActionIDHuanshouInvadeSettle
 				time.Sleep(30 * time.Millisecond)
 			}
 
-			slog.Info("山海幻兽入侵扫荡轮次完成", "role_id", session.RoleID(), "cleared_nodes", clearedNodes)
+			slog.Info("山海幻兽入侵扫荡轮次结束",
+				"role_id", session.RoleID(),
+				"cleared_nodes", clearedNodes,
+				"node_drops", nodeDrop,
+				"panel_reply_len", len(panelResp.Payload),
+				"chapter_reply_len", len(chapResp.Payload),
+				"challenge_reply_len", len(chalResp.Payload),
+				"sweep_reply_len", len(sweepResp.Payload),
+			)
 			return nil
 		},
 	)

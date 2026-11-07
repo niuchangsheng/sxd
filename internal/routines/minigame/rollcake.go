@@ -23,7 +23,9 @@ const (
 	// rollCakeRerollMinJi 触发逆天改运的最低吉数阈值 (吉 = 骰子点数 4)。
 	rollCakeRerollMinJi = 2
 	// rollCakeCallTimeout 单次协议请求超时。
-	rollCakeCallTimeout = 3 * time.Second
+	// 与项目内其他主服业务请求保持一致：3s 会把偶发慢回包误判为静默丢弃，
+	// 而真正的静默丢弃仍由上层在超时后立即结束本轮。
+	rollCakeCallTimeout = 8 * time.Second
 )
 
 // LuckyStarConfig 个人吉星高照自动化策略配置。
@@ -69,6 +71,19 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行益智任务: 吉星高照摇骰子", "role_id", session.RoleID())
 
+			// 功能未开放时服务端会静默丢弃 Module 38 请求，先用 Action 6 缓存判定。
+			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDRollCake)
+			if fErr != nil {
+				slog.Info("吉星高照功能开放状态查询失败，跳过",
+					"role_id", session.RoleID(), "err", fErr)
+				return nil
+			}
+			if !open {
+				slog.Info("吉星高照功能未开放，跳过",
+					"role_id", session.RoleID(), "function_id", protocol.FunctionIDRollCake)
+				return nil
+			}
+
 			call := func(pkt *protocol.Packet, actionID uint32) ([]byte, error) {
 				callCtx, cancel := context.WithTimeout(ctx, rollCakeCallTimeout)
 				defer cancel()
@@ -87,7 +102,8 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 			// 1. 查询是否存在上次未领取的投掷记录，存在则先补领，避免阻塞本次投掷。
 			statePayload, err := call(protocol.BuildRollCakeGetStatePacket(prevAct), protocol.ActionIDRollCakeGetState)
 			if err != nil {
-				slog.Warn("查询吉星高照未领取记录失败", "role_id", session.RoleID(), "err", err)
+				// 服务端静默丢弃或断线重连都表现为无回包，本轮跳过。
+				slog.Info("查询吉星高照未领取记录无回包，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 			state, err := protocol.ParseRollCakeStateResult(statePayload)

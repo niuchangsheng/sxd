@@ -139,6 +139,19 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 		}
 	})
 
+	t.Run("仙幽猎境每日进入", func(t *testing.T) {
+		r := NewMysticHuntRoutine()
+		if r.Name() != "mystic_hunt" {
+			t.Fatalf("任务名称不匹配: %s", r.Name())
+		}
+		if err := r.Execute(context.Background(), session, nil); err != nil {
+			t.Fatalf("仙幽猎境执行失败: %v", err)
+		}
+		if got := session.LastActionID(); got != protocol.ActionIDMysticHuntEnter {
+			t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDMysticHuntEnter, got)
+		}
+	})
+
 	t.Run("空会话防御", func(t *testing.T) {
 		routine := NewTravelEventRoutine(qaEngine)
 		if err := routine.Execute(context.Background(), nil, nil); err != client.ErrNotConnected {

@@ -1508,27 +1508,54 @@ func NewQiMenRoutine() scheduler.ActivityRoutine {
 			// 2. 查询阵眼傀儡 (Mod 485, Act 0)
 			puppetPkt := protocol.BuildQiMenPuppetInfoPacket(protocol.ActionIDQiMenArrayInfo)
 			pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(pCtx, puppetPkt, protocol.ActionIDQiMenPuppetInfo)
+			puppetResp, puppetErr := session.Call(pCtx, puppetPkt, protocol.ActionIDQiMenPuppetInfo)
 			pCancel()
+			if puppetErr != nil || puppetResp == nil {
+				slog.Info("奇门遁甲阵眼查询无回包，终止本轮以保护动作链",
+					"role_id", session.RoleID(), "err", puppetErr)
+				return nil
+			}
 
 			// 3. 升级星图注灵 (Mod 486, Act 1)
 			starPkt := protocol.BuildQiMenUpgradeStarPacket(protocol.ActionIDQiMenPuppetInfo)
 			sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(sCtx, starPkt, protocol.ActionIDQiMenUpgradeStar)
+			starResp, starErr := session.Call(sCtx, starPkt, protocol.ActionIDQiMenUpgradeStar)
 			sCancel()
+			if starErr != nil || starResp == nil {
+				slog.Info("奇门遁甲星图注灵无回包，终止本轮",
+					"role_id", session.RoleID(), "err", starErr)
+				return nil
+			}
 
 			// 4. 布阵生效与确认 (Mod 584, Act 1 & 3)
 			depPkt := protocol.BuildQiMenFormationDeployPacket(protocol.ActionIDQiMenUpgradeStar)
 			dCtx, dCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(dCtx, depPkt, protocol.ActionIDQiMenFormationDeploy)
+			deployResp, deployErr := session.Call(dCtx, depPkt, protocol.ActionIDQiMenFormationDeploy)
 			dCancel()
+			if deployErr != nil || deployResp == nil {
+				slog.Info("奇门遁甲布阵请求无回包，终止本轮",
+					"role_id", session.RoleID(), "err", deployErr)
+				return nil
+			}
 
 			confPkt := protocol.BuildQiMenFormationConfirmPacket(protocol.ActionIDQiMenFormationDeploy)
 			cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
-			_, _ = session.Call(cCtx, confPkt, protocol.ActionIDQiMenFormationConfirm)
+			confirmResp, confirmErr := session.Call(cCtx, confPkt, protocol.ActionIDQiMenFormationConfirm)
 			cCancel()
+			if confirmErr != nil || confirmResp == nil {
+				slog.Info("奇门遁甲阵法确认无回包，终止本轮",
+					"role_id", session.RoleID(), "err", confirmErr)
+				return nil
+			}
 
-			slog.Info("奇门遁甲阵法维护完成", "role_id", session.RoleID())
+			slog.Info("奇门遁甲阵法维护完成",
+				"role_id", session.RoleID(),
+				"array_reply_len", len(arrayResp.Payload),
+				"puppet_reply_len", len(puppetResp.Payload),
+				"star_reply_len", len(starResp.Payload),
+				"deploy_reply_len", len(deployResp.Payload),
+				"confirm_reply_len", len(confirmResp.Payload),
+			)
 			return nil
 		},
 	)

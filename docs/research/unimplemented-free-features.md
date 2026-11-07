@@ -24,11 +24,11 @@
 
 | 任务 | 玩法 | 每次 | 阻塞原因与实证 |
 | ---: | --- | ---: | --- |
-| 74 | 琳琅阁购买商品 | 10 | 官方请求为 `Mod_Item_Base.lucky_shop_item_list` + **当前城镇 NPC id**；已用 NPC 结交面板 10 个 `TownNpcID` 以及 Pieb.db `NPCposition` 中的神秘商人 `npcid=38` 分别请求 `100/80` 与 `2/76`，均无回包（角色当前处于 4879 特殊场景，缺城镇 `Towns` 静态表） |
+| 74 | 琳琅阁购买商品 | 10 | **商品可用铜钱购买**（Pieb.db `luckyshop` 中大量 `ingot=0` 条目），因此本身不违反元宝约束；但请求需当前城镇 NPC id，已用结交面板 10 个 `TownNpcID`、神秘商人 `npcid=38`，对 `100/80`、`2/76` 分别测试带/不带 PrevAct，均无回包（角色在 4879 特殊场景，缺城镇 `Towns` 静态表） |
 | 82 | 领取好礼馈赠 | 20 | `info_assistant (100/78)` 可读但返回 16 字节全 0；`get_award_assistant (100/79)` 索引 0..15 全部超时，入口在机器人会话不可达 |
 | 71 | 纪元湮劫战斗 | 20 | **已实现 `era_yanjie`**：`Mod_EraInfiniteMission_Base` (853) `get_panel_info` + `fight`；按 `mission_level+1` 每日推进一关，实测胜利后元宝/铜钱/体力均不变，任务 71 已由 0/1 → 1/1（+20） |
 | 77 | 宗门灵兽喂养 | 20 | **已实现 `sect_monster`**：`Mod_SectMonster_Base (576)` 经仙盟城镇会话、**不带 PrevAct** 调用 `get_monster_list (576/1, [sect_id])` + `feed (576/3, [type,0])`；实测免费喂养成功获 2471×10，任务 77 由 0/1 → 1/1（+20），元宝/铜钱不变 |
-| 73 | 进入仙幽猎境 | 20 | 功能 272 未开放（历史实测），Module 762 请求超时；2026-11-07 复核时因并发会话抢占未能取到 272 的最新开放状态 |
+| 73 | 进入仙幽猎境 | 20 | **已实现 `mystic_hunt`**：`Mod_MysticCapture_Base (762)` `is_open_hunt_entrance (762/5)` + `enter_hunt (762/1)`（空请求、不带 PrevAct）。线上当前入口 `0=关闭`（按时段开放），例程自动跳过；开放时免费进入并 +20，元宝/体力不变 |
 | 70 | 轮回净地挂机奖励 | 20 | 免费 852/6 实测 `result=8` 且不计任务；付费 852/5 消耗 10 元宝，永久禁用 |
 | 50 | 奇门遁甲 | 5 | 6 个条目以 `NORMAL_PRACTICE(3)` 调用均返回 `LEVEL_UNOPEN(8)`，id 映射未确认 |
 | 67 | 回忆之境 | 5 | 主面板 `get_award=1`，但 `get_bind_award (526/3)` 各编码均无回包、`backtrack (526/4)` 返回 `FAILED(1)`；伙伴碎片面板显示 500/500（疑似显示上限，实际不足） |

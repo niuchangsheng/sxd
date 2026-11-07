@@ -101,22 +101,27 @@ func main() {
 	}
 	slog.Info("城镇 NPC 列表", "count", len(ids), "town_npc_ids", ids)
 
-	// 两个候选实现: Mod_Mobile_Base (100/80) 与 Mod_Item_Base (2/76)。
+	// 两个候选实现 × 带/不带 PrevAct 编码。
 	for _, act := range []uint32{actionLuckyShopItemList, 0x0002004C} {
 		for _, npcID := range ids {
-			w := protocol.NewWriter()
-			w.WriteInt32(npcID)
-			pkt := protocol.NewPacket(act, w.Bytes())
-			pkt.HasPrevAct = true
-			c, cc := context.WithTimeout(ctx, *timeout)
-			resp, err := sess.Call(c, pkt, act)
-			cc()
-			if err != nil {
-				continue
+			for _, withPrev := range []bool{true, false} {
+				w := protocol.NewWriter()
+				w.WriteInt32(npcID)
+				if withPrev {
+					w.WriteUint32(0)
+				}
+				pkt := protocol.NewPacket(act, w.Bytes())
+				pkt.HasPrevAct = withPrev
+				c, cc := context.WithTimeout(ctx, *timeout)
+				resp, err := sess.Call(c, pkt, act)
+				cc()
+				if err != nil {
+					continue
+				}
+				slog.Info("琳琅阁回包命中", "action", fmt.Sprintf("0x%08X", act), "npc_id", npcID,
+					"with_prev", withPrev, "len", len(resp.Payload), "hex", hex.EncodeToString(resp.Payload))
+				return
 			}
-			slog.Info("琳琅阁回包命中", "action", fmt.Sprintf("0x%08X", act), "npc_id", npcID,
-				"len", len(resp.Payload), "hex", hex.EncodeToString(resp.Payload))
-			return
 		}
 	}
 	slog.Warn("未找到可响应的琳琅阁 NPC", "tried", len(ids))

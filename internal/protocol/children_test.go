@@ -80,6 +80,10 @@ func TestChildrenPacketBuilders(t *testing.T) {
 		attend.Payload[4] != 22 {
 		t.Fatalf("attend packet = %+v", attend)
 	}
+	study := protocol.BuildChildrenStudyInfoPacket(1812)
+	if study.ActionID != protocol.ActionIDChildrenStudyInfo || !study.HasPrevAct || len(study.Payload) != 8 {
+		t.Fatalf("study packet = %+v", study)
+	}
 	award := protocol.BuildChildrenTaskAwardPacket(1812, 26)
 	if award.ActionID != protocol.ActionIDChildrenTaskAward || len(award.Payload) != 8 {
 		t.Fatalf("award packet = %+v", award)

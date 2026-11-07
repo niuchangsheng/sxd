@@ -274,6 +274,61 @@ func TestMarryHomeRoutine_SkipsWhenFunctionClosed(t *testing.T) {
 	}
 }
 
+// TestMarryHomeRoutine_SkipsWhenNotMarried 验证未结婚角色在发出会被静默丢弃的
+// get_cake 之前就由住宅状态查询拦截，避免固定 8s 空等。
+func TestMarryHomeRoutine_SkipsWhenNotMarried(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	var cakeCalls int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerGetFunctions:
+				_ = protocol.WritePacket(serverConn,
+					protocol.BuildPlayerFunctionsResultPacket([]int32{protocol.FunctionIDMarryHome}))
+			case protocol.ActionIDMarryHomeSelfInfo:
+				_ = protocol.WritePacket(serverConn,
+					protocol.BuildMarryHomeSelfInfoResultPacket(protocol.MarryHomeResultNonMarry))
+			case protocol.ActionIDMarryHomeGetCake:
+				atomic.AddInt32(&cakeCalls, 1)
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_test_marry_home_unmarried",
+		RoleName:   "测试未结婚角色",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("家园奖励执行失败: %v", err)
+	}
+	if got := atomic.LoadInt32(&cakeCalls); got != 0 {
+		t.Fatalf("未结婚时不应发送蛋糕领取请求, 实际 %d 次", got)
+	}
+}
+
 // TestMarryHomeRoutine_Execute 使用内置 mock 验证家园奖励领取链路。
 func TestMarryHomeRoutine_Execute(t *testing.T) {
 	session := client.NewRoleSession(client.SessionConfig{
