@@ -1456,31 +1456,8 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 				"target", targetName,
 			)
 
-			// 1. 功能开放检查：使用 Mod 0 Act 6 会话缓存。
-			// 逐功能 check_function_open 会被服务端静默丢弃，不能作为唯一判定。
-			open, chkErr := session.IsFunctionOpen(ctx, protocol.FunctionIDRefinePool)
-			if chkErr != nil {
-				if errors.Is(chkErr, context.DeadlineExceeded) {
-					slog.Info("查询粗铁淬炼池开放状态无回包, 本轮跳过",
-						"role_id", session.RoleID(),
-						"target", targetName,
-					)
-				} else {
-					slog.Warn("查询粗铁淬炼池开放状态失败, 本轮跳过",
-						"role_id", session.RoleID(),
-						"err", chkErr,
-					)
-				}
-				return nil
-			}
-			if !open {
-				slog.Info("粗铁淬炼池功能未开启, 跳过",
-					"role_id", session.RoleID(),
-					"target", targetName,
-				)
-				return nil
-			}
-
+			// 1. 不再额外调用功能开放检查：check_function_open 会推进 PrevAct 链，
+			// 导致后续 282/1 一键淬炼被网关静默丢弃。282/0 面板本身就是开放门禁。
 			// 2. 打开淬炼池面板 (Mod 282, Act 0), 获取各铁槽生产状态
 			openPkt := protocol.BuildRefinePoolOpenPacket(session.LastActionID())
 			oCtx, oCancel := context.WithTimeout(ctx, callTimeout)
