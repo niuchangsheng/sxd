@@ -853,13 +853,13 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 			// 1. 读取劫镖面板状态。
 			infoResp := call(protocol.BuildCaravanGetDetailPacket(session.LastActionID()), protocol.ActionIDCaravanGetDetail)
 			if infoResp == nil {
-				slog.Info("劫镖功能不可用或未开放，跳过", "role_id", session.RoleID())
-				return nil
+				slog.Info("劫镖功能不可用或未开放，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "劫镖面板无回包")
 			}
 			state, err := protocol.ParseCaravanInfoResultCode(infoResp.Payload)
 			if err != nil {
-				slog.Warn("解析劫镖面板失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("解析劫镖面板失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "劫镖面板解析失败")
 			}
 			if state != protocol.CaravanStateSearched {
 				if state != protocol.CaravanStateNotSearch {
@@ -871,8 +871,8 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 				// 绝不调用 buy_rob_times (314/3)。
 				searchResp := call(protocol.BuildCaravanSearchPacket(session.LastActionID()), protocol.ActionIDCaravanGetList)
 				if searchResp == nil {
-					slog.Info("劫镖开始勘察无回包，终止本轮", "role_id", session.RoleID())
-					return nil
+					slog.Info("劫镖开始勘察无回包，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(30*time.Minute, "劫镖勘察无回包")
 				}
 				searchRes, sErr := protocol.ParseCaravanSearchResult(searchResp.Payload)
 				if sErr != nil {
@@ -899,8 +899,8 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 				infoResp = call(protocol.BuildCaravanGetDetailPacket(protocol.ActionIDCaravanGetList),
 					protocol.ActionIDCaravanGetDetail)
 				if infoResp == nil {
-					slog.Info("劫镖勘察后读取面板无回包，终止本轮", "role_id", session.RoleID())
-					return nil
+					slog.Info("劫镖勘察后读取面板无回包，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(10*time.Minute, "劫镖勘察后面板无回包")
 				}
 				state, err = protocol.ParseCaravanInfoResultCode(infoResp.Payload)
 				if err != nil {
