@@ -969,13 +969,13 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildWorshipMarsInfoPacket(), protocol.ActionIDWorshipMarsInfo)
 			iCancel()
 			if err != nil {
-				// 断线重连或活动上下文不匹配都会表现为无回包，跳过本轮即可。
-				slog.Info("查询膜拜信息无回包，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("查询膜拜信息无回包，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "膜拜信息无回包")
 			}
 			info, err := protocol.ParseWorshipMarsInfoResult(infoResp.Payload)
 			if err != nil {
-				return fmt.Errorf("解析膜拜信息失败: %w", err)
+				slog.Warn("解析膜拜信息失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "膜拜信息解析失败")
 			}
 			slog.Info("膜拜信息",
 				"role_id", session.RoleID(),
@@ -990,12 +990,13 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 			remainResp, err := session.Call(rCtx, protocol.BuildWorshipMarsRemainPacket(), protocol.ActionIDWorshipMarsRemain)
 			rCancel()
 			if err != nil {
-				slog.Info("查询剩余膜拜次数失败，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("查询剩余膜拜次数失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "膜拜剩余次数无回包")
 			}
 			remain, err := protocol.ParseWorshipMarsRemainResult(remainResp.Payload)
 			if err != nil {
-				return fmt.Errorf("解析剩余膜拜次数失败: %w", err)
+				slog.Warn("解析剩余膜拜次数失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "膜拜剩余次数解析失败")
 			}
 			if remain <= 0 {
 				slog.Info("膜拜免费次数已用尽", "role_id", session.RoleID())
@@ -1004,12 +1005,14 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 
 			// 3. 使用免费供品 (白檀香) 上香，直到次数耗尽或失败。
 			done := int32(0)
+			dropped := false
 			for done < remain {
 				cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
 				resp, cErr := session.Call(cCtx, protocol.BuildWorshipMarsIncensePacket(protocol.WorshipMarsOfferingFree), protocol.ActionIDWorshipMarsIncense)
 				cCancel()
 				if cErr != nil {
 					slog.Info("上香无应答", "role_id", session.RoleID(), "done", done, "err", cErr)
+					dropped = true
 					break
 				}
 				result, pErr := protocol.ParseWorshipMarsIncenseResult(resp.Payload)
@@ -1043,6 +1046,9 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 				}
 			}
 			slog.Info("膜拜完成", "role_id", session.RoleID(), "free_incense_done", done)
+			if done == 0 && dropped {
+				return scheduler.NewCooldown(10*time.Minute, "膜拜上香无回包")
+			}
 			return nil
 		},
 	)
