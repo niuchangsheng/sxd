@@ -49,13 +49,13 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 			// 1. 声望档位奖励。
 			resp, err := call(protocol.BuildCollectionBookletsPopularityInfoPacket(), protocol.ActionIDCollectionBookletsPopularityInfo)
 			if err != nil || resp == nil {
-				slog.Info("神仙收藏册功能不可用或未开放，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("神仙收藏册功能不可用或未开放，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "神仙收藏册声望面板无回包")
 			}
 			popInfo, err := protocol.ParseCollectionBookletsPopularityInfoResult(resp.Payload)
 			if err != nil {
-				slog.Info("解析神仙收藏册声望信息失败，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("解析神仙收藏册声望信息失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "神仙收藏册声望面板解析失败")
 			}
 			claimed := make(map[int32]bool, len(popInfo.ClaimedIDs))
 			for _, id := range popInfo.ClaimedIDs {
@@ -78,8 +78,9 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDCollectionBookletsGetPopularityAward,
 				)
 				if aErr != nil || aResp == nil {
-					slog.Info("领取神仙收藏册声望奖励无回包", "role_id", session.RoleID(), "award_id", award.ID, "err", aErr)
-					return nil
+					slog.Info("领取神仙收藏册声望奖励无回包，稍后重试",
+						"role_id", session.RoleID(), "award_id", award.ID, "err", aErr)
+					return scheduler.NewCooldown(10*time.Minute, "神仙收藏册领奖无回包")
 				}
 				code, pErr := protocol.ParseCollectionBookletsActionCode(aResp.Payload)
 				if pErr != nil {
@@ -107,8 +108,8 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 			// 2. 拜访好友获得声望。
 			fResp, fErr := call(protocol.BuildCollectionBookletsMyFriendPacket(), protocol.ActionIDCollectionBookletsMyFriend)
 			if fErr != nil || fResp == nil {
-				slog.Info("查询神仙收藏册好友列表无回包", "role_id", session.RoleID(), "err", fErr)
-				return nil
+				slog.Info("查询神仙收藏册好友列表无回包，稍后重试", "role_id", session.RoleID(), "err", fErr)
+				return scheduler.NewCooldown(30*time.Minute, "神仙收藏册好友列表无回包")
 			}
 			friendResult, friends, pErr := protocol.ParseCollectionBookletsMyFriendResult(fResp.Payload)
 			if pErr != nil {
@@ -135,8 +136,9 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDCollectionBookletsApprove,
 				)
 				if apErr != nil || approveResp == nil {
-					slog.Info("拜访神仙收藏册好友无回包", "role_id", session.RoleID(), "player_id", friend.PlayerID, "err", apErr)
-					return nil
+					slog.Info("拜访神仙收藏册好友无回包，稍后重试",
+						"role_id", session.RoleID(), "player_id", friend.PlayerID, "err", apErr)
+					return scheduler.NewCooldown(10*time.Minute, "神仙收藏册拜访无回包")
 				}
 				got, apParseErr := protocol.ParseCollectionBookletsApproveResult(approveResp.Payload)
 				if apParseErr != nil {
