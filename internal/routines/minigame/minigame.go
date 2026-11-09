@@ -3937,10 +3937,10 @@ func NewAskFairyRoutine() scheduler.ActivityRoutine {
 
 			info, err := fetchInfo()
 			if err != nil {
-				// 活动未开放/已结束时服务端会静默丢弃信息查询；按暂不可用跳过。
-				slog.Info("问灵活动未开放或状态查询被服务端丢弃，跳过",
+				// 活动未开放/已结束时服务端会静默丢弃信息查询；稍后重试而非等 24 小时。
+				slog.Info("问灵活动未开放或状态查询被服务端丢弃，稍后重试",
 					"role_id", session.RoleID(), "err", err)
-				return nil
+				return scheduler.NewCooldown(30*time.Minute, "问灵状态查询无回包")
 			}
 			if info.LeftDay <= 0 {
 				slog.Info("问灵活动已结束，跳过", "role_id", session.RoleID(), "left_day", info.LeftDay)
@@ -3984,7 +3984,8 @@ func NewAskFairyRoutine() scheduler.ActivityRoutine {
 			}
 			result, err := callAction(protocol.BuildAskFairyDoPacket(), protocol.ActionIDAskFairyDo, "问灵")
 			if err != nil {
-				return fmt.Errorf("问灵请求失败: %w", err)
+				slog.Info("问灵请求无回包，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "问灵请求无回包")
 			}
 			switch result {
 			case protocol.AskFairyResultSuccess:
@@ -4002,7 +4003,8 @@ func NewAskFairyRoutine() scheduler.ActivityRoutine {
 			// 重新拉取随机奖励候选，优先选择元宝
 			info, err = fetchInfo()
 			if err != nil {
-				return fmt.Errorf("问灵后刷新状态失败: %w", err)
+				slog.Info("问灵后刷新状态无回包，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "问灵后刷新状态无回包")
 			}
 			if len(info.RandomAwards) == 0 {
 				slog.Warn("问灵后未下发随机奖励候选", "role_id", session.RoleID())
