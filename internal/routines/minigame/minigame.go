@@ -1652,6 +1652,7 @@ type MasterPracticeConfig struct {
 	// AllowStepUp 是否在挑战后自动升阶 (默认 true)。
 	AllowStepUp bool
 	// MaxRetriesPerStar 单个星级挑战失败后的重试次数 (默认 2)。
+	// 仅在 SwitchJobOnFailure=false 时生效；开启失败切换时首次失败即退避换职业。
 	MaxRetriesPerStar int
 	// SwitchJobOnFailure 当前职业重试耗尽仍失败时，是否切换到其他可修行职业 (默认 true)。
 	SwitchJobOnFailure bool
@@ -1765,7 +1766,10 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 				if fresh := masterPracticeFetchPanel(call); fresh != nil {
 					panel = fresh
 				}
-				usedToday = panel.TodayChallengeTimes
+				// 本地已确认消耗的次数作为下限，避免面板延迟导致超发挑战。
+				if panel.TodayChallengeTimes > usedToday {
+					usedToday = panel.TodayChallengeTimes
+				}
 				if usedToday >= cfg.MaxChallengesPerDay {
 					slog.Info("宗师修行今日挑战次数已用尽，结束本轮",
 						"role_id", session.RoleID(),
@@ -1862,8 +1866,14 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 						"role_id", session.RoleID(), "used", usedToday, "limit", cfg.MaxChallengesPerDay)
 					return nil
 				}
+				// 开启失败切换时，单星级不做同职业重试：失败立即退避，
+				// 把剩余次数用于其他职业，保证「先用光次数」。
+				maxRetries := cfg.MaxRetriesPerStar
+				if cfg.SwitchJobOnFailure {
+					maxRetries = 0
+				}
 				challenged, full, failed, chErr := masterPracticeChallengeJob(
-					ctx, job, remaining, cfg.MaxRetriesPerStar, session.RoleID(), call)
+					ctx, job, remaining, maxRetries, session.RoleID(), call)
 				usedToday += challenged
 				totalChallenged += int(challenged)
 				if chErr != nil {
@@ -2082,6 +2092,8 @@ func masterPracticeChallengeJob(
 				return consumed, false, false, scheduler.ErrConditionNotMet
 			default:
 				if code == protocol.MasterPracticeResultFailed {
+					// 失败同样消耗一次每日挑战次数。
+					consumed++
 					if retries < maxRetries {
 						retries++
 						slog.Warn("宗师修行挑战失败，重试同星级",

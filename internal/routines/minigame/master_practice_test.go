@@ -398,8 +398,8 @@ func TestMasterPracticeChallengeJob_RetriesFailedStarThenSucceeds(t *testing.T) 
 	if err != nil || full || failed {
 		t.Fatalf("expected retry success, consumed=%d full=%v failed=%v err=%v", consumed, full, failed, err)
 	}
-	if consumed != 1 || fake.calls != 2 {
-		t.Fatalf("expected 1 consumed after 2 calls, got consumed=%d calls=%d", consumed, fake.calls)
+	if consumed != 2 || fake.calls != 2 {
+		t.Fatalf("失败+成功应消耗 2 次, got consumed=%d calls=%d", consumed, fake.calls)
 	}
 }
 
@@ -420,8 +420,29 @@ func TestMasterPracticeChallengeJob_RetriesExhaustedSignalsJobSwitch(t *testing.
 	if !failed {
 		t.Fatal("expected failed=true after retry exhaustion")
 	}
-	if consumed != 0 || fake.calls != 2 {
-		t.Fatalf("expected 0 consumed after 1 retry, got consumed=%d calls=%d", consumed, fake.calls)
+	if consumed != 2 || fake.calls != 2 {
+		t.Fatalf("两次失败应消耗 2 次, got consumed=%d calls=%d", consumed, fake.calls)
+	}
+}
+
+// TestMasterPracticeChallengeJob_FailureWithoutRetrySwitchesImmediately 验证
+// 开启失败切换时（maxRetries=0）首次失败即返回 failed=true，把剩余次数让给其他职业。
+func TestMasterPracticeChallengeJob_FailureWithoutRetrySwitchesImmediately(t *testing.T) {
+	job := protocol.MasterPracticeJobInfo{JobID: 15, TodayChallenge: []int32{2, 3}}
+	fake := &fakeMasterChallengeCall{results: []uint8{
+		protocol.MasterPracticeResultFailed,
+	}}
+
+	consumed, full, failed, err := masterPracticeChallengeJob(
+		context.Background(), job, 3, 0, "s0-test", fake.call)
+	if err != nil || full {
+		t.Fatalf("unexpected error/full: consumed=%d full=%v err=%v", consumed, full, err)
+	}
+	if !failed {
+		t.Fatal("首次失败应立即返回 failed=true")
+	}
+	if consumed != 1 || fake.calls != 1 {
+		t.Fatalf("失败应立即消耗 1 次并停止重试, got consumed=%d calls=%d", consumed, fake.calls)
 	}
 }
 
