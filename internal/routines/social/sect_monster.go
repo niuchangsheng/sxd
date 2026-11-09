@@ -61,8 +61,12 @@ func NewSectMonsterRoutine() scheduler.ActivityRoutine {
 
 			// 2. 仙盟功能开放检查。
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDFaction)
-			if fErr != nil || !open {
-				slog.Info("仙盟功能未开放，跳过宗门灵兽", "role_id", session.RoleID(), "err", fErr)
+			if fErr != nil {
+				slog.Info("仙盟功能开放状态查询失败，稍后重试宗门灵兽", "role_id", session.RoleID(), "err", fErr)
+				return scheduler.NewCooldown(30*time.Minute, "宗门灵兽功能开放状态无回包")
+			}
+			if !open {
+				slog.Info("仙盟功能未开放，跳过宗门灵兽", "role_id", session.RoleID())
 				return nil
 			}
 
@@ -78,8 +82,8 @@ func NewSectMonsterRoutine() scheduler.ActivityRoutine {
 
 			cred, err := session.FetchSectTownCredentials(townCtx)
 			if err != nil {
-				slog.Warn("读取仙盟凭据失败，跳过宗门灵兽", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("读取仙盟凭据失败，稍后重试宗门灵兽", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "宗门灵兽仙盟凭据无回包")
 			}
 			sectID := cred.LocalSectID
 			if sectID <= 0 {
@@ -91,8 +95,8 @@ func NewSectMonsterRoutine() scheduler.ActivityRoutine {
 			listResp, err := town.Call(lCtx, protocol.BuildSectMonsterListPacket(sectID), protocol.ActionIDSectMonsterList)
 			lCancel()
 			if err != nil {
-				slog.Info("宗门灵兽列表无回包，跳过", "role_id", session.RoleID(), "sect_id", sectID, "err", err)
-				return nil
+				slog.Info("宗门灵兽列表无回包，稍后重试", "role_id", session.RoleID(), "sect_id", sectID, "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "宗门灵兽列表无回包")
 			}
 			list, err := protocol.ParseSectMonsterListResult(listResp.Payload)
 			if err != nil {
