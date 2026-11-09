@@ -806,26 +806,26 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
-			resp, err := session.Call(cCtx, protocol.BuildMarryHomeSelfInfoPacket(session.PlayerID()), protocol.ActionIDMarryHomeSelfInfo)
-			cCancel()
-			if err != nil {
-				slog.Info("住宅功能不可用/未开放，跳过", "role_id", session.RoleID(), "err", err)
+			// 官方小助手"家园奖励"直接调用 210/18，不发 210/0。
+			// 线上实测先发 210/0 会污染会话上下文，紧随其后的 210/18 被静默丢弃。
+			bCtx, bCancel := context.WithTimeout(ctx, callTimeout)
+			effectResp, bErr := session.Call(bCtx, protocol.BuildMarryHomeBatchFurnitureEffectPacket(), protocol.ActionIDMarryHomeBatchFurnitureEffect)
+			bCancel()
+			if bErr != nil || effectResp == nil {
+				slog.Info("住宅家具效果领取无回包，稍后重试", "role_id", session.RoleID(), "err", bErr)
+				return scheduler.NewCooldown(2*time.Hour, "住宅家具效果无回包")
+			}
+			if len(effectResp.Payload) == 0 {
+				slog.Info("住宅暂无可领取家具效果", "role_id", session.RoleID())
 				return nil
 			}
-			result, pErr := protocol.ParseMarryHomeSelfInfoResult(resp.Payload)
-			if pErr != nil {
-				slog.Warn("解析住宅状态失败", "role_id", session.RoleID(), "err", pErr)
-				return nil
+			effects, eErr := protocol.ParseMarryHomeBatchFurnitureEffectResult(effectResp.Payload)
+			if eErr != nil {
+				slog.Warn("解析住宅家具效果失败，稍后重试", "role_id", session.RoleID(), "err", eErr)
+				return scheduler.NewCooldown(10*time.Minute, "住宅家具效果解析失败")
 			}
-			if result == protocol.MarryHomeResultNonMarry {
-				slog.Info("账号未处于婚姻状态，跳过住宅玩法", "role_id", session.RoleID())
-				return nil
-			}
-			slog.Info("住宅功能开放且账号满足条件，等待玩法执行",
-				"role_id", session.RoleID(),
-				"result", result,
-			)
+			slog.Info("住宅家具效果领取完成",
+				"role_id", session.RoleID(), "count", len(effects), "effects", effects)
 			return nil
 		},
 	)

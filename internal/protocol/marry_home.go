@@ -104,3 +104,56 @@ func BuildMarryHomeCakeResultPacket(res MarryHomeCakeResult) *Packet {
 	}
 	return NewPacket(ActionIDMarryHomeGetCake, w.Bytes())
 }
+
+// ActionIDMarryHomeBatchFurnitureEffect 批量领取家具效果/家园奖励
+// (Module 210, Action 18 -> 0x00D20012)。
+const ActionIDMarryHomeBatchFurnitureEffect uint32 = 0x00D20012
+
+// MarryHomeFurnitureEffect 表示批量领取结果中的一件家具效果。
+type MarryHomeFurnitureEffect struct {
+	// ItemID 家具/道具编号
+	ItemID int32
+	// Effect 效果值
+	Effect int32
+}
+
+// BuildMarryHomeBatchFurnitureEffectPacket 构造批量家具效果领取封包。
+//
+// 官方 request=[]，只读领取，不消耗元宝。
+func BuildMarryHomeBatchFurnitureEffectPacket() *Packet {
+	return NewPacket(ActionIDMarryHomeBatchFurnitureEffect, nil)
+}
+
+// ParseMarryHomeBatchFurnitureEffectResult 解析批量家具效果回包。
+//
+// 线格式: [[Int item_id, Int effect]]。
+func ParseMarryHomeBatchFurnitureEffectResult(payload []byte) ([]MarryHomeFurnitureEffect, error) {
+	r := NewReader(payload)
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("家具效果数量读取失败: %w", err)
+	}
+	out := make([]MarryHomeFurnitureEffect, 0, count)
+	for i := 0; i < int(count); i++ {
+		var e MarryHomeFurnitureEffect
+		if e.ItemID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("家具效果[%d].item_id 读取失败: %w", i, err)
+		}
+		if e.Effect, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("家具效果[%d].effect 读取失败: %w", i, err)
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// BuildMarryHomeBatchFurnitureEffectResultPacket 构造批量家具效果回包，供离线 mock/单测使用。
+func BuildMarryHomeBatchFurnitureEffectResultPacket(effects []MarryHomeFurnitureEffect) *Packet {
+	w := NewWriter()
+	w.WriteUint16(uint16(len(effects)))
+	for _, e := range effects {
+		w.WriteInt32(e.ItemID)
+		w.WriteInt32(e.Effect)
+	}
+	return NewPacket(ActionIDMarryHomeBatchFurnitureEffect, w.Bytes())
+}

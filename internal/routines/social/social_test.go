@@ -6,6 +6,7 @@ package social
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -216,7 +217,10 @@ func TestHomesteadRoutine_Execute(t *testing.T) {
 	}
 	defer session.Close()
 	time.Sleep(100 * time.Millisecond)
-	if err := NewHomesteadRoutine().Execute(context.Background(), session, nil); err != nil {
+	err := NewHomesteadRoutine().Execute(context.Background(), session, nil)
+	// 默认 mock 不实现 210/18 家具效果领取；无回包时应进入冷却而非报错退出。
+	var cd *scheduler.CooldownError
+	if err != nil && !errors.As(err, &cd) {
 		t.Fatalf("住宅任务执行失败: %v", err)
 	}
 }

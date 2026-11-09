@@ -58,3 +58,14 @@ func TestMarryHomeCakeResult(t *testing.T) {
 		t.Fatal("空载荷应返回错误")
 	}
 }
+func TestMarryHomeBatchFurnitureEffectRoundtrip(t *testing.T) {
+	effects := []MarryHomeFurnitureEffect{{ItemID: 6001, Effect: 12}, {ItemID: 6002, Effect: 30}}
+	got, err := ParseMarryHomeBatchFurnitureEffectResult(
+		BuildMarryHomeBatchFurnitureEffectResultPacket(effects).Payload)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(got) != 2 || got[0].ItemID != 6001 || got[1].Effect != 30 {
+		t.Fatalf("effects = %+v", got)
+	}
+}
