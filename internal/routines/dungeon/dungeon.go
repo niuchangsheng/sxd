@@ -1569,9 +1569,10 @@ func NewXunXianRoutine() scheduler.ActivityRoutine {
 // NewZodiacRoutine 构造生肖挑战与金油洗练任务。
 // NewZodiacRoutine 构造生肖挑战任务 (Module 44, Mod_Zodiac_Base)。
 //
-// 挑战前先读取 require_level 校验角色等级；不满足或已通关/冷却时直接跳过，
-// 每次调度最多发起一次挑战。
+// 挑战前先读取 require_level 校验角色等级；不满足或已通关/冷却时直接跳过。
+// 同一关卡战败后最多重试 zodiacMaxLossRetries 次。
 func NewZodiacRoutine() scheduler.ActivityRoutine {
+	const zodiacMaxLossRetries = 3
 	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"zodiac_challenge",
@@ -1642,48 +1643,62 @@ func NewZodiacRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			cCtx, cCancel := context.WithTimeout(ctx, 15*time.Second) // 回包携带完整战报
-			resp, err := session.Call(cCtx, protocol.BuildZodiacChallengePacket(), protocol.ActionIDZodiacChallenge)
-			cCancel()
-			if err != nil {
-				if errSessionTerminated(ctx, err) {
-					return fmt.Errorf("生肖挑战请求失败: %w", err)
+			losses := 0
+			for {
+				cCtx, cCancel := context.WithTimeout(ctx, 15*time.Second) // 回包携带完整战报
+				resp, err := session.Call(cCtx, protocol.BuildZodiacChallengePacket(), protocol.ActionIDZodiacChallenge)
+				cCancel()
+				if err != nil {
+					if errSessionTerminated(ctx, err) {
+						return fmt.Errorf("生肖挑战请求失败: %w", err)
+					}
+					// 功能未开放/未解锁时服务端对 challenge 静默不回包，按不可用跳过而非报错。
+					slog.Info("生肖挑战请求无回包，判定功能未开放/不可用，跳过",
+						"role_id", session.RoleID(), "err", err)
+					return nil
 				}
-				// 功能未开放/未解锁时服务端对 challenge 静默不回包，按不可用跳过而非报错。
-				slog.Info("生肖挑战请求无回包，判定功能未开放/不可用，跳过",
-					"role_id", session.RoleID(), "err", err)
+				result, err := protocol.ParseZodiacChallengeResult(resp.Payload)
+				if err != nil {
+					return fmt.Errorf("解析生肖挑战回包失败: %w", err)
+				}
+				switch result.Result {
+				case protocol.ZodiacResultSuccess:
+					slog.Info("生肖挑战成功",
+						"role_id", session.RoleID(),
+						"zodiac_level", result.ZodiacLevel,
+						"barrier", result.Barrier,
+					)
+					return nil
+				case protocol.ZodiacResultFail:
+					losses++
+					if losses >= zodiacMaxLossRetries {
+						slog.Info("生肖挑战连续失败，达到重试上限，结束本轮",
+							"role_id", session.RoleID(), "losses", losses,
+							"max_retries", zodiacMaxLossRetries)
+						return nil
+					}
+					slog.Info("生肖挑战失败，重试同一关卡",
+						"role_id", session.RoleID(), "losses", losses,
+						"max_retries", zodiacMaxLossRetries)
+					continue
+				case protocol.ZodiacResultTopHeaven:
+					slog.Info("生肖挑战已通关最高天", "role_id", session.RoleID())
+				case protocol.ZodiacResultNotEnoughPlayerLevel:
+					slog.Info("生肖挑战等级不足", "role_id", session.RoleID())
+				case protocol.ZodiacResultBagFull:
+					return scheduler.ErrBagFull
+				case protocol.ZodiacResultCDTime:
+					slog.Info("生肖挑战冷却中，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(30*time.Minute, "生肖挑战冷却")
+				case protocol.ZodiacResultNoEnoughStatePoint:
+					slog.Info("生肖挑战境界点不足", "role_id", session.RoleID())
+				case protocol.ZodiacResultLock:
+					slog.Info("生肖关卡未解锁", "role_id", session.RoleID())
+				default:
+					slog.Warn("生肖挑战返回未知结果", "role_id", session.RoleID(), "result", result.Result)
+				}
 				return nil
 			}
-			result, err := protocol.ParseZodiacChallengeResult(resp.Payload)
-			if err != nil {
-				return fmt.Errorf("解析生肖挑战回包失败: %w", err)
-			}
-			switch result.Result {
-			case protocol.ZodiacResultSuccess:
-				slog.Info("生肖挑战成功",
-					"role_id", session.RoleID(),
-					"zodiac_level", result.ZodiacLevel,
-					"barrier", result.Barrier,
-				)
-			case protocol.ZodiacResultFail:
-				slog.Info("生肖挑战失败", "role_id", session.RoleID())
-			case protocol.ZodiacResultTopHeaven:
-				slog.Info("生肖挑战已通关最高天", "role_id", session.RoleID())
-			case protocol.ZodiacResultNotEnoughPlayerLevel:
-				slog.Info("生肖挑战等级不足", "role_id", session.RoleID())
-			case protocol.ZodiacResultBagFull:
-				return scheduler.ErrBagFull
-			case protocol.ZodiacResultCDTime:
-				slog.Info("生肖挑战冷却中，稍后重试", "role_id", session.RoleID())
-				return scheduler.NewCooldown(30*time.Minute, "生肖挑战冷却")
-			case protocol.ZodiacResultNoEnoughStatePoint:
-				slog.Info("生肖挑战境界点不足", "role_id", session.RoleID())
-			case protocol.ZodiacResultLock:
-				slog.Info("生肖关卡未解锁", "role_id", session.RoleID())
-			default:
-				slog.Warn("生肖挑战返回未知结果", "role_id", session.RoleID(), "result", result.Result)
-			}
-			return nil
 		},
 	)
 }
