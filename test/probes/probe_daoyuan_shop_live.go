@@ -121,4 +121,14 @@ func main() {
 	call(sa, protocol.NewPacket(0x00840002, []byte{8}), 0x00840002, "sa_132_2_8")
 	call(sa, protocol.BuildSaUnionWorshipPanelPacketWithPrev(sa.LastActionID()), 0x01A30001, "sa_419_panel")
 	call(sa, protocol.BuildSaUnionWorshipPacket(0), 0x01A30002, "sa_419_worship")
+
+	town, err := sess.OpenSectTownSession(ctx)
+	if err != nil {
+		slog.Warn("建立仙盟城镇会话失败", "err", err)
+		return
+	}
+	defer town.Close()
+	slog.Info("仙盟城镇会话已建立", "player_id", town.PlayerID())
+	call(town, protocol.BuildSaUnionWorshipPanelPacketWithPrev(town.LastActionID()), 0x01A30001, "town_419_panel")
+	call(town, protocol.BuildSaUnionWorshipPacket(0), 0x01A30002, "town_419_worship")
 }
