@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
@@ -104,14 +105,13 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 			warResults, err := session.BeelzebubTrialsAutoChallengeAll(ctx, cfg.PreferBossID)
 			if err != nil {
 				if errors.Is(err, client.ErrBeelzebubTrialsNoResponse) {
-					// 客户端已记录具体关卡与原因；这里按业务条件跳过，避免调度器再报一次 WARN。
-					slog.Info("魔王试炼服务端连续无响应，本轮跳过", "role_id", session.RoleID(), "error", err)
-					return nil
+					// 客户端已记录具体关卡与原因；可能是资格/协议限制，稍后重试。
+					slog.Info("魔王试炼服务端连续无响应，稍后重试", "role_id", session.RoleID(), "error", err)
+					return scheduler.NewCooldown(time.Hour, "魔王试炼连续无响应")
 				}
 				if errors.Is(err, context.DeadlineExceeded) {
-					// 服务端静默丢弃或会话抖动均可能表现为超时；本轮跳过，等待下次调度。
-					slog.Info("魔王试炼请求超时/被服务端丢弃，本轮跳过", "role_id", session.RoleID(), "error", err)
-					return nil
+					slog.Info("魔王试炼请求超时/被服务端丢弃，稍后重试", "role_id", session.RoleID(), "error", err)
+					return scheduler.NewCooldown(30*time.Minute, "魔王试炼请求被丢弃")
 				}
 				return fmt.Errorf("魔王试炼自动挑战流程执行失败: %w", err)
 			}

@@ -1623,11 +1623,13 @@ func classifyWuFaDrawResult(code uint8) error {
 		return scheduler.ErrAttemptsExhausted
 	case protocol.WuFaResultItemPackFull:
 		return scheduler.ErrBagFull
+	case protocol.WuFaResultFunctionNotOpen:
+		// 功能可能稍后开启，按活动开启时间重试而不是等 24 小时。
+		return scheduler.NewCooldown(time.Hour, "悟法领域功能未开启")
 	case protocol.WuFaResultNotEnoughIngot,
 		protocol.WuFaResultNotEnoughResourse,
 		protocol.WuFaResultNotEnoughResource,
-		protocol.WuFaResultNotEnoughRecharge,
-		protocol.WuFaResultFunctionNotOpen:
+		protocol.WuFaResultNotEnoughRecharge:
 		return scheduler.ErrConditionNotMet
 	default:
 		return fmt.Errorf("悟法领域感悟失败: result=%d (%s)", code, protocol.WuFaResultText(code))

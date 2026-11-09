@@ -555,7 +555,6 @@ func TestClassifyWuFaDrawResult(t *testing.T) {
 		{protocol.WuFaResultNotEnoughResourse, scheduler.ErrConditionNotMet},
 		{protocol.WuFaResultNotEnoughResource, scheduler.ErrConditionNotMet},
 		{protocol.WuFaResultNotEnoughRecharge, scheduler.ErrConditionNotMet},
-		{protocol.WuFaResultFunctionNotOpen, scheduler.ErrConditionNotMet},
 	}
 	for _, tc := range cases {
 		got := classifyWuFaDrawResult(tc.code)
@@ -572,6 +571,10 @@ func TestClassifyWuFaDrawResult(t *testing.T) {
 
 	if err := classifyWuFaDrawResult(protocol.WuFaResultFieldTypeError); err == nil {
 		t.Error("秘馆类型错误应返回错误")
+	}
+	var cdErr *scheduler.CooldownError
+	if err := classifyWuFaDrawResult(protocol.WuFaResultFunctionNotOpen); !errors.As(err, &cdErr) {
+		t.Errorf("功能未开启应返回 CooldownError, 实际 %v", err)
 	}
 	if err := classifyWuFaDrawResult(200); err == nil {
 		t.Error("未知结果码应返回错误")

@@ -221,6 +221,13 @@ func (s *RoleScheduler) runLoop() {
 					"routine", item.routine.Name(),
 					"error", execErr,
 				)
+			} else if errors.Is(execErr, ErrConditionNotMet) {
+				// 等级/资源/功能条件不满足属于正常业务分支，不应记为执行异常。
+				slog.Info("任务前置条件不满足，本轮跳过",
+					"role_id", s.roleID,
+					"routine", item.routine.Name(),
+					"error", execErr,
+				)
 			} else if errors.Is(execErr, ErrBagFull) {
 				// 背包已满：挂起 10 分钟
 				item.coolingUntil = time.Now().Add(10 * time.Minute)
