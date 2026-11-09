@@ -2249,3 +2249,123 @@ func TestQiMenRoutine_UsesMiracleFightersModules(t *testing.T) {
 		t.Fatalf("不应再使用旧模块 486/485/584, 实际请求 %d 次", oldModuleCalls.Load())
 	}
 }
+
+// TestSixRealmsRoutine_ClearedAtSequenceMaxSkips 验证全通边界：
+// SequenceWar 等于 SequenceMax（线上全通返回 25/25）时不应再挑战最后一层。
+func TestSixRealmsRoutine_ClearedAtSequenceMaxSkips(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	var challenges atomic.Int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDTowerGetInfo:
+				w := protocol.NewWriter()
+				w.WriteUint8(25) // SequenceMax
+				w.WriteUint8(12) // Layer
+				w.WriteUint8(25) // SequenceWar == max -> 已全通
+				w.WriteUint8(20) // BagNum
+				w.WriteUint8(6)  // ResetNum
+				w.WriteUint16(0) // ResetIngot
+				w.WriteUint8(0)  // HideID
+				w.WriteInt32(0)  // HighStone
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+			case protocol.ActionIDTowerStartChallenge:
+				challenges.Add(1)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID,
+					[]byte{protocol.TowerResultSuccess}))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-six-realms-cleared",
+		RoleName:   "六道全通测试",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error { return nil },
+	})
+	_ = session.Start(context.Background())
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cfg := dungeon.DefaultSixRealmsConfig()
+	cfg.AutoReset = false
+	if err := dungeon.NewSixRealmsRoutine(cfg).Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("six realms: %v", err)
+	}
+	if got := challenges.Load(); got != 0 {
+		t.Fatalf("全通后不应再挑战, challenge calls = %d", got)
+	}
+}
+
+// TestSixRealmsRoutine_InvalidLayerStopsImmediately 验证最后一层返回 INVALID_LAYER(1)
+// 时立即结束，不再重试 3 次。
+func TestSixRealmsRoutine_InvalidLayerStopsImmediately(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	var challenges atomic.Int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDTowerGetInfo:
+				w := protocol.NewWriter()
+				w.WriteUint8(25) // SequenceMax
+				w.WriteUint8(12) // Layer
+				w.WriteUint8(24) // SequenceWar
+				w.WriteUint8(5)  // BagNum
+				w.WriteUint8(0)  // ResetNum
+				w.WriteUint16(0) // ResetIngot
+				w.WriteUint8(0)
+				w.WriteInt32(0)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+			case protocol.ActionIDTowerStartChallenge:
+				challenges.Add(1)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID,
+					[]byte{protocol.TowerResultInvalidLayer}))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-six-realms-invalid",
+		RoleName:   "六道无效层测试",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error { return nil },
+	})
+	_ = session.Start(context.Background())
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cfg := dungeon.DefaultSixRealmsConfig()
+	cfg.AutoReset = false
+	if err := dungeon.NewSixRealmsRoutine(cfg).Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("six realms: %v", err)
+	}
+	if got := challenges.Load(); got != 1 {
+		t.Fatalf("INVALID_LAYER 后应立即结束, challenge calls = %d", got)
+	}
+}

@@ -1089,8 +1089,13 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 			slog.Debug("六道轮回面板背包字段（仅诊断，不作为门禁）",
 				"role_id", session.RoleID(), "bag_num", info.BagNum)
 
-			// 4. 判断是否需要重置: 如果当前道已全部通关 (SequenceWar > 25)
-			if info.SequenceWar > 25 {
+			// 4. 判断是否需要重置: SequenceWar 表示当前待挑战层 (1..SequenceMax)，
+			// 线上实测全通时返回 SequenceWar == SequenceMax（而非 >），因此必须用 >=。
+			maxFloor := int(info.SequenceMax)
+			if maxFloor <= 0 {
+				maxFloor = 25
+			}
+			if int(info.SequenceWar) >= maxFloor {
 				if cfg.AutoReset && info.ResetNum > 0 {
 					slog.Info("六道轮回当前道已全通，检测到今日剩余免费重置次数，执行重置",
 						"role_id", session.RoleID(),
@@ -1110,6 +1115,13 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 						info = newInfo
 					} else {
 						info.SequenceWar = 1
+					}
+					if int(info.SequenceWar) >= maxFloor {
+						slog.Info("六道轮回重置后仍显示全通，结束本轮",
+							"role_id", session.RoleID(),
+							"sequence_war", info.SequenceWar,
+							"sequence_max", maxFloor)
+						return nil
 					}
 				} else {
 					slog.Info("六道轮回当前道今日已通关且无需重置或无免费重置次数，挑战完成",
@@ -1133,7 +1145,7 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 				maxRetries = 3
 			}
 
-			for floor := startFloor; floor <= 25; floor++ {
+			for floor := startFloor; floor <= maxFloor; floor++ {
 				floorRetries := 0
 				floorWon := false
 
@@ -1190,8 +1202,8 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 						)
 						info.SequenceWar = uint8(floor + 1)
 						floorWon = true
-						if floor == 25 {
-							slog.Info("恭喜通关六道轮回当前道全部 25 层！",
+						if floor == maxFloor {
+							slog.Info("恭喜通关六道轮回当前道全部层数！",
 								"role_id", session.RoleID(),
 								"layer", info.Layer,
 								"layer_name", protocol.TowerLayerName(info.Layer),
@@ -1207,6 +1219,15 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 					}
 					if res.Result == protocol.TowerResultFullTimes {
 						slog.Info("今日六道挑战次数已达上限", "role_id", session.RoleID())
+						return nil
+					}
+					if res.Result == protocol.TowerResultInvalidLayer {
+						// 该层已通关/无效（线上全通后挑战最后一层返回 1），重试无意义。
+						slog.Info("六道轮回该层已通关或无效，结束本轮",
+							"role_id", session.RoleID(),
+							"floor", floor,
+							"sequence_war", info.SequenceWar,
+							"sequence_max", maxFloor)
 						return nil
 					}
 

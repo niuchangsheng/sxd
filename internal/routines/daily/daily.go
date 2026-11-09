@@ -393,15 +393,15 @@ func NewOnlineGiftRoutine(cfgs ...OnlineGiftConfig) scheduler.ActivityRoutine {
 			st := session.GetPlayerState()
 			switch st.IsGetOnlineGift {
 			case -1:
-				slog.Info("在线礼包当前不可领取: 活动未开放或无可领礼包",
+				slog.Info("在线礼包当前不可领取: 活动未开放或无可领礼包，稍后重试",
 					"role_id", session.RoleID(),
 				)
-				return nil
+				return scheduler.NewCooldown(2*time.Hour, "在线礼包活动未开放")
 			case -2:
-				slog.Warn("在线礼包状态尚未同步, 跳过本轮",
+				slog.Warn("在线礼包状态尚未同步, 稍后重试",
 					"role_id", session.RoleID(),
 				)
-				return nil
+				return scheduler.NewCooldown(10*time.Minute, "在线礼包状态未同步")
 			}
 
 			// 2. 查询下一份礼包预览 (诊断与日志)
