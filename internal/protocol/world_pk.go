@@ -145,6 +145,47 @@ func BuildWorldPkAwardPanelPacket() *Packet {
 	return NewPacket(ActionIDWorldPkAwardPanel, nil)
 }
 
+// WorldPkTask 表示跨服 PK 每日/周常任务。
+type WorldPkTask struct {
+	ID       int32
+	Progress int32
+	// State 完成状态：实测 1=已完成/可领取。
+	State int32
+}
+
+// ParseWorldPkTasks 解析 open_task_panel 前两组任务列表。
+func ParseWorldPkTasks(payload []byte) ([]WorldPkTask, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	res, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: empty world pk task panel", ErrInvalidPayload)
+	}
+	if res != WorldPkRewardSuccess {
+		return nil, nil
+	}
+	var tasks []WorldPkTask
+	for list := 0; list < 2; list++ {
+		count, err := r.ReadUint16()
+		if err != nil {
+			break
+		}
+		for i := 0; i < int(count); i++ {
+			var t WorldPkTask
+			if t.ID, err = r.ReadInt32(); err != nil {
+				return tasks, nil
+			}
+			if t.Progress, err = r.ReadInt32(); err != nil {
+				return tasks, nil
+			}
+			if t.State, err = r.ReadInt32(); err != nil {
+				return tasks, nil
+			}
+			tasks = append(tasks, t)
+		}
+	}
+	return tasks, nil
+}
+
 // ParseWorldPkTaskIDs 解析 open_task_panel 前三组任务列表中的任务 ID。
 //
 // 回包首字节为结果码，随后是 3 个 [Int,Int,Int] 列表。

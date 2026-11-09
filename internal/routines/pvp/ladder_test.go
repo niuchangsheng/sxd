@@ -7,13 +7,14 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
 )
 
 func ladderTaskPanelPayload(taskID int32) []byte {
 	w := protocol.NewWriter().WriteUint8(protocol.WorldPkRewardSuccess)
-	w.WriteUint16(1).WriteInt32(taskID).WriteInt32(1).WriteInt32(0)
+	w.WriteUint16(1).WriteInt32(taskID).WriteInt32(1).WriteInt32(1)
 	w.WriteUint16(0)
 	w.WriteUint16(0)
 	w.WriteInt32(0).WriteInt32(0).WriteInt32(0).WriteInt32(0)
@@ -22,6 +23,12 @@ func ladderTaskPanelPayload(taskID int32) []byte {
 }
 
 func TestCrossServerLadderRoutine_ClaimsRewards(t *testing.T) {
+	orig := openLadderRewardSession
+	openLadderRewardSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+		return s, nil
+	}
+	defer func() { openLadderRewardSession = orig }()
+
 	var awardCalls atomic.Int32
 	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
@@ -47,12 +54,18 @@ func TestCrossServerLadderRoutine_ClaimsRewards(t *testing.T) {
 	if err := NewCrossServerLadderRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("ladder: %v", err)
 	}
-	if got := awardCalls.Load(); got != 23 {
-		t.Fatalf("task award calls = %d, want 23 (每日1..12 + 周常14..24)", got)
+	if got := awardCalls.Load(); got != 1 {
+		t.Fatalf("仅应领取 1 个已完成任务, task award calls = %d", got)
 	}
 }
 
 func TestCrossServerLadderRoutine_PackFull(t *testing.T) {
+	orig := openLadderRewardSession
+	openLadderRewardSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+		return s, nil
+	}
+	defer func() { openLadderRewardSession = orig }()
+
 	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDWorldPkStatus:
@@ -60,6 +73,10 @@ func TestCrossServerLadderRoutine_PackFull(t *testing.T) {
 		case protocol.ActionIDWorldPkJoin:
 			_ = protocol.WritePacket(conn, protocol.BuildWorldPkJoinResultPacket(protocol.WorldPkResultSuccess))
 		case protocol.ActionIDWorldPkSetAutoMatch:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.WorldPkRewardSuccess}))
+		case protocol.ActionIDWorldPkOpenTaskPanel:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, ladderTaskPanelPayload(7)))
+		case protocol.ActionIDWorldPkTaskAward:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.WorldPkRewardSuccess}))
 		case protocol.ActionIDWorldPkReceiveSpecial:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.WorldPkRewardPackFull}))

@@ -127,8 +127,24 @@ func main() {
 	call(sa, protocol.NewPacket(0x00840002, nil), 0x00840002, "sa_132_2_nil")
 	call(sa, protocol.NewPacket(0x00840002, []byte{5}), 0x00840002, "sa_132_2_5")
 	call(sa, protocol.NewPacket(0x00840002, []byte{8}), 0x00840002, "sa_132_2_8")
+	call(sa, protocol.NewPacket(0x015D0000, nil), 0x015D0000, "sa_pk_status")
+	call(sa, protocol.BuildWorldPkOpenTaskPanelPacket(), 0x015D001A, "sa_pk_tasks")
+	call(sa, protocol.BuildWorldPkTaskAwardPacket(1), 0x015D001B, "sa_pk_task1")
+	call(sa, protocol.BuildWorldPkTaskAwardPacket(7), 0x015D001B, "sa_pk_task7")
 	call(sa, protocol.BuildSaUnionWorshipPanelPacketWithPrev(sa.LastActionID()), 0x01A30001, "sa_419_panel")
 	call(sa, protocol.BuildSaUnionWorshipPacket(0), 0x01A30002, "sa_419_worship")
+
+	cross, cErr := sess.OpenCrossServerSession(ctx)
+	if cErr == nil {
+		defer cross.Close()
+		slog.Info("仙界跨服会话已建立", "player_id", cross.PlayerID())
+		call(cross, protocol.NewPacket(0x015D0000, nil), 0x015D0000, "cross_pk_status")
+		call(cross, protocol.BuildWorldPkOpenTaskPanelPacket(), 0x015D001A, "cross_pk_tasks")
+		call(cross, protocol.BuildWorldPkTaskAwardPacket(1), 0x015D001B, "cross_pk_task1")
+		call(cross, protocol.BuildWorldPkTaskAwardPacket(7), 0x015D001B, "cross_pk_task7")
+	} else {
+		slog.Warn("仙界跨服会话建立失败", "err", cErr)
+	}
 
 	town, err := sess.OpenSectTownSession(ctx)
 	if err != nil {
