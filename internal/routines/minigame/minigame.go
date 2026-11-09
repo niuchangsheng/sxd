@@ -4291,14 +4291,47 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 					continue
 				}
 				exchangedThisType := 0
+				current := price
 				for i := int16(0); i < price.Count && exchanges < 10; i++ {
 					if err := ctx.Err(); err != nil {
 						return nil
 					}
+					// 每次兑换前重新读取价格：服务端可能在首兑后把同类型
+					// 切换为元宝计价，复用旧价格会直接消耗元宝。
+					if exchangedThisType > 0 {
+						freshResp, fErr := call(protocol.BuildForbiddenBookExchangeInfoPacket(),
+							protocol.ActionIDForbiddenBookExchangeInfo)
+						if fErr != nil || freshResp == nil {
+							slog.Info("禁地之书兑换价格刷新无应答，停止兑换",
+								"role_id", session.RoleID(), "type", price.ForbiddenType, "err", fErr)
+							break
+						}
+						freshList, fpErr := protocol.ParseForbiddenBookExchangeInfoResult(freshResp.Payload)
+						if fpErr != nil {
+							slog.Warn("禁地之书兑换价格刷新解析失败，停止兑换",
+								"role_id", session.RoleID(), "err", fpErr)
+							break
+						}
+						found := false
+						for _, fp := range freshList {
+							if fp.ForbiddenType == price.ForbiddenType {
+								current = fp
+								found = true
+								break
+							}
+						}
+						if !found || current.CostIngot > 0 || current.CostCoin <= 0 || current.Count <= 0 {
+							slog.Info("禁地之书兑换已切换为元宝档或售罄，停止兑换",
+								"role_id", session.RoleID(), "type", price.ForbiddenType,
+								"cost_ingot", current.CostIngot, "cost_coin", current.CostCoin,
+								"count", current.Count)
+							break
+						}
+					}
 					coins := session.GetPlayerState().Coins
-					if coins < int64(price.CostCoin) {
+					if coins < int64(current.CostCoin) {
 						slog.Info("铜钱不足，停止禁地之书兑换", "role_id", session.RoleID(),
-							"coins", coins, "cost_coin", price.CostCoin)
+							"coins", coins, "cost_coin", current.CostCoin)
 						break
 					}
 					resp, xErr := call(protocol.BuildForbiddenBookExchangePacket(price.ForbiddenType), protocol.ActionIDForbiddenBookExchange)
@@ -4319,10 +4352,10 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 					exchanges++
 					exchangedThisType++
 					session.UpdatePlayerState(func(ps *client.PlayerState) {
-						ps.Coins -= int64(price.CostCoin)
+						ps.Coins -= int64(current.CostCoin)
 					})
 					slog.Info("禁地之书铜钱兑换成功", "role_id", session.RoleID(),
-						"type", price.ForbiddenType, "cost_coin", price.CostCoin)
+						"type", price.ForbiddenType, "cost_coin", current.CostCoin)
 				}
 
 				// 兑换次数不会体现在 panel 的 cur_number 上（线上实测兑换后仍为 0），

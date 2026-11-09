@@ -68,41 +68,47 @@ func NewPartnerLinkBoxRoutine() scheduler.ActivityRoutine {
 				remain = maxBuys
 			}
 
-			shopResp := call(protocol.BuildPartnerLinkShopPacket(), protocol.ActionIDPartnerLinkShop)
-			if shopResp == nil {
-				slog.Info("缘魂宝箱商店不可用，稍后重试", "role_id", session.RoleID())
-				return scheduler.NewCooldown(30*time.Minute, "缘魂宝箱商店无回包")
-			}
-			boxes, err := protocol.ParsePartnerLinkShopResult(shopResp.Payload)
-			if err != nil {
-				slog.Warn("解析缘魂宝箱商店失败", "role_id", session.RoleID(), "err", err)
-				return nil
-			}
-
-			// 优先铜钱结算，其次道缘；跳过元宝档与售罄档。
-			var target *protocol.PartnerLinkBox
-			for i := range boxes {
-				b := &boxes[i]
-				if b.MoneyType == protocol.PartnerLinkMoneyIngot || b.Times <= 0 {
-					continue
-				}
-				if target == nil || b.MoneyType == protocol.PartnerLinkMoneyCoin {
-					target = b
-				}
-			}
-			if target == nil {
-				slog.Info("没有道缘/铜钱结算的可购缘魂宝箱，跳过", "role_id", session.RoleID())
-				return nil
-			}
-			if int(target.Times) < remain {
-				remain = int(target.Times)
-			}
-
 			bought := 0
+			var boughtBoxType uint8
+			var boughtMoneyType uint8
+			// 每次购买前都重新拉取商店列表。服务端可能在首购后调整价格/货币
+			// （药园种子已实测会从铜钱切换为元宝），绝不能复用旧列表的货币信息。
 			for bought < remain {
 				if ctx.Err() != nil {
 					break
 				}
+				shopResp := call(protocol.BuildPartnerLinkShopPacket(), protocol.ActionIDPartnerLinkShop)
+				if shopResp == nil {
+					slog.Info("缘魂宝箱商店无回包，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(30*time.Minute, "缘魂宝箱商店无回包")
+				}
+				boxes, pErr := protocol.ParsePartnerLinkShopResult(shopResp.Payload)
+				if pErr != nil {
+					slog.Warn("解析缘魂宝箱商店失败，稍后重试", "role_id", session.RoleID(), "err", pErr)
+					return scheduler.NewCooldown(10*time.Minute, "缘魂宝箱商店解析失败")
+				}
+				// 优先铜钱结算，其次道缘；元宝档与售罄档一律跳过。
+				var target *protocol.PartnerLinkBox
+				for i := range boxes {
+					b := &boxes[i]
+					if b.MoneyType == protocol.PartnerLinkMoneyIngot || b.Times <= 0 {
+						continue
+					}
+					if target == nil || b.MoneyType == protocol.PartnerLinkMoneyCoin {
+						target = b
+					}
+				}
+				if target == nil {
+					if bought == 0 {
+						slog.Info("没有道缘/铜钱结算的可购缘魂宝箱，跳过", "role_id", session.RoleID())
+					} else {
+						slog.Info("缘魂宝箱已切换为元宝档或售罄，停止购买",
+							"role_id", session.RoleID(), "bought", bought)
+					}
+					break
+				}
+				boughtBoxType = target.BoxType
+				boughtMoneyType = target.MoneyType
 				resp := call(protocol.BuildPartnerLinkBuyPacket(target.BoxType), protocol.ActionIDPartnerLinkBuy)
 				if resp == nil || len(resp.Payload) == 0 {
 					slog.Info("购买缘魂宝箱无回包，稍后重试",
@@ -132,8 +138,8 @@ func NewPartnerLinkBoxRoutine() scheduler.ActivityRoutine {
 			}
 			if bought > 0 {
 				slog.Info("缘魂宝箱购买完成",
-					"role_id", session.RoleID(), "box_type", target.BoxType,
-					"money_type", target.MoneyType, "bought", bought)
+					"role_id", session.RoleID(), "box_type", boughtBoxType,
+					"money_type", boughtMoneyType, "bought", bought)
 			}
 			return nil
 		},
