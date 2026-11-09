@@ -146,6 +146,9 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 					"role_id", session.RoleID(),
 					"result", result.Result,
 					"result_text", protocol.EraRebirthResultText(result.Result))
+			case protocol.EraRebirthResultFuncNotOpen:
+				slog.Info("轮回净地功能未开放，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "轮回净地功能未开放")
 			case protocol.EraRebirthResultPackageFull:
 				return scheduler.ErrBagFull
 			default:

@@ -837,8 +837,8 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildIceCaveInfoPacket(), protocol.ActionIDIceCaveInfo)
 			iCancel()
 			if err != nil {
-				slog.Info("冰窟探险当前不可用/未开放，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("冰窟探险当前不可用/未开放，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "冰窟探险信息无回包")
 			}
 			info, err := protocol.ParseIceCaveInfoResult(infoResp.Payload)
 			if err != nil {
