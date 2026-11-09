@@ -87,9 +87,11 @@ func NewNpcFriendshipRoutine() scheduler.ActivityRoutine {
 					return true
 				}
 			}
+			fetchDropped := false
 			fetch := func() *protocol.NpcFriendshipSnapshot {
 				resp, err := call(protocol.BuildNpcFriendshipInfoPacket(), protocol.ActionIDNpcFriendshipInfo)
 				if err != nil || resp == nil {
+					fetchDropped = true
 					slog.Info("NPC 结交信息查询无回包", "role_id", session.RoleID(), "err", err)
 					return nil
 				}
@@ -103,6 +105,10 @@ func NewNpcFriendshipRoutine() scheduler.ActivityRoutine {
 
 			snap := fetch()
 			if snap == nil {
+				if fetchDropped {
+					slog.Info("NPC 结交面板无回包，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(30*time.Minute, "NPC结交面板无回包")
+				}
 				slog.Info("NPC 结交功能不可用或未开放，跳过", "role_id", session.RoleID())
 				return nil
 			}
