@@ -122,8 +122,9 @@ func main() {
 		slog.Info("种子商城条目",
 			"seed_id", s.SeedID,
 			"owned", s.OwnedCount,
-			"price_type", s.PriceType,
-			"price", s.Price,
+			"remain_times", s.RemainTimes,
+			"buy_need_coin", s.BuyNeedCoin,
+			"buy_need_ingot", s.BuyNeedIngot,
 		)
 	}
 }

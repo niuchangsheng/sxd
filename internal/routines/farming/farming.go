@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -20,6 +21,11 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
+// farmSeedBuyBlockedUntil 记录药园种子购买被服务端静默丢弃后的退避截止时间
+// (Unix 秒)。购买请求需要药园场景上下文，主服会话下可能被丢弃；退避期间
+// 只巡检/采摘/播种，不再重复发送必然超时的请求。
+var farmSeedBuyBlockedUntil atomic.Int64
+
 // NewHerbGardenRoutine 构造药园种植与巡检任务。
 // 支持无参调用或注入 dictionary.Repository 字典仓储。
 func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.ActivityRoutine {
@@ -27,6 +33,8 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 	if len(dictRepos) > 0 {
 		dictRepo = dictRepos[0]
 	}
+	// 每个例程实例独立开始退避周期；生产环境启动时只构造一次。
+	farmSeedBuyBlockedUntil.Store(0)
 
 	return scheduler.NewBaseRoutine(
 		"herb_garden",
@@ -137,6 +145,9 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				}
 			}
 
+			// seedOwned 记录种子库存，供后续播种筛选；避免对 0 库存种子
+			// 发送必然被服务端静默丢弃的 plant_new_herbs 请求。
+			seedOwned := make(map[int32]int32)
 			seedsPkt, sErr := protocol.BuildFarmSeedsPacket(protocol.FarmSeedsRequest{
 				PrevAct: prevAct,
 			})
@@ -153,16 +164,15 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				slog.Warn("解析药园种子库存失败，跳过补仓",
 					"role_id", session.RoleID(), "err", sParseErr)
 			} else {
-				ownedMap := make(map[int32]int32)
 				seedMeta := make(map[int32]protocol.FarmSeedItem, len(seedsRes.Seeds))
 				for _, sItem := range seedsRes.Seeds {
-					ownedMap[sItem.SeedID] = sItem.OwnedCount
+					seedOwned[sItem.SeedID] = sItem.OwnedCount
 					seedMeta[sItem.SeedID] = sItem
 				}
 				slog.Info("药园种子库存",
 					"role_id", session.RoleID(),
-					"seed_176_owned", ownedMap[176],
-					"seed_169_owned", ownedMap[169],
+					"seed_176_owned", seedOwned[176],
+					"seed_169_owned", seedOwned[169],
 					"seed_kinds", len(seedsRes.Seeds),
 				)
 
@@ -179,7 +189,14 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				// 确保常用主力种子 (176 经验丹果树 与 169 仙玲珑经验草) 库存充足。
 				// 购买请求一旦无回包立即终止本轮，避免 PrevAct 链被污染后
 				// 后续播种/采摘全部连续超时。
+			seedBuy:
 				for _, targetSeedID := range []int32{seedID, 169} {
+					if blockedUntil := farmSeedBuyBlockedUntil.Load(); blockedUntil > time.Now().Unix() {
+						slog.Info("药园种子购买近期被服务端静默丢弃，退避期间跳过补仓",
+							"role_id", session.RoleID(),
+							"blocked_until", time.Unix(blockedUntil, 0))
+						break
+					}
 					if !hasPlantableLand {
 						slog.Info("药园当前无空闲/待采摘土地，跳过种子补仓", "role_id", session.RoleID())
 						break
@@ -190,25 +207,35 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 							"role_id", session.RoleID(), "seed_id", targetSeedID)
 						continue
 					}
-					// 铁律：自动化绝不消耗元宝。种子商店同时存在铜钱/元宝计价档位
-					// (PriceType=3 为铜钱)；只有铜钱计价的种子才允许购买。
-					if meta.PriceType != 3 {
-						slog.Info("药园种子非铜钱计价，跳过购买以免消耗元宝",
+					// 铁律：自动化绝不消耗元宝。新农田种子列表同时给出
+					// buy_need_coin 与 buy_need_ingot，只要元宝价格 > 0 就绝不购买。
+					if meta.BuyNeedIngot > 0 {
+						slog.Info("药园种子含元宝计价，跳过购买以免消耗元宝",
 							"role_id", session.RoleID(),
 							"seed_id", targetSeedID,
-							"price_type", meta.PriceType,
-							"price", meta.Price,
+							"buy_need_coin", meta.BuyNeedCoin,
+							"buy_need_ingot", meta.BuyNeedIngot,
+						)
+						continue
+					}
+					if meta.BuyNeedCoin <= 0 || meta.RemainTimes <= 0 {
+						slog.Info("药园种子不可用铜钱购买或今日次数已用尽，跳过",
+							"role_id", session.RoleID(),
+							"seed_id", targetSeedID,
+							"buy_need_coin", meta.BuyNeedCoin,
+							"remain_times", meta.RemainTimes,
 						)
 						continue
 					}
 					slog.Info("药园种子价格",
 						"role_id", session.RoleID(),
 						"seed_id", targetSeedID,
-						"price_type", meta.PriceType,
-						"price", meta.Price,
+						"buy_need_coin", meta.BuyNeedCoin,
+						"buy_need_ingot", meta.BuyNeedIngot,
+						"remain_times", meta.RemainTimes,
 						"owned", meta.OwnedCount,
 					)
-					owned := ownedMap[targetSeedID]
+					owned := seedOwned[targetSeedID]
 					if owned >= 4 {
 						continue
 					}
@@ -222,7 +249,14 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 						}
 						buyResp, bCallErr := callWithTimeout(buyPkt, protocol.ActionIDFarmBuySeed)
 						if abortOnDrop(buyResp, bCallErr) {
-							return nil
+							// 购买需要药园场景上下文，主服会话会被静默丢弃。
+							// 退避 6 小时并继续巡检土地，避免每次 15 分钟都空等 8 秒。
+							until := time.Now().Add(6 * time.Hour).Unix()
+							farmSeedBuyBlockedUntil.Store(until)
+							slog.Info("药园种子购买被静默丢弃，暂停补仓 6 小时并继续巡检土地",
+								"role_id", session.RoleID(), "seed_id", targetSeedID,
+								"blocked_until", time.Unix(until, 0), "err", bCallErr)
+							break seedBuy
 						}
 						prevAct = protocol.ActionIDFarmBuySeed
 						buyRes, bParseErr := protocol.ParseFarmBuySeedResult(buyResp.Payload)
@@ -242,6 +276,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 								sName = item.Name
 							}
 						}
+						seedOwned[targetSeedID]++
 						slog.Info("药园种子自动购买成功", "seed_id", targetSeedID, "seed_name", sName)
 					}
 				}
@@ -308,6 +343,9 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 					}
 
 					for _, sID := range candidates {
+						if seedOwned[sID] <= 0 {
+							continue
+						}
 						plantPkt, pErr := protocol.BuildFarmPlantPacket(protocol.FarmPlantRequest{
 							LandID:       field.LandID,
 							SeedOrRoleID: sID,
@@ -335,6 +373,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 						}
 
 						plantedCount++
+						seedOwned[sID]--
 						sName := "药草种子"
 						if dictRepo != nil {
 							if item, dErr := dictRepo.GetItem(int(sID)); dErr == nil && item != nil {

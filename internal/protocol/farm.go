@@ -52,16 +52,21 @@ type FarmPlantStateResult struct {
 	Fields []FarmField
 }
 
-// FarmSeedItem 代表药园种子商城中单项种子的属性与存量。
+// FarmSeedItem 代表药园「新农田」种子商城条目。
+//
+// 官方 FarmData.new_farmland_herbs_list 字段顺序:
+// Int herbs_id, Int herbs_count, Int remain_times, Int buy_need_coin, Int buy_need_ingot。
 type FarmSeedItem struct {
-	// SeedID 种子编号 (如 0xA9 仙玲珑经验草, 0xB0 经验丹果树)
+	// SeedID 种子/药草编号 (如 0xA9 仙玲珑经验草, 0xB0 经验丹果树)
 	SeedID int32
-	// OwnedCount 当前玩家背包/库存拥有数量
+	// OwnedCount 当前玩家库存拥有数量
 	OwnedCount int32
-	// PriceType 货币类型 (3 为铜钱)
-	PriceType int32
-	// Price 单价
-	Price int32
+	// RemainTimes 今日剩余可购买次数
+	RemainTimes int32
+	// BuyNeedCoin 铜钱价格
+	BuyNeedCoin int32
+	// BuyNeedIngot 元宝价格 (大于 0 时自动化绝不购买)
+	BuyNeedIngot int32
 }
 
 // FarmSeedsRequest 代表查询药园种子库存与商城配置请求 (ActionID=0x000D0016)。
@@ -271,15 +276,16 @@ func ParseFarmSeedsResult(payload []byte) (*FarmSeedsResult, error) {
 	for i := 0; i < int(count); i++ {
 		seedID, _ := r.ReadInt32()
 		ownedCount, _ := r.ReadInt32()
-		priceType, _ := r.ReadInt32()
-		price, _ := r.ReadInt32()
-		_, _ = r.ReadInt32() // reserved 4B
+		remainTimes, _ := r.ReadInt32()
+		buyNeedCoin, _ := r.ReadInt32()
+		buyNeedIngot, _ := r.ReadInt32()
 
 		seeds = append(seeds, FarmSeedItem{
-			SeedID:     seedID,
-			OwnedCount: ownedCount,
-			PriceType:  priceType,
-			Price:      price,
+			SeedID:       seedID,
+			OwnedCount:   ownedCount,
+			RemainTimes:  remainTimes,
+			BuyNeedCoin:  buyNeedCoin,
+			BuyNeedIngot: buyNeedIngot,
 		})
 	}
 
