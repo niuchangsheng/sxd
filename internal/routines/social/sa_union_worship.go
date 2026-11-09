@@ -45,21 +45,26 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 			}
 			resp := call(protocol.BuildSaUnionWorshipPacket(protocol.SaUnionWorshipUseCoin), protocol.ActionIDSaUnionWorship)
 			if resp == nil {
-				return nil
+				return scheduler.NewCooldown(30*time.Minute, "圣盟膜拜无回包")
 			}
 			code, err := protocol.ParseSaUnionWorshipResult(resp.Payload)
 			if err != nil {
 				slog.Warn("解析圣盟膜拜回包失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				return scheduler.NewCooldown(30*time.Minute, "圣盟膜拜回包解析失败")
 			}
 			switch code {
 			case protocol.SaUnionWorshipResultSuccess:
 				slog.Info("圣盟膜拜成功", "role_id", session.RoleID())
 			case protocol.SaUnionWorshipResultPackFull:
 				return scheduler.ErrBagFull
-			default:
-				slog.Info("圣盟膜拜未成功", "role_id", session.RoleID(),
+			case protocol.SaUnionWorshipResultJoinToday, protocol.SaUnionWorshipResultIsVoted,
+				protocol.SaUnionWorshipResultNoTime:
+				slog.Info("圣盟膜拜今日已完成", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.SaUnionWorshipResultText(code))
+			default:
+				slog.Info("圣盟膜拜未成功，稍后重试", "role_id", session.RoleID(),
+					"result", code, "result_text", protocol.SaUnionWorshipResultText(code))
+				return scheduler.NewCooldown(time.Hour, "圣盟膜拜失败")
 			}
 			return nil
 		},

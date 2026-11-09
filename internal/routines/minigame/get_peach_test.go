@@ -238,3 +238,53 @@ func TestGetPeachRoutine_CallTimesNotDecreaseCircuitBreaker(t *testing.T) {
 		t.Fatalf("次数未递减时应熔断, 实际调用 %d 次", got)
 	}
 }
+
+func TestGetPeachRoutine_WaitsWarCDWhenCanCallFalse(t *testing.T) {
+	var infoCalls, warCdCalls, callCalls, harvestCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDGetPeachInfo:
+			n := infoCalls.Add(1)
+			// 前两次面板仍处于摘取后的战斗冷却，can_call=0；冷却结束后恢复。
+			canCall := n > 2
+			peachNum := uint8(0)
+			if n > 3 {
+				peachNum = 1
+			}
+			_ = protocol.WritePacket(conn, protocol.BuildGetPeachPanelResultPacket(protocol.GetPeachPanel{
+				PeachLv: 2, PeachNum: peachNum, CanCall: canCall,
+			}))
+		case protocol.ActionIDPlayerGetWarCdTime:
+			warCdCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerGetWarCdTimeResultPacket(0))
+		case protocol.ActionIDGetPeachPlayerInfo:
+			coinTimes := uint8(1)
+			if callCalls.Load() > 0 {
+				coinTimes = 0
+			}
+			_ = protocol.WritePacket(conn, protocol.BuildGetPeachPlayerInfoResultPacket(protocol.GetPeachPlayerInfo{
+				CallCoinTimes: coinTimes, CallNeedCoin: 10000000,
+			}))
+		case protocol.ActionIDGetPeachCall:
+			callCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildGetPeachCallResultPacket(protocol.GetPeachResultSuccess))
+		case protocol.ActionIDGetPeachHarvest:
+			harvestCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildGetPeachHarvestResultPacket(protocol.GetPeachResultSuccess, 1000))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewGetPeachRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("get peach: %v", err)
+	}
+	if got := warCdCalls.Load(); got == 0 {
+		t.Fatal("can_call=0 时应查询战斗冷却并等待")
+	}
+	if got := callCalls.Load(); got != 1 {
+		t.Fatalf("冷却结束后应召唤 1 次, 实际 %d 次", got)
+	}
+	if got := harvestCalls.Load(); got != 1 {
+		t.Fatalf("召唤后应摘取 1 次, 实际 %d 次", got)
+	}
+}

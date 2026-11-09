@@ -241,6 +241,17 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			if !panel.CanCall {
+				// 刚摘完存量仙桃时服务端仍处于 2 秒战斗冷却，can_call_peach 会暂时为 0。
+				// 官方客户端先等 checkWarCdTime(Peach) 冷却结束再刷新面板，不能直接放弃。
+				slog.Info("服务端暂不允许召唤仙桃，等待战斗冷却后重试", "role_id", session.RoleID())
+				if waitHarvestCD() {
+					panel = fetchPanel()
+				}
+			}
+			if panel == nil {
+				return nil
+			}
+			if !panel.CanCall {
 				slog.Info("服务端当前不允许召唤仙桃，跳过", "role_id", session.RoleID())
 				return nil
 			}
