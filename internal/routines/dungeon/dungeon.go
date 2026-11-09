@@ -506,6 +506,20 @@ func sweepEliteMissionsWithoutTown(
 		if ctx.Err() != nil {
 			break
 		}
+		// 网关偶发 EOF 重连；等待会话恢复，并用重连后的新动作号刷新锚点。
+		if session.State() != client.StateActive {
+			for i := 0; i < 30 && session.State() != client.StateActive; i++ {
+				time.Sleep(200 * time.Millisecond)
+			}
+			if session.State() != client.StateActive {
+				slog.Info("会话未恢复，结束全局精英扫荡", "role_id", session.RoleID(), "swept", swept)
+				break
+			}
+		}
+		if cur := session.LastActionID(); cur != 0 &&
+			cur != protocol.ActionIDPracticeGetStatus && cur != protocol.ActionIDPracticeStart {
+			anchorAct = cur
+		}
 		if session.GetStamina() < 5 {
 			slog.Info("体力不足，结束全局精英扫荡",
 				"role_id", session.RoleID(), "swept", swept, "remaining_stamina", session.GetStamina())
