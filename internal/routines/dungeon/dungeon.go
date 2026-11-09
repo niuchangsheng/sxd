@@ -507,14 +507,20 @@ func sweepEliteMissionsWithoutTown(
 				"role_id", session.RoleID(), "swept", swept, "remaining_stamina", session.GetStamina())
 			break
 		}
+		// 服务端对 Module 25 有频率限制；逐副本节流，避免连发被静默丢弃。
+		select {
+		case <-ctx.Done():
+			return swept, ctx.Err()
+		case <-time.After(350 * time.Millisecond):
+		}
 
-		statusPkt, pErr := protocol.BuildPracticeGetStatusPacket(int32(dungeonID), session.LastActionID())
+		// Module 25 的 PrevAct 必须锚定到玩家主属性查询；使用会话最近动作
+		// 会被先前的 25 请求污染成自引用 0x00190000，导致服务端静默丢弃。
+		statusPkt, pErr := protocol.BuildPracticeGetStatusPacket(int32(dungeonID), protocol.ActionIDPlayerGetInfo)
 		if pErr != nil {
 			continue
 		}
-		// 全局扫荡会遍历全部副本 ID，其中大量条目不允许扫荡且会被服务端
-		// 静默丢弃；这里使用短超时，避免 190 个 ID × 10s 拖垮整个日常批次。
-		sCtx, sCancel := context.WithTimeout(ctx, 3*time.Second)
+		sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
 		statusResp, sErr := session.Call(sCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
 		sCancel()
 		if sErr != nil || statusResp == nil {
@@ -542,7 +548,7 @@ func sweepEliteMissionsWithoutTown(
 		if bErr != nil {
 			continue
 		}
-		pCtx, pCancel := context.WithTimeout(ctx, 3*time.Second)
+		pCtx, pCancel := context.WithTimeout(ctx, 10*time.Second)
 		startResp, stErr := session.Call(pCtx, startPkt, protocol.ActionIDPracticeStart)
 		pCancel()
 		if stErr != nil || startResp == nil {
