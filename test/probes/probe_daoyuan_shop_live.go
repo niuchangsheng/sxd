@@ -142,6 +142,13 @@ func main() {
 		call(cross, protocol.BuildWorldPkOpenTaskPanelPacket(), 0x015D001A, "cross_pk_tasks")
 		call(cross, protocol.BuildWorldPkTaskAwardPacket(1), 0x015D001B, "cross_pk_task1")
 		call(cross, protocol.BuildWorldPkTaskAwardPacket(7), 0x015D001B, "cross_pk_task7")
+		call(cross, protocol.BuildWorldPkAwardPanelPacket(), 0x015D0019, "cross_pk_award_panel")
+		call(cross, protocol.NewPacket(0x015D0008, nil), 0x015D0008, "cross_pk_exchange_info")
+		for _, lv := range []int32{1, 2, 3, 4, 5} {
+			w := protocol.NewWriter()
+			w.WriteInt32(lv)
+			call(cross, protocol.NewPacket(0x015D001C, w.Bytes()), 0x015D001C, fmt.Sprintf("cross_pk_level_award%d", lv))
+		}
 	} else {
 		slog.Warn("仙界跨服会话建立失败", "err", cErr)
 	}
