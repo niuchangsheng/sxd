@@ -70,8 +70,8 @@ func NewPartnerLinkBoxRoutine() scheduler.ActivityRoutine {
 
 			shopResp := call(protocol.BuildPartnerLinkShopPacket(), protocol.ActionIDPartnerLinkShop)
 			if shopResp == nil {
-				slog.Info("缘魂宝箱商店不可用，跳过", "role_id", session.RoleID())
-				return nil
+				slog.Info("缘魂宝箱商店不可用，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "缘魂宝箱商店无回包")
 			}
 			boxes, err := protocol.ParsePartnerLinkShopResult(shopResp.Payload)
 			if err != nil {
@@ -105,7 +105,9 @@ func NewPartnerLinkBoxRoutine() scheduler.ActivityRoutine {
 				}
 				resp := call(protocol.BuildPartnerLinkBuyPacket(target.BoxType), protocol.ActionIDPartnerLinkBuy)
 				if resp == nil || len(resp.Payload) == 0 {
-					break
+					slog.Info("购买缘魂宝箱无回包，稍后重试",
+						"role_id", session.RoleID(), "bought", bought)
+					return scheduler.NewCooldown(30*time.Minute, "缘魂宝箱购买无回包")
 				}
 				code := resp.Payload[0]
 				switch code {

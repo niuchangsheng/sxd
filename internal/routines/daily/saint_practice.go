@@ -51,25 +51,25 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 			statusResp, err := session.Call(sCtx, protocol.BuildSaintAreaStatusPacket(), protocol.ActionIDSaintAreaStatus)
 			sCancel()
 			if err != nil || statusResp == nil {
-				slog.Info("查询圣域状态无回包，跳过圣域修炼", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("查询圣域状态无回包，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "圣域状态查询无回包")
 			}
 			status, err := protocol.ParseSaintAreaStatusResult(statusResp.Payload)
 			if err != nil {
-				slog.Warn("解析圣域状态失败，跳过圣域修炼", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("解析圣域状态失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "圣域状态解析失败")
 			}
 			if status.Status != protocol.SaintAreaStatusOpen {
-				slog.Info("圣域当前未开启，跳过圣域修炼",
+				slog.Info("圣域当前未开启，稍后重试",
 					"role_id", session.RoleID(), "status", status.Status)
-				return nil
+				return scheduler.NewCooldown(time.Hour, "圣域未开启")
 			}
 
 			// 2. 建立圣域独立会话。
 			sa, err := session.OpenSaintAreaSession(ctx)
 			if err != nil {
-				slog.Info("建立圣域会话失败，跳过圣域修炼", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("建立圣域会话失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "圣域会话不可用")
 			}
 			defer sa.Close()
 
@@ -82,13 +82,13 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 			// 3. 查询免费修炼房。
 			freeResp, err := call(protocol.BuildSaPracticeRoomFreeInfoPacket(), protocol.ActionIDSaPracticeRoomGetFreeInfo)
 			if err != nil || freeResp == nil {
-				slog.Info("圣域修炼房不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("圣域修炼房不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "圣域修炼房信息无回包")
 			}
 			room, err := protocol.ParseSaFreeRoomInfoResult(freeResp.Payload)
 			if err != nil {
-				slog.Warn("解析圣域修炼房信息失败，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("解析圣域修炼房信息失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "圣域修炼房信息解析失败")
 			}
 			slog.Info("圣域修炼房状态",
 				"role_id", session.RoleID(),
@@ -101,6 +101,7 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 			// 4. 未入座则尝试进入免费修炼房。
 			if room.RoomQuality <= 0 {
 				seated := false
+				seatDrop := false
 				for seat := 0; seat < maxSaintPracticeSeats; seat++ {
 					if err := ctx.Err(); err != nil {
 						return nil
@@ -108,6 +109,7 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 					sitResp, sErr := call(protocol.BuildSaPracticeRoomSitDownPacket(saintPracticeRoomQuality, uint8(seat)), protocol.ActionIDSaPracticeRoomSitDown)
 					if sErr != nil || sitResp == nil {
 						slog.Info("圣域修炼房入座无回包", "role_id", session.RoleID(), "seat", seat, "err", sErr)
+						seatDrop = true
 						break
 					}
 					code, pErr := protocol.ParseSaPracticeRoomActionResult(sitResp.Payload)
@@ -134,6 +136,10 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 					break
 				}
 				if !seated {
+					if seatDrop {
+						slog.Info("圣域修炼房入座无回包，稍后重试", "role_id", session.RoleID())
+						return scheduler.NewCooldown(10*time.Minute, "圣域修炼房入座无回包")
+					}
 					slog.Info("圣域修炼房没有可用空位，跳过", "role_id", session.RoleID())
 					return nil
 				}
@@ -142,13 +148,13 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 			// 5. 有可领取经验则领取 (use_type=0 免费档)。
 			flagResp, err := call(protocol.BuildSaPracticeRoomExpFlagPacket(), protocol.ActionIDSaPracticeRoomExpFlag)
 			if err != nil || flagResp == nil {
-				slog.Info("圣域修炼经验状态无回包，入座流程已完成", "role_id", session.RoleID())
-				return nil
+				slog.Info("圣域修炼经验状态无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(10*time.Minute, "圣域修炼经验状态无回包")
 			}
 			flag, err := protocol.ParseSaPracticeRoomActionResult(flagResp.Payload)
 			if err != nil {
-				slog.Warn("解析圣域修炼经验状态失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("解析圣域修炼经验状态失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "圣域修炼经验状态解析失败")
 			}
 			if flag == 0 {
 				slog.Info("圣域修炼暂无可领取经验", "role_id", session.RoleID())
@@ -156,13 +162,13 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 			}
 			expResp, err := call(protocol.BuildSaPracticeRoomGetExpPacket(0), protocol.ActionIDSaPracticeRoomGetExp)
 			if err != nil || expResp == nil {
-				slog.Info("领取圣域修炼经验无回包", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("领取圣域修炼经验无回包，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "圣域修炼经验领取无回包")
 			}
 			code, exp, pErr := protocol.ParseSaPracticeRoomExpResult(expResp.Payload)
 			if pErr != nil {
-				slog.Warn("解析圣域修炼经验回包失败", "role_id", session.RoleID(), "err", pErr)
-				return nil
+				slog.Warn("解析圣域修炼经验回包失败，稍后重试", "role_id", session.RoleID(), "err", pErr)
+				return scheduler.NewCooldown(10*time.Minute, "圣域修炼经验回包解析失败")
 			}
 			switch code {
 			case protocol.SaPracticeRoomResultSuccess:

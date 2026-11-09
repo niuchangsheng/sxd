@@ -2,11 +2,14 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestPartnerLinkBoxRoutine_BuysCoinBoxUntilLimit(t *testing.T) {
@@ -86,5 +89,24 @@ func TestPartnerLinkBoxRoutine_SkipsWhenTaskComplete(t *testing.T) {
 	}
 	if got := shopCalls.Load(); got != 0 {
 		t.Fatalf("shop calls = %d, want 0", got)
+	}
+}
+
+func TestPartnerLinkBoxRoutine_ShopSilentDropCooldown(t *testing.T) {
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		if pkt.ActionID == protocol.ActionIDGameAssistantInfo {
+			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
+				{TaskID: DailyTaskPartnerLinkBox, CurTimes: 0, MaxTimes: 9, PerActiveAdd: 5},
+			}))
+		}
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewPartnerLinkBoxRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("商店无回包应返回 CooldownError, 实际: %v", err)
 	}
 }
