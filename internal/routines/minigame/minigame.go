@@ -1754,9 +1754,14 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 					"role_id", session.RoleID(), "order", order, "current_job", currentJob)
 			}
 
-			totalChallenged := 0
+			totalChallenged := int32(0)
 			switchedAny := false
-			var usedToday int32
+			// 面板 today_challenge_times 实测不随挑战变化，不能作为门禁；
+			// 以服务端 NO_CHALLENGE_TIMES 为准，本地仅保留宽松上限防死循环。
+			maxTotalChallenges := cfg.MaxChallengesPerDay * 4
+			if maxTotalChallenges < 6 {
+				maxTotalChallenges = 6
+			}
 
 			for _, requestedJob := range order {
 				if err := ctx.Err(); err != nil {
@@ -1767,14 +1772,10 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 				if fresh := masterPracticeFetchPanel(call); fresh != nil {
 					panel = fresh
 				}
-				// 本地已确认消耗的次数作为下限，避免面板延迟导致超发挑战。
-				if panel.TodayChallengeTimes > usedToday {
-					usedToday = panel.TodayChallengeTimes
-				}
-				if usedToday >= cfg.MaxChallengesPerDay {
-					slog.Info("宗师修行今日挑战次数已用尽，结束本轮",
+				if totalChallenged >= maxTotalChallenges {
+					slog.Info("宗师修行达到本地尝试上限，结束本轮",
 						"role_id", session.RoleID(),
-						"used", usedToday, "limit", cfg.MaxChallengesPerDay)
+						"challenged", totalChallenged, "cap", maxTotalChallenges)
 					return nil
 				}
 				job, found := masterPracticeJobByID(panel, requestedJob)
@@ -1860,11 +1861,9 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 					continue
 				}
 
-				// 5. 挑战尚未完成的星级；每日最多 3 次，用尽前主动停止。
-				remaining := cfg.MaxChallengesPerDay - usedToday
+				// 5. 挑战尚未完成的星级；服务端次数不足时返回 NO_CHALLENGE_TIMES。
+				remaining := int32(maxTotalChallenges - totalChallenged)
 				if remaining <= 0 {
-					slog.Info("宗师修行今日挑战次数已用尽，结束本轮",
-						"role_id", session.RoleID(), "used", usedToday, "limit", cfg.MaxChallengesPerDay)
 					return nil
 				}
 				// 开启失败切换时，单星级不做同职业重试：失败立即退避，
@@ -1875,8 +1874,7 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 				}
 				challenged, full, failed, chErr := masterPracticeChallengeJob(
 					ctx, job, remaining, maxRetries, session.RoleID(), call)
-				usedToday += challenged
-				totalChallenged += int(challenged)
+				totalChallenged += challenged
 				if chErr != nil {
 					if errors.Is(chErr, scheduler.ErrAttemptsExhausted) {
 						slog.Info("宗师修行今日挑战次数已用尽", "role_id", session.RoleID())
@@ -1904,17 +1902,10 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 					}
 				}
 				if !full {
-					// 当前职业今天可挑战的星级已打完但未满星。
-					// 第一目标是先用光每日次数，因此继续下一个职业；
-					// 次数已耗尽时在下一轮循环顶部自然结束。
-					if usedToday >= cfg.MaxChallengesPerDay {
-						slog.Info("宗师修行今日挑战次数已用尽，结束本轮",
-							"role_id", session.RoleID(), "used", usedToday, "limit", cfg.MaxChallengesPerDay)
-						return nil
-					}
+					// 当前职业今天可挑战的星级已打完但未满星，继续下一职业用完次数。
 					slog.Info("宗师修行当前职业本次可挑战星级已完成，切换下一职业以用光次数",
 						"role_id", session.RoleID(), "job_id", requestedJob,
-						"challenged", challenged, "used", usedToday, "limit", cfg.MaxChallengesPerDay)
+						"challenged", challenged, "total_challenged", totalChallenged)
 					continue
 				}
 				slog.Info("宗师修行当前职业已满星，继续下一职业",
@@ -2102,8 +2093,6 @@ func masterPracticeChallengeJob(
 				return consumed, false, false, scheduler.ErrConditionNotMet
 			default:
 				if code == protocol.MasterPracticeResultFailed {
-					// 失败同样消耗一次每日挑战次数。
-					consumed++
 					if retries < maxRetries {
 						retries++
 						slog.Warn("宗师修行挑战失败，重试同星级",

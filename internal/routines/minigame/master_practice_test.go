@@ -398,8 +398,8 @@ func TestMasterPracticeChallengeJob_RetriesFailedStarThenSucceeds(t *testing.T) 
 	if err != nil || full || failed {
 		t.Fatalf("expected retry success, consumed=%d full=%v failed=%v err=%v", consumed, full, failed, err)
 	}
-	if consumed != 2 || fake.calls != 2 {
-		t.Fatalf("失败+成功应消耗 2 次, got consumed=%d calls=%d", consumed, fake.calls)
+	if consumed != 1 || fake.calls != 2 {
+		t.Fatalf("失败不消耗次数，成功计 1 次, got consumed=%d calls=%d", consumed, fake.calls)
 	}
 }
 
@@ -420,8 +420,8 @@ func TestMasterPracticeChallengeJob_RetriesExhaustedSignalsJobSwitch(t *testing.
 	if !failed {
 		t.Fatal("expected failed=true after retry exhaustion")
 	}
-	if consumed != 2 || fake.calls != 2 {
-		t.Fatalf("两次失败应消耗 2 次, got consumed=%d calls=%d", consumed, fake.calls)
+	if consumed != 0 || fake.calls != 2 {
+		t.Fatalf("失败不消耗次数, got consumed=%d calls=%d", consumed, fake.calls)
 	}
 }
 
@@ -441,8 +441,8 @@ func TestMasterPracticeChallengeJob_FailureWithoutRetrySwitchesImmediately(t *te
 	if !failed {
 		t.Fatal("首次失败应立即返回 failed=true")
 	}
-	if consumed != 1 || fake.calls != 1 {
-		t.Fatalf("失败应立即消耗 1 次并停止重试, got consumed=%d calls=%d", consumed, fake.calls)
+	if consumed != 0 || fake.calls != 1 {
+		t.Fatalf("失败应立即停止重试且不消耗次数, got consumed=%d calls=%d", consumed, fake.calls)
 	}
 }
 
