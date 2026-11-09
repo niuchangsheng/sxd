@@ -281,10 +281,12 @@ func NewFactionBlessingRoutine(cfgs ...FactionBlessingConfig) scheduler.Activity
 							return nil
 						}
 					}
-					session.MarkFactionFeatureUnavailable()
-					slog.Info("帮派祭神面板与上香探测均无回包，判定帮派模块不可用，跳过本轮帮派任务",
+					// 双丢包不能直接判定角色未入帮派（可能只是网关瞬断），
+					// 否则会把帮派模块永久禁用。改为冷却后重新探测，只有上香
+					// 返回 MEMBER_NOT_EXIST / FACTION_NOT_EXIST 才标记不可用。
+					slog.Info("帮派祭神面板与上香探测均无回包，可能为瞬断，稍后重试",
 						"role_id", session.RoleID())
-					return nil
+					return scheduler.NewCooldown(30*time.Minute, "帮派祭神面板与探测均无回包")
 				}
 				slog.Warn("查询帮派祭神信息失败", "role_id", session.RoleID(), "err", infoErr)
 				return nil
@@ -628,19 +630,21 @@ func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 			if err != nil {
 				if errors.Is(err, client.ErrNotInSect) {
 					slog.Info("账号未加入仙盟，跳过仙盟日常", "role_id", session.RoleID())
-				} else if errors.Is(err, context.DeadlineExceeded) {
-					slog.Info("仙盟面板无回包，判定未入盟或仙盟功能未开放，跳过仙盟日常", "role_id", session.RoleID())
-				} else {
-					slog.Info("仙盟城镇会话不可用，跳过仙盟日常", "role_id", session.RoleID(), "err", err)
+					return nil
 				}
-				return nil
+				if errors.Is(err, context.DeadlineExceeded) {
+					slog.Info("仙盟面板无回包，稍后重试仙盟日常", "role_id", session.RoleID())
+				} else {
+					slog.Info("仙盟城镇会话不可用，稍后重试仙盟日常", "role_id", session.RoleID(), "err", err)
+				}
+				return scheduler.NewCooldown(30*time.Minute, "仙盟城镇会话无回包")
 			}
 			defer town.Close()
 
 			cred, err := session.FetchSectTownCredentials(townCtx)
 			if err != nil {
-				slog.Warn("读取仙盟凭据失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("读取仙盟凭据失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "仙盟凭据无回包")
 			}
 
 			// 1. 仙盟主页
