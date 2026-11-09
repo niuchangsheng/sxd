@@ -866,7 +866,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 		c := cfgs[0]
 		hasSubConfig = c.QuestCycle.Enabled || c.QuestCycle.AutoReplenishStamina ||
 			c.QuestCycle.MaxReplenishStamina > 0 || c.QuestCycle.MaxReplenishTimes > 0 ||
-			c.Sweep.Enabled || len(c.Sweep.Pipeline) > 0 ||
+			c.Sweep.Enabled || len(c.Sweep.Pipeline) > 0 || c.Sweep.GlobalElite ||
 			c.Sweep.SellSweptItems || c.Sweep.AutoSellSweptItems || c.SellSweptItems || c.AutoSellSweptItems
 
 		// 继承外层顶层兼容字段到子功能

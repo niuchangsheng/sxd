@@ -405,6 +405,7 @@ type mockQuestDungeonRepo struct {
 	quests   map[int]*dictionary.Quest
 	missions map[int]*dictionary.Mission
 	townNPCs map[int][]int
+	eliteIDs []int
 }
 
 func (m *mockQuestDungeonRepo) GetItem(id int) (*dictionary.Item, error) {
@@ -435,7 +436,7 @@ func (m *mockQuestDungeonRepo) GetHighestMissionByTypeAndLevel(level int, missio
 	return &dictionary.Mission{ID: 43, Name: "万妖皇", MissionLock: 9999}, nil
 }
 func (m *mockQuestDungeonRepo) GetEliteMissionIDs() ([]int, error) {
-	return nil, nil
+	return m.eliteIDs, nil
 }
 
 func (m *mockQuestDungeonRepo) GetEliteMissionTowns() ([]int, error) {
@@ -2371,5 +2372,70 @@ func TestSixRealmsRoutine_InvalidLayerStopsImmediately(t *testing.T) {
 	}
 	if got := challenges.Load(); got != 1 {
 		t.Fatalf("INVALID_LAYER 后应立即结束, challenge calls = %d", got)
+	}
+}
+
+// TestDungeonSweep_GlobalElite 验证 global_elite 开关走 Module 25：
+// status(精英副本ID) 取子关卡后 start(子关卡,1,自动出售)。
+func TestDungeonSweep_GlobalElite(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	var statusCalls, startCalls atomic.Int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPracticeGetStatus:
+				statusCalls.Add(1)
+				w := protocol.NewWriter()
+				w.WriteBytes([]byte("FP"))
+				w.WriteUint16(1)
+				w.WriteInt32(448)
+				w.WriteInt16(31)
+				w.WriteInt8(1)
+				w.WriteUint8(0)
+				w.WriteUint32(100)
+				w.WriteUint32(200)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+			case protocol.ActionIDPracticeStart:
+				startCalls.Add(1)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, []byte{protocol.PracticeResultSuccess}))
+			}
+		}
+	}()
+
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-global-elite",
+		RoleName:   "全局扫荡测试",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error { return nil },
+	})
+	_ = sess.Start(context.Background())
+	defer sess.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	sess.SetStamina(100)
+
+	repo := &mockQuestDungeonRepo{eliteIDs: []int{166}}
+	cfg := dungeon.DefaultSweepConfig()
+	cfg.Sweep.Enabled = true
+	cfg.Sweep.GlobalElite = true
+	cfg.Sweep.SellSweptItems = false
+
+	if err := dungeon.NewDungeonSweepRoutine(repo, cfg).Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("global elite sweep: %v", err)
+	}
+	if statusCalls.Load() != 1 || startCalls.Load() != 1 {
+		t.Fatalf("expected 1 status + 1 start, got status=%d start=%d", statusCalls.Load(), startCalls.Load())
 	}
 }

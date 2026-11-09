@@ -57,6 +57,7 @@ func newRegistryFactory(
 		sc.Dungeon.QuestCycle.MaxReplenishStamina > 0 ||
 		sc.Dungeon.QuestCycle.MaxReplenishTimes > 0 ||
 		sc.Dungeon.Sweep.Enabled ||
+		sc.Dungeon.Sweep.GlobalElite ||
 		sc.Dungeon.Sweep.SellSweptItems ||
 		sc.Dungeon.Sweep.AutoSellSweptItems ||
 		sc.Dungeon.SellSweptItems ||
