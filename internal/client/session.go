@@ -1808,6 +1808,18 @@ func (s *RoleSession) SetLastActionID(actionID uint32) {
 }
 
 // Send 向对端发送一个未压缩协议封包。
+
+// setWriteDeadline 为当前连接设置写超时。
+//
+// 服务端限流/停止读取时 TCP 发送缓冲区会被填满，conn.Write 会永久阻塞并
+// 持有 writeMu，导致整个会话（含心跳与调度）冻结。写超时可让 Send 返回，
+// 由上层重连逻辑恢复。
+func (s *RoleSession) setWriteDeadline() {
+	if s.conn != nil {
+		_ = s.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	}
+}
+
 func (s *RoleSession) Send(p *protocol.Packet) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -1818,6 +1830,7 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 	if s.conn == nil {
 		return ErrNotConnected
 	}
+	s.setWriteDeadline()
 
 	if p != nil {
 		mod := p.ActionID >> 16
@@ -1869,6 +1882,7 @@ func (s *RoleSession) SendCompressed(p *protocol.Packet) error {
 	if s.conn == nil {
 		return ErrNotConnected
 	}
+	s.setWriteDeadline()
 
 	err := protocol.WriteCompressedPacket(s.conn, p)
 	if err == nil && p != nil {
@@ -1889,6 +1903,7 @@ func (s *RoleSession) SendRaw(data []byte) error {
 	if s.conn == nil {
 		return ErrNotConnected
 	}
+	s.setWriteDeadline()
 
 	_, err := s.conn.Write(data)
 	if err == nil {
