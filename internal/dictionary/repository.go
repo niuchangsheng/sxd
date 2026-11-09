@@ -34,6 +34,8 @@ type Repository interface {
 	// GetEliteMissionTowns 返回数据字典中所有存在精英副本 (MissionType=1) 的城镇/地图 ID，
 	// 按该城镇内精英关卡的最低解锁值升序排列。
 	GetEliteMissionTowns() ([]int, error)
+	// GetEliteMissionIDs 返回所有精英副本关卡 ID (MissionType=1)，按 ID 升序。
+	GetEliteMissionIDs() ([]int, error)
 	GetQuestMissions(questType int, playerLevel int) ([]int, error)
 	GetQuest(id int) (*Quest, error)
 	GetTownNPCs(townID int) ([]int, error)
@@ -398,6 +400,24 @@ func (r *sqliteRepository) GetHighestMissionByTypeAndLevel(level int, missionTyp
 	m.Monsters = monsters.String
 	m.IsBoss = isBoss == 1
 	return &m, nil
+}
+
+// GetEliteMissionIDs 返回所有精英副本关卡 ID (MissionType=1)。
+func (r *sqliteRepository) GetEliteMissionIDs() ([]int, error) {
+	rows, err := r.db.Query(`SELECT DISTINCT MissionsId FROM Missions WHERE MissionType = 1 ORDER BY MissionsId`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]int, 0)
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return ids, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // GetEliteMissionTowns 返回所有存在精英副本 (MissionType=1) 的城镇/地图 ID。

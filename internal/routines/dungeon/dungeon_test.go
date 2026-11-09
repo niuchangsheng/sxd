@@ -434,6 +434,10 @@ func (m *mockQuestDungeonRepo) GetHighestMissionByType(missionType int) (*dictio
 func (m *mockQuestDungeonRepo) GetHighestMissionByTypeAndLevel(level int, missionType int) (*dictionary.Mission, error) {
 	return &dictionary.Mission{ID: 43, Name: "万妖皇", MissionLock: 9999}, nil
 }
+func (m *mockQuestDungeonRepo) GetEliteMissionIDs() ([]int, error) {
+	return nil, nil
+}
+
 func (m *mockQuestDungeonRepo) GetEliteMissionTowns() ([]int, error) {
 	seen := make(map[int]bool)
 	towns := make([]int, 0)

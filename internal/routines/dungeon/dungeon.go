@@ -512,7 +512,9 @@ func sweepEliteMissionsWithoutTown(
 		if pErr != nil {
 			continue
 		}
-		sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
+		// 全局扫荡会遍历全部副本 ID，其中大量条目不允许扫荡且会被服务端
+		// 静默丢弃；这里使用短超时，避免 190 个 ID × 10s 拖垮整个日常批次。
+		sCtx, sCancel := context.WithTimeout(ctx, 3*time.Second)
 		statusResp, sErr := session.Call(sCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
 		sCancel()
 		if sErr != nil || statusResp == nil {
@@ -540,7 +542,7 @@ func sweepEliteMissionsWithoutTown(
 		if bErr != nil {
 			continue
 		}
-		pCtx, pCancel := context.WithTimeout(ctx, 10*time.Second)
+		pCtx, pCancel := context.WithTimeout(ctx, 3*time.Second)
 		startResp, stErr := session.Call(pCtx, startPkt, protocol.ActionIDPracticeStart)
 		pCancel()
 		if stErr != nil || startResp == nil {
