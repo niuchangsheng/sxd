@@ -14,7 +14,7 @@ func TestSaWorldTowerRoutine_NotOpenSkips(t *testing.T) {
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDSaWorldTowerOpen:
-			w := protocol.NewWriter().WriteInt32(1)
+			w := protocol.NewWriter().WriteInt32(0)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDSaWorldTowerPanel:
 			panelCalls.Add(1)
@@ -35,7 +35,7 @@ func TestSaWorldTowerRoutine_FightsWhenOpen(t *testing.T) {
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDSaWorldTowerOpen:
-			w := protocol.NewWriter().WriteInt32(0)
+			w := protocol.NewWriter().WriteInt32(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDSaWorldTowerPanel:
 			w := protocol.NewWriter().WriteInt32(3).WriteUint16(0)
@@ -61,7 +61,7 @@ func TestSaWorldTowerRoutine_UsesPanelTowerIDs(t *testing.T) {
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDSaWorldTowerOpen:
-			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 1}))
 		case protocol.ActionIDSaWorldTowerPanel:
 			w := protocol.NewWriter().WriteInt32(3).WriteUint16(1)
 			w.WriteInt32(22).WriteInt32(0).WriteInt32(0).WriteInt32(0).WriteInt32(0)
@@ -89,10 +89,10 @@ func TestSaWorldTowerRoutine_NoTimeStops(t *testing.T) {
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDSaWorldTowerOpen:
-			w := protocol.NewWriter().WriteInt32(0)
+			w := protocol.NewWriter().WriteInt32(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDSaWorldTowerPanel:
-			w := protocol.NewWriter().WriteInt32(0).WriteUint16(0)
+			w := protocol.NewWriter().WriteInt32(1).WriteUint16(0)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDSaWorldTowerFight:
 			fightCalls.Add(1)

@@ -51,7 +51,8 @@ func NewSaWorldTowerRoutine() scheduler.ActivityRoutine {
 			if len(openResp.Payload) >= 4 {
 				open := int32(openResp.Payload[0])<<24 | int32(openResp.Payload[1])<<16 |
 					int32(openResp.Payload[2])<<8 | int32(openResp.Payload[3])
-				if open != 0 {
+				// 521/0 返回 1=开放、0=未开放（实测 0 时 fight 返回 FUNCTION_NO_OPEN）。
+				if open == 0 {
 					slog.Info("全网幻魔塔未开放", "role_id", session.RoleID(), "status", open)
 					return nil
 				}
