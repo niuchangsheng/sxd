@@ -1,7 +1,8 @@
-// 本文件实现灵霄宝殿炼宝炉 (Mod_RefinePot_Base, Module 654)。
+// 本文件实现灵霄宝殿炼宝炉 (Mod_RefineFurnace_Base, Module 586)。
 //
-// 规则：对每种炼制材料，数量 >= min (默认 500) 时选择最大数量炼制；
-// 低于阈值直接跳过。仅消耗材料，不涉及元宝。
+// 流程：open_panel(1) 读取元气材料 → get_award(6) 收取上一次炼制产物 →
+// 对每种数量 >=500 的元气按最大批数 (每批 50) 执行 select_type(2) + start_refine(4)。
+// 每轮只启动一炉，剩余材料由下一轮继续；材料 <500 直接跳过。不涉及元宝。
 package farming
 
 import (
@@ -14,8 +15,27 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
-// minRefinePotMaterialCount 低于该值的材料跳过。
-const minRefinePotMaterialCount int32 = 500
+const (
+	// minRefinePotMaterialCount 低于该值的元气跳过。
+	minRefinePotMaterialCount int32 = 500
+	// refineFurnaceBatchSize 每批消耗的元气数量（实测 1 批 = 50 个）。
+	refineFurnaceBatchSize int32 = 50
+	// 元气道具 → select_type 参数映射见 refineFurnaceTypeForMaterial。
+)
+
+// refineFurnaceTypeForMaterial 返回元气材料对应的 select_type 参数。
+func refineFurnaceTypeForMaterial(itemID int32) (int32, bool) {
+	switch itemID {
+	case 7923:
+		return 1, true
+	case 7924:
+		return 3, true
+	case 7925:
+		return 2, true
+	default:
+		return 0, false
+	}
+}
 
 // NewRefinePotRoutine 构造炼宝炉炼制任务。
 func NewRefinePotRoutine() scheduler.ActivityRoutine {
@@ -44,80 +64,110 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
-			listResp := call(protocol.BuildRefinePotFromItemsPacket(), protocol.ActionIDRefinePotFromItems)
-			if listResp == nil {
+			panelResp := call(protocol.BuildRefineFurnacePanelPacket(), protocol.ActionIDRefineFurnacePanel)
+			if panelResp == nil {
 				return nil
 			}
-			result, materials, err := protocol.ParseRefinePotMaterials(listResp.Payload)
+			panel, err := protocol.ParseRefineFurnacePanel(panelResp.Payload)
 			if err != nil {
-				slog.Warn("解析炼宝炉材料列表失败", "role_id", session.RoleID(), "err", err)
+				slog.Warn("炼宝炉面板解析失败", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
-			if result != protocol.RefinePotResultSuccess {
-				slog.Info("炼宝炉材料列表返回失败", "role_id", session.RoleID(), "result", result)
+			if panel.Result != protocol.RefineFurnaceSuccess {
+				slog.Info("炼宝炉面板不可用", "role_id", session.RoleID(), "result", panel.Result)
 				return nil
 			}
-			slog.Info("炼宝炉材料列表", "role_id", session.RoleID(), "materials", materials)
+			slog.Info("炼宝炉面板", "role_id", session.RoleID(),
+				"level", panel.Level, "exp", panel.Exp, "selected", panel.Selected,
+				"materials", panel.Materials, "products", panel.Products)
 
-			refined := 0
-			for _, m := range materials {
+			// 1. 收取上一次炼制产物。
+			if awardResp := call(protocol.BuildRefineFurnaceAwardPacket(), protocol.ActionIDRefineFurnaceAward); awardResp != nil {
+				if code, aErr := protocol.ParseFirstByteResult(awardResp.Payload, "炼宝炉领奖"); aErr == nil {
+					switch code {
+					case protocol.RefineFurnaceSuccess:
+						slog.Info("炼宝炉产物领取成功", "role_id", session.RoleID())
+					case protocol.RefineFurnaceNotGetAward, protocol.RefineFurnaceNotComplete,
+						protocol.RefineFurnaceFailed:
+						slog.Info("炼宝炉暂无可领取产物", "role_id", session.RoleID(), "result", code)
+					case protocol.RefineFurnacePackFull:
+						return scheduler.ErrBagFull
+					default:
+						slog.Info("炼宝炉领奖未成功", "role_id", session.RoleID(), "result", code)
+					}
+				}
+			}
+
+			// 2. 选择一种数量 >=500 的元气，按最大批数开炉。
+			for _, m := range panel.Materials {
 				if ctx.Err() != nil {
 					return nil
 				}
 				if m.Count < minRefinePotMaterialCount {
-					slog.Info("炼宝炉材料不足 500，跳过",
-						"role_id", session.RoleID(), "item_id", m.ItemID, "count", m.Count)
+					slog.Info("炼宝炉材料不足 500，跳过", "role_id", session.RoleID(),
+						"item_id", m.ItemID, "count", m.Count)
 					continue
 				}
-				selResp := call(protocol.BuildRefinePotSelectPacket(m.ItemID, m.Count), protocol.ActionIDRefinePotSelect)
+				typeID, ok := refineFurnaceTypeForMaterial(m.ItemID)
+				if !ok {
+					slog.Info("炼宝炉材料类型未知，跳过", "role_id", session.RoleID(),
+						"item_id", m.ItemID, "type_id", typeID)
+					continue
+				}
+				selResp := call(protocol.BuildRefineFurnaceTypePacket(typeID), protocol.ActionIDRefineFurnaceType)
 				if selResp == nil {
-					return nil
+					// 该类型可能未解锁/请求被丢弃，继续尝试下一种材料。
+					continue
 				}
-				selCode, selErr := protocol.ParseRefinePotResult(selResp.Payload)
+				selCode, selErr := protocol.ParseFirstByteResult(selResp.Payload, "炼宝炉选择元气")
 				if selErr != nil {
-					slog.Warn("解析炼宝炉选择材料回包失败", "role_id", session.RoleID(), "err", selErr)
-					return nil
+					continue
 				}
-				if selCode != protocol.RefinePotResultSuccess {
-					slog.Info("炼宝炉选择材料未成功",
-						"role_id", session.RoleID(), "item_id", m.ItemID,
-						"count", m.Count, "result", selCode)
+				if selCode != protocol.RefineFurnaceSuccess {
+					slog.Info("炼宝炉选择元气未成功", "role_id", session.RoleID(),
+						"item_id", m.ItemID, "type_id", typeID, "result", selCode)
 					continue
 				}
 
-				refResp := call(protocol.BuildRefinePotRefinePacket(), protocol.ActionIDRefinePotRefine)
-				if refResp == nil {
-					return nil
+				batches := m.Count / refineFurnaceBatchSize
+				if batches < 1 {
+					continue
 				}
-				refCode, refErr := protocol.ParseRefinePotResult(refResp.Payload)
-				if refErr != nil {
-					slog.Warn("解析炼宝炉炼制回包失败", "role_id", session.RoleID(), "err", refErr)
-					return nil
-				}
-				switch refCode {
-				case protocol.RefinePotResultSuccess:
-					refined++
-					slog.Info("炼宝炉炼制成功",
-						"role_id", session.RoleID(), "item_id", m.ItemID, "count", m.Count)
-				case protocol.RefinePotResultNoFromItem, protocol.RefinePotResultNoRefineItem:
-					slog.Info("炼宝炉无可炼制材料/配方，结束本轮",
-						"role_id", session.RoleID(), "result", refCode)
-					return nil
-				case protocol.RefinePotResultPackFull:
-					return scheduler.ErrBagFull
-				default:
-					slog.Info("炼宝炉炼制未成功",
-						"role_id", session.RoleID(), "item_id", m.ItemID, "result", refCode)
+				// 每批实测消耗 20,000,000 铜钱；铜钱不足时按半量回退，避免死循环。
+				for batches >= 1 {
+					startResp := call(protocol.BuildRefineFurnaceStartPacket(batches), protocol.ActionIDRefineFurnaceStart)
+					if startResp == nil {
+						return nil
+					}
+					startCode, sErr := protocol.ParseFirstByteResult(startResp.Payload, "炼宝炉炼制")
+					if sErr != nil {
+						return nil
+					}
+					switch startCode {
+					case protocol.RefineFurnaceSuccess:
+						slog.Info("炼宝炉炼制已开始", "role_id", session.RoleID(),
+							"item_id", m.ItemID, "count", m.Count, "batches", batches)
+						return nil
+					case protocol.RefineFurnaceLessCoin:
+						slog.Info("炼宝炉铜钱不足，减半批数重试", "role_id", session.RoleID(),
+							"item_id", m.ItemID, "batches", batches)
+						batches /= 2
+						continue
+					case protocol.RefineFurnaceNotGetAward, protocol.RefineFurnaceNotComplete:
+						slog.Info("炼宝炉仍有未收取产物，结束本轮", "role_id", session.RoleID(),
+							"result", startCode)
+						return nil
+					case protocol.RefineFurnacePackFull:
+						return scheduler.ErrBagFull
+					default:
+						slog.Info("炼宝炉炼制未成功", "role_id", session.RoleID(),
+							"item_id", m.ItemID, "result", startCode)
+						break
+					}
+					break
 				}
 			}
-
-			// 领取炼制奖励（若有）。
-			if awardResp := call(protocol.BuildRefinePotAwardPacket(), protocol.ActionIDRefinePotAward); awardResp != nil {
-				if code, aErr := protocol.ParseRefinePotResult(awardResp.Payload); aErr == nil {
-					slog.Info("炼宝炉奖励领取结果", "role_id", session.RoleID(), "result", code)
-				}
-			}
-			slog.Info("炼宝炉巡检完成", "role_id", session.RoleID(), "refined", refined)
+			slog.Info("炼宝炉本轮无可炼制材料", "role_id", session.RoleID())
 			return nil
 		},
 	)
