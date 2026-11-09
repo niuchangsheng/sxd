@@ -45,6 +45,44 @@ func (s ScheduleType) String() string {
 	}
 }
 
+// CooldownError 表示任务需要在指定时间点之后再唤醒。
+//
+// Routine 在收到服务端冷却秒数、活动开启时间或临时不可用状态时返回该错误，
+// 调度器会把 nextRun 直接设为 Until，而不是等待下一次 24 小时 Cron 批次。
+type CooldownError struct {
+	// Until 下次允许执行的时间点
+	Until time.Time
+	// Reason 可读原因，仅用于日志
+	Reason string
+}
+
+// Error 实现 error 接口。
+func (e *CooldownError) Error() string {
+	if e == nil {
+		return "scheduler: cooldown"
+	}
+	if e.Reason == "" {
+		return "scheduler: cooldown until " + e.Until.Format(time.RFC3339)
+	}
+	return "scheduler: cooldown until " + e.Until.Format(time.RFC3339) + ": " + e.Reason
+}
+
+// NewCooldown 构造一个相对当前时间的冷却等待错误。
+func NewCooldown(d time.Duration, reason string) error {
+	if d < time.Second {
+		d = time.Second
+	}
+	return &CooldownError{Until: time.Now().Add(d), Reason: reason}
+}
+
+// NewCooldownUntil 构造一个绝对时间点的冷却等待错误。
+func NewCooldownUntil(until time.Time, reason string) error {
+	if until.Before(time.Now()) {
+		until = time.Now()
+	}
+	return &CooldownError{Until: until, Reason: reason}
+}
+
 var (
 	// ErrAttemptsExhausted 今日可用次数已耗尽，触发智能熔断挂起至次日重置
 	ErrAttemptsExhausted = errors.New("scheduler: daily attempts exhausted")

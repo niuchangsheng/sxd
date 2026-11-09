@@ -48,7 +48,7 @@ func TestPetAnimalRoutine_CoinFeedsUntilExhausted(t *testing.T) {
 	}
 }
 
-func TestPetAnimalRoutine_FeedNumNotDecreaseCircuitBreaker(t *testing.T) {
+func TestPetAnimalRoutine_FeedNumNotDecreaseStaleCircuitBreaker(t *testing.T) {
 	var feedCalls atomic.Int32
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
@@ -70,8 +70,9 @@ func TestPetAnimalRoutine_FeedNumNotDecreaseCircuitBreaker(t *testing.T) {
 	if err := NewPetAnimalRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("pet animal: %v", err)
 	}
-	if got := feedCalls.Load(); got != 1 {
-		t.Fatalf("次数未递减时应熔断, 实际培养 %d 次", got)
+	// 连续不递减达到 maxPetAnimalStaleFeeds 才熔断，不能因暴击或回包滞后只跑一次。
+	if got := feedCalls.Load(); got != maxPetAnimalStaleFeeds {
+		t.Fatalf("次数持续未递减时应按 stale 上限熔断, 期望 %d 次, 实际 %d 次", maxPetAnimalStaleFeeds, got)
 	}
 }
 

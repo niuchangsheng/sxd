@@ -110,7 +110,9 @@ func NewNineRegionsRoutine() scheduler.ActivityRoutine {
 				if cd, err := protocol.ParseNineRegionsCDResult(cdResp.Payload); err == nil {
 					slog.Info("九空无界挑战冷却", "role_id", session.RoleID(), "cd_seconds", cd)
 					if cd > 0 {
-						return nil
+						return scheduler.NewCooldown(
+							time.Duration(cd)*time.Second+2*time.Second,
+							"九空无界挑战冷却")
 					}
 				}
 			}

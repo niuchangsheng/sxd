@@ -378,4 +378,61 @@ func TestScheduler_SetRoutineEnabledAndDispatcherBatch(t *testing.T) {
 	disp.StopAll()
 }
 
+// TestScheduler_CooldownErrorSchedulesExactWake 验证 Routine 返回 CooldownError 时，
+// 调度器按指定时间唤醒，而不是把 Cron 任务固定推迟 24 小时。
+func TestScheduler_CooldownErrorSchedulesExactWake(t *testing.T) {
+	fastJitter := scheduler.NewJitter(scheduler.JitterConfig{
+		MinDuration: 2 * time.Millisecond,
+		MaxDuration: 5 * time.Millisecond,
+	})
+	sched := scheduler.NewRoleScheduler("role-cooldown", nil, fastJitter)
 
+	var calls atomic.Int32
+	r := scheduler.NewBaseRoutine(
+		"cooldown_routine",
+		"test",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+			if calls.Add(1) == 1 {
+				return scheduler.NewCooldown(80*time.Millisecond, "测试冷却")
+			}
+			return nil
+		},
+	)
+	if err := sched.Register(r); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sched.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sched.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() < 1 {
+		t.Fatal("routine 未执行")
+	}
+
+	_, next, _, found := sched.GetRoutineState("cooldown_routine")
+	if !found {
+		t.Fatal("未找到 routine 状态")
+	}
+	if wait := time.Until(next); wait > 5*time.Second {
+		t.Fatalf("CooldownError 未按指定时间唤醒, next=%v (wait=%v)", next, wait)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() < 2 {
+		t.Fatalf("冷却结束后未再次执行, calls=%d", calls.Load())
+	}
+}

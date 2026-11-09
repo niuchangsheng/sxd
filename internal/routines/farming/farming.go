@@ -166,10 +166,24 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 					"seed_kinds", len(seedsRes.Seeds),
 				)
 
+				// 无空闲/待采摘土地时服务端会静默丢弃 buy_seed 请求；
+				// 先判断是否存在可播种土地 (空闲 1 或成熟待采摘 3，采摘后会变空闲)。
+				hasPlantableLand := false
+				for _, f := range infoRes.Fields {
+					if f.State == 1 || f.State == 3 {
+						hasPlantableLand = true
+						break
+					}
+				}
+
 				// 确保常用主力种子 (176 经验丹果树 与 169 仙玲珑经验草) 库存充足。
 				// 购买请求一旦无回包立即终止本轮，避免 PrevAct 链被污染后
 				// 后续播种/采摘全部连续超时。
 				for _, targetSeedID := range []int32{seedID, 169} {
+					if !hasPlantableLand {
+						slog.Info("药园当前无空闲/待采摘土地，跳过种子补仓", "role_id", session.RoleID())
+						break
+					}
 					meta, ok := seedMeta[targetSeedID]
 					if !ok {
 						slog.Info("药园种子未在商店列表中，跳过购买",

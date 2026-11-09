@@ -86,6 +86,42 @@ func TestTongTianTowerRoutine_ChallengeSuccessAdvances(t *testing.T) {
 	}
 }
 
+func TestTongTianTowerRoutine_RetriesLossThenExits(t *testing.T) {
+	sess, srvConn := createTestSession(t, 5000)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var challengeCalls atomic.Int32
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDTongTianTowerPanel:
+			_ = protocol.WritePacket(srvConn, protocol.BuildTongTianTowerPanelResultPacket(protocol.TongTianTowerPanel{
+				Heaven: 1, Floor: 1, ChallengeTimes: 10, CurHeaven: 1, CurFloor: 1,
+			}))
+			return true
+		case protocol.ActionIDTongTianTowerChallenge:
+			challengeCalls.Add(1)
+			// 战斗已执行但层数不推进 = 战败。
+			_ = protocol.WritePacket(srvConn, protocol.BuildTongTianTowerChallengeResultPacket(
+				protocol.TongTianTowerChallengeResult{
+					Result:      protocol.TongTianTowerResultSuccess,
+					DeployType:  3,
+					WinPlayerID: 999,
+				}))
+			return true
+		}
+		return false
+	})
+
+	if err := dungeon.NewTongTianTowerRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("通天塔失败重试流程异常: %v", err)
+	}
+	// 首次 + 3 次重试。
+	if got := challengeCalls.Load(); got != 4 {
+		t.Fatalf("战败应重试至上限, 期望 4 次, 实际 %d 次", got)
+	}
+}
+
 // TestTongTianTowerRoutine_RetriesAfterCooldown 验证 CD_TIME 不消耗次数:
 // 同一层冷却后重试成功，随后继续消耗剩余 15 次中的下一次。
 func TestTongTianTowerRoutine_RetriesAfterCooldown(t *testing.T) {

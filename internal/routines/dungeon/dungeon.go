@@ -1247,6 +1247,9 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 // 锁妖塔单轮挑战上限。官方客户端最多展示 40 层，超过后不再追加下一层。
 const demonTowerMaxChallengesPerRun = 40
 
+// demonTowerMaxLossRetries 同一层战斗失败后的最大重试次数。
+const demonTowerMaxLossRetries = 3
+
 // demonTowerCallTimeout 锁妖塔单次请求超时。
 const demonTowerCallTimeout = 8 * time.Second
 
@@ -1307,6 +1310,7 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 
 			// 2. 循环挑战：每轮以最新面板数据计算下一层目标，成功则继续。
 			challenged := 0
+			losses := 0
 			for round := 0; round < demonTowerMaxChallengesPerRun; round++ {
 				if ctx.Err() != nil {
 					return nil
@@ -1357,6 +1361,24 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 						"result", result, "result_text", demonTowerResultText(result),
 						"challenged", challenged)
 					switch result {
+					case protocol.DemonTowerResultFailed:
+						losses++
+						if losses > demonTowerMaxLossRetries {
+							slog.Info("锁妖塔连续挑战失败，达到重试上限，结束本轮",
+								"role_id", session.RoleID(), "layer", target,
+								"retries", losses, "challenged", challenged)
+							return nil
+						}
+						slog.Info("锁妖塔挑战失败，重试同一层",
+							"role_id", session.RoleID(), "layer", target,
+							"retry", losses, "max_retries", demonTowerMaxLossRetries,
+							"challenged", challenged)
+						select {
+						case <-ctx.Done():
+							return nil
+						case <-time.After(time.Second):
+						}
+						continue
 					case protocol.DemonTowerResultNotEnoughTicket:
 						return scheduler.ErrAttemptsExhausted
 					case protocol.DemonTowerResultItemPackFull:
@@ -1371,6 +1393,7 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 				}
 
 				challenged++
+				losses = 0
 				slog.Info("锁妖塔挑战成功",
 					"role_id", session.RoleID(), "layer", target,
 					"tickets_before", panel.NowTicketNum, "challenged", challenged)
@@ -1630,7 +1653,8 @@ func NewZodiacRoutine() scheduler.ActivityRoutine {
 			case protocol.ZodiacResultBagFull:
 				return scheduler.ErrBagFull
 			case protocol.ZodiacResultCDTime:
-				slog.Info("生肖挑战冷却中", "role_id", session.RoleID())
+				slog.Info("生肖挑战冷却中，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "生肖挑战冷却")
 			case protocol.ZodiacResultNoEnoughStatePoint:
 				slog.Info("生肖挑战境界点不足", "role_id", session.RoleID())
 			case protocol.ZodiacResultLock:

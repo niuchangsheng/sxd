@@ -85,8 +85,10 @@ func TestCrossServerLadderRoutine_OffSkipsRewards(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewCrossServerLadderRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("ladder: %v", err)
+	err := NewCrossServerLadderRoutine().Execute(context.Background(), sess, nil)
+	var cdErr *scheduler.CooldownError
+	if !errors.As(err, &cdErr) {
+		t.Fatalf("OFF 时应返回 CooldownError, 实际: %v", err)
 	}
 	if claimCalls.Load() != 0 {
 		t.Fatalf("OFF 时不应领取奖励, calls = %d", claimCalls.Load())

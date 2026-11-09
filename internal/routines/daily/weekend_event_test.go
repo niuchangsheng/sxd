@@ -2,11 +2,13 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestWeekendEventRoutine_ClaimsGiftAndFruit(t *testing.T) {
@@ -77,8 +79,10 @@ func TestWeekendEventRoutine_SkipsClosedFruit(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewWeekendEventRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("weekend: %v", err)
+	err := NewWeekendEventRoutine().Execute(context.Background(), sess, nil)
+	var cdErr *scheduler.CooldownError
+	if !errors.As(err, &cdErr) {
+		t.Fatalf("水果机未开启应返回 CooldownError, 实际: %v", err)
 	}
 	if got := drawCalls.Load(); got != 0 {
 		t.Fatalf("水果机未开启时不应抽奖, 实际 %d 次", got)

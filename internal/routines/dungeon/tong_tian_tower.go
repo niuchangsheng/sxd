@@ -21,8 +21,10 @@ import (
 const (
 	tongTianTowerMaxChallengesPerRun = 200
 	tongTianTowerMaxCDRetries        = 5
-	tongTianTowerCDBaseWait          = 2 * time.Second
-	tongTianTowerCDMaxWait           = 10 * time.Second
+	// tongTianTowerMaxLossRetries 同一层战斗失败后的最大重试次数。
+	tongTianTowerMaxLossRetries = 3
+	tongTianTowerCDBaseWait     = 2 * time.Second
+	tongTianTowerCDMaxWait      = 10 * time.Second
 )
 
 // NewTongTianTowerRoutine 构造通天塔自动挑战任务。
@@ -133,6 +135,7 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 
 			challenged := 0
 			cdRetries := 0
+			losses := 0
 			for panel.ChallengeTimes > 0 && challenged < tongTianTowerMaxChallengesPerRun {
 				if err := ctx.Err(); err != nil {
 					return nil
@@ -180,16 +183,35 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 					oldHeaven, oldFloor := panel.Heaven, panel.Floor
 					panel = refreshed
 					if !won {
-						slog.Info("通天塔挑战失败，停止本轮（战力不足以通关当前层）",
+						losses++
+						if losses > tongTianTowerMaxLossRetries {
+							slog.Info("通天塔连续挑战失败，达到重试上限，结束本轮",
+								"role_id", session.RoleID(),
+								"heaven", oldHeaven,
+								"floor", oldFloor,
+								"retries", losses,
+								"win_player_id", result.WinPlayerID,
+							)
+							return nil
+						}
+						slog.Info("通天塔挑战失败，重试同一层",
 							"role_id", session.RoleID(),
 							"heaven", oldHeaven,
 							"floor", oldFloor,
+							"retry", losses,
+							"max_retries", tongTianTowerMaxLossRetries,
 							"win_player_id", result.WinPlayerID,
 						)
-						return nil
+						select {
+						case <-ctx.Done():
+							return nil
+						case <-time.After(time.Second):
+						}
+						continue
 					}
 					challenged++
 					cdRetries = 0
+					losses = 0
 					slog.Info("通天塔挑战通关",
 						"role_id", session.RoleID(),
 						"heaven", oldHeaven,

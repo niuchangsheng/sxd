@@ -113,13 +113,13 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					oCancel()
 
 					if oErr != nil || openResp == nil {
-						slog.Info("结缘宝箱开启请求无回包（服务端静默丢弃），终止本轮",
+						slog.Info("结缘宝箱开启请求无回包（服务端静默丢弃），稍后重试",
 							"role_id", session.RoleID(),
 							"item_id", box.ItemID,
 							"open_count", openCount,
 							"err", oErr,
 						)
-						return nil
+						return scheduler.NewCooldown(30*time.Minute, "结缘宝箱开箱无回包")
 					}
 
 					// 成功也要校验副作用：重新拉取列表，确认道具数量确实减少。
@@ -129,12 +129,12 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					verifyResp, vErr := session.Call(vCtx, verifyPkt, protocol.ActionIDJieYuanBoxList)
 					vCancel()
 					if vErr != nil || verifyResp == nil {
-						slog.Info("结缘宝箱开箱后核对库存无回包，终止本轮",
+						slog.Info("结缘宝箱开箱后核对库存无回包，稍后重试",
 							"role_id", session.RoleID(),
 							"item_id", box.ItemID,
 							"err", vErr,
 						)
-						return nil
+						return scheduler.NewCooldown(30*time.Minute, "结缘宝箱库存核对无回包")
 					}
 					boxesAfter, parseErr := protocol.ParseJieYuanBoxListResult(verifyResp.Payload)
 					if parseErr != nil {

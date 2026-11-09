@@ -40,14 +40,15 @@ func NewEraTreasureRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildEraTreasurePanelPacket(), protocol.ActionIDEraTreasurePanel)
 			if panelResp == nil {
-				slog.Info("纪元秘藏面板无回包，跳过", "role_id", session.RoleID())
-				return nil
+				// 面板无回包通常是活动未开启/不在赛季；定时重试而不是等 24 小时。
+				slog.Info("纪元秘藏面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "纪元秘藏面板无回包")
 			}
 			slog.Info("纪元秘藏面板", "role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
 
 			oneKeyResp := call(protocol.BuildEraTreasureOneKeyPacket(), protocol.ActionIDEraTreasureOneKey)
 			if oneKeyResp == nil {
-				return nil
+				return scheduler.NewCooldown(30*time.Minute, "纪元秘藏一键领取无回包")
 			}
 			code, err := protocol.ParseEraTreasureResult(oneKeyResp.Payload)
 			if err != nil {
@@ -57,7 +58,9 @@ func NewEraTreasureRoutine() scheduler.ActivityRoutine {
 			if code == 0 {
 				slog.Info("纪元秘藏一键领取成功", "role_id", session.RoleID())
 			} else {
+				// 无奖励/活动状态下 848/6 也会被静默丢弃，不再发送诊断请求。
 				slog.Info("纪元秘藏一键领取未成功", "role_id", session.RoleID(), "result", code)
+				return nil
 			}
 
 			if taskResp := call(protocol.BuildEraTreasureTaskInfoPacket(), protocol.ActionIDEraTreasureTaskInfo); taskResp != nil {

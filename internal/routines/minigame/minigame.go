@@ -255,8 +255,10 @@ func NewTravelEventRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				return nil
 			}
 			if infoRes.CdTimer > 0 {
-				slog.Info("仙旅奇缘事件冷却中，本轮跳过", "role_id", session.RoleID(), "cd_timer", infoRes.CdTimer)
-				return nil
+				slog.Info("仙旅奇缘事件冷却中，等待冷却结束", "role_id", session.RoleID(), "cd_timer", infoRes.CdTimer)
+				return scheduler.NewCooldown(
+					time.Duration(infoRes.CdTimer)*time.Second+time.Second,
+					"仙旅奇缘事件冷却")
 			}
 
 			// fetchQuestion 拉取当前奇缘题目并校验业务结果码。
@@ -967,21 +969,30 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 			statusResp, err := session.Call(stCtx, protocol.BuildImperialExamStatusPacket(), protocol.ActionIDImperialExamStatus)
 			stCancel()
 			if err != nil {
-				slog.Info("金榜题名功能不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("金榜题名功能不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "金榜题名状态查询无回包")
 			}
 			status, err := protocol.ParseImperialExamStatusResult(statusResp.Payload)
 			if err != nil {
 				return fmt.Errorf("解析金榜题名活动状态失败: %w", err)
 			}
 			if status.Status != protocol.ImperialExamActivityStart {
-				slog.Info("金榜题名当前非进行中阶段，跳过",
+				now := time.Now().Unix()
+				slog.Info("金榜题名当前非进行中阶段，等待活动开启",
 					"role_id", session.RoleID(),
 					"status", status.Status,
 					"start_time", status.StartTime,
 					"end_time", status.EndTime,
 				)
-				return nil
+				if int64(status.StartTime) > now {
+					return scheduler.NewCooldownUntil(
+						time.Unix(int64(status.StartTime), 0).Add(2*time.Second),
+						"金榜题名活动未开始")
+				}
+				if status.EndTime > 0 && now > int64(status.EndTime) {
+					return scheduler.ErrAttemptsExhausted
+				}
+				return scheduler.NewCooldown(30*time.Minute, "金榜题名非进行中")
 			}
 
 			answered, right, wrong := 0, 0, 0

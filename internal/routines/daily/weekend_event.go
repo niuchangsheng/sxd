@@ -87,15 +87,15 @@ func NewWeekendEventRoutine() scheduler.ActivityRoutine {
 			// 2. 周末水果机：仅免费次数。
 			activeResp := call(protocol.BuildSundayFruitActivePacket(), protocol.ActionIDSundayFruitActive)
 			if activeResp == nil {
-				return nil
+				return scheduler.NewCooldown(30*time.Minute, "周末水果机状态无回包")
 			}
 			active, err := protocol.ParseFirstByteResult(activeResp.Payload, "水果机")
 			if err != nil {
 				return nil
 			}
 			if active != protocol.SundayFruitResultYes {
-				slog.Info("周末水果机未开启", "role_id", session.RoleID(), "status", active)
-				return nil
+				slog.Info("周末水果机未开启，稍后重试", "role_id", session.RoleID(), "status", active)
+				return scheduler.NewCooldown(6*time.Hour, "周末水果机未开启")
 			}
 			if infoResp := call(protocol.BuildSundayFruitInfoPacket(), protocol.ActionIDSundayFruitInfo); infoResp != nil {
 				slog.Info("周末水果机面板", "role_id", session.RoleID(), "payload_len", len(infoResp.Payload))

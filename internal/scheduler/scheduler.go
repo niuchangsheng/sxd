@@ -176,8 +176,21 @@ func (s *RoleScheduler) runLoop() {
 		item.runCount++
 
 		s.itemsMu.Lock()
+		cooldownScheduled := false
 		if execErr != nil {
-			if errors.Is(execErr, ErrAttemptsExhausted) {
+			var cdErr *CooldownError
+			if errors.As(execErr, &cdErr) {
+				// 服务端冷却/活动开启时间：按指定时间唤醒，而不是等到下一次 24h Cron。
+				item.nextRun = cdErr.Until
+				item.coolingUntil = time.Time{}
+				cooldownScheduled = true
+				slog.Info("任务进入定时等待，将在指定时间后唤醒",
+					"role_id", s.roleID,
+					"routine", item.routine.Name(),
+					"wake_at", cdErr.Until,
+					"reason", cdErr.Reason,
+				)
+			} else if errors.Is(execErr, ErrAttemptsExhausted) {
 				// 次数耗尽：挂起至次日凌晨 00:00:10
 				tomorrow := time.Now().AddDate(0, 0, 1)
 				midnight := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 10, 0, tomorrow.Location())
@@ -230,7 +243,9 @@ func (s *RoleScheduler) runLoop() {
 		if det, ok := item.routine.(DetailedRoutine); ok && det.ScheduleType() == ScheduleCron {
 			isCron = true
 		}
-		if item.routine.Interval() > 0 {
+		if cooldownScheduled {
+			// nextRun 已由 CooldownError.Until 指定，保留该唤醒时间。
+		} else if item.routine.Interval() > 0 {
 			item.nextRun = time.Now().Add(item.routine.Interval())
 		} else if isCron {
 			// 定点任务等待下一次 TriggerBatch 唤醒或次日重置

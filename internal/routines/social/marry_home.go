@@ -29,7 +29,9 @@ func NewMarryHomeRoutine() scheduler.ActivityRoutine {
 		"social",
 		scheduler.ScheduleCron,
 		scheduler.PriorityNormal,
-		0,
+		// 家园活动存在开启时段；30 分钟巡检一次，活动开启后自动领取，
+		// 成功后返回 ErrAttemptsExhausted 挂起至次日 00:00。
+		30*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
 				return client.ErrNotConnected
@@ -46,7 +48,7 @@ func NewMarryHomeRoutine() scheduler.ActivityRoutine {
 			}
 			if !open {
 				slog.Info("家园功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDMarryHome)
-				return nil
+				return scheduler.ErrAttemptsExhausted
 			}
 
 			// 1. 先查询自身住宅状态 (210/0 get_self_home_info)。
@@ -70,7 +72,7 @@ func NewMarryHomeRoutine() scheduler.ActivityRoutine {
 			}
 			if selfResult == protocol.MarryHomeResultNonMarry {
 				slog.Info("账号未处于婚姻状态，跳过家园奖励", "role_id", session.RoleID())
-				return nil
+				return scheduler.ErrAttemptsExhausted
 			}
 
 			// 2. 领取自家小蛋糕奖励 (免费)。
@@ -100,13 +102,17 @@ func NewMarryHomeRoutine() scheduler.ActivityRoutine {
 					"role_id", session.RoleID(),
 					"player_id", playerID,
 					"awards", formatCakeAwards(res.Awards))
+				return scheduler.ErrAttemptsExhausted
 			case protocol.MarryHomeResultNonActivityTime:
-				slog.Info("家园奖励当前不在活动时间，本轮跳过", "role_id", session.RoleID())
+				// 活动尚未开启：保留 Interval 周期性唤醒，30 分钟后再试。
+				slog.Info("家园奖励当前不在活动时间，稍后重试", "role_id", session.RoleID())
 			case protocol.MarryHomeResultAlreadyGet, protocol.MarryHomeResultTodayLimit:
 				slog.Info("家园奖励今日已领取", "role_id", session.RoleID(), "result", res.Result)
+				return scheduler.ErrAttemptsExhausted
 			case protocol.MarryHomeResultNonMarryStatus, protocol.MarryHomeResultFunctionNoOpen:
 				slog.Info("家园功能不可用（未结婚或未开放），跳过",
 					"role_id", session.RoleID(), "result", res.Result)
+				return scheduler.ErrAttemptsExhausted
 			default:
 				slog.Warn("家园奖励领取失败", "role_id", session.RoleID(), "result", res.Result)
 			}

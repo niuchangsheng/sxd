@@ -70,8 +70,9 @@ func NewEraYanjieRoutine() scheduler.ActivityRoutine {
 			mainResp := call(protocol.BuildEraYanjiePanelPacket(session.LastActionID()),
 				protocol.ActionIDEraYanjiePanel, callTimeout)
 			if mainResp == nil {
-				slog.Info("纪元湮劫: 主面板无回包，跳过", "role_id", session.RoleID())
-				return nil
+				// 主面板被静默丢弃通常意味着活动未开启/不在赛季，稍后重试。
+				slog.Info("纪元湮劫: 主面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "纪元湮劫主面板无回包")
 			}
 			main, err := protocol.ParseEraYanjiePanelResult(mainResp.Payload)
 			if err != nil {
@@ -98,8 +99,8 @@ func NewEraYanjieRoutine() scheduler.ActivityRoutine {
 				fightResp := call(protocol.BuildEraYanjieFightPacket(level, eraYanjieDeployType, 1, session.LastActionID()),
 					protocol.ActionIDEraYanjieFight, 20*time.Second)
 				if fightResp == nil {
-					slog.Info("纪元湮劫战斗无回包，本轮结束", "role_id", session.RoleID(), "level", level)
-					return nil
+					slog.Info("纪元湮劫战斗无回包，稍后重试", "role_id", session.RoleID(), "level", level)
+					return scheduler.NewCooldown(10*time.Minute, "纪元湮劫战斗无回包")
 				}
 				res, fErr := protocol.ParseEraYanjieFightResult(fightResp.Payload)
 				if fErr != nil {

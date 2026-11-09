@@ -6,11 +6,13 @@ package dungeon_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/routines/dungeon"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestNineRegionsRoutine_CreateTeamChooseHelpersAndFight(t *testing.T) {
@@ -194,8 +196,10 @@ func TestNineRegionsRoutine_CDSkips(t *testing.T) {
 		return false
 	})
 
-	if err := dungeon.NewNineRegionsRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("nine regions: %v", err)
+	err := dungeon.NewNineRegionsRoutine().Execute(context.Background(), sess, nil)
+	var cdErr *scheduler.CooldownError
+	if !errors.As(err, &cdErr) {
+		t.Fatalf("CD 中应返回 CooldownError, 实际: %v", err)
 	}
 	if got := startCalls.Load(); got != 0 {
 		t.Fatalf("CD 中不应开始挑战, 实际 %d 次", got)

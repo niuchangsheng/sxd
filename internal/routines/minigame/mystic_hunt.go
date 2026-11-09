@@ -69,16 +69,16 @@ func NewMysticHuntRoutine() scheduler.ActivityRoutine {
 			// 2. 入口开放检查 (按活动时段开放，关闭时后续请求会被静默丢弃)。
 			openResp := call(protocol.BuildMysticHuntEntrancePacket(), protocol.ActionIDMysticHuntEntranceOpen, callTimeout)
 			if openResp == nil {
-				slog.Info("仙幽猎境入口状态无回包，跳过", "role_id", session.RoleID())
-				return nil
+				slog.Info("仙幽猎境入口状态无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(10*time.Minute, "仙幽猎境入口状态无回包")
 			}
 			open, err := protocol.ParseMysticHuntEntranceResult(openResp.Payload)
 			if err != nil {
 				return fmt.Errorf("解析仙幽猎境入口状态失败: %w", err)
 			}
 			if open == 0 {
-				slog.Info("仙幽猎境入口当前未开放，跳过", "role_id", session.RoleID())
-				return nil
+				slog.Info("仙幽猎境入口当前未开放，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "仙幽猎境入口未开放")
 			}
 
 			// 3. 进入猎境 (免费)。

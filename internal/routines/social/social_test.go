@@ -266,8 +266,8 @@ func TestMarryHomeRoutine_SkipsWhenFunctionClosed(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != nil {
-		t.Fatalf("家园奖励执行失败: %v", err)
+	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != scheduler.ErrAttemptsExhausted {
+		t.Fatalf("家园未开放应挂起至次日, 实际: %v", err)
 	}
 	if got := atomic.LoadInt32(&cakeCalls); got != 0 {
 		t.Fatalf("家园未开放时不应发送蛋糕领取请求, 实际 %d 次", got)
@@ -321,8 +321,8 @@ func TestMarryHomeRoutine_SkipsWhenNotMarried(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != nil {
-		t.Fatalf("家园奖励执行失败: %v", err)
+	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != scheduler.ErrAttemptsExhausted {
+		t.Fatalf("未结婚应挂起至次日, 实际: %v", err)
 	}
 	if got := atomic.LoadInt32(&cakeCalls); got != 0 {
 		t.Fatalf("未结婚时不应发送蛋糕领取请求, 实际 %d 次", got)
@@ -342,8 +342,8 @@ func TestMarryHomeRoutine_Execute(t *testing.T) {
 	defer session.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != nil {
-		t.Fatalf("家园奖励执行失败: %v", err)
+	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != scheduler.ErrAttemptsExhausted {
+		t.Fatalf("领取成功后应挂起至次日, 实际: %v", err)
 	}
 	if got := session.LastActionID(); got != protocol.ActionIDMarryHomeGetCake {
 		t.Errorf("期望最后动作 0x%08X, 实际 0x%08X", protocol.ActionIDMarryHomeGetCake, got)

@@ -110,6 +110,16 @@ func BuildPetAnimalInfoPacket(playerID int32, prevAct uint32) *Packet {
 	return pkt
 }
 
+// BuildPetAnimalInfoPacketBare 构造不带 PrevAct 的叶公好龙面板查询封包。
+//
+// Module 48 在部分会话上下文中会静默丢弃带 PrevAct 的面板请求；
+// 自动化在主请求超时后可用该裸载荷重试一次。
+func BuildPetAnimalInfoPacketBare(playerID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(playerID)
+	return NewPacket(ActionIDPetAnimalInfo, w.Bytes())
+}
+
 // BuildPetAnimalFeedPacket 构造叶公好龙培养封包 (0x00300002)。
 //
 // 官方请求为 [Byte feed_type]；末尾追加 PrevAct。

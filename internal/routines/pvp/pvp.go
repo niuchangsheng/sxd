@@ -1160,19 +1160,19 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 			statusResp, err := session.Call(sCtx, protocol.BuildWorldPkStatusPacket(), protocol.ActionIDWorldPkStatus)
 			sCancel()
 			if err != nil {
-				slog.Info("跨服PK功能不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("跨服PK功能不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "跨服PK状态查询无回包")
 			}
 			status, err := protocol.ParseWorldPkStatusResult(statusResp.Payload)
 			if err != nil {
 				return fmt.Errorf("解析跨服PK状态失败: %w", err)
 			}
 			if status.Status != protocol.WorldPkStatusOn {
-				slog.Info("跨服PK当前未开放，跳过",
+				slog.Info("跨服PK当前未开放，稍后重试",
 					"role_id", session.RoleID(),
 					"status", status.Status,
 				)
-				return nil
+				return scheduler.NewCooldown(time.Hour, "跨服PK未开放")
 			}
 
 			jCtx, jCancel := context.WithTimeout(ctx, callTimeout)

@@ -45,21 +45,21 @@ func NewSignInRoutine() scheduler.ActivityRoutine {
 			statusResp, err := callDaily(ctx, session, protocol.BuildSignInStatusPacket(), protocol.ActionIDSignInStatus, 8*time.Second)
 			if err != nil {
 				// 活动未开放时服务端会静默丢弃状态查询；按暂不可用跳过，由下次 Cron 重试。
-				slog.Info("签到活动状态查询失败/未开放，跳过",
+				slog.Info("签到活动状态查询失败/未开放，稍后重试",
 					"role_id", session.RoleID(), "err", err)
-				return nil
+				return scheduler.NewCooldown(10*time.Minute, "签到活动状态查询无回包")
 			}
 			status, err := protocol.ParseSignInStatusResult(statusResp.Payload)
 			if err != nil {
 				return fmt.Errorf("解析签到活动状态失败: %w", err)
 			}
 			if !status.ActivityOpen {
-				slog.Info("签到活动当前未开放，跳过",
+				slog.Info("签到活动当前未开放，稍后重试",
 					"role_id", session.RoleID(),
 					"has_award", status.HasAward,
 					"raw", []uint8{status.RawA, status.RawB, status.RawC},
 				)
-				return nil
+				return scheduler.NewCooldown(time.Hour, "签到活动未开放")
 			}
 
 			// 3. 签到详情
