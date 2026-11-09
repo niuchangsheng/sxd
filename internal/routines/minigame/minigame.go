@@ -903,8 +903,9 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 				case protocol.IceCaveResultFuncNotOpen,
 					protocol.IceCaveResultNonActivityTime,
 					protocol.IceCaveResultNotActivityTime:
-					slog.Info("冰窟活动未开放/非活动时间，结束", "role_id", session.RoleID(), "result", result.Result)
-					hits = info.HammerNum
+					slog.Info("冰窟活动未开放/非活动时间，稍后重试",
+						"role_id", session.RoleID(), "result", result.Result)
+					return scheduler.NewCooldown(30*time.Minute, "冰窟活动非活动时间")
 				default:
 					slog.Warn("冰窟敲击返回未知结果", "role_id", session.RoleID(), "result", result.Result)
 					hits = info.HammerNum
