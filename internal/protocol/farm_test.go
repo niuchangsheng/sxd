@@ -28,8 +28,8 @@ func TestFarmCodec_BuildAndParse(t *testing.T) {
 		t.Errorf("PrevAct 不匹配: 期望 0x00010000, 实际 0x%08X", parsedInfo.PrevAct)
 	}
 
-	// 2. 测试 FarmPlantRequest 对齐真实抓包 Hex
-	// 真实抓包: 0000000a000000a9000d0016 (LandID=10, SeedID=169, PrevAct=0x000D0016)
+	// 2. 测试 FarmPlantRequest 对齐官方请求
+	// 官方 plant_new_herbs request=[Int,Int]: 0000000a000000a9 (LandID=10, SeedID=169)
 	plantReq := FarmPlantRequest{
 		LandID:       10,
 		SeedOrRoleID: 169,
@@ -43,7 +43,7 @@ func TestFarmCodec_BuildAndParse(t *testing.T) {
 		t.Fatalf("ActionID 不匹配: 期望 0x%08X, 实际 0x%08X", ActionIDFarmPlant, pktPlant.ActionID)
 	}
 
-	expectedHex := "0000000a000000a9000d0016"
+	expectedHex := "0000000a000000a9"
 	actualHex := hex.EncodeToString(pktPlant.Payload)
 	if actualHex != expectedHex {
 		t.Errorf("播种载荷 Hex 不匹配: 期望 %s, 实际 %s", expectedHex, actualHex)
@@ -53,12 +53,12 @@ func TestFarmCodec_BuildAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseFarmPlantRequest 失败: %v", err)
 	}
-	if parsedPlant.LandID != 10 || parsedPlant.SeedOrRoleID != 169 || parsedPlant.PrevAct != 0x000D0016 {
+	if parsedPlant.LandID != 10 || parsedPlant.SeedOrRoleID != 169 {
 		t.Errorf("播种解析结果不符: %+v", parsedPlant)
 	}
 
-	// 3. 测试 FarmHarvestRequest 对齐真实抓包 Hex
-	// 真实抓包: 0000000a000d0018 (LandID=10, PrevAct=0x000D0018)
+	// 3. 测试 FarmHarvestRequest 对齐官方请求
+	// 官方 harvest_new request=[Int]: 0000000a (LandID=10)
 	harvestReq := FarmHarvestRequest{
 		LandID:  10,
 		PrevAct: 0x000D0018,
@@ -71,7 +71,7 @@ func TestFarmCodec_BuildAndParse(t *testing.T) {
 		t.Fatalf("ActionID 不匹配: 期望 0x%08X, 实际 0x%08X", ActionIDFarmHarvest, pktHarvest.ActionID)
 	}
 
-	expectedHarvestHex := "0000000a000d0018"
+	expectedHarvestHex := "0000000a"
 	actualHarvestHex := hex.EncodeToString(pktHarvest.Payload)
 	if actualHarvestHex != expectedHarvestHex {
 		t.Errorf("收获载荷 Hex 不匹配: 期望 %s, 实际 %s", expectedHarvestHex, actualHarvestHex)
@@ -81,7 +81,7 @@ func TestFarmCodec_BuildAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseFarmHarvestRequest 失败: %v", err)
 	}
-	if parsedHarvest.LandID != 10 || parsedHarvest.PrevAct != 0x000D0018 {
+	if parsedHarvest.LandID != 10 {
 		t.Errorf("收获解析结果不符: %+v", parsedHarvest)
 	}
 }
@@ -219,8 +219,10 @@ func TestFarmCodec_RealPcapGroundTruth(t *testing.T) {
 	}
 }
 
-// TestFarmRequests_MarkPrevAct 验证所有药园业务请求都标记 HasPrevAct，
+// TestFarmRequests_MarkPrevAct 验证空 request 的药园查询请求标记 HasPrevAct，
 // 由会话层在发包时用真实最近动作号覆盖末尾 4 字节，避免手工链断档被静默丢弃。
+// 注意: 13/23、13/24、13/25 官方请求分别只有 [Int]、[Int,Int]、[Int]，
+// 不能追加 PrevAct，否则会被服务端静默丢弃（见下方 TestFarmIntRequests_BarePayload）。
 func TestFarmRequests_MarkPrevAct(t *testing.T) {
 	builders := []struct {
 		name  string
@@ -235,15 +237,6 @@ func TestFarmRequests_MarkPrevAct(t *testing.T) {
 		{"seeds", func() (*Packet, error) {
 			return BuildFarmSeedsPacket(FarmSeedsRequest{PrevAct: ActionIDFarmGetPlantState})
 		}},
-		{"buy_seed", func() (*Packet, error) {
-			return BuildFarmBuySeedPacket(FarmBuySeedRequest{SeedID: 176, PrevAct: ActionIDFarmGetSeeds})
-		}},
-		{"plant", func() (*Packet, error) {
-			return BuildFarmPlantPacket(FarmPlantRequest{LandID: 10, SeedOrRoleID: 176, PrevAct: ActionIDFarmGetSeeds})
-		}},
-		{"harvest", func() (*Packet, error) {
-			return BuildFarmHarvestPacket(FarmHarvestRequest{LandID: 10, PrevAct: ActionIDFarmPlant})
-		}},
 	}
 	for _, b := range builders {
 		pkt, err := b.build()
@@ -255,6 +248,38 @@ func TestFarmRequests_MarkPrevAct(t *testing.T) {
 		}
 		if len(pkt.Payload) < 4 {
 			t.Errorf("%s 载荷不足 4 字节，无法写入 PrevAct", b.name)
+		}
+	}
+}
+
+// TestFarmIntRequests_BarePayload 验证带 Int 参数的药园动作严格按官方长度发送。
+// 线上实测 13/23 裸 4 字节可成功扣铜钱并增加种子库存；多带 PrevAct 会被丢弃。
+func TestFarmIntRequests_BarePayload(t *testing.T) {
+	cases := []struct {
+		name    string
+		build   func() (*Packet, error)
+		wantLen int
+	}{
+		{"buy_seed", func() (*Packet, error) {
+			return BuildFarmBuySeedPacket(FarmBuySeedRequest{SeedID: 176})
+		}, 4},
+		{"plant", func() (*Packet, error) {
+			return BuildFarmPlantPacket(FarmPlantRequest{LandID: 10, SeedOrRoleID: 176})
+		}, 8},
+		{"harvest", func() (*Packet, error) {
+			return BuildFarmHarvestPacket(FarmHarvestRequest{LandID: 10})
+		}, 4},
+	}
+	for _, c := range cases {
+		pkt, err := c.build()
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if pkt.HasPrevAct {
+			t.Errorf("%s 不应标记 HasPrevAct", c.name)
+		}
+		if len(pkt.Payload) != c.wantLen {
+			t.Errorf("%s 载荷长度 = %d, want %d", c.name, len(pkt.Payload), c.wantLen)
 		}
 	}
 }

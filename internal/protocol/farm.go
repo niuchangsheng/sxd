@@ -293,17 +293,13 @@ func ParseFarmSeedsResult(payload []byte) (*FarmSeedsResult, error) {
 }
 
 // BuildFarmBuySeedPacket 构造购买药园种子二进制封包。
+//
+// 官方 request=[Int herbs_id]，服务端只接受 4 字节。线上实测多带 4 字节
+// PrevAct 会被静默丢弃；裸载荷可正常返回 0x08 并扣铜钱、增加种子库存。
 func BuildFarmBuySeedPacket(req FarmBuySeedRequest) (*Packet, error) {
 	w := NewWriter()
 	w.WriteInt32(req.SeedID)
-	prevAct := req.PrevAct
-	if prevAct == 0 {
-		prevAct = ActionIDFarmGetSeeds
-	}
-	w.WriteUint32(prevAct)
-	pkt := NewPacket(ActionIDFarmBuySeed, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt, nil
+	return NewPacket(ActionIDFarmBuySeed, w.Bytes()), nil
 }
 
 // ParseFarmBuySeedResult 从载荷反序列化购买种子响应。
@@ -318,27 +314,19 @@ func ParseFarmBuySeedResult(payload []byte) (*FarmBuySeedResult, error) {
 }
 
 // BuildFarmPlantPacket 构造播种药草二进制封包。
+//
+// 官方 plant_new_herbs request=[Int farmland_id, Int herbs_id]，仅 8 字节；
+// 额外 PrevAct 会被静默丢弃。
 func BuildFarmPlantPacket(req FarmPlantRequest) (*Packet, error) {
 	w := NewWriter()
-	// 1. 写入 LandID (4B 大端序整型)
 	w.WriteInt32(req.LandID)
-	// 2. 写入 SeedOrRoleID (4B 大端序整型)
 	w.WriteInt32(req.SeedOrRoleID)
-	// 3. 写入 PrevAct (4B 大端序整型)
-	prevAct := req.PrevAct
-	if prevAct == 0 {
-		prevAct = ActionIDFarmHarvest
-	}
-	w.WriteUint32(prevAct)
-
-	pkt := NewPacket(ActionIDFarmPlant, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt, nil
+	return NewPacket(ActionIDFarmPlant, w.Bytes()), nil
 }
 
 // ParseFarmPlantRequest 从载荷反序列化播种药草请求。
 func ParseFarmPlantRequest(payload []byte) (*FarmPlantRequest, error) {
-	if len(payload) < 12 {
+	if len(payload) < 8 {
 		return nil, fmt.Errorf("%w: payload too short for farm plant", ErrInvalidPayload)
 	}
 	r := NewReader(payload)
@@ -350,38 +338,21 @@ func ParseFarmPlantRequest(payload []byte) (*FarmPlantRequest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to read seed_id: %v", ErrInvalidPayload, err)
 	}
-	prevAct, err := r.ReadUint32()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read prev_act: %v", ErrInvalidPayload, err)
-	}
-
-	return &FarmPlantRequest{
-		LandID:       landID,
-		SeedOrRoleID: seedID,
-		PrevAct:      prevAct,
-	}, nil
+	return &FarmPlantRequest{LandID: landID, SeedOrRoleID: seedID}, nil
 }
 
 // BuildFarmHarvestPacket 构造收取成熟药草二进制封包。
+//
+// 官方 harvest_new request=[Int farmland_id]，仅 4 字节；额外 PrevAct 会被静默丢弃。
 func BuildFarmHarvestPacket(req FarmHarvestRequest) (*Packet, error) {
 	w := NewWriter()
-	// 1. 写入 LandID (4B 大端序整型)
 	w.WriteInt32(req.LandID)
-	// 2. 写入 PrevAct (4B 大端序整型)
-	prevAct := req.PrevAct
-	if prevAct == 0 {
-		prevAct = ActionIDFarmPlant
-	}
-	w.WriteUint32(prevAct)
-
-	pkt := NewPacket(ActionIDFarmHarvest, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt, nil
+	return NewPacket(ActionIDFarmHarvest, w.Bytes()), nil
 }
 
 // ParseFarmHarvestRequest 从载荷反序列化收取成熟药草请求。
 func ParseFarmHarvestRequest(payload []byte) (*FarmHarvestRequest, error) {
-	if len(payload) < 8 {
+	if len(payload) < 4 {
 		return nil, fmt.Errorf("%w: payload too short for farm harvest", ErrInvalidPayload)
 	}
 	r := NewReader(payload)
@@ -389,15 +360,7 @@ func ParseFarmHarvestRequest(payload []byte) (*FarmHarvestRequest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to read land_id: %v", ErrInvalidPayload, err)
 	}
-	prevAct, err := r.ReadUint32()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read prev_act: %v", ErrInvalidPayload, err)
-	}
-
-	return &FarmHarvestRequest{
-		LandID:  landID,
-		PrevAct: prevAct,
-	}, nil
+	return &FarmHarvestRequest{LandID: landID}, nil
 }
 
 // BuildFarmGetInfoResultPacket 构造药园土地列表查询响应二进制封包。

@@ -239,46 +239,51 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 					if owned >= 4 {
 						continue
 					}
-					for b := int32(0); b < 4-owned; b++ {
-						buyPkt, bErr := protocol.BuildFarmBuySeedPacket(protocol.FarmBuySeedRequest{
-							SeedID:  targetSeedID,
-							PrevAct: prevAct,
-						})
-						if bErr != nil {
-							return fmt.Errorf("farming: 构造药园种子购买封包失败: %w", bErr)
-						}
-						buyResp, bCallErr := callWithTimeout(buyPkt, protocol.ActionIDFarmBuySeed)
-						if abortOnDrop(buyResp, bCallErr) {
-							// 购买需要药园场景上下文，主服会话会被静默丢弃。
-							// 退避 6 小时并继续巡检土地，避免每次 15 分钟都空等 8 秒。
-							until := time.Now().Add(6 * time.Hour).Unix()
-							farmSeedBuyBlockedUntil.Store(until)
-							slog.Info("药园种子购买被静默丢弃，暂停补仓 6 小时并继续巡检土地",
-								"role_id", session.RoleID(), "seed_id", targetSeedID,
-								"blocked_until", time.Unix(until, 0), "err", bCallErr)
-							break seedBuy
-						}
-						prevAct = protocol.ActionIDFarmBuySeed
-						buyRes, bParseErr := protocol.ParseFarmBuySeedResult(buyResp.Payload)
-						if bParseErr != nil {
-							slog.Warn("解析药园种子购买回包失败",
-								"role_id", session.RoleID(), "seed_id", targetSeedID, "err", bParseErr)
-							break
-						}
-						if !buyRes.Success {
-							slog.Info("药园种子购买未成功（铜钱不足或已达上限），跳过该种子",
-								"role_id", session.RoleID(), "seed_id", targetSeedID)
-							break
-						}
-						sName := seedName
-						if dictRepo != nil {
-							if item, dErr := dictRepo.GetItem(int(targetSeedID)); dErr == nil && item != nil {
-								sName = item.Name
-							}
-						}
-						seedOwned[targetSeedID]++
-						slog.Info("药园种子自动购买成功", "seed_id", targetSeedID, "seed_name", sName)
+					// 铁律：每次运行每种种子最多购买 1 次。服务端首购按列表中的
+				// 铜钱价结算，后续购买会切换为元宝价；买完后列表数据即过期，
+				// 若继续循环会按旧价格连续扣元宝（线上实测 3 次 ×30 元宝）。
+				buyPkt, bErr := protocol.BuildFarmBuySeedPacket(protocol.FarmBuySeedRequest{
+					SeedID: targetSeedID,
+				})
+				if bErr != nil {
+					return fmt.Errorf("farming: 构造药园种子购买封包失败: %w", bErr)
+				}
+				buyResp, bCallErr := callWithTimeout(buyPkt, protocol.ActionIDFarmBuySeed)
+				if abortOnDrop(buyResp, bCallErr) {
+					// 裸 [Int] 载荷在 s0 实测可购买；部分区服/账号仍会被
+					// 服务端静默丢弃。退避 6 小时并继续巡检土地，
+					// 避免每次 15 分钟都空等 8 秒。
+					until := time.Now().Add(6 * time.Hour).Unix()
+					farmSeedBuyBlockedUntil.Store(until)
+					slog.Info("药园种子购买被静默丢弃，暂停补仓 6 小时并继续巡检土地",
+						"role_id", session.RoleID(), "seed_id", targetSeedID,
+						"blocked_until", time.Unix(until, 0), "err", bCallErr)
+					break seedBuy
+				}
+				buyRes, bParseErr := protocol.ParseFarmBuySeedResult(buyResp.Payload)
+				if bParseErr != nil {
+					slog.Warn("解析药园种子购买回包失败",
+						"role_id", session.RoleID(), "seed_id", targetSeedID, "err", bParseErr)
+					continue
+				}
+				if !buyRes.Success {
+					slog.Info("药园种子购买未成功（铜钱不足或已达上限），跳过该种子",
+						"role_id", session.RoleID(), "seed_id", targetSeedID)
+					continue
+				}
+				sName := seedName
+				if dictRepo != nil {
+					if item, dErr := dictRepo.GetItem(int(targetSeedID)); dErr == nil && item != nil {
+						sName = item.Name
 					}
+				}
+				seedOwned[targetSeedID]++
+				slog.Info("药园种子自动购买成功（单次铜钱档）",
+					"seed_id", targetSeedID, "seed_name", sName,
+					"buy_need_coin", meta.BuyNeedCoin, "buy_need_ingot", meta.BuyNeedIngot)
+				// 每次运行最多购买 1 颗：首购后服务端可能把后续购买切换为
+				// 元宝计价，旧列表价格不再可信。剩余补仓交给下一轮。
+				break seedBuy
 				}
 			}
 

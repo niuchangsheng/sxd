@@ -47,6 +47,7 @@ func TestHerbGardenRoutine_FullBusinessFlow(t *testing.T) {
 	defer c1.Close()
 	defer c2.Close()
 
+	var buyCalls atomic.Int32
 	var harvestCalls atomic.Int32
 	var plantCalls atomic.Int32
 	var queryCalls atomic.Int32
@@ -145,6 +146,7 @@ func TestHerbGardenRoutine_FullBusinessFlow(t *testing.T) {
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetSeeds, w.Bytes()))
 
 			case protocol.ActionIDFarmBuySeed:
+				buyCalls.Add(1)
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmBuySeed, []byte{protocol.FarmStatusSuccess}))
 
 			case protocol.ActionIDFarmHarvest:
@@ -218,17 +220,23 @@ func TestHerbGardenRoutine_FullBusinessFlow(t *testing.T) {
 		t.Errorf("期望发起 1 次土地查询, 实际发起 %d 次", queryCalls.Load())
 	}
 
-	// 2. 验证采摘调用总计 3 次 (Land 10 播种后采摘尝试 + Land 11 成熟采摘 + Land 11 播种后采摘尝试)
+	// 2. 每次运行每种种子只允许购买一次；服务端首购后价格可能切换为元宝，
+	// 继续循环会按旧价格重复扣元宝（线上实测 3 次 ×30 元宝）。
+	if got := buyCalls.Load(); got != 1 {
+		t.Errorf("期望种子购买 1 次, 实际 %d 次", got)
+	}
+
+	// 3. 验证采摘调用总计 3 次 (Land 10 播种后采摘尝试 + Land 11 成熟采摘 + Land 11 播种后采摘尝试)
 	if harvestCalls.Load() != 3 {
 		t.Errorf("期望采摘调用 3 次, 实际采摘 %d 次", harvestCalls.Load())
 	}
 
-	// 3. 验证对 Land 10 与刚采摘的 Land 11 发起了播种 (共 2 块空闲土地)
+	// 4. 验证对 Land 10 与刚采摘的 Land 11 发起了播种 (共 2 块空闲土地)
 	if plantCalls.Load() != 2 {
 		t.Errorf("期望播种 2 块空闲土地, 实际播种 %d 次", plantCalls.Load())
 	}
 
-	// 4. 验证收获奖励累加至角色状态 (初始铜钱 + 600,000)
+	// 5. 验证收获奖励累加至角色状态 (初始铜钱 + 600,000)
 	currentCoins := session.GetPlayerState().Coins
 	if currentCoins != initialCoins+600000 {
 		t.Errorf("期望铜钱增加 600,000 (当前: %d, 初始: %d)", currentCoins, initialCoins)

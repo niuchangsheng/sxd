@@ -136,6 +136,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return minigame.NewPetAnimalRoutine()
 	case "lingdao_practice":
 		return minigame.NewLingDaoRoutine()
+	case "herb_garden":
+		return farming.NewHerbGardenRoutine()
 	case "pilgrimage":
 		pcfg := farming.DefaultPilgrimageConfig()
 		if os.Getenv("SXD_PROBE_FORCE_SA") == "1" {
