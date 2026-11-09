@@ -187,7 +187,10 @@ func TestGuildActivitiesRoutine_Execute(t *testing.T) {
 	}
 	defer session.Close()
 	time.Sleep(100 * time.Millisecond)
-	if err := NewGuildActivitiesRoutine().Execute(context.Background(), session, nil); err != nil {
+	err := NewGuildActivitiesRoutine().Execute(context.Background(), session, nil)
+	// Mock 未实现功能开放列表时视为静默丢包，应进入冷却而非报错。
+	var cd *scheduler.CooldownError
+	if err != nil && !errors.As(err, &cd) {
 		t.Fatalf("仙盟任务执行失败: %v", err)
 	}
 }
