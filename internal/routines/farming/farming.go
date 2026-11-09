@@ -1400,16 +1400,19 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			iCtx, iCancel := context.WithTimeout(ctx, callTimeout)
-			infoResp, err := session.Call(iCtx, protocol.BuildStMineInfoPacket(), protocol.ActionIDStMineInfo)
-			iCancel()
+			queryInfo := func() (*protocol.StMineInfo, error) {
+				iCtx, iCancel := context.WithTimeout(ctx, callTimeout)
+				infoResp, qErr := session.Call(iCtx, protocol.BuildStMineInfoPacket(), protocol.ActionIDStMineInfo)
+				iCancel()
+				if qErr != nil || infoResp == nil {
+					return nil, qErr
+				}
+				return protocol.ParseStMineInfoResult(infoResp.Payload)
+			}
+			info, err := queryInfo()
 			if err != nil {
 				slog.Info("仙界矿山不可用，稍后重试", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(30*time.Minute, "仙界矿山信息无回包")
-			}
-			info, err := protocol.ParseStMineInfoResult(infoResp.Payload)
-			if err != nil {
-				return fmt.Errorf("解析矿山信息失败: %w", err)
 			}
 			slog.Info("仙界矿山状态",
 				"role_id", session.RoleID(),
@@ -1417,6 +1420,33 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 				"level", info.Level,
 				"cur_mountain", info.CurMountain,
 			)
+			if info.Result == protocol.StMineResultResting {
+				// 休息中表示角色仍停留在矿脉/矿洞内。官方客户端关闭
+				// StMineHolesView 时会发送 leave_mine_mountain 退出休息状态，
+				// 然后重新打开矿山面板；这里照做后再重新查询一次。
+				slog.Info("仙界矿山休息中，先退出休息状态", "role_id", session.RoleID())
+				lCtx, lCancel := context.WithTimeout(ctx, callTimeout)
+				leaveResp, lErr := session.Call(lCtx, protocol.BuildStMineLeavePacket(), protocol.ActionIDStMineLeave)
+				lCancel()
+				if lErr != nil || leaveResp == nil {
+					slog.Info("退出矿山休息状态无回包，稍后重试", "role_id", session.RoleID(), "err", lErr)
+					return scheduler.NewCooldown(10*time.Minute, "退出矿山休息状态无回包")
+				}
+				if leaveCode, pErr := protocol.ParseStMineActionResult(leaveResp.Payload); pErr != nil {
+					slog.Warn("解析退出矿山回包失败，稍后重试", "role_id", session.RoleID(), "err", pErr)
+					return scheduler.NewCooldown(10*time.Minute, "退出矿山回包解析失败")
+				} else if leaveCode != protocol.StMineResultSuccess {
+					slog.Info("退出矿山休息状态未成功", "role_id", session.RoleID(), "result", leaveCode)
+					return scheduler.NewCooldown(10*time.Minute, "退出矿山休息状态未成功")
+				}
+				info, err = queryInfo()
+				if err != nil {
+					return scheduler.NewCooldown(30*time.Minute, "退出休息后矿山信息无回包")
+				}
+				slog.Info("退出休息状态后重新查询矿山",
+					"role_id", session.RoleID(), "result", info.Result,
+					"level", info.Level, "cur_mountain", info.CurMountain)
+			}
 			switch info.Result {
 			case protocol.StMineResultSuccess:
 				// 继续
