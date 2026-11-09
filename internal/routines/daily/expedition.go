@@ -50,12 +50,23 @@ func NewExpeditionRoutine() scheduler.ActivityRoutine {
 				slog.Warn("远征任务面板解析失败", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
-			slog.Info("远征任务面板", "role_id", session.RoleID(), "tasks", len(tasks))
+			inProgress := 0
+			for _, task := range tasks {
+				if task.State == 1 {
+					inProgress++
+				}
+			}
+			slog.Info("远征任务面板", "role_id", session.RoleID(),
+				"tasks", len(tasks), "in_progress", inProgress)
 
 			started := 0
 			for _, task := range tasks {
 				if ctx.Err() != nil {
 					return nil
+				}
+				// state=1 表示已在派遣中；重复 start_task 只会返回 FAILED。
+				if task.State != 0 {
+					continue
 				}
 				startResp := call(protocol.BuildExpeditionStartPacket(task.MissionID), protocol.ActionIDExpeditionStart)
 				if startResp == nil {

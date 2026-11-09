@@ -146,6 +146,12 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 			pcfg.SaintAreaFallback = farming.SaintAreaForceOnly
 		}
 		return farming.NewPilgrimageRoutine(pcfg)
+	case "dungeon_sweep":
+		dRepo, dErr := dictionary.NewRepository("data/Pieb.db")
+		if dErr != nil {
+			return nil
+		}
+		return dungeon.NewDungeonSweepRoutine(dRepo, dungeon.DefaultSweepConfig())
 	case "six_realms":
 		return dungeon.NewSixRealmsRoutine(dungeon.DefaultSixRealmsConfig())
 	case "demon_tower":
