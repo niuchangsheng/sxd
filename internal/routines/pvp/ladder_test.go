@@ -47,8 +47,8 @@ func TestCrossServerLadderRoutine_ClaimsRewards(t *testing.T) {
 	if err := NewCrossServerLadderRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("ladder: %v", err)
 	}
-	if awardCalls.Load() != 1 {
-		t.Fatalf("task award calls = %d, want 1", awardCalls.Load())
+	if got := awardCalls.Load(); got != 23 {
+		t.Fatalf("task award calls = %d, want 23 (每日1..12 + 周常14..24)", got)
 	}
 }
 

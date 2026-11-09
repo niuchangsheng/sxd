@@ -1046,37 +1046,18 @@ func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSess
 		return resp
 	}
 
-	if resp := call(protocol.BuildWorldPkSetAutoMatchPacket(true), protocol.ActionIDWorldPkSetAutoMatch); resp != nil {
-		if code, err := protocol.ParseActionFirstByte(resp.Payload, "跨服PK自动匹配"); err == nil {
-			slog.Info("跨服PK自动匹配设置", "role_id", session.RoleID(), "result", code)
-		}
+	// 实测 open_task_panel(349/26) 之后立即调用 349/27 会被静默丢弃；
+	// 任务 ID 固定为每日 1..12、周常 14..24，直接逐个尝试领取。
+	ids := make([]int32, 0, 22)
+	for id := int32(1); id <= 12; id++ {
+		ids = append(ids, id)
 	}
-
-	if resp := call(protocol.BuildWorldPkReceiveSpecialPacket(), protocol.ActionIDWorldPkReceiveSpecial); resp != nil {
-		if code, err := protocol.ParseActionFirstByte(resp.Payload, "跨服PK特殊奖励"); err == nil {
-			switch code {
-			case protocol.WorldPkRewardSuccess:
-				slog.Info("跨服PK特殊奖励领取成功", "role_id", session.RoleID())
-			case protocol.WorldPkRewardPackFull:
-				return scheduler.ErrBagFull
-			default:
-				slog.Info("跨服PK特殊奖励未领取", "role_id", session.RoleID(), "result", code)
-			}
-		}
-	}
-
-	taskResp := call(protocol.BuildWorldPkOpenTaskPanelPacket(), protocol.ActionIDWorldPkOpenTaskPanel)
-	if taskResp == nil {
-		return nil
-	}
-	ids, err := protocol.ParseWorldPkTaskIDs(taskResp.Payload)
-	if err != nil {
-		slog.Warn("跨服PK任务面板解析失败", "role_id", session.RoleID(), "err", err)
-		return nil
+	for id := int32(14); id <= 24; id++ {
+		ids = append(ids, id)
 	}
 	claimed := 0
 	for i, id := range ids {
-		if i >= 10 || ctx.Err() != nil {
+		if i >= len(ids) || ctx.Err() != nil {
 			break
 		}
 		awardResp := call(protocol.BuildWorldPkTaskAwardPacket(id), protocol.ActionIDWorldPkTaskAward)
@@ -1097,6 +1078,25 @@ func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSess
 			return scheduler.ErrBagFull
 		default:
 			slog.Info("跨服PK任务奖励未成功", "role_id", session.RoleID(), "task_id", id, "result", code)
+		}
+	}
+
+	if resp := call(protocol.BuildWorldPkReceiveSpecialPacket(), protocol.ActionIDWorldPkReceiveSpecial); resp != nil {
+		if code, err := protocol.ParseActionFirstByte(resp.Payload, "跨服PK特殊奖励"); err == nil {
+			switch code {
+			case protocol.WorldPkRewardSuccess:
+				slog.Info("跨服PK特殊奖励领取成功", "role_id", session.RoleID())
+			case protocol.WorldPkRewardPackFull:
+				return scheduler.ErrBagFull
+			default:
+				slog.Info("跨服PK特殊奖励未领取", "role_id", session.RoleID(), "result", code)
+			}
+		}
+	}
+
+	if resp := call(protocol.BuildWorldPkSetAutoMatchPacket(true), protocol.ActionIDWorldPkSetAutoMatch); resp != nil {
+		if code, err := protocol.ParseActionFirstByte(resp.Payload, "跨服PK自动匹配"); err == nil {
+			slog.Info("跨服PK自动匹配设置", "role_id", session.RoleID(), "result", code)
 		}
 	}
 
@@ -1175,6 +1175,11 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 				return scheduler.NewCooldown(time.Hour, "跨服PK未开放")
 			}
 
+			// 领取奖励必须在 join_pk 之前，避免进入匹配队列后奖励请求被丢弃。
+			if rErr := claimCrossServerLadderRewards(ctx, session); rErr != nil {
+				return rErr
+			}
+
 			jCtx, jCancel := context.WithTimeout(ctx, callTimeout)
 			joinResp, err := session.Call(jCtx, protocol.BuildWorldPkJoinPacket(), protocol.ActionIDWorldPkJoin)
 			jCancel()
@@ -1188,9 +1193,6 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 			switch result.Result {
 			case protocol.WorldPkResultSuccess:
 				slog.Info("跨服PK加入成功", "role_id", session.RoleID())
-				if rErr := claimCrossServerLadderRewards(ctx, session); rErr != nil {
-					return rErr
-				}
 			case protocol.WorldPkResultLowLevel:
 				slog.Info("跨服PK等级不足", "role_id", session.RoleID())
 			case protocol.WorldPkResultTimeCD:

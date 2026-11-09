@@ -96,6 +96,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return daily.NewFateHuntRoutine()
 	case "forbidden_book":
 		return minigame.NewForbiddenBookRoutine()
+	case "cross_server_ladder":
+		return pvp.NewCrossServerLadderRoutine()
 	case "holy_arena":
 		return pvp.NewHolyArenaRoutine()
 	case "children_daily":
