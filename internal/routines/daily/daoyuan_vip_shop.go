@@ -6,6 +6,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -23,6 +24,10 @@ const (
 )
 
 // NewDaoyuanVipShopRoutine 构造精品杂货 VIP 商店购买任务。
+// errVipShopNoResponse 标记 132 协议在会话上被服务端静默丢弃。
+// 线上主服连接对所有 132 动作均不回包，必须改走圣域独立会话。
+var errVipShopNoResponse = errors.New("精品杂货协议无回包")
+
 func NewDaoyuanVipShopRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
@@ -38,29 +43,29 @@ func NewDaoyuanVipShopRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
+			call := func(s *client.RoleSession, pkt *protocol.Packet, act uint32) *protocol.Packet {
 				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
 				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := s.Call(cCtx, pkt, act)
 				if err != nil {
-					slog.Info("道缘商店协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
+					slog.Info("道缘商店协议无回包", "role_id", s.RoleID(), "action", act, "err", err)
 					return nil
 				}
 				return resp
 			}
 
-			run := func(vipLevel uint8, targets []int32) {
-				listResp := call(protocol.BuildDaoyuanVipShopListPacket(vipLevel), protocol.ActionIDDaoyuanVipShopList)
+			run := func(s *client.RoleSession, vipLevel uint8, targets []int32) error {
+				listResp := call(s, protocol.BuildDaoyuanVipShopListPacket(vipLevel), protocol.ActionIDDaoyuanVipShopList)
 				if listResp == nil {
-					slog.Info("精品杂货商店列表无回包", "role_id", session.RoleID(), "vip", vipLevel)
-					return
+					slog.Info("精品杂货商店列表无回包", "role_id", s.RoleID(), "vip", vipLevel)
+					return errVipShopNoResponse
 				}
 				items, err := protocol.ParseDaoyuanVipShopList(listResp.Payload)
 				if err != nil {
-					slog.Warn("解析精品杂货商店列表失败", "role_id", session.RoleID(), "vip", vipLevel, "err", err)
-					return
+					slog.Warn("解析精品杂货商店列表失败", "role_id", s.RoleID(), "vip", vipLevel, "err", err)
+					return nil
 				}
-				slog.Info("精品杂货 VIP 商店列表", "role_id", session.RoleID(), "vip", vipLevel, "items", items)
+				slog.Info("精品杂货 VIP 商店列表", "role_id", s.RoleID(), "vip", vipLevel, "items", items)
 
 				for _, item := range items {
 					wanted := false
@@ -75,12 +80,12 @@ func NewDaoyuanVipShopRoutine() scheduler.ActivityRoutine {
 					}
 					if item.Price <= 0 {
 						slog.Info("精品杂货商品价格异常，跳过",
-							"role_id", session.RoleID(), "vip", vipLevel, "item_id", item.ItemID, "price", item.Price)
+							"role_id", s.RoleID(), "vip", vipLevel, "item_id", item.ItemID, "price", item.Price)
 						continue
 					}
 					if item.Price >= vipShopIngotPriceThreshold {
 						slog.Info("精品杂货商品疑似元宝定价，跳过",
-							"role_id", session.RoleID(), "vip", vipLevel,
+							"role_id", s.RoleID(), "vip", vipLevel,
 							"item_id", item.ItemID, "price", item.Price)
 						continue
 					}
@@ -91,39 +96,60 @@ func NewDaoyuanVipShopRoutine() scheduler.ActivityRoutine {
 					if count > maxVipShopBuys {
 						count = maxVipShopBuys
 					}
-					resp := call(protocol.BuildDaoyuanShopBuyPacket(item.Index, count), protocol.ActionIDDaoyuanShopBuy)
+					resp := call(s, protocol.BuildDaoyuanShopBuyPacket(item.Index, count), protocol.ActionIDDaoyuanShopBuy)
 					if resp == nil {
-						return
+						return errVipShopNoResponse
 					}
 					code, pErr := protocol.ParseDaoyuanShopBuyResult(resp.Payload)
 					if pErr != nil {
-						slog.Warn("解析精品杂货购买回包失败", "role_id", session.RoleID(), "err", pErr)
-						return
+						slog.Warn("解析精品杂货购买回包失败", "role_id", s.RoleID(), "err", pErr)
+						return nil
 					}
 					switch code {
 					case protocol.DaoyuanShopResultSuccess:
 						slog.Info("精品杂货购买成功",
-							"role_id", session.RoleID(), "vip", vipLevel,
+							"role_id", s.RoleID(), "vip", vipLevel,
 							"item_id", item.ItemID, "count", count, "price", item.Price)
 					case protocol.DaoyuanShopResultPackFull:
-						slog.Warn("精品杂货购买背包已满", "role_id", session.RoleID())
-						return
+						slog.Warn("精品杂货购买背包已满", "role_id", s.RoleID())
+						return scheduler.ErrBagFull
 					case protocol.DaoyuanShopResultNoDaoYuan, protocol.DaoyuanShopResultNoIngot,
 						protocol.DaoyuanShopResultVipTwo, protocol.DaoyuanShopResultVipFive,
 						protocol.DaoyuanShopResultVipEight, protocol.DaoyuanShopResultItemNotExist:
-						slog.Info("精品杂货购买未成功", "role_id", session.RoleID(),
+						slog.Info("精品杂货购买未成功", "role_id", s.RoleID(),
 							"item_id", item.ItemID, "result", code,
 							"result_text", protocol.DaoyuanShopResultText(code))
 					default:
-						slog.Info("精品杂货购买未成功", "role_id", session.RoleID(),
+						slog.Info("精品杂货购买未成功", "role_id", s.RoleID(),
 							"item_id", item.ItemID, "result", code)
 					}
 				}
+				return nil
 			}
 
-			run(5, []int32{itemShenJiaJingShi, itemTianHunPack})
-			run(8, []int32{itemTianHunPack})
-			return nil
+			runAll := func(s *client.RoleSession) error {
+				if err := run(s, protocol.DaoyuanVipShopTabFive, []int32{itemShenJiaJingShi, itemTianHunPack}); err != nil {
+					return err
+				}
+				return run(s, protocol.DaoyuanVipShopTabEight, []int32{itemTianHunPack})
+			}
+
+			err := runAll(session)
+			if !errors.Is(err, errVipShopNoResponse) {
+				return err
+			}
+			// 主服对所有 132 动作静默丢包，线上必须改走圣域独立会话 (Mod 293)。
+			slog.Info("主服精品杂货协议无回包，改走圣域会话", "role_id", session.RoleID())
+			sa, openErr := session.OpenSaintAreaSession(ctx)
+			if openErr != nil {
+				slog.Info("圣域会话不可用，稍后重试", "role_id", session.RoleID(), "err", openErr)
+				return scheduler.NewCooldown(30*time.Minute, "精品杂货商店需圣域会话")
+			}
+			defer sa.Close()
+			if err = runAll(sa); errors.Is(err, errVipShopNoResponse) {
+				return scheduler.NewCooldown(30*time.Minute, "圣域精品杂货商店无回包")
+			}
+			return err
 		},
 	)
 }

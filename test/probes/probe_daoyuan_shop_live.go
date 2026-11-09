@@ -101,6 +101,8 @@ func main() {
 
 	call(sess, protocol.NewPacket(0x00840000, nil), 0x00840000, "main_132_0")
 	call(sess, protocol.NewPacket(0x00840003, []byte{5}), 0x00840003, "main_132_3_vip5")
+	call(sess, protocol.NewPacket(0x00840003, []byte{10}), 0x00840003, "main_132_3_tab10")
+	call(sess, protocol.BuildDaoyuanVipShopListPacket(10), 0x00840003, "main_132_3_builder10")
 
 	sa, err := sess.OpenSaintAreaSession(ctx)
 	if err != nil {
@@ -114,8 +116,14 @@ func main() {
 	for _, v := range []byte{0, 1, 2, 3, 4, 6, 7} {
 		call(sa, protocol.NewPacket(0x00840003, []byte{v}), 0x00840003, fmt.Sprintf("sa_132_3_byte%d", v))
 	}
+	// 官方页签参数为结果码 VIP_TWO/FIVE/EIGHT = 9/10/11。
+	for _, v := range []byte{9, 10, 11} {
+		call(sa, protocol.NewPacket(0x00840003, []byte{v}), 0x00840003, fmt.Sprintf("sa_132_3_tab%d", v))
+	}
 	call(sa, protocol.BuildDaoyuanVipShopListPacket(5), 0x00840003, "sa_132_3_builder5")
 	call(sa, protocol.BuildDaoyuanVipShopListPacket(8), 0x00840003, "sa_132_3_builder8")
+	call(sa, protocol.BuildDaoyuanVipShopListPacket(10), 0x00840003, "sa_132_3_builder10")
+	call(sa, protocol.BuildDaoyuanVipShopListPacket(11), 0x00840003, "sa_132_3_builder11")
 	call(sa, protocol.NewPacket(0x00840002, nil), 0x00840002, "sa_132_2_nil")
 	call(sa, protocol.NewPacket(0x00840002, []byte{5}), 0x00840002, "sa_132_2_5")
 	call(sa, protocol.NewPacket(0x00840002, []byte{8}), 0x00840002, "sa_132_2_8")

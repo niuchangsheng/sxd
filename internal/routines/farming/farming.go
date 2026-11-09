@@ -1399,8 +1399,8 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildStMineInfoPacket(), protocol.ActionIDStMineInfo)
 			iCancel()
 			if err != nil {
-				slog.Info("仙界矿山不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("仙界矿山不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "仙界矿山信息无回包")
 			}
 			info, err := protocol.ParseStMineInfoResult(infoResp.Payload)
 			if err != nil {
@@ -1416,11 +1416,11 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 			case protocol.StMineResultSuccess:
 				// 继续
 			case protocol.StMineResultFunctionUnopen, protocol.StMineResultSuperTownClosed:
-				slog.Info("仙界矿山未开放，跳过", "role_id", session.RoleID(), "result", info.Result)
-				return nil
+				slog.Info("仙界矿山未开放，稍后重试", "role_id", session.RoleID(), "result", info.Result)
+				return scheduler.NewCooldown(2*time.Hour, "仙界矿山未开放")
 			default:
-				slog.Info("仙界矿山暂不可进入", "role_id", session.RoleID(), "result", info.Result)
-				return nil
+				slog.Info("仙界矿山暂不可进入，稍后重试", "role_id", session.RoleID(), "result", info.Result)
+				return scheduler.NewCooldown(time.Hour, "仙界矿山暂不可进入")
 			}
 
 			// 进入当前矿脉
@@ -1689,8 +1689,8 @@ func NewGourdRealmRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 			dateResp, err := session.Call(dCtx, protocol.BuildFairyGourdDatePacket(), protocol.ActionIDFairyGourdDate)
 			dCancel()
 			if err != nil {
-				slog.Info("仙葫芦功能不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("仙葫芦功能不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "仙葫芦活动时间无回包")
 			}
 			date, err := protocol.ParseFairyGourdDateResult(dateResp.Payload)
 			if err != nil {
@@ -1698,12 +1698,13 @@ func NewGourdRealmRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 			}
 			now := time.Now().Unix()
 			if date.StartTime > 0 && now < int64(date.StartTime) {
-				slog.Info("仙葫芦活动尚未开始，跳过", "role_id", session.RoleID(), "start_time", date.StartTime)
-				return nil
+				slog.Info("仙葫芦活动尚未开始，等待开启", "role_id", session.RoleID(), "start_time", date.StartTime)
+				return scheduler.NewCooldownUntil(
+					time.Unix(int64(date.StartTime), 0).Add(2*time.Second), "仙葫芦活动尚未开始")
 			}
 			if date.EndTime > 0 && now > int64(date.EndTime) {
 				slog.Info("仙葫芦活动已结束，跳过", "role_id", session.RoleID(), "end_time", date.EndTime)
-				return nil
+				return scheduler.ErrAttemptsExhausted
 			}
 
 			// 2. 收益列表

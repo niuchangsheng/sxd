@@ -1131,13 +1131,13 @@ func NewEraTravelRoutine() scheduler.ActivityRoutine {
 			sCancel()
 
 			if err != nil || resp == nil || len(resp.Payload) == 0 {
-				slog.Info("山河游历功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("山河游历功能未开放/不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "山河游历状态查询无回包")
 			}
 			if code := resp.Payload[0]; code != 0 {
-				slog.Info("山河游历状态查询返回失败，跳过",
+				slog.Info("山河游历状态查询返回失败，稍后重试",
 					"role_id", session.RoleID(), "result", code)
-				return nil
+				return scheduler.NewCooldown(time.Hour, "山河游历状态不可用")
 			}
 
 			// 2. 掷骰移动 (Mod 850, Act 0)
@@ -1146,12 +1146,12 @@ func NewEraTravelRoutine() scheduler.ActivityRoutine {
 			rollResp, rollErr := session.Call(rCtx, rollPkt, protocol.ActionIDEraTravelRollDice)
 			rCancel()
 			if rollErr != nil || rollResp == nil {
-				slog.Info("山河游历掷骰无回包，终止本轮", "role_id", session.RoleID(), "err", rollErr)
-				return nil
+				slog.Info("山河游历掷骰无回包，稍后重试", "role_id", session.RoleID(), "err", rollErr)
+				return scheduler.NewCooldown(10*time.Minute, "山河游历掷骰无回包")
 			}
 			if len(rollResp.Payload) == 0 {
-				slog.Info("山河游历掷骰回包为空，终止本轮", "role_id", session.RoleID())
-				return nil
+				slog.Info("山河游历掷骰回包为空，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(10*time.Minute, "山河游历掷骰回包为空")
 			}
 
 			// 3. 奇遇画卷事件结算 (Mod 635, Act 0)
@@ -1160,8 +1160,8 @@ func NewEraTravelRoutine() scheduler.ActivityRoutine {
 			eventResp, eventErr := session.Call(eCtx, eventPkt, protocol.ActionIDEraEventSettle)
 			eCancel()
 			if eventErr != nil || eventResp == nil {
-				slog.Info("山河游历事件结算无回包，终止本轮", "role_id", session.RoleID(), "err", eventErr)
-				return nil
+				slog.Info("山河游历事件结算无回包，稍后重试", "role_id", session.RoleID(), "err", eventErr)
+				return scheduler.NewCooldown(10*time.Minute, "山河游历事件结算无回包")
 			}
 
 			slog.Info("山河游历掷骰与事件结算完成",
@@ -1208,9 +1208,9 @@ func NewLingDaoRoutine() scheduler.ActivityRoutine {
 			compResp, cErr := session.Call(cCtx, compPkt, protocol.ActionIDLingDaoComprehend)
 			cCancel()
 			if cErr != nil || compResp == nil {
-				slog.Info("灵道初解领悟请求无回包，终止本轮",
+				slog.Info("灵道初解领悟请求无回包，稍后重试",
 					"role_id", session.RoleID(), "err", cErr)
-				return nil
+				return scheduler.NewCooldown(30*time.Minute, "灵道初解领悟无回包")
 			}
 
 			slog.Info("灵道初解战斗通行证面板", "role_id", session.RoleID(),
@@ -1222,8 +1222,8 @@ func NewLingDaoRoutine() scheduler.ActivityRoutine {
 			awardResp, aErr := session.Call(aCtx, awardPkt, protocol.ActionIDLingDaoOneKeyAward)
 			aCancel()
 			if aErr != nil || awardResp == nil {
-				slog.Info("灵道初解一键领取无回包", "role_id", session.RoleID(), "err", aErr)
-				return nil
+				slog.Info("灵道初解一键领取无回包，稍后重试", "role_id", session.RoleID(), "err", aErr)
+				return scheduler.NewCooldown(30*time.Minute, "灵道初解一键领取无回包")
 			}
 			code, pErr := protocol.ParseActionFirstByte(awardResp.Payload, "灵道初解一键领取")
 			if pErr != nil {
@@ -1707,17 +1707,17 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 			// 1. 查询宗师修行主面板 (Mod 665, Act 1)
 			resp, err := call(protocol.BuildMasterPracticePanelPacket(protocol.ActionIDTownEnter), protocol.ActionIDMasterPracticePanel)
 			if err != nil || resp == nil {
-				slog.Info("宗师修行功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("宗师修行功能未开放/不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "宗师修行面板无回包")
 			}
 			panel, err := protocol.ParseMasterPracticePanelResult(resp.Payload)
 			if err != nil {
-				slog.Info("解析宗师修行面板失败，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("解析宗师修行面板失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "宗师修行面板解析失败")
 			}
 			if panel.Result != protocol.MasterPracticeResultSuccess {
-				slog.Info("宗师修行面板返回失败", "role_id", session.RoleID(), "result", panel.Result)
-				return nil
+				slog.Info("宗师修行面板返回失败，稍后重试", "role_id", session.RoleID(), "result", panel.Result)
+				return scheduler.NewCooldown(time.Hour, "宗师修行面板返回失败")
 			}
 			slog.Info("宗师修行面板",
 				"role_id", session.RoleID(),

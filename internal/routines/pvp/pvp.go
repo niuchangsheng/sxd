@@ -768,8 +768,8 @@ func NewGodsAndDemonsRoutine() scheduler.ActivityRoutine {
 			statusResp, err := session.Call(sCtx, protocol.BuildGodWarStatusPacket(), protocol.ActionIDGodWarStatus)
 			sCancel()
 			if err != nil {
-				slog.Info("神魔大战功能不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("神魔大战功能不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "神魔大战状态查询无回包")
 			}
 			status, err := protocol.ParseGodWarStatusResult(statusResp.Payload)
 			if err != nil {
@@ -777,17 +777,17 @@ func NewGodsAndDemonsRoutine() scheduler.ActivityRoutine {
 			}
 			switch status.Status {
 			case protocol.GodWarStatusClose:
-				slog.Info("神魔大战未开启，跳过", "role_id", session.RoleID())
-				return nil
+				slog.Info("神魔大战未开启，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(time.Hour, "神魔大战未开启")
 			case protocol.GodWarStatusSignUp:
 				// 报名期，继续
 			default:
-				slog.Info("神魔大战当前非报名期，跳过",
+				slog.Info("神魔大战当前非报名期，稍后重试",
 					"role_id", session.RoleID(),
 					"status", status.Status,
 					"race_count", status.RaceCount,
 				)
-				return nil
+				return scheduler.NewCooldown(time.Hour, "神魔大战非报名期")
 			}
 
 			rCtx, rCancel := context.WithTimeout(ctx, callTimeout)

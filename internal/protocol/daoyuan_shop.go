@@ -15,6 +15,14 @@ const (
 	ActionIDDaoyuanShopBuy uint32 = 0x00840001
 )
 
+// VIP 商店页签参数。官方客户端直接把结果码常量 VIP_TWO/VIP_FIVE/VIP_EIGHT
+// 作为 132/3 的网参，因此线上必须传 9/10/11，而不是 2/5/8。
+const (
+	DaoyuanVipShopTabTwo   uint8 = 9
+	DaoyuanVipShopTabFive  uint8 = 10
+	DaoyuanVipShopTabEight uint8 = 11
+)
+
 // 道缘商店结果码。
 const (
 	DaoyuanShopResultSuccess      uint8 = 0
@@ -39,14 +47,12 @@ type DaoyuanShopItem struct {
 
 // BuildDaoyuanVipShopListPacket 构造 VIP 商店列表查询封包。
 //
-// 官方 request=[UByte vip_level]；会话层在末尾补 4 字节真实 PrevAct。
+// 官方 request=[UByte vip_level]，服务端只接受这 1 字节。实测载荷末尾多带
+// 4 字节 PrevAct 会被静默丢弃 (圣域会话同样)，因此 HasPrevAct 必须为 false。
 func BuildDaoyuanVipShopListPacket(vipLevel uint8) *Packet {
 	w := NewWriter()
 	w.WriteUint8(vipLevel)
-	w.WriteUint32(0)
-	pkt := NewPacket(ActionIDDaoyuanVipShopList, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDDaoyuanVipShopList, w.Bytes())
 }
 
 // BuildDaoyuanShopBuyPacket 构造购买封包。
