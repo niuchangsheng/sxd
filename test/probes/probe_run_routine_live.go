@@ -156,6 +156,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return minigame.NewStarPictureRoutine()
 	case "get_peach":
 		return minigame.NewGetPeachRoutine()
+	case "golden_touch_stone":
+		return minigame.NewGoldenTouchStoneRoutine()
 	case "courtyard_pet":
 		return daily.NewCourtyardPetRoutine()
 	case "weekend_event":

@@ -184,13 +184,13 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDDragonballSacrifice)
 				cancel()
 				if err != nil || resp == nil {
-					slog.Info("神龙普通上供无回包", "role_id", session.RoleID(), "err", err)
-					return nil
+					slog.Info("神龙普通上供无回包，稍后重试", "role_id", session.RoleID(), "err", err)
+					return scheduler.NewCooldown(30*time.Minute, "神龙普通上供无回包")
 				}
 				res, pErr := protocol.ParseDragonballSacrificeResult(resp.Payload)
 				if pErr != nil {
 					slog.Warn("解析神龙普通上供回包失败", "role_id", session.RoleID(), "err", pErr)
-					return nil
+					return scheduler.NewCooldown(30*time.Minute, "神龙普通上供回包解析失败")
 				}
 				switch res.Result {
 				case protocol.DragonballResultSuccess:
@@ -234,8 +234,8 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 					i--
 					continue
 				case protocol.DragonballResultFunctionNoOpen:
-					slog.Info("神龙上供功能未开放", "role_id", session.RoleID())
-					return nil
+					slog.Info("神龙上供功能未开放，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(time.Hour, "神龙上供功能未开放")
 				case protocol.DragonballResultNotEnoughLevel:
 					slog.Info("神龙上供等级不足", "role_id", session.RoleID())
 					return nil

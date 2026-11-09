@@ -4065,30 +4065,50 @@ func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
 				return session.Call(cCtx, pkt, act)
 			}
 
-			statusResp, err := call(protocol.BuildGoldenTouchStoneStatusPacket(), protocol.ActionIDGoldenTouchStoneStatus)
-			if err != nil || statusResp == nil || len(statusResp.Payload) == 0 {
-				slog.Info("点金石功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+			queryStatus := func() (uint8, error) {
+				statusResp, qErr := call(protocol.BuildGoldenTouchStoneStatusPacket(), protocol.ActionIDGoldenTouchStoneStatus)
+				if qErr != nil || statusResp == nil || len(statusResp.Payload) == 0 {
+					return 0, qErr
+				}
+				return protocol.ParseGoldenTouchStoneStatusResult(statusResp.Payload)
 			}
-			status, err := protocol.ParseGoldenTouchStoneStatusResult(statusResp.Payload)
+
+			status, err := queryStatus()
 			if err != nil {
-				return fmt.Errorf("解析点金石状态失败: %w", err)
+				slog.Info("点金石功能未开放/不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "点金石状态查询无回包")
 			}
 
 			if status == protocol.GoldenTouchStoneStatusInit {
 				initResp, iErr := call(protocol.BuildGoldenTouchStoneInitPacket(), protocol.ActionIDGoldenTouchStoneInit)
 				if iErr != nil || initResp == nil || len(initResp.Payload) == 0 {
-					slog.Info("点金石初始化无应答", "role_id", session.RoleID(), "err", iErr)
-					return nil
+					slog.Info("点金石初始化无应答，稍后重试", "role_id", session.RoleID(), "err", iErr)
+					return scheduler.NewCooldown(30*time.Minute, "点金石初始化无回包")
 				}
-				slog.Info("点金石初始化成功", "role_id", session.RoleID())
-				statusResp, err = call(protocol.BuildGoldenTouchStoneStatusPacket(), protocol.ActionIDGoldenTouchStoneStatus)
-				if err != nil || statusResp == nil || len(statusResp.Payload) == 0 {
-					return nil
+				initResult := initResp.Payload[0]
+				if initResult != protocol.GoldenTouchStoneResultSuccess {
+					// 线上 init_player_panel 返回 FAIL(4) 时状态会一直停在 INIT_STATUS，
+					// 继续轮询没有意义；按冷却重试，避免整日错过。
+					slog.Info("点金石初始化未成功，稍后重试",
+						"role_id", session.RoleID(), "result", initResult)
+					return scheduler.NewCooldown(time.Hour, "点金石初始化失败")
 				}
-				status, err = protocol.ParseGoldenTouchStoneStatusResult(statusResp.Payload)
-				if err != nil {
-					return nil
+				slog.Info("点金石初始化完成，等待状态刷新", "role_id", session.RoleID())
+				// 初始化由服务端异步落库，立即查询经常仍返回 INIT_STATUS；
+				// 官方客户端是剧情结束后再打开面板，这里短暂轮询几次。
+				for i := 0; i < 5; i++ {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(300 * time.Millisecond):
+					}
+					next, qErr := queryStatus()
+					if qErr == nil {
+						status = next
+					}
+					if qErr == nil && status != protocol.GoldenTouchStoneStatusInit {
+						break
+					}
 				}
 			}
 
@@ -4099,8 +4119,8 @@ func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
 			case protocol.GoldenTouchStoneStatusTouch:
 				// 继续
 			default:
-				slog.Info("点金石状态未知，跳过", "role_id", session.RoleID(), "status", status)
-				return nil
+				slog.Info("点金石状态未就绪，稍后重试", "role_id", session.RoleID(), "status", status)
+				return scheduler.NewCooldown(30*time.Minute, "点金石状态未就绪")
 			}
 
 			panelResp, err := call(protocol.BuildGoldenTouchStoneTouchPanelPacket(), protocol.ActionIDGoldenTouchStoneTouchPanel)

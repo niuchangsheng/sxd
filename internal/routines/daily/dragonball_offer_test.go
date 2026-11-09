@@ -2,12 +2,14 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 // respondDragonballMerge 解析一键合成请求中的品质列表并回成功。
@@ -183,5 +185,26 @@ func TestDragonballOfferRoutine_SellsInvalidTmpBalls(t *testing.T) {
 	defer mu.Unlock()
 	if len(soldIDs) != 2 || soldIDs[0] != 2001 || soldIDs[1] != 2002 {
 		t.Fatalf("sold ids = %v", soldIDs)
+	}
+}
+
+func TestDragonballOfferRoutine_FunctionNoOpenCooldown(t *testing.T) {
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDDragonballTmpInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildDragonballTmpInfoDetailResultPacket(
+				protocol.DragonballTmpInfo{NormalCount: 20, RemainNormalCount: 20}))
+		case protocol.ActionIDDragonballSacrifice:
+			_ = protocol.WritePacket(conn, protocol.BuildDragonballSacrificeResultPacket(protocol.DragonballSacrificeResult{
+				Result: protocol.DragonballResultFunctionNoOpen, PlayFlag: protocol.DragonballNotPlay,
+			}))
+		}
+	})
+	defer sess.Close()
+
+	err := NewDragonballOfferRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("功能未开放应返回 CooldownError, 实际: %v", err)
 	}
 }
