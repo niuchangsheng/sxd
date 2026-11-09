@@ -153,6 +153,11 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 							"item_id", m.ItemID, "batches", batches)
 						batches /= 2
 						continue
+					case protocol.RefineFurnaceLessAir:
+						slog.Info("炼宝炉元气不足，减半批数重试", "role_id", session.RoleID(),
+							"item_id", m.ItemID, "batches", batches)
+						batches /= 2
+						continue
 					case protocol.RefineFurnaceNotGetAward, protocol.RefineFurnaceNotComplete:
 						slog.Info("炼宝炉仍有未收取产物，结束本轮", "role_id", session.RoleID(),
 							"result", startCode)

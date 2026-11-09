@@ -25,6 +25,8 @@ type refineFurnaceGateway struct {
 	startCalls  atomic.Int32
 	// lessCoinTimes >0 时前 N 次 start_refine 返回 LESS_COIN。
 	lessCoinTimes int32
+	// lessAirTimes >0 时接着前 N 次 start_refine 返回 LESS_AIR。
+	lessAirTimes int32
 
 	mu           sync.Mutex
 	startPayload []byte
@@ -101,6 +103,8 @@ func startRefineFurnaceSession(t *testing.T, gw *refineFurnaceGateway) (*client.
 				code := gw.startCode
 				if gw.lessCoinTimes > 0 && n <= gw.lessCoinTimes {
 					code = protocol.RefineFurnaceLessCoin
+				} else if gw.lessAirTimes > 0 && n <= gw.lessCoinTimes+gw.lessAirTimes {
+					code = protocol.RefineFurnaceLessAir
 				}
 				_ = protocol.WritePacket(c2, protocol.NewPacket(pkt.ActionID, []byte{code}))
 			}
@@ -184,6 +188,30 @@ func TestRefinePotRoutine_LessCoinHalvesBatches(t *testing.T) {
 	}
 	if got := gw.startCalls.Load(); got != 3 {
 		t.Fatalf("LESS_COIN 两次后第三次应成功, start calls = %d, want 3", got)
+	}
+	payload := gw.lastStartPayload()
+	batches := int32(payload[0])<<24 | int32(payload[1])<<16 | int32(payload[2])<<8 | int32(payload[3])
+	if batches != 5 {
+		t.Fatalf("最终批数 = %d, want 5 (20→10→5)", batches)
+	}
+}
+
+func TestRefinePotRoutine_LessAirHalvesBatches(t *testing.T) {
+	gw := &refineFurnaceGateway{
+		awardCode:    protocol.RefineFurnaceSuccess,
+		selectCode:   protocol.RefineFurnaceSuccess,
+		startCode:    protocol.RefineFurnaceSuccess,
+		lessAirTimes: 2,
+		materials:    []protocol.RefineFurnaceMaterial{{ItemID: 7925, Count: 1000}},
+	}
+	session, cleanup := startRefineFurnaceSession(t, gw)
+	defer cleanup()
+
+	if err := farming.NewRefinePotRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("refine furnace: %v", err)
+	}
+	if got := gw.startCalls.Load(); got != 3 {
+		t.Fatalf("LESS_AIR 两次后第三次应成功, start calls = %d, want 3", got)
 	}
 	payload := gw.lastStartPayload()
 	batches := int32(payload[0])<<24 | int32(payload[1])<<16 | int32(payload[2])<<8 | int32(payload[3])
