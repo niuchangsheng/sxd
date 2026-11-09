@@ -911,6 +911,33 @@ func BuildSaWorldTowerFightPacket(towerID int32) *Packet {
 	return NewPacket(ActionIDSaWorldTowerFight, w.Bytes())
 }
 
+// ParseSaWorldTowerTowerIDs 解析幻魔塔面板 [Int total, [Int towerID, Int, Int, Int, Int]]。
+func ParseSaWorldTowerTowerIDs(payload []byte) ([]int32, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	if _, err := r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("幻魔塔总数读取失败: %w", err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("幻魔塔数量读取失败: %w", err)
+	}
+	ids := make([]int32, 0, count)
+	for i := 0; i < int(count); i++ {
+		var id int32
+		for j := 0; j < 5; j++ {
+			v, err := r.ReadInt32()
+			if err != nil {
+				return ids, fmt.Errorf("幻魔塔[%d]字段读取失败: %w", i, err)
+			}
+			if j == 0 {
+				id = v
+			}
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 // SaWorldTowerResultText 返回全网幻魔塔结果码文本。
 func SaWorldTowerResultText(code uint8) string {
 	switch code {

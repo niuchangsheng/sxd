@@ -56,6 +56,34 @@ func TestSaWorldTowerRoutine_FightsWhenOpen(t *testing.T) {
 	}
 }
 
+func TestSaWorldTowerRoutine_UsesPanelTowerIDs(t *testing.T) {
+	var firstID atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDSaWorldTowerOpen:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
+		case protocol.ActionIDSaWorldTowerPanel:
+			w := protocol.NewWriter().WriteInt32(3).WriteUint16(1)
+			w.WriteInt32(22).WriteInt32(0).WriteInt32(0).WriteInt32(0).WriteInt32(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDSaWorldTowerFight:
+			r := protocol.NewReader(pkt.Payload)
+			id, _ := r.ReadInt32()
+			firstID.Store(id)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.SaWorldTowerFuncNoOpen}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewSaWorldTowerRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("sa world tower: %v", err)
+	}
+	if firstID.Load() != 22 {
+		t.Fatalf("fight tower id = %d, want 22", firstID.Load())
+	}
+}
+
 func TestSaWorldTowerRoutine_NoTimeStops(t *testing.T) {
 	var fightCalls atomic.Int32
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {

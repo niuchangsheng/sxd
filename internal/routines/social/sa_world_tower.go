@@ -57,14 +57,19 @@ func NewSaWorldTowerRoutine() scheduler.ActivityRoutine {
 				}
 			}
 
-			panelResp := call(protocol.BuildSaWorldTowerPanelPacket(), protocol.ActionIDSaWorldTowerPanel)
-			if panelResp != nil {
+			towerIDs := []int32{1, 2, 3, 4, 5}
+			if panelResp := call(protocol.BuildSaWorldTowerPanelPacket(), protocol.ActionIDSaWorldTowerPanel); panelResp != nil {
 				slog.Info("全网幻魔塔面板", "role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
+				if ids, pErr := protocol.ParseSaWorldTowerTowerIDs(panelResp.Payload); pErr == nil && len(ids) > 0 {
+					towerIDs = ids
+				} else if pErr != nil {
+					slog.Warn("全网幻魔塔面板解析失败", "role_id", session.RoleID(), "err", pErr)
+				}
 			}
 
 			fights := 0
-			for towerID := int32(1); towerID <= maxSaWorldTowerFights; towerID++ {
-				if ctx.Err() != nil {
+			for _, towerID := range towerIDs {
+				if ctx.Err() != nil || fights >= maxSaWorldTowerFights {
 					return nil
 				}
 				fightResp := call(protocol.BuildSaWorldTowerFightPacket(towerID), protocol.ActionIDSaWorldTowerFight)
