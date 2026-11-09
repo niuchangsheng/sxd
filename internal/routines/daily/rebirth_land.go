@@ -57,8 +57,8 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 			// 1. 活跃度任务 70 未完成时才领取，避免无意义请求。
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
-				slog.Info("查询每日活跃度失败，跳过轮回净地", "role_id", session.RoleID())
-				return nil
+				slog.Info("查询每日活跃度失败，稍后重试轮回净地", "role_id", session.RoleID())
+				return scheduler.NewCooldown(10*time.Minute, "轮回净地活跃度查询无回包")
 			}
 			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)
 			if err != nil {

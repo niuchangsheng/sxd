@@ -1518,10 +1518,11 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 			oCancel()
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
-					slog.Info("打开粗铁淬炼池面板无回包（开放状态已确认，可能为网关瞬断），本轮跳过",
+					slog.Info("打开粗铁淬炼池面板无回包（可能为网关瞬断），稍后重试",
 						"role_id", session.RoleID(),
 						"target", targetName,
 					)
+					return scheduler.NewCooldown(10*time.Minute, "粗铁淬炼池面板无回包")
 				} else {
 					slog.Warn("打开粗铁淬炼池面板失败", "role_id", session.RoleID(), "err", err)
 				}

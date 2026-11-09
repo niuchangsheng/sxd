@@ -52,8 +52,8 @@ func NewPartnerLinkBoxRoutine() scheduler.ActivityRoutine {
 
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
-				slog.Info("查询每日活跃度失败，跳过缘魂宝箱", "role_id", session.RoleID())
-				return nil
+				slog.Info("查询每日活跃度失败，稍后重试缘魂宝箱", "role_id", session.RoleID())
+				return scheduler.NewCooldown(10*time.Minute, "缘魂宝箱活跃度查询无回包")
 			}
 			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)
 			if err != nil {
