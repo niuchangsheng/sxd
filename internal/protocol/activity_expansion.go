@@ -150,7 +150,15 @@ func BuildBaiLianInfoPacket(two bool) *Packet {
 	return NewPacket(ActionIDBaiLianOneInfo, nil)
 }
 
-// BuildBaiLianOneKeyPacket 构造百炼乾坤一键挑战封包。
+// BuildBaiLianChallengePacket 构造百炼乾坤单次挑战封包。
+func BuildBaiLianChallengePacket(two bool) *Packet {
+	if two {
+		return NewPacket(ActionIDBaiLianTwoFight, nil)
+	}
+	return NewPacket(ActionIDBaiLianOneFight, nil)
+}
+
+// BuildBaiLianOneKeyPacket 构造百炼乾坤一键挑战/扫荡封包。
 func BuildBaiLianOneKeyPacket(two bool) *Packet {
 	if two {
 		return NewPacket(ActionIDBaiLianTwoKey, nil)

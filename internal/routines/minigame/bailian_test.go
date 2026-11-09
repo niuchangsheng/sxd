@@ -40,6 +40,8 @@ func TestBaiLianRoutine_OneKeyBoth(t *testing.T) {
 		case protocol.ActionIDBaiLianTwoKey:
 			twoCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.BaiLianTwoFailed}))
+		case protocol.ActionIDBaiLianTwoFight:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.BaiLianTwoFailed}))
 		}
 	})
 	defer sess.Close()
@@ -53,7 +55,7 @@ func TestBaiLianRoutine_OneKeyBoth(t *testing.T) {
 }
 
 func TestBaiLianRoutine_FuncUnopenStops(t *testing.T) {
-	var keyCalls atomic.Int32
+	var keyCalls, fightCalls atomic.Int32
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDBaiLianOneInfo:
@@ -69,6 +71,9 @@ func TestBaiLianRoutine_FuncUnopenStops(t *testing.T) {
 		case protocol.ActionIDBaiLianOneKey:
 			keyCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.BaiLianOneFailed}))
+		case protocol.ActionIDBaiLianOneFight:
+			fightCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.BaiLianOneFailed}))
 		}
 	})
 	defer sess.Close()
@@ -78,5 +83,8 @@ func TestBaiLianRoutine_FuncUnopenStops(t *testing.T) {
 	}
 	if keyCalls.Load() != 1 {
 		t.Fatalf("one_key calls = %d, want 1", keyCalls.Load())
+	}
+	if fightCalls.Load() != 1 {
+		t.Fatalf("一键扫荡失败后应尝试单次挑战, fight calls = %d", fightCalls.Load())
 	}
 }

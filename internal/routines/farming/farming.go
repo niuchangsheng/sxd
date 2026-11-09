@@ -776,96 +776,110 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 	return true
 }
 
-// crossPilgrimageEscort 在仙界跨服连接上完成一次取经使者巡检与启程。
+// crossPilgrimageEscort 在圣域/仙界取经连接上巡检使者并启程护送。
+//
+// 线上实测圣域取经有 3 个独立队列，可一次连续发起 3 支护送队伍；
+// 循环重新拉取准备详情，按剩余总次数最多启程 3 次。
 func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, crossCall crossTakeBibleCallFunc, normalize func(uint8) uint8) {
-	infoResp, err := crossCall(protocol.BuildStTakeBibleCrossGetInfoPacket(), protocol.ActionIDStTakeBibleCrossGetInfo, 3*time.Second)
-	if err != nil {
-		slog.Info("跨服取经详情无应答", "role_id", session.RoleID(), "error", err)
-		return
-	}
-	info, err := protocol.ParseStTakeBibleCrossInfoResult(infoResp.Payload)
-	if err != nil {
-		slog.Warn("解析跨服取经详情失败", "role_id", session.RoleID(), "error", err)
-		return
-	}
-	slog.Info("跨服取经准备详情",
-		"role_id", session.RoleID(),
-		"take_times", info.TakeBibleTimes,
-		"total_times", info.TotalTakeBibleTimes,
-		"refresh_price", info.RefreshPrice,
-		"status", info.TakeBibleStatus,
-		"protection", protocol.StTakeBibleCrossProtectionName(info.CanProtection),
-		"protect_player", info.ProtectPlayer,
-		"protection_options", len(info.ProtectionList),
-		"protect_players", len(info.ProtectPlayerList),
-	)
-
-	// 每日护送上限 (3 次) 已用满时无需再启程。
-	if info.TotalTakeBibleTimes <= 0 || info.TakeBibleTimes >= uint8(info.TotalTakeBibleTimes) {
-		slog.Info("跨服取经今日护送次数已用满，无需启程",
+	const maxStartsPerRun = 3
+	for started := 0; started < maxStartsPerRun; started++ {
+		infoResp, err := crossCall(protocol.BuildStTakeBibleCrossGetInfoPacket(), protocol.ActionIDStTakeBibleCrossGetInfo, 3*time.Second)
+		if err != nil {
+			slog.Info("跨服取经详情无应答", "role_id", session.RoleID(), "error", err)
+			return
+		}
+		info, err := protocol.ParseStTakeBibleCrossInfoResult(infoResp.Payload)
+		if err != nil {
+			slog.Warn("解析跨服取经详情失败", "role_id", session.RoleID(), "error", err)
+			return
+		}
+		slog.Info("跨服取经准备详情",
 			"role_id", session.RoleID(),
+			"started", started,
 			"take_times", info.TakeBibleTimes,
 			"total_times", info.TotalTakeBibleTimes,
+			"refresh_price", info.RefreshPrice,
+			"status", info.TakeBibleStatus,
+			"protection", protocol.StTakeBibleCrossProtectionName(info.CanProtection),
+			"protect_player", info.ProtectPlayer,
+			"protection_options", len(info.ProtectionList),
+			"protect_players", len(info.ProtectPlayerList),
 		)
-		return
-	}
 
-	// 使者非最高品质时尝试刷新一次，但仅在本次刷新免费 (refresh_price=0) 时执行；
-	// 任何需要元宝的刷新都严格跳过，符合“自动化永不消耗元宝”的铁律。
-	protection := info.CanProtection
-	if protection < protocol.StTakeBibleCrossProtectionTangSeng {
-		if info.RefreshPrice > 0 {
-			slog.Info("取经使者刷新需要元宝，跳过刷新",
-				"role_id", session.RoleID(), "refresh_price", info.RefreshPrice)
-		} else {
-			refreshResp, rErr := crossCall(protocol.BuildStTakeBibleCrossRefreshPacket(), protocol.ActionIDStTakeBibleCrossRefresh, 2*time.Second)
-			if rErr == nil && refreshResp != nil {
-				msg, newProtection, nextPrice, pErr := protocol.ParseStTakeBibleCrossRefreshResult(refreshResp.Payload)
-				if pErr == nil {
-					msg = normalize(msg)
-				}
-				if pErr == nil && msg == protocol.StTakeBibleCrossMsgSuccess {
-					slog.Info("跨服取经使者刷新成功",
-						"role_id", session.RoleID(),
-						"old_protection", protocol.StTakeBibleCrossProtectionName(protection),
-						"new_protection", protocol.StTakeBibleCrossProtectionName(newProtection),
-						"next_price", nextPrice,
-					)
-					protection = newProtection
+		if info.TotalTakeBibleTimes <= 0 || info.TakeBibleTimes >= uint8(info.TotalTakeBibleTimes) {
+			slog.Info("跨服取经今日护送次数已用满",
+				"role_id", session.RoleID(),
+				"started", started,
+				"take_times", info.TakeBibleTimes,
+				"total_times", info.TotalTakeBibleTimes,
+			)
+			return
+		}
+
+		// 使者非最高品质时尝试刷新一次，仅在本次刷新免费时执行。
+		protection := info.CanProtection
+		if protection < protocol.StTakeBibleCrossProtectionTangSeng {
+			if info.RefreshPrice > 0 {
+				slog.Info("取经使者刷新需要元宝，跳过刷新",
+					"role_id", session.RoleID(), "refresh_price", info.RefreshPrice)
+			} else {
+				refreshResp, rErr := crossCall(protocol.BuildStTakeBibleCrossRefreshPacket(), protocol.ActionIDStTakeBibleCrossRefresh, 2*time.Second)
+				if rErr == nil && refreshResp != nil {
+					msg, newProtection, nextPrice, pErr := protocol.ParseStTakeBibleCrossRefreshResult(refreshResp.Payload)
+					if pErr == nil {
+						msg = normalize(msg)
+					}
+					if pErr == nil && msg == protocol.StTakeBibleCrossMsgSuccess {
+						slog.Info("跨服取经使者刷新成功",
+							"role_id", session.RoleID(),
+							"old_protection", protocol.StTakeBibleCrossProtectionName(protection),
+							"new_protection", protocol.StTakeBibleCrossProtectionName(newProtection),
+							"next_price", nextPrice,
+						)
+						protection = newProtection
+					}
 				}
 			}
 		}
-	}
 
-	startResp, err := crossCall(protocol.BuildStTakeBibleCrossStartPacket(), protocol.ActionIDStTakeBibleCrossStart, 3*time.Second)
-	if err != nil {
-		slog.Info("跨服取经启程无应答", "role_id", session.RoleID(), "error", err)
-		return
-	}
-	startMsg, itemID, err := protocol.ParseStTakeBibleCrossStartResult(startResp.Payload)
-	if err != nil {
-		slog.Warn("解析跨服取经启程回包失败", "role_id", session.RoleID(), "error", err)
-		return
-	}
-	startMsg = normalize(startMsg)
+		startResp, err := crossCall(protocol.BuildStTakeBibleCrossStartPacket(), protocol.ActionIDStTakeBibleCrossStart, 3*time.Second)
+		if err != nil {
+			slog.Info("跨服取经启程无应答", "role_id", session.RoleID(), "error", err)
+			return
+		}
+		startMsg, itemID, err := protocol.ParseStTakeBibleCrossStartResult(startResp.Payload)
+		if err != nil {
+			slog.Warn("解析跨服取经启程回包失败", "role_id", session.RoleID(), "error", err)
+			return
+		}
+		startMsg = normalize(startMsg)
 
-	switch startMsg {
-	case protocol.StTakeBibleCrossMsgSuccess:
-		slog.Info("跨服取经队伍已顺利启程护送",
-			"role_id", session.RoleID(),
-			"protection", protocol.StTakeBibleCrossProtectionName(protection),
-			"item_id", itemID,
-		)
-	case protocol.StTakeBibleCrossMsgTakeBibleStatus:
-		slog.Info("跨服取经队伍正在护送途中，无需重复启程", "role_id", session.RoleID())
-	case protocol.StTakeBibleCrossMsgFullTakeBibleTimes:
-		slog.Info("跨服取经今日护送次数已用满", "role_id", session.RoleID(), "total_times", info.TotalTakeBibleTimes)
-	case protocol.StTakeBibleCrossMsgProtectTime:
-		slog.Info("跨服取经当前处于护送保护时间", "role_id", session.RoleID())
-	case protocol.StTakeBibleCrossMsgNotEnoughIngot:
-		slog.Info("跨服取经刷新元宝不足", "role_id", session.RoleID())
-	default:
-		slog.Info("跨服取经完成巡检", "role_id", session.RoleID(), "status_code", startMsg)
+		switch startMsg {
+		case protocol.StTakeBibleCrossMsgSuccess:
+			slog.Info("跨服取经队伍已顺利启程护送",
+				"role_id", session.RoleID(),
+				"queue", started+1,
+				"protection", protocol.StTakeBibleCrossProtectionName(protection),
+				"item_id", itemID,
+			)
+			// 继续下一队列，重新拉取详情计算剩余次数。
+		case protocol.StTakeBibleCrossMsgTakeBibleStatus:
+			slog.Info("跨服取经队伍正在护送途中，当前无可启程队列",
+				"role_id", session.RoleID(), "started", started)
+			return
+		case protocol.StTakeBibleCrossMsgFullTakeBibleTimes:
+			slog.Info("跨服取经今日护送次数已用满", "role_id", session.RoleID(), "total_times", info.TotalTakeBibleTimes)
+			return
+		case protocol.StTakeBibleCrossMsgProtectTime:
+			slog.Info("跨服取经当前处于护送保护时间", "role_id", session.RoleID())
+			return
+		case protocol.StTakeBibleCrossMsgNotEnoughIngot:
+			slog.Info("跨服取经刷新元宝不足", "role_id", session.RoleID())
+			return
+		default:
+			slog.Info("跨服取经完成巡检", "role_id", session.RoleID(), "status_code", startMsg)
+			return
+		}
 	}
 }
 

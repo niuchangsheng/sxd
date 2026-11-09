@@ -2,6 +2,7 @@ package farming
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -726,4 +727,74 @@ func playerCallsFromPacket(pkt *protocol.Packet) int32 {
 		return 0
 	}
 	return int32(uint32(pkt.Payload[0])<<24 | uint32(pkt.Payload[1])<<16 | uint32(pkt.Payload[2])<<8 | uint32(pkt.Payload[3]))
+}
+
+// TestCrossPilgrimageEscort_StartsThreeQueues 验证圣域取经三个队列可一次连续启程 3 次。
+func TestCrossPilgrimageEscort_StartsThreeQueues(t *testing.T) {
+	starts := 0
+	infoCalls := 0
+	fake := func(pkt *protocol.Packet, act uint32, d time.Duration) (*protocol.Packet, error) {
+		switch act {
+		case protocol.ActionIDStTakeBibleCrossGetInfo:
+			infoCalls++
+			w := protocol.NewWriter()
+			w.WriteUint16(0)            // protection list
+			w.WriteUint16(0)            // protect player list
+			w.WriteUint8(uint8(starts)) // TakeBibleTimes
+			w.WriteInt8(3)              // TotalTakeBibleTimes
+			w.WriteInt16(0)             // RefreshPrice (free)
+			w.WriteInt8(0)              // TakeBibleStatus
+			w.WriteUint8(5)             // CanProtection = TangSeng
+			w.WriteString("")           // ProtectPlayer
+			w.WriteInt8(0).WriteInt8(0) // Bless, Buff
+			return protocol.NewPacket(act, w.Bytes()), nil
+		case protocol.ActionIDStTakeBibleCrossStart:
+			starts++
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.StTakeBibleCrossMsgSuccess)
+			w.WriteInt8(1)
+			return protocol.NewPacket(act, w.Bytes()), nil
+		}
+		return nil, fmt.Errorf("unexpected action 0x%08X", act)
+	}
+	sess := client.NewRoleSession(client.SessionConfig{RoleID: "role-pilgrimage-3queues"})
+	crossPilgrimageEscort(context.Background(), sess, fake, func(m uint8) uint8 { return m })
+	if starts != 3 || infoCalls != 3 {
+		t.Fatalf("应连续启程 3 次并在每次前刷新详情, starts=%d info_calls=%d", starts, infoCalls)
+	}
+}
+
+// TestCrossPilgrimageEscort_StopsWhenTimesFull 验证剩余次数不足时按实际剩余启程。
+func TestCrossPilgrimageEscort_StopsWhenTimesFull(t *testing.T) {
+	starts := 0
+	infoCalls := 0
+	fake := func(pkt *protocol.Packet, act uint32, d time.Duration) (*protocol.Packet, error) {
+		switch act {
+		case protocol.ActionIDStTakeBibleCrossGetInfo:
+			infoCalls++
+			w := protocol.NewWriter()
+			w.WriteUint16(0)
+			w.WriteUint16(0)
+			w.WriteUint8(uint8(2 + starts)) // 已用 2 次，剩余 1 次
+			w.WriteInt8(3)
+			w.WriteInt16(0)
+			w.WriteInt8(0)
+			w.WriteUint8(5)
+			w.WriteString("")
+			w.WriteInt8(0).WriteInt8(0)
+			return protocol.NewPacket(act, w.Bytes()), nil
+		case protocol.ActionIDStTakeBibleCrossStart:
+			starts++
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.StTakeBibleCrossMsgSuccess)
+			w.WriteInt8(1)
+			return protocol.NewPacket(act, w.Bytes()), nil
+		}
+		return nil, fmt.Errorf("unexpected action 0x%08X", act)
+	}
+	sess := client.NewRoleSession(client.SessionConfig{RoleID: "role-pilgrimage-1left"})
+	crossPilgrimageEscort(context.Background(), sess, fake, func(m uint8) uint8 { return m })
+	if starts != 1 || infoCalls != 2 {
+		t.Fatalf("剩余 1 次应只启程 1 次, starts=%d info_calls=%d", starts, infoCalls)
+	}
 }

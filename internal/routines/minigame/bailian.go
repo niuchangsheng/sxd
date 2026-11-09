@@ -76,9 +76,10 @@ func NewBaiLianRoutine() scheduler.ActivityRoutine {
 					code == protocol.BaiLianTwoPass || code == protocol.BaiLianTwoFighting):
 					slog.Info(name+"一键挑战已提交", "role_id", session.RoleID(), "result", code)
 				case !two && code == protocol.BaiLianOneFailed:
-					slog.Info(name+"当前无可挑战关卡", "role_id", session.RoleID(), "result", code)
+					// 一键扫荡不可用时再尝试单次挑战，确认是否有可挑战关卡。
+					logBaiLianFallbackChallenge(name, two, session, call)
 				case two && (code == protocol.BaiLianTwoFailed || code == protocol.BaiLianTwoTimeCD):
-					slog.Info(name+"当前无可挑战关卡", "role_id", session.RoleID(), "result", code)
+					logBaiLianFallbackChallenge(name, two, session, call)
 				case two && code == protocol.BaiLianTwoFuncUnopen:
 					slog.Info(name+"功能未开放", "role_id", session.RoleID())
 				default:
@@ -88,6 +89,24 @@ func NewBaiLianRoutine() scheduler.ActivityRoutine {
 			return nil
 		},
 	)
+}
+
+// logBaiLianFallbackChallenge 在一键扫荡失败后尝试单次挑战一次。
+func logBaiLianFallbackChallenge(name string, two bool, session *client.RoleSession, call func(*protocol.Packet, uint32) *protocol.Packet) {
+	act := protocol.ActionIDBaiLianOneFight
+	if two {
+		act = protocol.ActionIDBaiLianTwoFight
+	}
+	resp := call(protocol.BuildBaiLianChallengePacket(two), act)
+	if resp == nil {
+		return
+	}
+	code, err := protocol.ParseActionFirstByte(resp.Payload, name+"单次挑战")
+	if err != nil {
+		return
+	}
+	slog.Info(name+"单次挑战结果", "role_id", session.RoleID(), "result", code,
+		"one_key_unavailable", true)
 }
 
 func baiLianInfoAction(two bool) uint32 {
