@@ -46,23 +46,25 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 
 			stateResp := call(protocol.NewPacket(protocol.ActionIDSoulHuntState, nil), protocol.ActionIDSoulHuntState)
 			if stateResp == nil {
-				return nil
+				slog.Info("灵域猎妖活动状态无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "灵域猎妖活动状态无回包")
 			}
 			slog.Info("灵域猎妖活动状态", "role_id", session.RoleID(), "payload_len", len(stateResp.Payload))
 
 			panelResp := call(protocol.NewPacket(protocol.ActionIDSoulHuntMainPanel, nil), protocol.ActionIDSoulHuntMainPanel)
 			if panelResp == nil {
-				return nil
+				slog.Info("灵域猎妖主面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "灵域猎妖主面板无回包")
 			}
 			panel, err := protocol.ParseSoulHuntMainPanel(panelResp.Payload)
 			if err != nil {
-				slog.Warn("灵域猎妖主面板解析失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("灵域猎妖主面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "灵域猎妖主面板解析失败")
 			}
 			if panel.Result != protocol.SoulHuntSuccess {
-				slog.Info("灵域猎妖主面板不可用", "role_id", session.RoleID(),
+				slog.Info("灵域猎妖主面板不可用，稍后重试", "role_id", session.RoleID(),
 					"result", panel.Result, "result_text", protocol.SoulHuntResultText(panel.Result))
-				return nil
+				return scheduler.NewCooldown(2*time.Hour, "灵域猎妖未开放")
 			}
 			slog.Info("灵域猎妖主面板", "role_id", session.RoleID(),
 				"fields", panel.Ints, "levels", panel.Levels, "times", panel.Times)

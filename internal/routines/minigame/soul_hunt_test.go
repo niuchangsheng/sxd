@@ -2,11 +2,14 @@ package minigame
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestSoulHuntRoutine_ChallengesFreeLevel(t *testing.T) {
@@ -115,5 +118,18 @@ func TestSoulHuntRoutine_NoIngotStops(t *testing.T) {
 	}
 	if startCalls.Load() != 1 {
 		t.Fatalf("NO_INGOT 后应停止，start calls = %d", startCalls.Load())
+	}
+}
+
+func TestSoulHuntRoutine_StateSilentDropCooldown(t *testing.T) {
+	sess := newMinigameMockSession(t, func(net.Conn, *protocol.Packet) {})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewSoulHuntRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("灵域猎妖状态无回包应返回 CooldownError, 实际: %v", err)
 	}
 }
