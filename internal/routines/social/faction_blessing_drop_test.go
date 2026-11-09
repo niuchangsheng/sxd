@@ -28,3 +28,21 @@ func TestFactionBlessingRoutine_BothSilentDropCooldownNotPermanent(t *testing.T)
 		t.Fatal("瞬断不应标记帮派模块永久不可用")
 	}
 }
+
+func TestFactionLuckyWheelRoutine_PanelSilentDropCooldownNotPermanent(t *testing.T) {
+	sess := newSocialMockSession(t, func(net.Conn, *protocol.Packet) {
+		// 帮派转盘面板模拟静默丢包。
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewFactionLuckyWheelRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("转盘面板无回包应返回 CooldownError, 实际: %v", err)
+	}
+	if sess.IsFactionFeatureUnavailable() {
+		t.Fatal("瞬断不应标记帮派模块永久不可用")
+	}
+}

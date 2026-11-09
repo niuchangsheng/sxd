@@ -473,13 +473,13 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 			openCancel()
 			if openErr != nil || openResp == nil {
 				if errors.Is(openErr, context.DeadlineExceeded) {
-					session.MarkFactionFeatureUnavailable()
-					slog.Info("帮派转盘面板无任何回包，判定帮派模块不可用（角色可能未加入帮派），跳过本轮帮派任务",
+					// 单次丢包可能只是瞬断，不能直接永久禁用帮派模块。
+					slog.Info("帮派转盘面板无回包，稍后重试",
 						"role_id", session.RoleID())
-					return nil
+					return scheduler.NewCooldown(30*time.Minute, "帮派转盘面板无回包")
 				}
-				slog.Warn("查询帮派转盘状态失败", "role_id", session.RoleID(), "err", openErr)
-				return nil
+				slog.Warn("查询帮派转盘状态失败，稍后重试", "role_id", session.RoleID(), "err", openErr)
+				return scheduler.NewCooldown(30*time.Minute, "帮派转盘状态查询失败")
 			}
 
 			openInfo, err := protocol.ParseLuckyWheelOpenResult(openResp.Payload)
