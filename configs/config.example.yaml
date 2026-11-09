@@ -153,6 +153,7 @@ scheduler:
     soul_hunt: true               # 灵域猎妖免费挑战 (不买次数)
     era_creation: true            # 纪元造化秘境探索+挑战 (免费)
     cultivation_card: true        # 神仙卡牌收藏集 (仅铜钱商城, 不消耗元宝)
+    faxiang_trial: true           # 法相试炼(造物佛手/守护魔兽) 免费领奖+挑战
     fortune_box: true             # 奇缘宝藏 (免费开箱)
     era_yanjie: true               # 纪元湮劫每日一关战斗 (免费)
     era_treasure: true            # 纪元秘藏/轮回图录奖励 (免费)

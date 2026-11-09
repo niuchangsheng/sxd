@@ -21,6 +21,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/config"
+	"sxd-pie-ng/internal/dictionary"
 	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/routines/daily"
@@ -104,13 +105,25 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 	case "jieyuan_box":
 		return social.NewJieYuanBoxRoutine(social.DefaultJieYuanBoxConfig())
 	case "spirit_pool":
-		return farming.NewSpiritPoolRoutine(farming.DefaultSpiritPoolConfig())
+		spCfg := farming.DefaultSpiritPoolConfig()
+		if os.Getenv("SXD_PROBE_SPIRIT_TARGET") == "lingcai" {
+			spCfg.Target = farming.SpiritPoolRefineLingCai
+		}
+		return farming.NewSpiritPoolRoutine(spCfg)
 	case "refine_pot":
 		return farming.NewRefinePotRoutine()
 	case "tong_tian_tower":
 		return dungeon.NewTongTianTowerRoutine()
 	case "find_immortal":
 		return minigame.NewFindImmortalRoutine()
+	case "master_practice":
+		mRepo, mErr := dictionary.NewRepository("data/Pieb.db")
+		if mErr != nil {
+			return nil
+		}
+		mCfg := minigame.DefaultMasterPracticeConfig()
+		mCfg.DictRepo = mRepo
+		return minigame.NewMasterPracticeRoutine(mCfg)
 	case "wufa_field":
 		return minigame.NewWuFaRoutine()
 	case "npc_friendship":
@@ -169,6 +182,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return daily.NewPartnerPracticeRoutine()
 	case "expedition":
 		return daily.NewExpeditionRoutine()
+	case "faxiang_trial":
+		return minigame.NewFaxiangTrialRoutine()
 	case "cultivation_card":
 		return minigame.NewCultivationCardRoutine()
 	case "fortune_box":
