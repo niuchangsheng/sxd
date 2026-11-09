@@ -168,6 +168,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return daily.NewDaoyuanVipShopRoutine()
 	case "void_worship":
 		return social.NewVoidWorshipRoutine()
+	case "friendship":
+		return social.NewFriendshipRoutine()
 	case "sa_union_worship":
 		return social.NewSaUnionWorshipRoutine()
 	case "marry_home":

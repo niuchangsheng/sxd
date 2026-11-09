@@ -855,8 +855,8 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 			panelResp, err := session.Call(pCtx, protocol.BuildFriendsSentPanelPacket(), protocol.ActionIDFriendsSentPanel)
 			pCancel()
 			if err != nil {
-				slog.Info("好友来信功能不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("好友来信功能不可用，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "好友来信面板无回包")
 			}
 			letters, err := protocol.ParseFriendsSentPanelResult(panelResp.Payload)
 			if err != nil {
@@ -872,22 +872,29 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 				openResp, oErr := session.Call(octx, protocol.BuildFriendsSentOpenPacket(l.ID), protocol.ActionIDFriendsSentOpen)
 				ocancel()
 				if oErr != nil {
-					slog.Info("打开好友来信无应答", "role_id", session.RoleID(), "letter_id", l.ID, "err", oErr)
-					continue
+					slog.Info("打开好友来信无应答，稍后重试", "role_id", session.RoleID(), "letter_id", l.ID, "err", oErr)
+					return scheduler.NewCooldown(10*time.Minute, "打开好友来信无回包")
 				}
 				detail, pErr := protocol.ParseFriendsSentOpenResult(openResp.Payload)
 				if pErr != nil {
 					slog.Warn("解析好友来信内容失败", "role_id", session.RoleID(), "letter_id", l.ID, "err", pErr)
 					continue
 				}
-				if detail.IsRead == 0 {
+				// 领取前总是补发一次 read：部分区服要求领奖请求前本会话内
+				// 有 read 动作，即使账号维度的 is_read 已经是 1。
+				if detail.IsGetAward == 0 {
 					rctx, rcancel := context.WithTimeout(ctx, callTimeout)
 					rResp, rErr := session.Call(rctx, protocol.BuildFriendsSentReadPacket(l.ID), protocol.ActionIDFriendsSentRead)
 					rcancel()
-					if rErr == nil && rResp != nil {
-						if result, e := protocol.ParseFriendsSentActionResult(rResp.Payload); e == nil && result != protocol.FriendsSentResultSuccess {
-							slog.Debug("标记好友来信已读未成功", "role_id", session.RoleID(), "letter_id", l.ID, "result", result)
-						}
+					if rErr != nil || rResp == nil {
+						slog.Info("标记好友来信已读无回包，稍后重试",
+							"role_id", session.RoleID(), "letter_id", l.ID, "err", rErr)
+						return scheduler.NewCooldown(10*time.Minute, "好友来信已读请求无回包")
+					}
+					if result, e := protocol.ParseFriendsSentActionResult(rResp.Payload); e == nil &&
+						result != protocol.FriendsSentResultSuccess {
+						slog.Info("标记好友来信已读未成功", "role_id", session.RoleID(),
+							"letter_id", l.ID, "result", result)
 					}
 				}
 				if detail.IsGetAward == 0 && len(detail.Awards) > 0 {
@@ -911,7 +918,10 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 					case protocol.FriendsSentResultUnRead:
 						slog.Info("好友来信未阅读，跳过领奖", "role_id", session.RoleID(), "letter_id", l.ID)
 					default:
-						slog.Info("好友来信奖励未领取", "role_id", session.RoleID(), "letter_id", l.ID, "result", result)
+						// 线上两套账号实测: 均已读、is_get_award=0 且列出附件，
+						// get_award 仍固定返回 FAILED(1)，通常表示历史信件已领/不可领。
+						slog.Info("好友来信奖励不可领取", "role_id", session.RoleID(),
+							"letter_id", l.ID, "result", result)
 					}
 				}
 			}
