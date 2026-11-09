@@ -2,11 +2,13 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestFairylandDispatchRoutine_NotOpenSkips(t *testing.T) {
@@ -21,7 +23,9 @@ func TestFairylandDispatchRoutine_NotOpenSkips(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewFairylandDispatchRoutine().Execute(context.Background(), sess, nil); err != nil {
+	err := NewFairylandDispatchRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if err != nil && !errors.As(err, &cd) {
 		t.Fatalf("fairyland: %v", err)
 	}
 	if taskCalls.Load() != 0 {

@@ -46,30 +46,34 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildFairylandMainPanelPacket(), protocol.ActionIDFairylandMainPanel)
 			if panelResp == nil {
-				return nil
+				slog.Info("宠物仙域主面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "宠物仙域主面板无回包")
 			}
 			code, err := protocol.ParseActionFirstByte(panelResp.Payload, "宠物仙域主面板")
 			if err != nil {
-				return nil
+				slog.Warn("宠物仙域主面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "宠物仙域主面板解析失败")
 			}
 			if code != protocol.FairylandSuccess {
-				slog.Info("宠物仙域未开放", "role_id", session.RoleID(),
+				slog.Info("宠物仙域未开放，稍后重试", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.FairylandResultText(code))
-				return nil
+				return scheduler.NewCooldown(2*time.Hour, "宠物仙域未开放")
 			}
 
 			taskResp := call(protocol.BuildFairylandTaskPanelPacket(), protocol.ActionIDFairylandTaskPanel)
 			if taskResp == nil {
-				return nil
+				slog.Info("宠物仙域任务面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "宠物仙域任务面板无回包")
 			}
 			taskCode, tErr := protocol.ParseActionFirstByte(taskResp.Payload, "宠物仙域任务面板")
 			if tErr != nil {
-				return nil
+				slog.Warn("宠物仙域任务面板解析失败，稍后重试", "role_id", session.RoleID(), "err", tErr)
+				return scheduler.NewCooldown(10*time.Minute, "宠物仙域任务面板解析失败")
 			}
 			if taskCode != protocol.FairylandSuccess {
-				slog.Info("宠物仙域任务面板不可用", "role_id", session.RoleID(),
+				slog.Info("宠物仙域任务面板不可用，稍后重试", "role_id", session.RoleID(),
 					"result", taskCode, "result_text", protocol.FairylandResultText(taskCode))
-				return nil
+				return scheduler.NewCooldown(2*time.Hour, "宠物仙域任务面板不可用")
 			}
 
 			dispatched := 0

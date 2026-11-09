@@ -58,17 +58,18 @@ func NewThreeWorldRoutine() scheduler.ActivityRoutine {
 			// 2. 人界修炼状态。
 			infoResp := call(protocol.BuildHumanWorldPracticePacket(), protocol.ActionIDHumanWorldPractice)
 			if infoResp == nil {
-				return nil
+				slog.Info("人界修炼面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "人界修炼面板无回包")
 			}
 			res, vals, err := protocol.ParseHumanWorldPractice(infoResp.Payload)
 			if err != nil {
-				slog.Warn("人界修炼面板解析失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("人界修炼面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "人界修炼面板解析失败")
 			}
 			if res != protocol.ThreeWorldSuccess {
-				slog.Info("人界修炼不可用", "role_id", session.RoleID(),
+				slog.Info("人界修炼不可用，稍后重试", "role_id", session.RoleID(),
 					"result", res, "result_text", protocol.ThreeWorldResultText(res))
-				return nil
+				return scheduler.NewCooldown(2*time.Hour, "人界修炼未开放")
 			}
 			slog.Info("人界修炼面板", "role_id", session.RoleID(), "values", vals)
 
@@ -82,7 +83,8 @@ func NewThreeWorldRoutine() scheduler.ActivityRoutine {
 			case int32(protocol.ThreeWorldIdle):
 				startResp := call(protocol.BuildHumanWorldStartPacket(), protocol.ActionIDHumanWorldStart)
 				if startResp == nil {
-					return nil
+					slog.Info("人界开始修炼无回包，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(10*time.Minute, "人界开始修炼无回包")
 				}
 				code, sErr := protocol.ParseActionFirstByte(startResp.Payload, "人界开始修炼")
 				if sErr != nil {
@@ -93,7 +95,8 @@ func NewThreeWorldRoutine() scheduler.ActivityRoutine {
 			case int32(protocol.ThreeWorldComplete):
 				stopResp := call(protocol.BuildHumanWorldStopPacket(), protocol.ActionIDHumanWorldStop)
 				if stopResp == nil {
-					return nil
+					slog.Info("人界结算修炼无回包，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(10*time.Minute, "人界结算修炼无回包")
 				}
 				code, sErr := protocol.ParseActionFirstByte(stopResp.Payload, "人界结算修炼")
 				if sErr != nil {

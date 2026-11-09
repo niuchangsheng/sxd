@@ -44,12 +44,13 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 
 			infoResp := call(protocol.BuildPartnerPracticeInfoPacket(), protocol.ActionIDPartnerPracticeInfo)
 			if infoResp == nil {
-				return nil
+				slog.Info("幻境修炼面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "幻境修炼面板无回包")
 			}
 			info, err := protocol.ParsePartnerPracticeInfo(infoResp.Payload)
 			if err != nil {
-				slog.Warn("幻境修炼面板解析失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("幻境修炼面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "幻境修炼面板解析失败")
 			}
 			if info.PartnerRoleID <= 0 {
 				slog.Info("幻境修炼未选择伙伴，跳过", "role_id", session.RoleID())
@@ -59,7 +60,8 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 
 			startResp := call(protocol.BuildPartnerPracticeStartPacket(), protocol.ActionIDPartnerPracticeStart)
 			if startResp == nil {
-				return nil
+				slog.Info("幻境修炼开始无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "幻境修炼开始无回包")
 			}
 			code, err := protocol.ParsePartnerPracticeResult(startResp.Payload)
 			if err != nil {
@@ -74,7 +76,8 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 				// 修炼已完成：进入镜像战斗领取收益 (306/5 -> 306/9)。
 				enterResp := call(protocol.BuildPartnerPracticeEnterFightPacket(), protocol.ActionIDPartnerPracticeEnterFight)
 				if enterResp == nil {
-					return nil
+					slog.Info("幻境修炼进入战斗无回包，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(10*time.Minute, "幻境修炼进入战斗无回包")
 				}
 				enterCode, eErr := protocol.ParsePartnerPracticeResult(enterResp.Payload)
 				if eErr != nil {
@@ -87,7 +90,8 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 				}
 				fightResp := call(protocol.BuildPartnerPracticeFightPacket(), protocol.ActionIDPartnerPracticeFight)
 				if fightResp == nil {
-					return nil
+					slog.Info("幻境修炼战斗无回包，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(10*time.Minute, "幻境修炼战斗无回包")
 				}
 				fightCode, fErr := protocol.ParsePartnerPracticeResult(fightResp.Payload)
 				if fErr != nil {

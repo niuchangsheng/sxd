@@ -2,11 +2,13 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func humanWorldPracticePayload(result uint8, state int32) []byte {
@@ -80,7 +82,9 @@ func TestThreeWorldRoutine_PracticeFailedNoStart(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewThreeWorldRoutine().Execute(context.Background(), sess, nil); err != nil {
+	err := NewThreeWorldRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if err != nil && !errors.As(err, &cd) {
 		t.Fatalf("three world: %v", err)
 	}
 	if startCalls.Load() != 0 {
