@@ -1645,8 +1645,9 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 			resp, err := session.Call(eCtx, execPkt, protocol.ActionIDRefineExecute)
 			eCancel()
 			if err != nil {
-				slog.Warn("粗铁淬炼执行失败", "role_id", session.RoleID(), "target", targetName, "done_slots", done, "err", err)
-				return nil
+				slog.Warn("粗铁淬炼执行无回包，稍后重试",
+					"role_id", session.RoleID(), "target", targetName, "done_slots", done, "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "粗铁淬炼执行无回包")
 			}
 
 			result, err := protocol.ParseRefineExecuteResponse(resp.Payload)
