@@ -1903,9 +1903,18 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 					}
 				}
 				if !full {
-					slog.Info("宗师修行当前职业尚未满星，本轮结束",
-						"role_id", session.RoleID(), "job_id", requestedJob, "challenged", challenged)
-					return nil
+					// 当前职业今天可挑战的星级已打完但未满星。
+					// 第一目标是先用光每日次数，因此继续下一个职业；
+					// 次数已耗尽时在下一轮循环顶部自然结束。
+					if usedToday >= cfg.MaxChallengesPerDay {
+						slog.Info("宗师修行今日挑战次数已用尽，结束本轮",
+							"role_id", session.RoleID(), "used", usedToday, "limit", cfg.MaxChallengesPerDay)
+						return nil
+					}
+					slog.Info("宗师修行当前职业本次可挑战星级已完成，切换下一职业以用光次数",
+						"role_id", session.RoleID(), "job_id", requestedJob,
+						"challenged", challenged, "used", usedToday, "limit", cfg.MaxChallengesPerDay)
+					continue
 				}
 				slog.Info("宗师修行当前职业已满星，继续下一职业",
 					"role_id", session.RoleID(), "job_id", requestedJob)
@@ -3727,14 +3736,13 @@ func NewFiveBlessingsRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行益智任务: 五福临门免费祈福", "role_id", session.RoleID())
 
-			executeFiveBlessings(ctx, session, jitter)
-			return nil
+			return executeFiveBlessings(ctx, session, jitter)
 		},
 	)
 }
 
 // executeFiveBlessings 执行五福临门免费次数与既有奖励领取闭环。
-func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) {
+func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) (runErr error) {
 	prevAct := session.LastActionID()
 
 	// 1. 不再调用 Act 14 is_five_blessings_open。
@@ -3752,8 +3760,8 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 	iResp, iErr := session.Call(iCtx, infoPkt, protocol.ActionIDFindImmortalOpenFiveBlessings)
 	iCancel()
 	if iErr != nil || iResp == nil {
-		slog.Info("查询五福临门面板未收到回包", "role_id", session.RoleID(), "err", iErr)
-		return
+		slog.Info("查询五福临门面板未收到回包，稍后重试", "role_id", session.RoleID(), "err", iErr)
+		return scheduler.NewCooldown(10*time.Minute, "五福临门面板无回包")
 	}
 	info, err := protocol.ParseFiveBlessingsInfoResult(iResp.Payload)
 	if err != nil {
@@ -3796,8 +3804,8 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 		sCancel()
 		prevAct = protocol.ActionIDFindImmortalStartBless
 		if sErr != nil || sResp == nil {
-			slog.Info("五福临门开始祈福请求未收到回包，服务端暂不接受，跳过本轮", "role_id", session.RoleID(), "err", sErr)
-			return
+			slog.Info("五福临门开始祈福请求未收到回包，稍后重试", "role_id", session.RoleID(), "err", sErr)
+			return scheduler.NewCooldown(30*time.Minute, "五福临门开始祈福无回包")
 		}
 		start, err := protocol.ParseFiveBlessingsActionResult(sResp.Payload)
 		if err != nil {
@@ -3825,6 +3833,7 @@ func executeFiveBlessings(ctx context.Context, session *client.RoleSession, jitt
 	}
 
 	slog.Info("五福临门流程完成", "role_id", session.RoleID(), "rounds", rounds, "remain_bless_number", info.BlessNumber)
+	return
 }
 
 // endFiveBlessings 结束当前祈福并领取奖励 (Mod 68, Act 13)。
