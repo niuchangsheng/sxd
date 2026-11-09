@@ -119,6 +119,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return daily.NewDragonballOfferRoutine()
 	case "nine_regions":
 		return dungeon.NewNineRegionsRoutine()
+	case "pet_animal":
+		return minigame.NewPetAnimalRoutine()
 	case "lingdao_practice":
 		return minigame.NewLingDaoRoutine()
 	case "pilgrimage":
@@ -131,6 +133,8 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		return dungeon.NewSixRealmsRoutine(dungeon.DefaultSixRealmsConfig())
 	case "demon_tower":
 		return dungeon.NewDemonTowerRoutine()
+	case "online_gift":
+		return daily.NewOnlineGiftRoutine(daily.DefaultOnlineGiftConfig())
 	case "online_reward":
 		return daily.NewOnlineRewardRoutine()
 	case "rebirth_land":

@@ -148,3 +148,27 @@ func TestOnlineGiftRoutine_PreservesOnlineGiftStateMachine(t *testing.T) {
 		t.Fatalf("免费功能终结礼包应全部领取, 剩余 %v", ids)
 	}
 }
+
+// TestFunctionEndMock_ClaimWithoutRandomAwardReturnsEmpty 固化服务端语义：
+// 未先 random_award(127/3) 时，127/2 返回全 0 奖励且 is_have_next=1。
+func TestFunctionEndMock_ClaimWithoutRandomAwardReturnsEmpty(t *testing.T) {
+	session := startFunctionEndTestSession(t, "role_test_function_end_no_roll")
+	defer session.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := session.Call(ctx, protocol.BuildGetFunctionEndGiftPacket(1), protocol.ActionIDGetGameFunctionEndGift)
+	if err != nil {
+		t.Fatalf("claim without roll: %v", err)
+	}
+	claim, err := protocol.ParseGetGameFunctionEndGiftResult(resp.Payload)
+	if err != nil {
+		t.Fatalf("parse claim: %v", err)
+	}
+	if !claim.IsHaveNext {
+		t.Fatal("未摇奖时应返回 is_have_next=true")
+	}
+	if claim.StatePoint != 0 || claim.Skill != 0 || claim.Nimbus != 0 || claim.JuLing != 0 {
+		t.Fatalf("未摇奖时奖励应全 0, got %+v", claim)
+	}
+}

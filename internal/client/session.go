@@ -3403,10 +3403,14 @@ func runMockGameServer(conn net.Conn) {
 
 		case protocol.ActionIDGetGameFunctionEndGift:
 			// 响应领取功能终结礼包。
-			// 官方客户端 GetAwardView 的普通「领取」按钮直接调用本动作，
-			// 不依赖 random_award，也不扣除元宝；random_award 只是付费随机按钮。
+			// 真实服务端要求先 random_award(127/3) 摇奖；未摇奖时返回
+			// SUCCESS + 全 0 奖励 + is_have_next=1（会造成空转）。此处对齐该语义。
 			gr := protocol.NewReader(pkt.Payload)
 			giftID, gerr := gr.ReadInt16()
+			rolled := functionEndRolled[giftID]
+			if rolled {
+				delete(functionEndRolled, giftID)
+			}
 			result := protocol.FunctionEndSuccess
 			isHaveNext := false
 			switch {
@@ -3432,6 +3436,17 @@ func runMockGameServer(conn net.Conn) {
 				cw.WriteInt16(0)
 				cw.WriteInt16(0)
 				cw.WriteUint8(0)
+				cw.WriteInt32(0)
+			} else if !rolled {
+				// 未摇奖：全 0 奖励 + 还有下一份，模拟真实服务端。
+				cw.WriteInt16(0)
+				cw.WriteInt32(0)
+				cw.WriteInt32(0)
+				cw.WriteInt32(0)
+				cw.WriteInt32(0)
+				cw.WriteInt16(0)
+				cw.WriteInt16(0)
+				cw.WriteUint8(1)
 				cw.WriteInt32(0)
 			} else {
 				writeMockFunctionEndClaimRewards(cw, giftID, isHaveNext)

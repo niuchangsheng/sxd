@@ -87,15 +87,18 @@ func claimFunctionEndGifts(ctx context.Context, session *client.RoleSession, cfg
 	return nil
 }
 
-// claimFunctionEndGift 领取单个终结礼包；is_have_next 为 true 时按客户端语义继续领取。
+// claimFunctionEndGift 领取单个终结礼包：每次先 random_award(127/3) 摇奖，再
+// get_game_function_end_gift(127/2) 结算；is_have_next 为 true 且未达 bei 次数时继续。
 //
-// 官方客户端 GetAwardView.onGetAward 对 flag=1 的终结礼包直接调用
-// get_game_function_end_gift(gift_id)，这是「免费领取」按钮；列表记录里的
-// ingot 字段只是「随机奖励」按钮的价格，不能据此跳过免费领取。
+// 线上实测：未先摇奖直接调用 127/2 会返回 result=SUCCESS + 全 0 奖励 +
+// is_have_next=true，造成 20 次空转。摇奖本身免费，不消耗元宝。
 func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift protocol.FunctionEndGift, cfg OnlineGiftConfig) error {
 	maxClaims := cfg.MaxClaimsPerGift
 	if maxClaims <= 0 {
 		maxClaims = 20
+	}
+	if gift.Bei > 0 && int(gift.Bei) < maxClaims {
+		maxClaims = int(gift.Bei)
 	}
 
 	// 仅作诊断：列表中的 ingot 是随机奖励按钮价格，与免费领取按钮无关。
@@ -108,6 +111,27 @@ func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift
 	}
 
 	for attempt := 1; attempt <= maxClaims; attempt++ {
+		// 1. 先摇奖 (127/3)，服务端才会为本次领取准备奖励结果。
+		rCtx, rCancel := context.WithTimeout(ctx, 5*time.Second)
+		rollResp, rollErr := session.Call(rCtx, protocol.BuildFunctionEndRandomAwardPacket(gift.GiftID), protocol.ActionIDFunctionEndRandomAward)
+		rCancel()
+		if rollErr != nil || rollResp == nil {
+			return fmt.Errorf("random award gift %d: %w", gift.GiftID, rollErr)
+		}
+		preview, pErr := protocol.ParseFunctionEndRandomAwardResult(rollResp.Payload)
+		if pErr != nil {
+			return fmt.Errorf("random award gift %d: %w", gift.GiftID, pErr)
+		}
+		slog.Debug("功能终结礼包摇奖完成",
+			"role_id", session.RoleID(),
+			"gift_id", gift.GiftID,
+			"attempt", attempt,
+			"state_point", preview.StatePoint,
+			"nimbus", preview.Nimbus,
+			"juling", preview.JuLing,
+		)
+
+		// 2. 再领取 (127/2)。
 		cCtx, cCancel := context.WithTimeout(ctx, 5*time.Second)
 		resp, err := session.Call(cCtx, protocol.BuildGetFunctionEndGiftPacket(gift.GiftID), protocol.ActionIDGetGameFunctionEndGift)
 		cCancel()
