@@ -38,10 +38,15 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行日常任务: 每日免费礼包", "role_id", session.RoleID())
 
+			responded := 0
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
 				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				defer cancel()
-				return session.Call(cCtx, pkt, act)
+				resp, err := session.Call(cCtx, pkt, act)
+				if err == nil && resp != nil {
+					responded++
+				}
+				return resp, err
 			}
 
 			// 1. 每日俸禄。
@@ -109,7 +114,11 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 				}
 			}
 
-			slog.Info("每日免费礼包巡检完成", "role_id", session.RoleID())
+			slog.Info("每日免费礼包巡检完成", "role_id", session.RoleID(), "responded", responded)
+			if responded == 0 {
+				// 三个独立免费礼包请求全部被静默丢弃时，不要等到次日 Cron。
+				return scheduler.NewCooldown(30*time.Minute, "每日免费礼包全部无回包")
+			}
 			return nil
 		},
 	)
