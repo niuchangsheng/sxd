@@ -2,11 +2,13 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestPartnerPracticeRoutine_StartsPractice(t *testing.T) {
@@ -98,7 +100,9 @@ func TestPartnerPracticeRoutine_FuncNoOpenStops(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewPartnerPracticeRoutine().Execute(context.Background(), sess, nil); err != nil {
+	err := NewPartnerPracticeRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if err != nil && !errors.As(err, &cd) {
 		t.Fatalf("partner practice: %v", err)
 	}
 	if stopCalls.Load() != 0 {
