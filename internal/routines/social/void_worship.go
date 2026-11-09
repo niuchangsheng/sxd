@@ -110,8 +110,8 @@ func NewVoidWorshipRoutine() scheduler.ActivityRoutine {
 			resp, err := session.Call(cCtx, protocol.BuildGodRankWorshipPacket(), protocol.ActionIDGodRankWorship)
 			cancel()
 			if err != nil || resp == nil {
-				slog.Info("大神榜膜拜无回包，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("大神榜膜拜无回包，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "大神榜膜拜无回包")
 			}
 			code, pErr := protocol.ParseGodRankResult(resp.Payload)
 			if pErr != nil {

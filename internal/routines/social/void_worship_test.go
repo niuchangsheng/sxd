@@ -7,11 +7,14 @@ package social
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestVoidWorshipRoutine_OpenPanelThenLikeUnlikedMember(t *testing.T) {
@@ -82,5 +85,20 @@ func TestVoidWorshipRoutine_FallsBackToGodRankWhenPanelFails(t *testing.T) {
 	}
 	if got := godRankCalls.Load(); got != 1 {
 		t.Fatalf("652 面板失败时应回退 500/1, 实际 %d 次", got)
+	}
+}
+
+func TestVoidWorshipRoutine_BothPanelsSilentDropCooldown(t *testing.T) {
+	sess := newSocialMockSession(t, func(net.Conn, *protocol.Packet) {
+		// 652 与 500/1 均模拟服务端静默丢包。
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewVoidWorshipRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("两条膜拜链路无回包应返回 CooldownError, 实际: %v", err)
 	}
 }
