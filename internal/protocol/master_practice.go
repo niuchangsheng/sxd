@@ -101,9 +101,9 @@ type MasterPracticeJobInfo struct {
 type MasterPracticePanel struct {
 	// Result 结果码
 	Result uint8
-	// TodayChallengeTimes 今日已挑战/已通关的星级数量。
-	// 注意：该字段不表示剩余挑战次数，也不随重复挑战同一星级变化；
-	// 每日次数上限必须由服务端 NO_CHALLENGE_TIMES(8) 结果码判定。
+	// TodayChallengeTimes 今日已挑战次数（服务端按每日上限封顶）。
+	// 每日重置后为 0；随成功挑战递增，实测到达 3 后即使继续成功挑战也保持 3，
+	// 因此不能反推剩余次数；次数是否耗尽必须由服务端 NO_CHALLENGE_TIMES(8) 判定。
 	TodayChallengeTimes int32
 	// ArtifactSkillLevel 神器技能等级
 	ArtifactSkillLevel int32
