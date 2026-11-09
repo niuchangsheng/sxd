@@ -495,7 +495,11 @@ func sweepEliteMissionsWithoutTown(
 			"role_id", session.RoleID(), "err", err)
 		return 0, nil
 	}
-	slog.Info("开始全局精英副本扫荡", "role_id", session.RoleID(), "dungeons", len(ids))
+	anchorAct := session.LastActionID()
+	if anchorAct == 0 || anchorAct == protocol.ActionIDPracticeGetStatus || anchorAct == protocol.ActionIDPracticeStart {
+		anchorAct = 42 // 登录后的玩家初始化动作，实测可作为 Module 25 的 PrevAct 锚点
+	}
+	slog.Info("开始全局精英副本扫荡", "role_id", session.RoleID(), "dungeons", len(ids), "anchor_act", anchorAct)
 
 	swept := 0
 	for _, dungeonID := range ids {
@@ -514,9 +518,10 @@ func sweepEliteMissionsWithoutTown(
 		case <-time.After(350 * time.Millisecond):
 		}
 
-		// Module 25 的 PrevAct 必须锚定到玩家主属性查询；使用会话最近动作
-		// 会被先前的 25 请求污染成自引用 0x00190000，导致服务端静默丢弃。
-		statusPkt, pErr := protocol.BuildPracticeGetStatusPacket(int32(dungeonID), protocol.ActionIDPlayerGetInfo)
+		// Module 25 会自动用会话最近动作覆盖 PrevAct；连续 status 会自引用
+		// 0x00190000 被丢弃，因此每次查询前把链重置到登录锚点。
+		session.SetLastActionID(anchorAct)
+		statusPkt, pErr := protocol.BuildPracticeGetStatusPacket(int32(dungeonID), anchorAct)
 		if pErr != nil {
 			continue
 		}
