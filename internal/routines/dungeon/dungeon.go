@@ -1721,6 +1721,7 @@ func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
 				return fmt.Errorf("解析精灵试炼模式失败: %w", err)
 			}
 
+			const stTrialsMaxLossRetries = 3
 			active := 0
 			for _, mode := range modes {
 				if mode.RemainChallengeTimes == 0 {
@@ -1775,6 +1776,7 @@ func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
 					slog.Warn("领取精灵试炼奖励失败", "role_id", session.RoleID(), "mode", mode.ModeType, "err", err)
 				}
 
+				losses := 0
 				for i := uint8(0); i < mode.RemainChallengeTimes; i++ {
 					cCtx, cCancel := context.WithTimeout(ctx, 15*time.Second) // 战报较大
 					resp, cErr := session.Call(cCtx, protocol.BuildStTrialsChallengePacket(mode.ModeType), protocol.ActionIDStTrialsChallenge)
@@ -1790,6 +1792,7 @@ func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
 					}
 					switch result {
 					case protocol.StTrialsResultSuccess:
+						losses = 0
 						slog.Info("精灵试炼挑战成功", "role_id", session.RoleID(), "mode", mode.ModeType, "index", i+1)
 						if info, iErr = fetchInfo(); iErr == nil {
 							if cErr := claim(info); cErr != nil {
@@ -1799,8 +1802,17 @@ func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
 							}
 						}
 					case protocol.StTrialsResultFaild:
-						slog.Info("精灵试炼挑战失败，停止该模式", "role_id", session.RoleID(), "mode", mode.ModeType)
-						i = mode.RemainChallengeTimes
+						losses++
+						if losses >= stTrialsMaxLossRetries {
+							slog.Info("精灵试炼连续挑战失败，达到重试上限，停止该模式",
+								"role_id", session.RoleID(), "mode", mode.ModeType,
+								"losses", losses, "max_retries", stTrialsMaxLossRetries)
+							i = mode.RemainChallengeTimes
+						} else {
+							slog.Info("精灵试炼挑战失败，重试同一模式",
+								"role_id", session.RoleID(), "mode", mode.ModeType,
+								"losses", losses, "max_retries", stTrialsMaxLossRetries)
+						}
 					case protocol.StTrialsResultCannotChallenge, protocol.StTrialsResultTimeOut:
 						slog.Info("精灵试炼当前不可挑战", "role_id", session.RoleID(), "mode", mode.ModeType, "result", result)
 						i = mode.RemainChallengeTimes
