@@ -77,6 +77,7 @@ func newRegistryFactory(
 		dCfg.Sweep.Pipeline = sc.Dungeon.Sweep.Pipeline
 		dCfg.Sweep.PreferPracticeQuickly = sc.Dungeon.Sweep.PreferPracticeQuickly
 		dCfg.Sweep.SellSweptItems = sc.Dungeon.Sweep.SellSweptItems || sc.Dungeon.Sweep.AutoSellSweptItems || sc.Dungeon.SellSweptItems || sc.Dungeon.AutoSellSweptItems
+		dCfg.Sweep.GlobalElite = sc.Dungeon.Sweep.GlobalElite
 	} else {
 		if len(sc.Dungeon.Pipeline) > 0 {
 			dCfg.Sweep.Pipeline = sc.Dungeon.Pipeline

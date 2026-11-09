@@ -387,6 +387,7 @@ type DungeonSweepFeatureConfig struct {
 	PreferPracticeQuickly bool     `yaml:"prefer_practice_quickly"` // 优先使用英雄副本秒完成协议
 	SellSweptItems        bool     `yaml:"sell_swept_items"`        // 扫荡精英副本后是否自动卖掉扫荡物
 	AutoSellSweptItems    bool     `yaml:"auto_sell_swept_items"`   // 扫荡精英副本后是否自动卖掉扫荡物 (兼容别名)
+	GlobalElite           bool     `yaml:"global_elite"`            // 全局扫荡所有精英副本 (无需进城)
 }
 
 // DungeonConfig 副本与推图自动化策略配置

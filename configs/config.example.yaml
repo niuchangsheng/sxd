@@ -175,6 +175,7 @@ scheduler:
       pipeline:
         - "sweep_elite"               # 扫荡精英副本
       sell_swept_items: true          # 扫荡后自动出售扫荡物
+      global_elite: true              # 全局扫荡所有精英副本 (无需身处精英城镇)
       prefer_practice_quickly: true   # 优先使用秒完成协议
 
   six_realms:

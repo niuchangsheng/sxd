@@ -76,43 +76,43 @@ func main() {
 	slog.Info("会话已激活", "role_id", sess.RoleID(), "player_id", sess.PlayerID())
 
 	// 1. 跳过进城：直接走 Module 25 扫荡。
-	// 2. 直接对精英副本 mission 169 走 Module 25 扫荡：先 get_status 再 start。
-	{
+	// 2. 对前几个精英副本逐个执行 status + start，打印结果。
+	for _, dungeonID := range []int32{169, 166, 167, 168, 170} {
 		sw := protocol.NewWriter()
-		sw.WriteInt32(169)
-		sw.WriteUint32(protocol.ActionIDPlayerGetInfo)
-		sCtx, sCancel := context.WithTimeout(ctx, 10*time.Second)
+		sw.WriteInt32(dungeonID)
+		sw.WriteUint32(sess.LastActionID())
+		sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
 		stResp, stErr := sess.Call(sCtx, protocol.NewPacket(protocol.ActionIDPracticeGetStatus, sw.Bytes()), protocol.ActionIDPracticeGetStatus)
 		sCancel()
 		if stErr != nil || stResp == nil {
-			slog.Warn("练习状态无回包", "mission", 169, "err", stErr)
-		} else {
-			slog.Info("练习状态", "mission", 169, "len", len(stResp.Payload))
-			pw := protocol.NewWriter()
-			pw.WriteInt32(433)
-			pw.WriteInt16(1)
-			pw.WriteInt8(1)
-			pw.WriteUint32(protocol.ActionIDPracticeGetStatus)
-			pCtx, pCancel := context.WithTimeout(ctx, 15*time.Second)
-			startResp, pErr := sess.Call(pCtx, protocol.NewPacket(protocol.ActionIDPracticeStart, pw.Bytes()), protocol.ActionIDPracticeStart)
-			pCancel()
-			if pErr != nil || startResp == nil {
-				slog.Warn("扫荡启动无回包", "mission", 433, "err", pErr)
-			} else {
-				slog.Info("扫荡启动回包", "mission", 433, "len", len(startResp.Payload), "hex", hex.EncodeToString(startResp.Payload))
-				qw := protocol.NewWriter()
-				qw.WriteInt16(1)
-				qw.WriteUint32(protocol.ActionIDPracticeStart)
-				qCtx, qCancel := context.WithTimeout(ctx, 10*time.Second)
-				qResp, qErr := sess.Call(qCtx, protocol.NewPacket(protocol.ActionIDPracticeQuickly, qw.Bytes()), protocol.ActionIDPracticeQuickly)
-				qCancel()
-				if qErr != nil || qResp == nil {
-					slog.Warn("加速完成无回包", "err", qErr)
-				} else {
-					slog.Info("加速完成回包", "len", len(qResp.Payload), "hex", hex.EncodeToString(qResp.Payload))
-				}
+			slog.Warn("练习状态无回包", "dungeon", dungeonID, "err", stErr)
+			continue
+		}
+		st, perr := protocol.ParsePracticeStatusResult(stResp.Payload)
+		if perr != nil || st == nil || len(st.Missions) == 0 {
+			slog.Warn("练习状态解析失败", "dungeon", dungeonID, "len", len(stResp.Payload), "err", perr)
+			continue
+		}
+		best := st.Missions[0]
+		for _, m := range st.Missions[1:] {
+			if m.Level > best.Level || (m.Level == best.Level && m.MissionID > best.MissionID) {
+				best = m
 			}
 		}
+		slog.Info("练习状态", "dungeon", dungeonID, "missions", len(st.Missions), "best", best.MissionID, "level", best.Level, "type", best.Type)
+		pw := protocol.NewWriter()
+		pw.WriteInt32(best.MissionID)
+		pw.WriteInt16(1)
+		pw.WriteInt8(1)
+		pw.WriteUint32(protocol.ActionIDPracticeGetStatus)
+		pCtx, pCancel := context.WithTimeout(ctx, 10*time.Second)
+		startResp, pErr := sess.Call(pCtx, protocol.NewPacket(protocol.ActionIDPracticeStart, pw.Bytes()), protocol.ActionIDPracticeStart)
+		pCancel()
+		if pErr != nil || startResp == nil {
+			slog.Warn("扫荡启动无回包", "dungeon", dungeonID, "mission", best.MissionID, "err", pErr)
+			continue
+		}
+		slog.Info("扫荡启动回包", "dungeon", dungeonID, "mission", best.MissionID, "len", len(startResp.Payload), "hex", hex.EncodeToString(startResp.Payload))
 	}
 
 	// 3. 用显式 PrevAct=0x00010000 查询英雄副本列表。

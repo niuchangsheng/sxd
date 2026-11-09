@@ -151,7 +151,9 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 		if dErr != nil {
 			return nil
 		}
-		return dungeon.NewDungeonSweepRoutine(dRepo, dungeon.DefaultSweepConfig())
+		sweepCfg := dungeon.DefaultSweepConfig()
+		sweepCfg.Sweep.GlobalElite = true
+		return dungeon.NewDungeonSweepRoutine(dRepo, sweepCfg)
 	case "six_realms":
 		return dungeon.NewSixRealmsRoutine(dungeon.DefaultSixRealmsConfig())
 	case "demon_tower":

@@ -38,6 +38,8 @@ type SweepFeatureConfig struct {
 	PreferPracticeQuickly bool     `json:"prefer_practice_quickly"` // 兼容旧配置字段
 	SellSweptItems        bool     `json:"sell_swept_items"`        // 扫荡精英副本后是否自动卖掉扫荡物
 	AutoSellSweptItems    bool     `json:"auto_sell_swept_items"`   // 别名
+	// GlobalElite 通过 Module 25 全局扫荡所有精英副本（无需身处精英城镇）。
+	GlobalElite bool `json:"global_elite"`
 }
 
 // SweepConfig 关卡推图与扫荡自定义策略配置。包含两大核心功能：剧情推图 与 关卡扫荡。
@@ -77,6 +79,7 @@ func DefaultSweepConfig() SweepConfig {
 			Enabled:        true,
 			Pipeline:       []string{"sweep_elite"},
 			SellSweptItems: false,
+			GlobalElite:    false,
 		},
 		AutoReplenishStamina: true,
 		MaxReplenishStamina:  200,
@@ -473,6 +476,108 @@ func performEliteTownSweep(
 	return eliteTownDone, startRes, nil
 }
 
+// sweepEliteMissionsWithoutTown 使用 Module 25 (副本扫荡) 全局扫荡所有精英副本。
+//
+// 官方 get_status(精英副本ID) 会返回该副本的子关卡列表；对子关卡 start_practice
+// (count=1, auto_sale=1) 即可完成一轮扫荡并自动出售白绿蓝装备，无需角色身处该城镇。
+func sweepEliteMissionsWithoutTown(
+	ctx context.Context,
+	session *client.RoleSession,
+	dictRepo dictionary.Repository,
+) (int, error) {
+	if dictRepo == nil {
+		slog.Info("数据字典不可用，跳过全局精英扫荡", "role_id", session.RoleID())
+		return 0, nil
+	}
+	ids, err := dictRepo.GetEliteMissionIDs()
+	if err != nil || len(ids) == 0 {
+		slog.Info("数据字典中未发现精英副本关卡，跳过全局精英扫荡",
+			"role_id", session.RoleID(), "err", err)
+		return 0, nil
+	}
+	slog.Info("开始全局精英副本扫荡", "role_id", session.RoleID(), "dungeons", len(ids))
+
+	swept := 0
+	for _, dungeonID := range ids {
+		if ctx.Err() != nil {
+			break
+		}
+		if session.GetStamina() < 5 {
+			slog.Info("体力不足，结束全局精英扫荡",
+				"role_id", session.RoleID(), "swept", swept, "remaining_stamina", session.GetStamina())
+			break
+		}
+
+		statusPkt, pErr := protocol.BuildPracticeGetStatusPacket(int32(dungeonID), session.LastActionID())
+		if pErr != nil {
+			continue
+		}
+		sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
+		statusResp, sErr := session.Call(sCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
+		sCancel()
+		if sErr != nil || statusResp == nil {
+			continue
+		}
+		status, parseErr := protocol.ParsePracticeStatusResult(statusResp.Payload)
+		if parseErr != nil || status == nil || len(status.Missions) == 0 {
+			slog.Debug("精英副本状态不可用", "dungeon_id", dungeonID, "err", parseErr, "len", len(statusResp.Payload))
+			continue
+		}
+		// 优先扫荡等级最高的子关卡；同等级取最大关卡 ID。
+		best := status.Missions[0]
+		for _, m := range status.Missions[1:] {
+			if m.Level > best.Level || (m.Level == best.Level && m.MissionID > best.MissionID) {
+				best = m
+			}
+		}
+
+		startPkt, bErr := protocol.BuildStartPracticePacket(protocol.StartPracticeRequest{
+			MissionID: best.MissionID,
+			Count:     1,
+			AutoSale:  1,
+			PrevAct:   protocol.ActionIDPracticeGetStatus,
+		})
+		if bErr != nil {
+			continue
+		}
+		pCtx, pCancel := context.WithTimeout(ctx, 10*time.Second)
+		startResp, stErr := session.Call(pCtx, startPkt, protocol.ActionIDPracticeStart)
+		pCancel()
+		if stErr != nil || startResp == nil {
+			slog.Info("精英副本扫荡无回包，继续下一副本",
+				"role_id", session.RoleID(), "dungeon_id", dungeonID, "mission_id", best.MissionID)
+			continue
+		}
+		res, rErr := protocol.ParseStartPracticeResult(startResp.Payload)
+		if rErr != nil || res == nil {
+			continue
+		}
+		slog.Debug("精英副本扫荡回包", "dungeon_id", dungeonID, "mission_id", best.MissionID, "result", res.Result)
+		switch res.Result {
+		case protocol.PracticeResultSuccess:
+			swept++
+			slog.Info("精英副本扫荡成功",
+				"role_id", session.RoleID(), "dungeon_id", dungeonID, "mission_id", best.MissionID, "swept", swept)
+		case protocol.PracticeResultNotEnoughPower:
+			slog.Info("体力不足，结束全局精英扫荡",
+				"role_id", session.RoleID(), "swept", swept)
+			return swept, nil
+		case protocol.PracticeResultBagFull:
+			slog.Info("背包已满，结束全局精英扫荡",
+				"role_id", session.RoleID(), "swept", swept)
+			return swept, scheduler.ErrBagFull
+		case protocol.PracticeResultInPractice:
+			slog.Info("副本扫荡队列进行中，结束本轮",
+				"role_id", session.RoleID(), "swept", swept)
+			return swept, nil
+		default:
+			continue
+		}
+	}
+	slog.Info("全局精英副本扫荡完成", "role_id", session.RoleID(), "swept", swept)
+	return swept, nil
+}
+
 // executeEliteMissionSweep 按官方 Mod_HeroMission_Base 协议逐城镇扫荡精英副本。
 //
 // 关键点:
@@ -489,6 +594,9 @@ func executeEliteMissionSweep(
 	totalGainExp *int64,
 	totalGainCoins *int64,
 ) (int, error) {
+	if cfg.Sweep.GlobalElite {
+		return sweepEliteMissionsWithoutTown(ctx, session, dictRepo)
+	}
 	towns := eliteMissionTowns(dictRepo)
 	if len(towns) == 0 {
 		slog.Info("数据字典中未发现精英副本城镇，跳过精英扫荡", "role_id", session.RoleID())
@@ -504,9 +612,9 @@ func executeEliteMissionSweep(
 			}
 		}
 		if len(filtered) == 0 {
-			slog.Info("当前城镇不在精英副本城镇列表中，跳过精英扫荡",
+			slog.Info("当前城镇无精英副本，改用 Module 25 全局精英扫荡",
 				"role_id", session.RoleID(), "town_map_id", currentMap)
-			return 0, nil
+			return sweepEliteMissionsWithoutTown(ctx, session, dictRepo)
 		}
 		slog.Info("精英副本扫荡限定当前城镇",
 			"role_id", session.RoleID(), "town_map_id", currentMap, "all_towns", len(towns))
