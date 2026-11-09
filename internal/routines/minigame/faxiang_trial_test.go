@@ -69,7 +69,9 @@ func TestFaxiangTrialRoutine_NotOpenSkips(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewFaxiangTrialRoutine().Execute(context.Background(), sess, nil); err != nil {
+	err := NewFaxiangTrialRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if err != nil && !errors.As(err, &cd) {
 		t.Fatalf("faxiang trial: %v", err)
 	}
 	if anyCall.Load() != 0 {

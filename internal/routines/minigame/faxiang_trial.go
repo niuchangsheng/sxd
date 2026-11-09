@@ -45,17 +45,18 @@ func NewFaxiangTrialRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildFaxiangTrialPanelPacket(), protocol.ActionIDFaxiangTrialPanel)
 			if panelResp == nil {
-				return nil
+				slog.Info("法相试炼面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "法相试炼面板无回包")
 			}
 			code, err := protocol.ParseActionFirstByte(panelResp.Payload, "法相试炼")
 			if err != nil {
-				slog.Warn("法相试炼面板解析失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("法相试炼面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "法相试炼面板解析失败")
 			}
 			if code != protocol.FaxiangTrialSuccess {
-				slog.Info("法相试炼未开放", "role_id", session.RoleID(),
+				slog.Info("法相试炼未开放，稍后重试", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.FaxiangTrialResultText(code))
-				return nil
+				return scheduler.NewCooldown(2*time.Hour, "法相试炼未开放")
 			}
 
 			// 只读记录守护魔兽配置，便于后续实现造物佛手参数。

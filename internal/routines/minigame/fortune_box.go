@@ -46,7 +46,8 @@ func NewFortuneBoxRoutine() scheduler.ActivityRoutine {
 
 			openResp := call(protocol.BuildFortuneBoxOpenPacket(), protocol.ActionIDFortuneBoxOpen)
 			if openResp == nil {
-				return nil
+				slog.Info("奇缘宝藏开放状态无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "奇缘宝藏开放状态无回包")
 			}
 			open := int32(0)
 			if len(openResp.Payload) >= 4 {
@@ -54,8 +55,8 @@ func NewFortuneBoxRoutine() scheduler.ActivityRoutine {
 					int32(openResp.Payload[2])<<8 | int32(openResp.Payload[3])
 			}
 			if open == 0 {
-				slog.Info("奇缘宝藏未开放", "role_id", session.RoleID())
-				return nil
+				slog.Info("奇缘宝藏未开放，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(2*time.Hour, "奇缘宝藏未开放")
 			}
 
 			panelResp := call(protocol.BuildFortuneBoxPanelPacket(), protocol.ActionIDFortuneBoxPanel)

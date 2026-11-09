@@ -46,15 +46,16 @@ func NewSaWorldTowerRoutine() scheduler.ActivityRoutine {
 
 			openResp := call(protocol.BuildSaWorldTowerOpenPacket(), protocol.ActionIDSaWorldTowerOpen)
 			if openResp == nil {
-				return nil
+				slog.Info("全网幻魔塔开放状态无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "全网幻魔塔开放状态无回包")
 			}
 			if len(openResp.Payload) >= 4 {
 				open := int32(openResp.Payload[0])<<24 | int32(openResp.Payload[1])<<16 |
 					int32(openResp.Payload[2])<<8 | int32(openResp.Payload[3])
 				// 521/0 返回 1=开放、0=未开放（实测 0 时 fight 返回 FUNCTION_NO_OPEN）。
 				if open == 0 {
-					slog.Info("全网幻魔塔未开放", "role_id", session.RoleID(), "status", open)
-					return nil
+					slog.Info("全网幻魔塔未开放，稍后重试", "role_id", session.RoleID(), "status", open)
+					return scheduler.NewCooldown(2*time.Hour, "全网幻魔塔未开放")
 				}
 			}
 

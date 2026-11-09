@@ -2,11 +2,13 @@ package social
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestSaWorldTowerRoutine_NotOpenSkips(t *testing.T) {
@@ -22,7 +24,9 @@ func TestSaWorldTowerRoutine_NotOpenSkips(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewSaWorldTowerRoutine().Execute(context.Background(), sess, nil); err != nil {
+	err := NewSaWorldTowerRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if err != nil && !errors.As(err, &cd) {
 		t.Fatalf("sa world tower: %v", err)
 	}
 	if panelCalls.Load() != 0 {

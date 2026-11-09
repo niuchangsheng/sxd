@@ -23,7 +23,9 @@ func TestFortuneBoxRoutine_NotOpenSkips(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewFortuneBoxRoutine().Execute(context.Background(), sess, nil); err != nil {
+	err := NewFortuneBoxRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if err != nil && !errors.As(err, &cd) {
 		t.Fatalf("fortune box: %v", err)
 	}
 	if panelCalls.Load() != 0 {
