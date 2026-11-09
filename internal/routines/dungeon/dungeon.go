@@ -1105,8 +1105,13 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 						_ = jitter.Wait(ctx)
 					}
 					resetRes, resetErr := session.ResetTowerLayer(ctx)
-					if resetErr != nil || resetRes.Result != protocol.TowerResultSuccess {
-						slog.Warn("六道轮回塔重置失败", "err", resetErr)
+					if resetErr != nil {
+						slog.Warn("六道轮回塔重置无回包，稍后重试", "err", resetErr)
+						return scheduler.NewCooldown(30*time.Minute, "六道轮回重置无回包")
+					}
+					if resetRes.Result != protocol.TowerResultSuccess {
+						slog.Info("六道轮回塔重置未成功",
+							"role_id", session.RoleID(), "result", resetRes.Result)
 						return nil
 					}
 					slog.Info("六道轮回塔重置成功", "role_id", session.RoleID(), "layer", resetRes.Layer)
