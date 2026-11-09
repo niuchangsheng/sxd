@@ -54,8 +54,8 @@ func NewTacticsWaterRoutine() scheduler.ActivityRoutine {
 
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
-				slog.Info("查询每日活跃度失败，跳过兵法圣水", "role_id", session.RoleID())
-				return nil
+				slog.Info("查询每日活跃度失败，稍后重试兵法圣水", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "兵法圣水活跃度查询无回包")
 			}
 			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)
 			if err != nil {
@@ -83,11 +83,15 @@ func NewTacticsWaterRoutine() scheduler.ActivityRoutine {
 				resp := call(protocol.BuildTacticsBuyItemPacket(protocol.TacticsWaterXiao),
 					protocol.ActionIDTacticsBuyItem)
 				if resp == nil {
-					break
+					slog.Info("购买兵法圣水无回包，稍后重试",
+						"role_id", session.RoleID(), "bought", bought)
+					return scheduler.NewCooldown(30*time.Minute, "兵法圣水购买无回包")
 				}
 				code, err := protocol.ParseTacticsResultCode(resp.Payload)
 				if err != nil {
-					break
+					slog.Warn("解析兵法圣水购买回包失败，稍后重试",
+						"role_id", session.RoleID(), "err", err)
+					return scheduler.NewCooldown(10*time.Minute, "兵法圣水回包解析失败")
 				}
 				switch code {
 				case protocol.TacticsResultSucceed:

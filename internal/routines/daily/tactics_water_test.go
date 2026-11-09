@@ -2,12 +2,14 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestTacticsWaterRoutine_BuysUntilLimit(t *testing.T) {
@@ -81,5 +83,23 @@ func TestTacticsWaterRoutine_CoinGuard(t *testing.T) {
 	}
 	if got := buyCalls.Load(); got != 0 {
 		t.Fatalf("buy calls = %d, want 0 (coin guard)", got)
+	}
+}
+
+func TestTacticsWaterRoutine_BuySilentDropCooldown(t *testing.T) {
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDGameAssistantInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
+				{TaskID: DailyTaskTactics, CurTimes: 0, MaxTimes: 3, PerActiveAdd: 5},
+			}))
+		}
+	})
+	defer sess.Close()
+
+	err := NewTacticsWaterRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("购买无回包应返回 CooldownError, 实际: %v", err)
 	}
 }

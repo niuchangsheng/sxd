@@ -62,13 +62,13 @@ func NewDestinySwordRoutine() scheduler.ActivityRoutine {
 
 			resp, err := call(protocol.BuildDestinySwordPanelPacket(), protocol.ActionIDDestinySwordPanel)
 			if err != nil || resp == nil {
-				slog.Info("飞剑功能不可用或未开放，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("飞剑功能不可用或未开放，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "飞剑面板无回包")
 			}
 			panel, err := protocol.ParseDestinySwordPanelResult(resp.Payload)
 			if err != nil {
-				slog.Info("解析飞剑面板失败，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("解析飞剑面板失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "飞剑面板解析失败")
 			}
 			slog.Info("飞剑面板",
 				"role_id", session.RoleID(),
@@ -101,8 +101,8 @@ func NewDestinySwordRoutine() scheduler.ActivityRoutine {
 							protocol.ActionIDDestinySwordOneClickTemperPanel,
 						)
 						if pErr != nil || pResp == nil {
-							slog.Info("查询飞剑淬炼消耗无回包", "role_id", session.RoleID(), "err", pErr)
-							return nil
+							slog.Info("查询飞剑淬炼消耗无回包，稍后重试", "role_id", session.RoleID(), "err", pErr)
+							return scheduler.NewCooldown(30*time.Minute, "飞剑淬炼消耗查询无回包")
 						}
 						cost, cErr := protocol.ParseDestinySwordTemperPanelResult(pResp.Payload)
 						if cErr != nil {
@@ -137,8 +137,8 @@ func NewDestinySwordRoutine() scheduler.ActivityRoutine {
 							protocol.ActionIDDestinySwordOneClickTemper,
 						)
 						if tErr != nil || tResp == nil {
-							slog.Info("执行飞剑淬炼无回包", "role_id", session.RoleID(), "err", tErr)
-							return nil
+							slog.Info("执行飞剑淬炼无回包，稍后重试", "role_id", session.RoleID(), "err", tErr)
+							return scheduler.NewCooldown(30*time.Minute, "飞剑淬炼无回包")
 						}
 						code, pErr := protocol.ParseDestinySwordActionCode(tResp.Payload)
 						if pErr != nil {

@@ -27,6 +27,8 @@ type refineFurnaceGateway struct {
 	lessCoinTimes int32
 	// lessAirTimes >0 时接着前 N 次 start_refine 返回 LESS_AIR。
 	lessAirTimes int32
+	// dropPanel 为 true 时模拟面板请求被服务端静默丢弃。
+	dropPanel bool
 
 	mu           sync.Mutex
 	startPayload []byte
@@ -89,6 +91,9 @@ func startRefineFurnaceSession(t *testing.T, gw *refineFurnaceGateway) (*client.
 			case protocol.ActionHeartbeat:
 				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
 			case protocol.ActionIDRefineFurnacePanel:
+				if gw.dropPanel {
+					continue
+				}
 				_ = protocol.WritePacket(c2, protocol.NewPacket(pkt.ActionID, buildRefineFurnacePanel(gw.materials)))
 			case protocol.ActionIDRefineFurnaceAward:
 				_ = protocol.WritePacket(c2, protocol.NewPacket(pkt.ActionID, []byte{gw.awardCode}))
@@ -249,5 +254,19 @@ func TestRefinePotRoutine_PackFull(t *testing.T) {
 	err := farming.NewRefinePotRoutine().Execute(context.Background(), session, nil)
 	if !errors.Is(err, scheduler.ErrBagFull) {
 		t.Fatalf("err = %v, want ErrBagFull", err)
+	}
+}
+
+func TestRefinePotRoutine_PanelSilentDropCooldown(t *testing.T) {
+	gw := &refineFurnaceGateway{dropPanel: true}
+	session, closeFn := startRefineFurnaceSession(t, gw)
+	defer closeFn()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := farming.NewRefinePotRoutine().Execute(ctx, session, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("面板无回包应返回 CooldownError, 实际: %v", err)
 	}
 }

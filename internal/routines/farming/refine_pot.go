@@ -66,16 +66,17 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildRefineFurnacePanelPacket(), protocol.ActionIDRefineFurnacePanel)
 			if panelResp == nil {
-				return nil
+				slog.Info("炼宝炉面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "炼宝炉面板无回包")
 			}
 			panel, err := protocol.ParseRefineFurnacePanel(panelResp.Payload)
 			if err != nil {
-				slog.Warn("炼宝炉面板解析失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("炼宝炉面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "炼宝炉面板解析失败")
 			}
 			if panel.Result != protocol.RefineFurnaceSuccess {
-				slog.Info("炼宝炉面板不可用", "role_id", session.RoleID(), "result", panel.Result)
-				return nil
+				slog.Info("炼宝炉面板暂不可用，稍后重试", "role_id", session.RoleID(), "result", panel.Result)
+				return scheduler.NewCooldown(time.Hour, "炼宝炉面板不可用")
 			}
 			slog.Info("炼宝炉面板", "role_id", session.RoleID(),
 				"level", panel.Level, "exp", panel.Exp, "selected", panel.Selected,
@@ -137,11 +138,13 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 				for batches >= 1 {
 					startResp := call(protocol.BuildRefineFurnaceStartPacket(batches), protocol.ActionIDRefineFurnaceStart)
 					if startResp == nil {
-						return nil
+						slog.Info("炼宝炉开炉无回包，稍后重试", "role_id", session.RoleID())
+						return scheduler.NewCooldown(30*time.Minute, "炼宝炉开炉无回包")
 					}
 					startCode, sErr := protocol.ParseFirstByteResult(startResp.Payload, "炼宝炉炼制")
 					if sErr != nil {
-						return nil
+						slog.Warn("解析炼宝炉炼制回包失败，稍后重试", "role_id", session.RoleID(), "err", sErr)
+						return scheduler.NewCooldown(30*time.Minute, "炼宝炉炼制回包解析失败")
 					}
 					switch startCode {
 					case protocol.RefineFurnaceSuccess:

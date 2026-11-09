@@ -57,8 +57,8 @@ func NewCourtyardPetRoutine() scheduler.ActivityRoutine {
 
 			info := query()
 			if info == nil {
-				slog.Info("宠物庭院功能不可用或未开放，跳过", "role_id", session.RoleID())
-				return nil
+				slog.Info("宠物庭院功能不可用或未开放，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "宠物庭院信息无回包")
 			}
 			remain := info.TalismanCount
 			slog.Info("宠物庭院灵符状态", "role_id", session.RoleID(), "talisman", remain)
@@ -75,7 +75,8 @@ func NewCourtyardPetRoutine() scheduler.ActivityRoutine {
 				resp := call(protocol.BuildCourtyardPetCallPacket(protocol.CourtyardPetUseNormal),
 					protocol.ActionIDCourtyardPetCall)
 				if resp == nil {
-					return nil
+					slog.Info("灵符召唤无回包，稍后重试", "role_id", session.RoleID(), "summoned", calls)
+					return scheduler.NewCooldown(30*time.Minute, "宠物灵符召唤无回包")
 				}
 				code, err := protocol.ParseCourtyardPetResultCode(resp.Payload)
 				if err != nil {
@@ -102,7 +103,9 @@ func NewCourtyardPetRoutine() scheduler.ActivityRoutine {
 
 				next := query()
 				if next == nil {
-					return nil
+					slog.Info("召唤后灵符状态查询无回包，稍后重试",
+						"role_id", session.RoleID(), "summoned", calls)
+					return scheduler.NewCooldown(10*time.Minute, "宠物庭院刷新状态无回包")
 				}
 				if next.TalismanCount >= remain {
 					slog.Warn("宠物庭院灵符数量未递减，熔断退出",

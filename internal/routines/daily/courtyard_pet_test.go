@@ -2,11 +2,14 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func petInfoPayload(talisman int16) []byte {
@@ -83,5 +86,20 @@ func TestCourtyardPetRoutine_StopsWhenCountNotDecrease(t *testing.T) {
 	}
 	if got := callCalls.Load(); got != 1 {
 		t.Fatalf("灵符数量未递减时应熔断, 实际召唤 %d 次", got)
+	}
+}
+
+func TestCourtyardPetRoutine_InfoSilentDropCooldown(t *testing.T) {
+	sess := newDailyMockSession(t, func(net.Conn, *protocol.Packet) {
+		// 面板请求模拟服务端静默丢包。
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewCourtyardPetRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("庭院信息无回包应返回 CooldownError, 实际: %v", err)
 	}
 }
