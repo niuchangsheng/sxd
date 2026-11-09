@@ -135,7 +135,8 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 			for group := int32(1); group <= 4 && attempts < maxCultivationTaskAward; group++ {
 				taskResp := call(protocol.BuildCultivationCardTaskInfoPacket(group), protocol.ActionIDCultivationTaskInfo)
 				if taskResp == nil {
-					break
+					// 实测 group=2 会被静默丢弃；跳过该组继续检查其余分组。
+					continue
 				}
 				_, tasks, tErr := protocol.ParseCultivationCardTasks(taskResp.Payload)
 				if tErr != nil {
@@ -146,7 +147,9 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 					if ctx.Err() != nil || attempts >= maxCultivationTaskAward {
 						break
 					}
-					if task.Progress <= 0 || task.Flag != 0 {
+					// 实测 task_info 的第三个字段为完成标志：1=已完成/可领，0=未完成。
+					// 之前误按 0 领取，导致大量 result=1/9/11 失败。
+					if task.Progress <= 0 || task.Flag != 1 {
 						continue
 					}
 					attempts++

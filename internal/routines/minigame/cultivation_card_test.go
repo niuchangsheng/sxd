@@ -18,7 +18,7 @@ func TestCultivationCardRoutine_ClaimsTaskBuysAndOpens(t *testing.T) {
 		case protocol.ActionIDCultivationTaskInfo:
 			w := protocol.NewWriter().WriteInt32(4)
 			if string(pkt.Payload) == string([]byte{0, 0, 0, 1}) {
-				w.WriteUint16(1).WriteInt32(1).WriteInt32(6).WriteUint8(0)
+				w.WriteUint16(1).WriteInt32(1).WriteInt32(6).WriteUint8(1)
 			} else {
 				w.WriteUint16(0)
 			}
