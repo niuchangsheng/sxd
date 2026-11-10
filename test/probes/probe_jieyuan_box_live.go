@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -27,7 +28,11 @@ func main() {
 	flag.Parse()
 
 	slog.SetLogLoggerLevel(slog.LevelDebug)
-	cfg, err := config.Load("configs/config.yaml")
+	cfgPath := os.Getenv("SXD_CONFIG")
+	if cfgPath == "" {
+		cfgPath = "configs/config.yaml"
+	}
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		slog.Error("加载配置失败", "err", err)
 		return
