@@ -502,6 +502,7 @@ func sweepEliteMissionsWithoutTown(
 	slog.Info("开始全局精英副本扫荡", "role_id", session.RoleID(), "dungeons", len(ids), "anchor_act", anchorAct)
 
 	swept := 0
+	failStreak := 0
 	for _, dungeonID := range ids {
 		if ctx.Err() != nil {
 			break
@@ -515,6 +516,10 @@ func sweepEliteMissionsWithoutTown(
 				slog.Info("会话未恢复，结束全局精英扫荡", "role_id", session.RoleID(), "swept", swept)
 				break
 			}
+			// 重连后服务端场景/动作链需要短暂恢复时间。
+			failStreak = 0
+			anchorAct = session.LastActionID()
+			time.Sleep(1500 * time.Millisecond)
 		}
 		if cur := session.LastActionID(); cur != 0 &&
 			cur != protocol.ActionIDPracticeGetStatus && cur != protocol.ActionIDPracticeStart {
@@ -539,12 +544,25 @@ func sweepEliteMissionsWithoutTown(
 		if pErr != nil {
 			continue
 		}
-		sCtx, sCancel := context.WithTimeout(ctx, 8*time.Second)
+		statusTimeout := 8 * time.Second
+		if failStreak > 0 {
+			// 连续失败时缩短超时，避免 190 个副本 × 8s 长时间卡住。
+			statusTimeout = 3 * time.Second
+		}
+		sCtx, sCancel := context.WithTimeout(ctx, statusTimeout)
 		statusResp, sErr := session.Call(sCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
 		sCancel()
 		if sErr != nil || statusResp == nil {
+			failStreak++
+			slog.Info("精英副本状态无回包", "role_id", session.RoleID(), "dungeon_id", dungeonID,
+				"fail_streak", failStreak, "err", sErr)
+			if failStreak >= 3 {
+				slog.Info("精英副本扫荡连续无回包，进入冷却待恢复", "role_id", session.RoleID(), "swept", swept)
+				return swept, scheduler.NewCooldown(10*time.Minute, "精英副本扫荡连续无回包")
+			}
 			continue
 		}
+		failStreak = 0
 		status, parseErr := protocol.ParsePracticeStatusResult(statusResp.Payload)
 		if parseErr != nil || status == nil || len(status.Missions) == 0 {
 			slog.Debug("精英副本状态不可用", "dungeon_id", dungeonID, "err", parseErr, "len", len(statusResp.Payload))
