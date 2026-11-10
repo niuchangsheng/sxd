@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -60,93 +61,12 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
-			// 1. 查询渡业台/渡业仙池面板（必须带 PrevAct，官方抓包为 12 字节请求）。
-			//    空载荷版本服务端虽回包但不会登记 PrevAct 链，导致后续 852/16 被静默丢弃。
-			// 先用 0/2 全量角色资产重建 PrevAct 链：长会话中大量无 PrevAct 的请求会让
-			// 服务端的链锚点与本地 lastActionID 脱节，导致 852/16 被静默丢弃。
-			// 线上实测 (2026-11-11)：0/2 → 852/12 → 852/16 可稳定成功。
-			// 依次尝试候选锚点，直到 0/2 真正被服务端处理（LastAck 变为 0/2）。
-			candidates := []uint32{
-				session.LastAckActionID(),
-				session.LastActionID(),
-				protocol.ActionIDPlayerGetInfo,
-				protocol.ActionIDPlayerHeartbeat,
-				0x00A50000, // Mod 165 扩展模块初始化
-				0x00000063, // Mod 0 Act 99 场景进阶
-				0x00000048, // Mod 0 Act 72 城镇初始化
-			}
-			seen := make(map[uint32]bool, len(candidates))
-			synced := false
-			for _, cand := range candidates {
-				if cand == 0 || seen[cand] {
-					continue
-				}
-				seen[cand] = true
-				if call(protocol.BuildPlayerGetInfoPacket(int32(cand)), protocol.ActionIDPlayerGetInfo) != nil &&
-					session.LastAckActionID() == protocol.ActionIDPlayerGetInfo {
-					synced = true
-					slog.Debug("轮回净地 PrevAct 链重建成功", "role_id", session.RoleID(),
-						"anchor", fmt.Sprintf("0x%08X", cand))
-					break
-				}
-			}
-			if !synced {
-				slog.Info("轮回净地 PrevAct 链重建未成功，稍后重试", "role_id", session.RoleID())
-			}
-			anchor := session.LastAckActionID()
-			if anchor == 0 {
-				anchor = session.LastActionID()
-			}
-			if poolResp := call(protocol.BuildEraRebirthLandPoolPanelPrevActPacket(anchor),
-				protocol.ActionIDEraRebirthLandPoolPanel); poolResp != nil {
-				r := protocol.NewReader(poolResp.Payload)
-				vals := make([]int32, 0, 6)
-				for i := 0; i < 6; i++ {
-					v, rErr := r.ReadInt32()
-					if rErr != nil {
-						break
-					}
-					vals = append(vals, v)
-				}
-				slog.Info("轮回净地渡业仙池面板",
-					"role_id", session.RoleID(), "payload_len", len(poolResp.Payload), "ints", vals)
-			}
-
-			// 2. 渡业台抽取 (852/16)：消耗渡业符/活动道具，不消耗元宝。
-			//    抓包请求载荷为 [Int type=0][PrevAct]；收到非成功结果码（通常为
-			//    渡业符不足）即停止。元宝数量发生变化时视为协议漂移并熔断。
-			ingotsBefore := session.GetPlayerState().Ingots
-			draws := 0
+			// 1~2. 渡业台抽取：登录钩子已在会话激活后第一时间执行过则跳过；
+			// 长会话中再执行会被服务端静默丢弃（2026-11-11 实测）。
 			var drawCooldown error
-			for draws < maxAltarDrawsPerRun && ctx.Err() == nil {
-				resp := call(protocol.BuildEraRebirthLandDrawPacket(0, session.LastActionID()),
-					protocol.ActionIDEraRebirthLandDraw)
-				if resp == nil {
-					// 抽取无回包不应阻断仙池领取与挂机奖励：先完成其余步骤，最后再冷却。
-					drawCooldown = scheduler.NewCooldown(30*time.Minute, "渡业台抽取无回包")
-					break
-				}
-				res, err := protocol.ParseEraRebirthDrawResult(resp.Payload)
-				if err != nil {
-					slog.Warn("解析渡业台抽取回包失败", "role_id", session.RoleID(), "err", err)
-					break
-				}
-				if res.Result != protocol.EraRebirthResultSuccess {
-					slog.Info("渡业台抽取结束", "role_id", session.RoleID(), "draws", draws,
-						"result", res.Result, "result_text", protocol.EraRebirthResultText(res.Result))
-					break
-				}
-				draws++
-				slog.Info("渡业台抽取成功", "role_id", session.RoleID(),
-					"draws", draws, "first", res.First, "second", res.Second)
-			}
-			if ingotsAfter := session.GetPlayerState().Ingots; ingotsAfter != ingotsBefore {
-				slog.Error("渡业台抽取导致元宝变化，疑似协议漂移，立即熔断",
-					"role_id", session.RoleID(), "before", ingotsBefore, "after", ingotsAfter)
-				return scheduler.NewCooldown(6*time.Hour, "渡业台抽取导致元宝变化")
-			}
-			if draws > 0 {
-				slog.Info("渡业台本轮抽取完成", "role_id", session.RoleID(), "draws", draws)
+			if _, attempted := altarAttempted.Load(session); !attempted {
+				_, drawCooldown = runAltarDraws(ctx, session, call, true)
+				altarAttempted.Store(session, true)
 			}
 
 			// 3. 领取渡业仙池免费奖励 / 今日奖励 (852/13, 852/14)。
@@ -240,4 +160,157 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 			return drawCooldown
 		},
 	)
+}
+
+// altarAttempted 标记本进程内已对某角色执行过渡业台抽取（登录钩子优先）。
+var altarAttempted sync.Map
+
+// RunRebirthAltarOnLogin 在会话刚激活、调度器尚未启动时执行渡业台抽取。
+//
+// 服务端对 852/16 的上下文非常敏感：登录后第一件事执行可稳定成功；
+// 经过其他模块请求后再抽取会被静默丢弃（2026-11-11 线上实测）。
+// 调用方应在 dispatcher.StartAll 之前调用本函数。
+func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
+	if session == nil {
+		return
+	}
+	// RoleSession.Start 是异步连接：等待状态机进入 Active 后再抢占“第一业务请求”。
+	deadline := time.Now().Add(30 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if session.State() != client.StateActive {
+		slog.Info("登录后渡业台等待会话激活超时", "role_id", session.RoleID())
+		return
+	}
+	if _, loaded := altarAttempted.LoadOrStore(session, true); loaded {
+		return
+	}
+	const callTimeout = 8 * time.Second
+	call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
+		cCtx, cancel := context.WithTimeout(ctx, callTimeout)
+		defer cancel()
+		resp, err := session.Call(cCtx, pkt, act)
+		if err != nil {
+			slog.Info("登录后渡业台协议无回包", "role_id", session.RoleID(),
+				"action", act, "err", err)
+			return nil
+		}
+		return resp
+	}
+	draws, cooldown := runAltarDraws(ctx, session, call, false)
+	if draws > 0 {
+		slog.Info("登录后渡业台抽取完成", "role_id", session.RoleID(), "draws", draws)
+	}
+	if cooldown != nil {
+		slog.Info("登录后渡业台抽取未完成", "role_id", session.RoleID())
+	}
+}
+
+// runAltarDraws 查询渡业仙池面板并循环执行 852/16 抽取。
+//
+// doResync=true 时会先用 0/2 全量角色资产重建 PrevAct 链（长会话兜底路径）。
+func runAltarDraws(
+	ctx context.Context,
+	session *client.RoleSession,
+	call func(*protocol.Packet, uint32) *protocol.Packet,
+	doResync bool,
+) (int, error) {
+	// 先用 0/2 全量角色资产重建 PrevAct 链：长会话中大量无 PrevAct 的请求会让
+	// 服务端的链锚点与本地 lastActionID 脱节，导致 852/16 被静默丢弃。
+	// 依次尝试候选锚点，直到 0/2 真正被服务端处理（LastAck 变为 0/2）。
+	if doResync {
+		candidates := []uint32{
+			session.LastAckActionID(),
+			session.LastActionID(),
+			protocol.ActionIDPlayerGetInfo,
+			protocol.ActionIDPlayerHeartbeat,
+			0x00A50000, // Mod 165 扩展模块初始化
+			0x00000063, // Mod 0 Act 99 场景进阶
+			0x00000048, // Mod 0 Act 72 城镇初始化
+		}
+		seen := make(map[uint32]bool, len(candidates))
+		synced := false
+		for _, cand := range candidates {
+			if cand == 0 || seen[cand] {
+				continue
+			}
+			seen[cand] = true
+			if call(protocol.BuildPlayerGetInfoPacket(int32(cand)), protocol.ActionIDPlayerGetInfo) != nil &&
+				session.LastAckActionID() == protocol.ActionIDPlayerGetInfo {
+				synced = true
+				slog.Debug("轮回净地 PrevAct 链重建成功", "role_id", session.RoleID(),
+					"anchor", fmt.Sprintf("0x%08X", cand))
+				break
+			}
+		}
+		if !synced {
+			slog.Info("轮回净地 PrevAct 链重建未成功，稍后重试", "role_id", session.RoleID())
+		}
+	}
+
+	anchor := session.LastAckActionID()
+	if anchor == 0 {
+		anchor = session.LastActionID()
+	}
+	slog.Info("轮回净地渡业台请求上下文", "role_id", session.RoleID(),
+		"anchor", fmt.Sprintf("0x%08X", anchor),
+		"last_action", fmt.Sprintf("0x%08X", session.LastActionID()),
+		"last_ack", fmt.Sprintf("0x%08X", session.LastAckActionID()))
+	if poolResp := call(protocol.BuildEraRebirthLandPoolPanelPrevActPacket(anchor),
+		protocol.ActionIDEraRebirthLandPoolPanel); poolResp != nil {
+		r := protocol.NewReader(poolResp.Payload)
+		vals := make([]int32, 0, 6)
+		for i := 0; i < 6; i++ {
+			v, rErr := r.ReadInt32()
+			if rErr != nil {
+				break
+			}
+			vals = append(vals, v)
+		}
+		slog.Info("轮回净地渡业仙池面板",
+			"role_id", session.RoleID(), "payload_len", len(poolResp.Payload), "ints", vals)
+	}
+
+	ingotsBefore := session.GetPlayerState().Ingots
+	draws := 0
+	var drawCooldown error
+	for draws < maxAltarDrawsPerRun && ctx.Err() == nil {
+		drawPkt := protocol.BuildEraRebirthLandDrawPacket(0, session.LastActionID())
+		slog.Info("轮回净地渡业台抽取请求", "role_id", session.RoleID(), "draws", draws,
+			"prev_act", fmt.Sprintf("0x%08X", session.LastActionID()),
+			"payload", fmt.Sprintf("% X", drawPkt.Payload))
+		resp := call(drawPkt, protocol.ActionIDEraRebirthLandDraw)
+		if resp == nil {
+			// 抽取无回包不应阻断仙池领取与挂机奖励：先完成其余步骤，最后再冷却。
+			drawCooldown = scheduler.NewCooldown(30*time.Minute, "渡业台抽取无回包")
+			break
+		}
+		res, err := protocol.ParseEraRebirthDrawResult(resp.Payload)
+		if err != nil {
+			slog.Warn("解析渡业台抽取回包失败", "role_id", session.RoleID(), "err", err)
+			break
+		}
+		if res.Result != protocol.EraRebirthResultSuccess {
+			slog.Info("渡业台抽取结束", "role_id", session.RoleID(), "draws", draws,
+				"result", res.Result, "result_text", protocol.EraRebirthResultText(res.Result))
+			break
+		}
+		draws++
+		slog.Info("渡业台抽取成功", "role_id", session.RoleID(),
+			"draws", draws, "first", res.First, "second", res.Second)
+	}
+	if ingotsAfter := session.GetPlayerState().Ingots; ingotsAfter != ingotsBefore {
+		slog.Error("渡业台抽取导致元宝变化，疑似协议漂移，立即熔断",
+			"role_id", session.RoleID(), "before", ingotsBefore, "after", ingotsAfter)
+		return draws, scheduler.NewCooldown(6*time.Hour, "渡业台抽取导致元宝变化")
+	}
+	if draws > 0 {
+		slog.Info("渡业台本轮抽取完成", "role_id", session.RoleID(), "draws", draws)
+	}
+	return draws, drawCooldown
 }

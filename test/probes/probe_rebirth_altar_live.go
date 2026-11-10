@@ -50,7 +50,7 @@ func main() {
 	xdAuth.SetCookie(acc.Cookie)
 	ticketCache.RegisterAuthenticator(xdAuth)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 	defer cancel()
 
 	ticket, err := ticketCache.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)

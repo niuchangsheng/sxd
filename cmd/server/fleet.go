@@ -21,6 +21,7 @@ import (
 	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/routines"
+	"sxd-pie-ng/internal/routines/daily"
 	"sxd-pie-ng/internal/scheduler"
 	"sxd-pie-ng/internal/web"
 )
@@ -289,6 +290,11 @@ func startPlans(ctx context.Context, plans []*rolePlan) {
 			}
 			slog.Info("角色会话启动中",
 				"role_id", p.roleID, "server_id", p.role.ServerID, "server_addr", p.cfg.ServerAddr)
+			// 登录后置任务：渡业台抽取对 PrevAct 链上下文敏感，必须抢在其它
+			// 业务请求之前执行（调度器在 startPlans 之后才启动）。
+			if p.enabled["rebirth_land"] {
+				daily.RunRebirthAltarOnLogin(ctx, p.sess)
+			}
 		}()
 	}
 	wg.Wait()

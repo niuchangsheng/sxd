@@ -244,8 +244,10 @@ func run(ctx context.Context, args []string) error {
 	// 阶段三：装配会话与独立调度器，然后并发启动会话。
 	routineMgr := newRoutineManager(buildRoutineEnabledMap(cfg.Scheduler))
 	startable := registerPlans(plans, mgr, dispatcher, routineMgr)
-	dispatcher.StartAll(ctx)
+	// 先完成登录与登录后置任务（如渡业台抽取），再启动调度器，
+	// 确保对 PrevAct 链敏感的协议是会话激活后的第一批业务请求。
 	startPlans(ctx, startable)
+	dispatcher.StartAll(ctx)
 
 	// 每个角色按其生效的 cron_times 独立唤醒 Cron 玩法。
 	cronTimesByRole := make(map[string][]string, len(plans))

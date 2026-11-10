@@ -127,3 +127,44 @@ func TestRebirthLandRoutine_NoGiftStops(t *testing.T) {
 		t.Fatalf("仙池无奖励时应兜底调用 852/6 一次, 实际 %d 次", got)
 	}
 }
+
+// 登录后置钩子：面板 + 一次成功抽取，随后渡业符不足自动停止；元宝不变。
+func TestRunRebirthAltarOnLogin_DrawsUntilInsufficient(t *testing.T) {
+	var drawCalls atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDEraRebirthLandPoolPanel:
+			w := protocol.NewWriter()
+			for i := 0; i < 6; i++ {
+				w.WriteInt32(0)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDEraRebirthLandDraw:
+			n := drawCalls.Add(1)
+			result := protocol.EraRebirthResultSuccess
+			if n > 1 {
+				result = protocol.EraRebirthResultNotEnoughFu
+			}
+			w := protocol.NewWriter()
+			w.WriteUint8(result)
+			w.WriteInt32(1)
+			w.WriteInt32(4)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		}
+	})
+	defer sess.Close()
+
+	beforeIngots := sess.GetPlayerState().Ingots
+	RunRebirthAltarOnLogin(context.Background(), sess)
+	if got := drawCalls.Load(); got != 2 {
+		t.Fatalf("抽取调用 = %d, want 2 (1 次成功 + 1 次渡业符不足)", got)
+	}
+	// 第二次登录钩子调用应被去重，不再发抽取。
+	RunRebirthAltarOnLogin(context.Background(), sess)
+	if got := drawCalls.Load(); got != 2 {
+		t.Fatalf("重复钩子不应再次抽取, calls = %d", got)
+	}
+	if ingots := sess.GetPlayerState().Ingots; ingots != beforeIngots {
+		t.Fatalf("元宝发生变化: before=%d after=%d", beforeIngots, ingots)
+	}
+}
