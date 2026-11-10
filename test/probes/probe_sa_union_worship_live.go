@@ -5,9 +5,10 @@
 // 可选执行: WORSHIP_EXECUTE=1 时才真正发送 419/2（只使用 type=0 铜钱/免费档）。
 //
 // 目的: 对比三种载荷形态下 419/2 的结果码：
-//   A. [UByte type]                     (当前例程)
-//   B. [UByte type][UInt32 prevAct]     (official 链式风格)
-//   C. [UByte type][UInt32 prevAct=面板] (显式指向面板)
+//
+//	A. [UByte type]                     (当前例程)
+//	B. [UByte type][UInt32 prevAct]     (official 链式风格)
+//	C. [UByte type][UInt32 prevAct=面板] (显式指向面板)
 package main
 
 import (
@@ -117,6 +118,25 @@ func main() {
 		}
 	}
 
+	// 圣盟/仙盟城镇会话对照（线上 8252）
+	if town, tErr := sess.OpenSectTownSession(ctx); tErr != nil {
+		slog.Warn("打开仙盟城镇会话失败", "err", tErr)
+	} else {
+		defer town.Close()
+		slog.Info("仙盟城镇会话已建立", "role_id", town.RoleID())
+		if panel := callOn(town, protocol.BuildSaUnionWorshipPanelPacketWithPrev(town.LastActionID()), 8*time.Second); panel != nil {
+			slog.Info("城镇会话 419/1 回包", "len", len(panel.Payload), "hex", hex.EncodeToString(panel.Payload))
+		}
+		if os.Getenv("WORSHIP_EXECUTE") == "1" {
+			pkt := protocol.NewPacket(protocol.ActionIDSaUnionWorship, []byte{protocol.SaUnionWorshipUseCoin})
+			if resp := callOn(town, pkt, 8*time.Second); resp != nil && len(resp.Payload) > 0 {
+				slog.Info("城镇会话膜拜结果", "result", resp.Payload[0],
+					"result_text", protocol.SaUnionWorshipResultText(resp.Payload[0]),
+					"hex", hex.EncodeToString(resp.Payload))
+			}
+		}
+	}
+
 	run("A-[UByte type]", []byte{protocol.SaUnionWorshipUseCoin})
 	time.Sleep(500 * time.Millisecond)
 	w := protocol.NewWriter()
@@ -131,6 +151,17 @@ func main() {
 
 	st = sess.GetPlayerState()
 	slog.Info("结束资产", "ingots", st.Ingots, "coins", st.Coins)
+}
+
+func callOn(s *client.RoleSession, pkt *protocol.Packet, d time.Duration) *protocol.Packet {
+	cCtx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	resp, err := s.Call(cCtx, pkt, pkt.ActionID)
+	if err != nil {
+		slog.Warn("城镇会话请求无应答", "action", fmt.Sprintf("0x%08X", pkt.ActionID), "err", err)
+		return nil
+	}
+	return resp
 }
 
 func dumpPacket(label string, pkt *protocol.Packet) {
