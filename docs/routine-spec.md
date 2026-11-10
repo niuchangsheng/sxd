@@ -78,6 +78,7 @@ stateDiagram-v2
 - **自动对齐恢复窗口**：系统将任务挂起至下一个逻辑重置时间点（如次日 `00:00`，或根据体力回复速率计算的具体时刻），而非在短时间内频繁重试消耗带宽与触发防挂检测。
 - **功能开放状态必须原生探测**：新增玩法在发业务请求前，先用 `RoleSession.CheckFunctionOpen` 调用 `Mod_Player_Base.check_function_open`（Module 0, Action 69），功能编号取自客户端 `FunctionTypeData.List`。回包 `TRUE=119` 才继续；`FALSE=120` 记 `INFO` 后跳过；未知标志位或协议异常按失败处理。禁止用“业务请求超时”反推功能未开放。若需要一次性获取全部已开放功能，可改用 `get_player_function`（Module 0, Action 6），其回包为 `[Int id, Byte isPlayed]` 列表。
 - **静默无回包的边界**：仅当原生探测本身无回包时，才按会话异常记录 `WARN` 并跳过本轮；主服只读探测必须使用独立短超时（见 `SessionConfig.SectQueryTimeout`），不得占用城镇/跨服会话的长超时预算。
+- **协议封装必须自带超时**：`RoleSession` 的每个协议封装方法都**不得**以调用方透传的 ctx 直接调用 `s.Call`。Routine 拿到的是调度器上下文（无 deadline），服务端静默丢包时会永久阻塞并冻结该角色的**全部**后续玩法（2026-11-10 叶公好龙 `check_function_open` 事故：调度协程挂死 24 分钟）。业务封装应设置 3~8 秒业务超时；`s.Call` 另对无 deadline 的调用兜底 30 秒，仅作最后防线。
 
 ### 2.2 回包解析铁律（强制）
 

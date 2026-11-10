@@ -590,8 +590,23 @@ func (s *RoleSession) SetPacketObserver(fn func(*protocol.Packet)) {
 	s.packetObserver = fn
 }
 
+// defaultCallTimeout 调用方未携带 deadline 时的兜底等待上限。
+//
+// 服务端对不满足条件/场景不符的请求会静默丢弃。若某个协议封装直接透传 Routine
+// 的调度上下文 (无 deadline)，Call 将永久阻塞，冻结该角色的整个调度协程
+// (2026-11-10 叶公好龙卡死事故)。业务侧仍应显式设置更短的超时，这里仅作
+// 最后一道防线，避免一次漏设超时拖垮全部玩法。
+var defaultCallTimeout = 30 * time.Second
+
 // Call 发送指定请求封包并同步等待特定 ActionID 的对端回包。
 func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respActionID uint32) (*protocol.Packet, error) {
+	// 兜底超时: 调用方漏设 deadline 时也要能返回，绝不无限等待。
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		callCtx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
+		defer cancel()
+		ctx = callCtx
+	}
+
 	ch := make(chan *protocol.Packet, 1)
 
 	s.handlerMu.Lock()
