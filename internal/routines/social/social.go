@@ -102,11 +102,9 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 						openCount = remaining
 					}
 
-					// 线上实测 (2026-11-07 s0): 旧抓包中 0x02100001 的“开箱前置握手”
-					// 在当前服务端会被静默丢弃，且会把 PrevAct 链指向一个服务端从未处理的
-					// 动作，导致随后的开箱请求也全部超时（每批固定空等 16s）。
-					// 因此不再发送该握手，直接以库存查询动作作为 PrevAct 发起开箱；
-					// 请求失败即终止本轮，避免对其他宝箱重复空等。
+					// 官方抓包中开箱请求 TCP 段为 20 字节（8 字节帧头 + item_id/count/PrevAct）。
+					// 线上主服会话仍被静默丢弃；当前以最近一次库存查询动作作为 PrevAct 重试，
+					// 具体 PrevAct/会话归属待原始报文字节确认。
 					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, openCount, prevAct)
 					oCtx, oCancel := context.WithTimeout(ctx, 8*time.Second)
 					openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)
@@ -166,7 +164,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					openedNow := remaining - afterCount
 					totalOpened += int(openedNow)
 					remaining = afterCount
-					// 库存核对查询是本轮最后一个已发送动作，后续开箱以它为 PrevAct。
+					// 库存核对查询是本轮最后一个已发送动作。
 					prevAct = protocol.ActionIDJieYuanBoxList
 
 					time.Sleep(50 * time.Millisecond)

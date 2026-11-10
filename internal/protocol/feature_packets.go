@@ -221,6 +221,9 @@ func BuildJieYuanBoxOpenContextPacket(prevAct uint32) *Packet {
 }
 
 // BuildJieYuanBoxOpenPacket 构造批量开启结缘宝箱请求封包 (Module 232, Action 34)。
+//
+// 抓包显示官方开箱请求为 [Int box_item_id, Int count, Uint32 PrevAct]；
+// PrevAct 默认指向 528/1 前置握手。
 func BuildJieYuanBoxOpenPacket(itemID int32, openCount int32, prevAct uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(itemID)

@@ -49,8 +49,8 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 	if pOpen.ActionID != protocol.ActionIDJieYuanBoxOpen {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDJieYuanBoxOpen, pOpen.ActionID)
 	}
-	if !pOpen.HasPrevAct {
-		t.Error("结缘宝箱开箱必须标记 HasPrevAct，由会话层填充真实前序动作号")
+	if !pOpen.HasPrevAct || len(pOpen.Payload) != 12 {
+		t.Errorf("开箱载荷应为 12 字节并标记 PrevAct, 实际 len=%d prev=%v", len(pOpen.Payload), pOpen.HasPrevAct)
 	}
 	pList := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDTownEnter)
 	if !pList.HasPrevAct {
