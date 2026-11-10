@@ -450,6 +450,7 @@ func NewOnlineGiftRoutine(cfgs ...OnlineGiftConfig) scheduler.ActivityRoutine {
 
 			switch claim.Result {
 			case protocol.PlayerActionSuccess:
+				OpenGiftPacks(ctx, session, giftPackRepo)
 				slog.Info("在线礼包领取成功",
 					"role_id", session.RoleID(),
 					"gift_count", len(claim.Gifts),
@@ -457,6 +458,7 @@ func NewOnlineGiftRoutine(cfgs ...OnlineGiftConfig) scheduler.ActivityRoutine {
 					"next_time_stamp", claim.NextTimeStamp,
 				)
 			case protocol.PlayerAlreadyGet:
+				OpenGiftPacks(ctx, session, giftPackRepo)
 				slog.Info("在线礼包已领取过",
 					"role_id", session.RoleID(),
 					"next_time_stamp", claim.NextTimeStamp,
@@ -736,6 +738,7 @@ func NewOnlineRewardRoutine() scheduler.ActivityRoutine {
 			}
 			switch result {
 			case protocol.OnlineRewardResultSuccess:
+				OpenGiftPacks(ctx, session, giftPackRepo)
 				slog.Info("在线奖励领取成功",
 					"role_id", session.RoleID(),
 					"award_ids", awards,

@@ -111,26 +111,7 @@ func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift
 	}
 
 	for attempt := 1; attempt <= maxClaims; attempt++ {
-		// 1. 先摇奖 (127/3)，服务端才会为本次领取准备奖励结果。
-		rCtx, rCancel := context.WithTimeout(ctx, 5*time.Second)
-		rollResp, rollErr := session.Call(rCtx, protocol.BuildFunctionEndRandomAwardPacket(gift.GiftID), protocol.ActionIDFunctionEndRandomAward)
-		rCancel()
-		if rollErr != nil || rollResp == nil {
-			return fmt.Errorf("random award gift %d: %w", gift.GiftID, rollErr)
-		}
-		preview, pErr := protocol.ParseFunctionEndRandomAwardResult(rollResp.Payload)
-		if pErr != nil {
-			return fmt.Errorf("random award gift %d: %w", gift.GiftID, pErr)
-		}
-		slog.Debug("功能终结礼包摇奖完成",
-			"role_id", session.RoleID(),
-			"gift_id", gift.GiftID,
-			"attempt", attempt,
-			"state_point", preview.StatePoint,
-			"nimbus", preview.Nimbus,
-			"juling", preview.JuLing,
-		)
-
+		// 1. 直接领取 (127/2)，不先摇奖。
 		// 2. 再领取 (127/2)。
 		cCtx, cCancel := context.WithTimeout(ctx, 5*time.Second)
 		resp, err := session.Call(cCtx, protocol.BuildGetFunctionEndGiftPacket(gift.GiftID), protocol.ActionIDGetGameFunctionEndGift)
@@ -145,6 +126,26 @@ func claimFunctionEndGift(ctx context.Context, session *client.RoleSession, gift
 		claim, err := protocol.ParseGetGameFunctionEndGiftResult(resp.Payload)
 		if err != nil {
 			return fmt.Errorf("claim gift %d: %w", gift.GiftID, err)
+		}
+		// 直接领取未产生任何奖励且仍有下一份时，回退到随机摇奖一次再领取，
+		// 兼容服务端要求先 random_award 的随机礼包；直接领取成功的礼包不走此分支。
+		if claim.Result == protocol.FunctionEndSuccess && claim.IsHaveNext && !functionEndClaimGranted(claim) {
+			rCtx, rCancel := context.WithTimeout(ctx, 5*time.Second)
+			rollResp, rollErr := session.Call(rCtx, protocol.BuildFunctionEndRandomAwardPacket(gift.GiftID), protocol.ActionIDFunctionEndRandomAward)
+			rCancel()
+			if rollErr == nil && rollResp != nil {
+				if _, pErr := protocol.ParseFunctionEndRandomAwardResult(rollResp.Payload); pErr == nil {
+					c2Ctx, c2Cancel := context.WithTimeout(ctx, 5*time.Second)
+					retryResp, retryErr := session.Call(c2Ctx, protocol.BuildGetFunctionEndGiftPacket(gift.GiftID), protocol.ActionIDGetGameFunctionEndGift)
+					c2Cancel()
+					if retryErr == nil && retryResp != nil {
+						if retryClaim, rErr := protocol.ParseGetGameFunctionEndGiftResult(retryResp.Payload); rErr == nil {
+							claim = retryClaim
+							slog.Info("功能终结礼包直接领取为空，已摇奖后重领", "role_id", session.RoleID(), "gift_id", gift.GiftID)
+						}
+					}
+				}
+			}
 		}
 
 		switch claim.Result {
