@@ -75,6 +75,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "fame_blessing", Name: "仙界尊像膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "仙界膜拜前三名霸主大神与声望祝福获取", DefaultOn: false},
 		{ID: "void_worship", Name: "仙界虚空膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "大神榜每日免费膜拜 (不消耗元宝)", DefaultOn: false},
 		{ID: "sa_world_tower", Name: "全网幻魔塔", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "开放时按塔编号免费挑战 (不买次数)", DefaultOn: false},
+		{ID: "tower_room", Name: "全服伏魔塔房间", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "创建房间→解除封印→进入战斗 (不调用元宝动作)", DefaultOn: false},
 		{ID: "sa_union_worship", Name: "万古神墟膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "圣盟膜拜面板铜钱/免费档 (不使用元宝档)", DefaultOn: false},
 		{ID: "jieyuan_box", Name: "结缘宝箱开启", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "批量开启结缘宝箱 (除了传说，其他都开)", DefaultOn: false},
 		{ID: "faction_blessing", Name: "帮派祭神", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "每日帮派上香祭神，获取祝福、声望与神像灵气", DefaultOn: false},
@@ -371,6 +372,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewSaUnionWorshipRoutine()
 	case "sa_world_tower":
 		return social.NewSaWorldTowerRoutine()
+	case "tower_room":
+		return social.NewTowerRoomRoutine()
 	case "void_worship":
 		return social.NewVoidWorshipRoutine()
 	case "fame_blessing":

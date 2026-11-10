@@ -1250,6 +1250,16 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 				maxFloor = 25
 			}
 			if int(info.SequenceWar) >= maxFloor {
+				// 仙·天道(12) 为最终道：全通后服务端不再允许重置（2026-11-10 用户确认，
+				// 且实测重置请求被静默丢弃）。直接结束，避免每 30 分钟无意义重试。
+				if info.Layer >= protocol.TowerLayerXianHeaven {
+					slog.Info("六道轮回已全通最终道且无法重置，挑战完成",
+						"role_id", session.RoleID(),
+						"layer", info.Layer,
+						"layer_name", layerName,
+					)
+					return nil
+				}
 				if cfg.AutoReset && info.ResetNum > 0 {
 					slog.Info("六道轮回当前道已全通，检测到今日剩余免费重置次数，执行重置",
 						"role_id", session.RoleID(),

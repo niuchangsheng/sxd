@@ -24,6 +24,11 @@ const (
 	ActionIDEraRebirthLandFreeAward uint32 = 0x0354000D
 	// ActionIDEraRebirthLandTodayAward 领取渡业仙池今日奖励 (Module 852, Action 14 -> 0x0354000E)
 	ActionIDEraRebirthLandTodayAward uint32 = 0x0354000E
+	// ActionIDEraRebirthLandDraw 渡业台抽取 (Module 852, Action 16 -> 0x03540010)
+	//
+	// 抓包 (2026-11-10): 请求 [Int type][Uint32 PrevAct]，type 实测为 0；
+	// 回包 [UByte result, Int, Int]，成功时 result=0。消耗渡业符/活动道具，不消耗元宝。
+	ActionIDEraRebirthLandDraw uint32 = 0x03540010
 )
 
 // 轮回净地结果码 (Mod_EraRebirthLandAuto_Base)。
@@ -110,6 +115,44 @@ func BuildEraRebirthLandFreeAwardPacket() *Packet {
 // BuildEraRebirthLandTodayAwardPacket 构造领取渡业仙池今日奖励封包 (852/14)。
 func BuildEraRebirthLandTodayAwardPacket() *Packet {
 	return NewPacket(ActionIDEraRebirthLandTodayAward, nil)
+}
+
+// BuildEraRebirthLandDrawPacket 构造渡业台抽取封包 (852/16)。
+//
+// 线格式: Int type, Uint32 PrevAct；type 实测为 0（普通抽取）。
+// HasPrevAct 置位后由会话在发送时填充最新动作号。
+func BuildEraRebirthLandDrawPacket(drawType int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(drawType)
+	w.WriteUint32(prevAct)
+	return &Packet{ActionID: ActionIDEraRebirthLandDraw, Payload: w.Bytes(), HasPrevAct: true}
+}
+
+// EraRebirthDrawResult 表示渡业台抽取回包 [UByte result, Int, Int]。
+type EraRebirthDrawResult struct {
+	// Result 结果码，0 = SUCCESS
+	Result uint8
+	// First 第一个返回值（抓包成功时为 1）
+	First int32
+	// Second 第二个返回值（抓包成功时为 4）
+	Second int32
+}
+
+// ParseEraRebirthDrawResult 解析渡业台抽取回包。
+func ParseEraRebirthDrawResult(payload []byte) (*EraRebirthDrawResult, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	res := &EraRebirthDrawResult{}
+	var err error
+	if res.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("渡业台结果码读取失败: %w", err)
+	}
+	if res.First, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("渡业台返回值读取失败: %w", err)
+	}
+	if res.Second, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("渡业台第二返回值读取失败: %w", err)
+	}
+	return res, nil
 }
 
 // ParseEraRebirthSimpleResult 解析仅含单字节结果码的 852 回包。

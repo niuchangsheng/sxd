@@ -1,10 +1,11 @@
 // Package daily 提供签到、邮件、在线奖励、绑定奖励与日常维护类玩法。
 //
-// 本文件实现轮回净地每日挂机奖励领取 (Mod_EraRebirthLandAuto_Base, Module 852)，
-// 对应每日活跃度任务 70「每日轮回净地领取挂机奖励」(每次 +20)。
+// 本文件实现轮回净地 (Mod_EraRebirthLandAuto_Base, Module 852)：
+//   - 渡业台抽取 (852/16)：消耗渡业符/活动道具，不消耗元宝；
+//   - 渡业仙池免费/今日奖励 (852/13, 852/14)；
+//   - 每日活跃度任务 70「每日轮回净地领取挂机奖励」的免费一键领取 (852/6)。
 //
-// 仅调用免费一键领取 one_click_quick_free_back；元宝档 one_click_quick_ingot_back
-// 永不调用。
+// 元宝档 one_click_quick_ingot_back (852/7) 永不调用。
 package daily
 
 import (
@@ -20,7 +21,11 @@ import (
 // DailyTaskRebirthLand 每日轮回净地领取挂机奖励。
 const DailyTaskRebirthLand int32 = 70
 
-// NewRebirthLandRoutine 构造轮回净地挂机奖励领取任务。
+// maxAltarDrawsPerRun 单轮渡业台抽取上限，防止服务端异常导致死循环。
+// 实际次数由渡业符数量决定，收到非成功结果码即停止。
+const maxAltarDrawsPerRun = 50
+
+// NewRebirthLandRoutine 构造轮回净地日常任务。
 func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 6 * time.Second
 	return scheduler.NewBaseRoutine(
@@ -54,22 +59,7 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
-			// 1. 活跃度任务 70 未完成时才领取，避免无意义请求。
-			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
-			if actResp == nil {
-				slog.Info("查询每日活跃度失败，稍后重试轮回净地", "role_id", session.RoleID())
-				return scheduler.NewCooldown(10*time.Minute, "轮回净地活跃度查询无回包")
-			}
-			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)
-			if err != nil {
-				return err
-			}
-			if panel.RemainingTimesFor(DailyTaskRebirthLand) <= 0 {
-				slog.Info("轮回净地活跃度已完成，跳过", "role_id", session.RoleID())
-				return nil
-			}
-
-			// 2. 查询渡业台/渡业仙池面板（仅诊断，失败不阻断领取）。
+			// 1. 查询渡业台/渡业仙池面板（诊断，失败不阻断后续领取）。
 			if poolResp := call(protocol.BuildEraRebirthLandPoolPanelPacket(), protocol.ActionIDEraRebirthLandPoolPanel); poolResp != nil {
 				r := protocol.NewReader(poolResp.Payload)
 				vals := make([]int32, 0, 6)
@@ -82,6 +72,40 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				}
 				slog.Info("轮回净地渡业仙池面板",
 					"role_id", session.RoleID(), "payload_len", len(poolResp.Payload), "ints", vals)
+			}
+
+			// 2. 渡业台抽取 (852/16)：消耗渡业符/活动道具，不消耗元宝。
+			//    抓包请求载荷为 [Int type=0][PrevAct]；收到非成功结果码（通常为
+			//    渡业符不足）即停止。元宝数量发生变化时视为协议漂移并熔断。
+			ingotsBefore := session.GetPlayerState().Ingots
+			draws := 0
+			for draws < maxAltarDrawsPerRun && ctx.Err() == nil {
+				resp := call(protocol.BuildEraRebirthLandDrawPacket(0, session.LastActionID()),
+					protocol.ActionIDEraRebirthLandDraw)
+				if resp == nil {
+					return scheduler.NewCooldown(10*time.Minute, "渡业台抽取无回包")
+				}
+				res, err := protocol.ParseEraRebirthDrawResult(resp.Payload)
+				if err != nil {
+					slog.Warn("解析渡业台抽取回包失败", "role_id", session.RoleID(), "err", err)
+					break
+				}
+				if res.Result != protocol.EraRebirthResultSuccess {
+					slog.Info("渡业台抽取结束", "role_id", session.RoleID(), "draws", draws,
+						"result", res.Result, "result_text", protocol.EraRebirthResultText(res.Result))
+					break
+				}
+				draws++
+				slog.Info("渡业台抽取成功", "role_id", session.RoleID(),
+					"draws", draws, "first", res.First, "second", res.Second)
+			}
+			if ingotsAfter := session.GetPlayerState().Ingots; ingotsAfter != ingotsBefore {
+				slog.Error("渡业台抽取导致元宝变化，疑似协议漂移，立即熔断",
+					"role_id", session.RoleID(), "before", ingotsBefore, "after", ingotsAfter)
+				return scheduler.NewCooldown(6*time.Hour, "渡业台抽取导致元宝变化")
+			}
+			if draws > 0 {
+				slog.Info("渡业台本轮抽取完成", "role_id", session.RoleID(), "draws", draws)
 			}
 
 			// 3. 领取渡业仙池免费奖励 / 今日奖励 (852/13, 852/14)。
@@ -124,7 +148,22 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				return scheduler.ErrBagFull
 			}
 
-			// 4. 兜底：免费一键领取挂机奖励 (852/6)。
+			// 4. 活跃度任务 70 未完成时才领取挂机奖励，避免无意义请求。
+			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
+			if actResp == nil {
+				slog.Info("查询每日活跃度失败，稍后重试轮回净地", "role_id", session.RoleID())
+				return scheduler.NewCooldown(10*time.Minute, "轮回净地活跃度查询无回包")
+			}
+			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)
+			if err != nil {
+				return err
+			}
+			if panel.RemainingTimesFor(DailyTaskRebirthLand) <= 0 {
+				slog.Info("轮回净地活跃度已完成，跳过", "role_id", session.RoleID())
+				return nil
+			}
+
+			// 5. 兜底：免费一键领取挂机奖励 (852/6)。
 			resp := call(protocol.BuildEraRebirthLandFreeBackPacket(), protocol.ActionIDEraRebirthLandFreeBack)
 			if resp == nil {
 				slog.Info("轮回净地不可用或未开放，跳过", "role_id", session.RoleID())

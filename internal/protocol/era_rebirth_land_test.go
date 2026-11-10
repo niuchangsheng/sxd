@@ -36,3 +36,37 @@ func TestParseEraRebirthFreeBackResult_NoGift(t *testing.T) {
 		t.Fatal("expected error for empty payload")
 	}
 }
+
+// 抓包样本 (2026-11-10): 渡业台抽取请求 = [Int type=0][PrevAct=852/12]。
+func TestBuildEraRebirthLandDrawPacket(t *testing.T) {
+	pkt := protocol.BuildEraRebirthLandDrawPacket(0, protocol.ActionIDEraRebirthLandPoolPanel)
+	if pkt.ActionID != protocol.ActionIDEraRebirthLandDraw {
+		t.Fatalf("ActionID = 0x%08X, 期望 0x%08X", pkt.ActionID, protocol.ActionIDEraRebirthLandDraw)
+	}
+	if !pkt.HasPrevAct {
+		t.Fatal("HasPrevAct 未置位，PrevAct 会被心跳打断")
+	}
+	want := []byte{0x00, 0x00, 0x00, 0x00, 0x03, 0x54, 0x00, 0x0c}
+	if len(pkt.Payload) != len(want) {
+		t.Fatalf("载荷长度 = %d, 期望 %d", len(pkt.Payload), len(want))
+	}
+	for i := range want {
+		if pkt.Payload[i] != want[i] {
+			t.Fatalf("载荷 = % X, 期望 % X", pkt.Payload, want)
+		}
+	}
+}
+
+// 抓包样本回包: 00 00 00 00 01 00 00 00 04 -> result=0, first=1, second=4。
+func TestParseEraRebirthDrawResult(t *testing.T) {
+	res, err := protocol.ParseEraRebirthDrawResult([]byte{0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.Result != protocol.EraRebirthResultSuccess || res.First != 1 || res.Second != 4 {
+		t.Fatalf("res = %+v", res)
+	}
+	if _, err := protocol.ParseEraRebirthDrawResult([]byte{0x00}); err == nil {
+		t.Fatal("截断回包应返回错误")
+	}
+}

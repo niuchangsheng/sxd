@@ -1,0 +1,108 @@
+package social
+
+import (
+	"context"
+	"net"
+	"sync/atomic"
+	"testing"
+
+	"sxd-pie-ng/internal/protocol"
+)
+
+// 缩短步骤间隔，避免单测等待 7 秒。
+func shortenTowerRoomGaps(t *testing.T) {
+	t.Helper()
+	oldStep, oldEnter := towerRoomStepGap, towerRoomEnterGap
+	towerRoomStepGap, towerRoomEnterGap = 0, 0
+	t.Cleanup(func() {
+		towerRoomStepGap, towerRoomEnterGap = oldStep, oldEnter
+	})
+}
+
+// 正常路径：创建房间 -> 解除封印 -> 进入战斗，三步都应以结果码 4 通过。
+func TestTowerRoomRoutine_HappyPath(t *testing.T) {
+	shortenTowerRoomGaps(t)
+
+	var createCalls, unsealCalls, enterCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDTowerRoomOpen:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{4}))
+		case protocol.ActionIDTowerRoomCreate:
+			createCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{4, 0x00, 0x00, 0x07, 0xd1}))
+		case protocol.ActionIDTowerRoomUnseal:
+			unsealCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{4}))
+		case protocol.ActionIDTowerRoomNext:
+			enterCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{4}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewTowerRoomRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("tower room routine: %v", err)
+	}
+	if createCalls.Load() != 1 || unsealCalls.Load() != 1 || enterCalls.Load() != 1 {
+		t.Fatalf("调用次数 create=%d unseal=%d enter=%d, 期望各 1 次",
+			createCalls.Load(), unsealCalls.Load(), enterCalls.Load())
+	}
+}
+
+// 创建房间失败（结果码非 4）时不得继续解除封印。
+func TestTowerRoomRoutine_CreateFailureStops(t *testing.T) {
+	shortenTowerRoomGaps(t)
+
+	var unsealCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDTowerRoomOpen:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{4}))
+		case protocol.ActionIDTowerRoomCreate:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{0, 0x00, 0x00, 0x07, 0xd1}))
+		case protocol.ActionIDTowerRoomUnseal:
+			unsealCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{4}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewTowerRoomRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("tower room routine: %v", err)
+	}
+	if unsealCalls.Load() != 0 {
+		t.Fatalf("创建失败后不应解除封印, unseal=%d", unsealCalls.Load())
+	}
+}
+
+// 解除封印失败时不得进入战斗。
+func TestTowerRoomRoutine_UnsealFailureStops(t *testing.T) {
+	shortenTowerRoomGaps(t)
+
+	var enterCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDTowerRoomOpen:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{4}))
+		case protocol.ActionIDTowerRoomCreate:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{4, 0x00, 0x00, 0x07, 0xd1}))
+		case protocol.ActionIDTowerRoomUnseal:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{1}))
+		case protocol.ActionIDTowerRoomNext:
+			enterCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{4}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewTowerRoomRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("tower room routine: %v", err)
+	}
+	if enterCalls.Load() != 0 {
+		t.Fatalf("解除封印失败后不应进入战斗, enter=%d", enterCalls.Load())
+	}
+}

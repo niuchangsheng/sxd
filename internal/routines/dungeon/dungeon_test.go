@@ -2450,3 +2450,60 @@ func TestDungeonSweep_GlobalElite(t *testing.T) {
 		t.Fatalf("expected 1 status + 1 start, got status=%d start=%d", statusCalls.Load(), startCalls.Load())
 	}
 }
+
+// 仙·天道(12) 全通后服务端不再允许重置：例程不得发送重置请求，直接收尾。
+func TestSixRealmsRoutine_FinalPathNoReset(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	var resetCalls atomic.Int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDTowerGetInfo:
+				w := protocol.NewWriter()
+				w.WriteUint8(25) // SequenceMax
+				w.WriteUint8(12) // Layer: 仙·天道
+				w.WriteUint8(25) // SequenceWar: 全通
+				w.WriteUint8(5)  // BagNum
+				w.WriteUint8(6)  // ResetNum: 服务端仍显示有免费重置次数
+				w.WriteUint16(0) // ResetIngot
+				w.WriteUint8(0)  // HideID
+				w.WriteInt32(20) // HighStone
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerGetInfo, w.Bytes()))
+			case protocol.ActionIDTowerResetLayer:
+				resetCalls.Add(1)
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:            "role-six-realms-final",
+		RoleName:          "六道终道测试",
+		ServerAddr:        "mock-pipe",
+		HeartbeatInterval: time.Hour,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error { return nil },
+	})
+	_ = session.Start(context.Background())
+	defer session.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := dungeon.NewSixRealmsRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("six realms: %v", err)
+	}
+	if got := resetCalls.Load(); got != 0 {
+		t.Fatalf("最终道全通后不应发送重置请求, reset_calls=%d", got)
+	}
+}
