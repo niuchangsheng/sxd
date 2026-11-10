@@ -1560,8 +1560,25 @@ func NewSpiritPoolRoutine(cfgs ...SpiritPoolConfig) scheduler.ActivityRoutine {
 
 			// 1. 不再额外调用功能开放检查：check_function_open 会推进 PrevAct 链，
 			// 导致后续 282/1 一键淬炼被网关静默丢弃。282/0 面板本身就是开放门禁。
-			// 2. 打开淬炼池面板 (Mod 282, Act 0), 获取各铁槽生产状态
-			openPkt := protocol.BuildRefinePoolOpenPacket(session.LastActionID())
+			// 2. 打开淬炼池面板 (Mod 282, Act 0), 获取各铁槽生产状态。
+			//    先用 0/2 全量资产刷新 PrevAct 链锚点：长会话中被静默丢弃的请求会
+			//    污染本地 lastActionID，导致 282/1 一键淬炼被服务端静默丢弃
+			//    （2026-11-11 与 852/16 同源问题）。
+			anchor := session.LastAckActionID()
+			if anchor == 0 {
+				anchor = session.LastActionID()
+			}
+			syncCtx, syncCancel := context.WithTimeout(ctx, callTimeout)
+			syncResp, syncErr := session.Call(syncCtx, protocol.BuildPlayerGetInfoPacket(int32(anchor)),
+				protocol.ActionIDPlayerGetInfo)
+			syncCancel()
+			if syncErr != nil || syncResp == nil {
+				slog.Debug("淬炼池 PrevAct 链刷新无回包，沿用本地锚点",
+					"role_id", session.RoleID(), "err", syncErr)
+			} else if ack := session.LastAckActionID(); ack != 0 {
+				anchor = ack
+			}
+			openPkt := protocol.BuildRefinePoolOpenPacket(anchor)
 			oCtx, oCancel := context.WithTimeout(ctx, callTimeout)
 			openResp, err := session.Call(oCtx, openPkt, protocol.ActionIDRefinePoolOpen)
 			oCancel()
