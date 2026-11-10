@@ -92,3 +92,14 @@ SPIRIT_POOL_EXECUTE=1 go run -tags=probe test/probes/probe_spirit_pool_live.go
 SPIRIT_POOL_EXECUTE=1 SPIRIT_POOL_TARGET=6 \
   go run -tags=probe test/probes/probe_spirit_pool_live.go
 ```
+## 2026-11-11 线上补充：282/1 静默丢弃的链污染与登录窗口
+
+长会话中执行 `282/0 → 282/1` 时，282/1 曾连续 20s 无回包（14:02、21:45）。
+
+- **534/5 资源面板会推进 PrevAct 链**，若在 282/0 之后调用，282/1 的
+  `PrevAct=282/0` 会失配被静默丢弃；自动化链路必须跳过 534/5；
+- `check_function_open (0/45)` 同样会推进链，例程已移除；
+- 打开面板前先发 `0/2 get_player_info`（PrevAct=最近回包业务动作）刷新锚点；
+- 最终可靠方案：会话激活后、调度器启动前执行（登录钩子），实测：
+  - qq：1 个完成槽位 → `result=11 SUCCESS`，炼器精华 +5，元宝不变；
+  - 渡业台 852/16 在同一登录窗口内随后执行，仍能成功抽取。
