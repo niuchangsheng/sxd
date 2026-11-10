@@ -155,16 +155,21 @@ func main() {
 	printPanel(panel)
 
 	// 2. 资源面板查询 (Mod 534, Act 5)
-	panelPkt := protocol.BuildRefinePoolPanelPacket(protocol.ActionIDRefinePoolOpen)
-	slog.Info("发送淬炼池资源面板查询",
-		"action", fmt.Sprintf("0x%08X", panelPkt.ActionID),
-		"payload_hex", hex.EncodeToString(panelPkt.Payload),
-	)
-	panelResp, err := callWithTimeout(panelPkt, protocol.ActionIDRefinePoolPanel, 3*time.Second)
-	if err != nil {
-		slog.Warn("淬炼池资源面板无应答", "err", err)
+	//    REFINE_SKIP_PANEL=1 可跳过：该请求会推进 PrevAct 链，导致 282/1 的 prevAct 失配。
+	if os.Getenv("REFINE_SKIP_PANEL") == "1" {
+		slog.Info("跳过资源面板查询 (REFINE_SKIP_PANEL=1)")
 	} else {
-		dumpPacket("淬炼池资源面板回包", panelResp)
+		panelPkt := protocol.BuildRefinePoolPanelPacket(protocol.ActionIDRefinePoolOpen)
+		slog.Info("发送淬炼池资源面板查询",
+			"action", fmt.Sprintf("0x%08X", panelPkt.ActionID),
+			"payload_hex", hex.EncodeToString(panelPkt.Payload),
+		)
+		panelResp, err := callWithTimeout(panelPkt, protocol.ActionIDRefinePoolPanel, 3*time.Second)
+		if err != nil {
+			slog.Warn("淬炼池资源面板无应答", "err", err)
+		} else {
+			dumpPacket("淬炼池资源面板回包", panelResp)
+		}
 	}
 
 	// 3. 仅在显式授权时执行淬炼写操作

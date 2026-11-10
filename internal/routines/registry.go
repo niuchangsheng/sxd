@@ -247,6 +247,11 @@ func (f *RegistryFactory) SetPilgrimageConfig(cfg farming.PilgrimageConfig) {
 	f.pilgrimageCfg = cfg
 }
 
+// SpiritPoolConfig 返回当前粗铁淬炼池配置。
+func (f *RegistryFactory) SpiritPoolConfig() farming.SpiritPoolConfig {
+	return f.spiritPoolCfg
+}
+
 // SetSpiritPoolConfig 设置粗铁淬炼池产出目标配置 (玄铁/灵材)。
 func (f *RegistryFactory) SetSpiritPoolConfig(cfg farming.SpiritPoolConfig) {
 	f.spiritPoolCfg = cfg

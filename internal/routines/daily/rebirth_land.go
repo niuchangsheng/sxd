@@ -202,7 +202,7 @@ func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
 		}
 		return resp
 	}
-	draws, cooldown := runAltarDraws(ctx, session, call, false)
+	draws, cooldown := runAltarDraws(ctx, session, call, true)
 	if draws > 0 {
 		slog.Info("登录后渡业台抽取完成", "role_id", session.RoleID(), "draws", draws)
 	}
