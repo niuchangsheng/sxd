@@ -21,6 +21,8 @@ func TestRebirthLandRoutine_ClaimsFreeReward(t *testing.T) {
 	var freeAwardCalls, freeBackCalls atomic.Int32
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDGameAssistantInfo:
 			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
 				{TaskID: DailyTaskRebirthLand, CurTimes: 0, MaxTimes: 1, PerActiveAdd: 20},
@@ -60,6 +62,8 @@ func TestRebirthLandRoutine_SkipsWhenTaskComplete(t *testing.T) {
 	var claimCalls atomic.Int32
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDGameAssistantInfo:
 			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
 				{TaskID: DailyTaskRebirthLand, CurTimes: 1, MaxTimes: 1, PerActiveAdd: 20},
@@ -91,6 +95,8 @@ func TestRebirthLandRoutine_NoGiftStops(t *testing.T) {
 	var freeBackCalls atomic.Int32
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDGameAssistantInfo:
 			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
 				{TaskID: DailyTaskRebirthLand, CurTimes: 0, MaxTimes: 1, PerActiveAdd: 20},

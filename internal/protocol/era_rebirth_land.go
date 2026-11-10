@@ -103,8 +103,23 @@ func BuildEraRebirthLandFreeBackPacket() *Packet {
 }
 
 // BuildEraRebirthLandPoolPanelPacket 构造渡业台/渡业仙池面板查询封包 (852/12)。
+//
+// 注意: 官方客户端请求带 4 字节 PrevAct（12 字节包）。空载荷版本服务端虽仍会回包，
+// 但不会登记 PrevAct 链，随后 852/16 抽取会以错误 PrevAct 被静默丢弃。
+// 自动化链路请使用 BuildEraRebirthLandPoolPanelPrevActPacket。
 func BuildEraRebirthLandPoolPanelPacket() *Packet {
 	return NewPacket(ActionIDEraRebirthLandPoolPanel, nil)
+}
+
+// BuildEraRebirthLandPoolPanelPrevActPacket 构造带 PrevAct 的渡业仙池面板封包 (852/12)。
+//
+// 这里传入的必须是「服务端最后处理并回包的动作」(RoleSession.LastAckActionID)，
+// 而不是本地最后发送的动作：被静默丢弃的请求会污染本地 lastActionID。
+// 因此不置 HasPrevAct，避免会话用本地动作号覆盖该锚点。
+func BuildEraRebirthLandPoolPanelPrevActPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDEraRebirthLandPoolPanel, w.Bytes())
 }
 
 // BuildEraRebirthLandFreeAwardPacket 构造领取渡业仙池免费奖励封包 (852/13)。

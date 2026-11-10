@@ -10,6 +10,7 @@ package daily
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -59,8 +60,45 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
-			// 1. 查询渡业台/渡业仙池面板（诊断，失败不阻断后续领取）。
-			if poolResp := call(protocol.BuildEraRebirthLandPoolPanelPacket(), protocol.ActionIDEraRebirthLandPoolPanel); poolResp != nil {
+			// 1. 查询渡业台/渡业仙池面板（必须带 PrevAct，官方抓包为 12 字节请求）。
+			//    空载荷版本服务端虽回包但不会登记 PrevAct 链，导致后续 852/16 被静默丢弃。
+			// 先用 0/2 全量角色资产重建 PrevAct 链：长会话中大量无 PrevAct 的请求会让
+			// 服务端的链锚点与本地 lastActionID 脱节，导致 852/16 被静默丢弃。
+			// 线上实测 (2026-11-11)：0/2 → 852/12 → 852/16 可稳定成功。
+			// 依次尝试候选锚点，直到 0/2 真正被服务端处理（LastAck 变为 0/2）。
+			candidates := []uint32{
+				session.LastAckActionID(),
+				session.LastActionID(),
+				protocol.ActionIDPlayerGetInfo,
+				protocol.ActionIDPlayerHeartbeat,
+				0x00A50000, // Mod 165 扩展模块初始化
+				0x00000063, // Mod 0 Act 99 场景进阶
+				0x00000048, // Mod 0 Act 72 城镇初始化
+			}
+			seen := make(map[uint32]bool, len(candidates))
+			synced := false
+			for _, cand := range candidates {
+				if cand == 0 || seen[cand] {
+					continue
+				}
+				seen[cand] = true
+				if call(protocol.BuildPlayerGetInfoPacket(int32(cand)), protocol.ActionIDPlayerGetInfo) != nil &&
+					session.LastAckActionID() == protocol.ActionIDPlayerGetInfo {
+					synced = true
+					slog.Debug("轮回净地 PrevAct 链重建成功", "role_id", session.RoleID(),
+						"anchor", fmt.Sprintf("0x%08X", cand))
+					break
+				}
+			}
+			if !synced {
+				slog.Info("轮回净地 PrevAct 链重建未成功，稍后重试", "role_id", session.RoleID())
+			}
+			anchor := session.LastAckActionID()
+			if anchor == 0 {
+				anchor = session.LastActionID()
+			}
+			if poolResp := call(protocol.BuildEraRebirthLandPoolPanelPrevActPacket(anchor),
+				protocol.ActionIDEraRebirthLandPoolPanel); poolResp != nil {
 				r := protocol.NewReader(poolResp.Payload)
 				vals := make([]int32, 0, 6)
 				for i := 0; i < 6; i++ {
@@ -79,11 +117,14 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 			//    渡业符不足）即停止。元宝数量发生变化时视为协议漂移并熔断。
 			ingotsBefore := session.GetPlayerState().Ingots
 			draws := 0
+			var drawCooldown error
 			for draws < maxAltarDrawsPerRun && ctx.Err() == nil {
 				resp := call(protocol.BuildEraRebirthLandDrawPacket(0, session.LastActionID()),
 					protocol.ActionIDEraRebirthLandDraw)
 				if resp == nil {
-					return scheduler.NewCooldown(10*time.Minute, "渡业台抽取无回包")
+					// 抽取无回包不应阻断仙池领取与挂机奖励：先完成其余步骤，最后再冷却。
+					drawCooldown = scheduler.NewCooldown(30*time.Minute, "渡业台抽取无回包")
+					break
 				}
 				res, err := protocol.ParseEraRebirthDrawResult(resp.Payload)
 				if err != nil {
@@ -137,12 +178,12 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 			freeCode, freeOK := claim(protocol.BuildEraRebirthLandFreeAwardPacket(),
 				protocol.ActionIDEraRebirthLandFreeAward, "渡业仙池免费奖励")
 			if freeOK {
-				return nil
+				return drawCooldown
 			}
 			todayCode, todayOK := claim(protocol.BuildEraRebirthLandTodayAwardPacket(),
 				protocol.ActionIDEraRebirthLandTodayAward, "渡业仙池今日奖励")
 			if todayOK {
-				return nil
+				return drawCooldown
 			}
 			if freeCode == protocol.EraRebirthResultPackageFull || todayCode == protocol.EraRebirthResultPackageFull {
 				return scheduler.ErrBagFull
@@ -196,7 +237,7 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 					"result", result.Result,
 					"result_text", protocol.EraRebirthResultText(result.Result))
 			}
-			return nil
+			return drawCooldown
 		},
 	)
 }

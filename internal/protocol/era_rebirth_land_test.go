@@ -70,3 +70,17 @@ func TestParseEraRebirthDrawResult(t *testing.T) {
 		t.Fatal("截断回包应返回错误")
 	}
 }
+
+// 官方抓包形态: 852/12 必须带 4 字节 PrevAct，空载荷不会登记 PrevAct 链。
+func TestBuildEraRebirthLandPoolPanelPrevActPacket(t *testing.T) {
+	pkt := protocol.BuildEraRebirthLandPoolPanelPrevActPacket(protocol.ActionIDTownEnter)
+	if pkt.ActionID != protocol.ActionIDEraRebirthLandPoolPanel {
+		t.Fatalf("ActionID = 0x%08X", pkt.ActionID)
+	}
+	if pkt.HasPrevAct {
+		t.Fatal("面板锚点必须原样发送，不能被会话本地动作号覆盖")
+	}
+	if len(pkt.Payload) != 4 {
+		t.Fatalf("载荷长度 = %d, 期望 4", len(pkt.Payload))
+	}
+}

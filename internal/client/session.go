@@ -147,7 +147,11 @@ type RoleSession struct {
 	isCustomDialer    bool
 
 	lastActionID atomic.Uint32
-	lastSendTime atomic.Int64
+	// lastAckActionID 记录最后一次收到回包的业务 ActionID。
+	// 被服务端静默丢弃的请求也会推进 lastActionID，但不会推进本字段；
+	// 需要严格 PrevAct 链的协议 (如 852/16) 应以本字段作为锚点。
+	lastAckActionID atomic.Uint32
+	lastSendTime    atomic.Int64
 
 	// factionUnavailable 标记本次会话内已确认帮派模块对当前角色不可用。
 	// 服务端对未加入帮派角色的帮派类请求会静默丢弃（无任何回包），
@@ -1822,6 +1826,12 @@ func (s *RoleSession) SetLastActionID(actionID uint32) {
 	s.lastActionID.Store(actionID)
 }
 
+// LastAckActionID 获取最后一次收到服务端回包的业务 ActionID。
+// 用于需要与服务端 PrevAct 链严格对齐的协议锚点。
+func (s *RoleSession) LastAckActionID() uint32 {
+	return s.lastAckActionID.Load()
+}
+
 // Send 向对端发送一个未压缩协议封包。
 
 // setWriteDeadline 为当前连接设置写超时。
@@ -2144,6 +2154,11 @@ func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
 	if calls, ok := s.pendingCalls[pkt.ActionID]; ok && len(calls) > 0 {
 		ch := calls[0]
 		s.pendingCalls[pkt.ActionID] = calls[1:]
+		// 只有真正被服务端处理并回包的业务动作才推进确认锚点；
+		// 心跳会周期性回包，但服务端不把它计入业务 PrevAct 链，必须排除。
+		if pkt.ActionID != protocol.ActionIDPlayerHeartbeat {
+			s.lastAckActionID.Store(pkt.ActionID)
+		}
 		select {
 		case ch <- pkt:
 		default:
