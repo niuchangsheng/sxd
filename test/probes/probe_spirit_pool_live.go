@@ -90,30 +90,53 @@ func main() {
 		return sess.Call(cCtx, pkt, expectedAct)
 	}
 
-	// 0. 先查询功能开放状态 (Mod 0, Act 69), 未开启时服务端会静默丢弃业务请求
-	chkPkt := protocol.BuildCheckFunctionOpenPacket(protocol.FunctionIDRefinePool, sess.LastActionID())
-	slog.Info("查询淬炼池功能开放状态",
-		"action", fmt.Sprintf("0x%08X", chkPkt.ActionID),
-		"payload_hex", hex.EncodeToString(chkPkt.Payload),
-	)
-	chkResp, err := callWithTimeout(chkPkt, protocol.ActionIDPlayerCheckFunctionOpen, 3*time.Second)
-	if err != nil {
-		slog.Warn("查询淬炼池功能开放状态无应答", "err", err)
-		return
+	// 0. 先查询功能开放状态 (Mod 0, Act 69), 未开启时服务端会静默丢弃业务请求。
+	//    REFINE_SKIP_CHECK=1 可跳过（该请求会推进 PrevAct 链，例程已移除）。
+	if os.Getenv("REFINE_SKIP_CHECK") == "1" {
+		slog.Info("跳过功能开放查询 (REFINE_SKIP_CHECK=1)")
+	} else {
+		chkPkt := protocol.BuildCheckFunctionOpenPacket(protocol.FunctionIDRefinePool, sess.LastActionID())
+		slog.Info("查询淬炼池功能开放状态",
+			"action", fmt.Sprintf("0x%08X", chkPkt.ActionID),
+			"payload_hex", hex.EncodeToString(chkPkt.Payload),
+		)
+		chkResp, err := callWithTimeout(chkPkt, protocol.ActionIDPlayerCheckFunctionOpen, 3*time.Second)
+		if err != nil {
+			slog.Warn("查询淬炼池功能开放状态无应答", "err", err)
+			return
+		}
+		openFlag, err := protocol.ParseCheckFunctionOpenResponse(chkResp.Payload)
+		if err != nil {
+			slog.Warn("解析淬炼池开放状态失败", "err", err)
+			return
+		}
+		if openFlag != protocol.PlayerFunctionOpenTrue {
+			slog.Info("淬炼池功能未开启, 跳过", "open_flag", openFlag)
+			return
+		}
+		slog.Info("淬炼池功能已开启", "open_flag", openFlag)
 	}
-	openFlag, err := protocol.ParseCheckFunctionOpenResponse(chkResp.Payload)
-	if err != nil {
-		slog.Warn("解析淬炼池开放状态失败", "err", err)
-		return
+
+	// 0'. 可选: 用 0/2 刷新 PrevAct 链锚点（与例程修复一致）。
+	openPrev := sess.LastActionID()
+	if os.Getenv("REFINE_RESYNC") == "1" {
+		syncAnchor := sess.LastAckActionID()
+		if syncAnchor == 0 {
+			syncAnchor = sess.LastActionID()
+		}
+		syncPkt := protocol.BuildPlayerGetInfoPacket(int32(syncAnchor))
+		slog.Info("发送 0/2 刷新 PrevAct 锚点", "anchor", fmt.Sprintf("0x%08X", syncAnchor))
+		if syncResp, syncErr := callWithTimeout(syncPkt, protocol.ActionIDPlayerGetInfo, 8*time.Second); syncErr == nil && syncResp != nil {
+			if ack := sess.LastAckActionID(); ack != 0 {
+				openPrev = ack
+			}
+		} else {
+			slog.Warn("0/2 刷新无回包，沿用本地锚点", "err", syncErr)
+		}
 	}
-	if openFlag != protocol.PlayerFunctionOpenTrue {
-		slog.Info("淬炼池功能未开启, 跳过", "open_flag", openFlag)
-		return
-	}
-	slog.Info("淬炼池功能已开启", "open_flag", openFlag)
 
 	// 1. 打开淬炼池面板 (只读), 前序动作号必须与网关实际序列一致
-	openPkt := protocol.BuildRefinePoolOpenPacket(sess.LastActionID())
+	openPkt := protocol.BuildRefinePoolOpenPacket(openPrev)
 	slog.Info("发送打开淬炼池面板",
 		"action", fmt.Sprintf("0x%08X", openPkt.ActionID),
 		"payload_hex", hex.EncodeToString(openPkt.Payload),
@@ -159,7 +182,7 @@ func main() {
 	target := envByte("SPIRIT_POOL_TARGET", protocol.RefinePoolTargetXuanTie)
 	cost := envByte("SPIRIT_POOL_COST", protocol.RefinePoolCostCoins)
 	mode := envByte("SPIRIT_POOL_MODE", protocol.RefinePoolTypeOneKey)
-	execPkt := protocol.BuildRefineExecutePacket(target, cost, mode, protocol.ActionIDRefinePoolPanel)
+	execPkt := protocol.BuildRefineExecutePacket(target, cost, mode, protocol.ActionIDRefinePoolOpen)
 	slog.Info("发送淬炼执行",
 		"action", fmt.Sprintf("0x%08X", execPkt.ActionID),
 		"target", target,
