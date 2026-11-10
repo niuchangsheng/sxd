@@ -33,6 +33,10 @@ const (
 // TowerRoomResultSuccess 房间流程成功结果码 (与登录回包 SUCCESS=4 一致)。
 const TowerRoomResultSuccess uint8 = 4
 
+// TowerRoomResultNotOpen 活动未开放/条件不满足。
+// 2026-11-11 01:44 非活动时间实测：341/1、341/4、341/12、341/13 均返回 5。
+const TowerRoomResultNotOpen uint8 = 5
+
 // BuildTowerRoomOpenPacket 构造房间入口/面板封包 (341/1，抓包中以 PrevAct 形式出现)。
 func BuildTowerRoomOpenPacket(prevAct uint32) *Packet {
 	return buildTowerRoomPacket(ActionIDTowerRoomOpen, prevAct)
@@ -97,6 +101,8 @@ func TowerRoomResultText(code uint8) string {
 	switch code {
 	case TowerRoomResultSuccess:
 		return "成功"
+	case TowerRoomResultNotOpen:
+		return "未开放或条件不满足"
 	default:
 		return fmt.Sprintf("未知结果码(%d)", code)
 	}

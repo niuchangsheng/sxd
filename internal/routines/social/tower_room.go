@@ -88,6 +88,10 @@ func NewTowerRoomRoutine() scheduler.ActivityRoutine {
 				slog.Info("全服伏魔塔创建房间未成功", "role_id", session.RoleID(),
 					"result", createRes.Result,
 					"result_text", protocol.TowerRoomResultText(createRes.Result))
+				if createRes.Result == protocol.TowerRoomResultNotOpen {
+					// 非活动时间（实测 01:44 四个动作均返回 5）：定时重试以覆盖晚间开放时段。
+					return scheduler.NewCooldown(time.Hour, "全服伏魔塔未开放")
+				}
 				return nil
 			}
 			slog.Info("全服伏魔塔房间创建成功", "role_id", session.RoleID(), "room_id", createRes.RoomID)

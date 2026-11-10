@@ -2,11 +2,13 @@ package social
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 // 缩短步骤间隔，避免单测等待 7 秒。
@@ -104,5 +106,33 @@ func TestTowerRoomRoutine_UnsealFailureStops(t *testing.T) {
 	}
 	if enterCalls.Load() != 0 {
 		t.Fatalf("解除封印失败后不应进入战斗, enter=%d", enterCalls.Load())
+	}
+}
+
+// 非活动时间（341/1 与 341/4 均返回 5）应进入 1 小时冷却并停止后续动作。
+func TestTowerRoomRoutine_NotOpenCooldown(t *testing.T) {
+	shortenTowerRoomGaps(t)
+
+	var unsealCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDTowerRoomOpen:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.TowerRoomResultNotOpen}))
+		case protocol.ActionIDTowerRoomCreate:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.TowerRoomResultNotOpen, 0, 0, 0, 0}))
+		case protocol.ActionIDTowerRoomUnseal:
+			unsealCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+
+	err := NewTowerRoomRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("未开放应返回冷却错误, got %v", err)
+	}
+	if unsealCalls.Load() != 0 {
+		t.Fatalf("未开放时不应解除封印, unseal=%d", unsealCalls.Load())
 	}
 }
