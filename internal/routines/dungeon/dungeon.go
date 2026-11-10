@@ -521,8 +521,9 @@ func sweepEliteMissionsWithoutTown(
 			anchorAct = session.LastActionID()
 			time.Sleep(1500 * time.Millisecond)
 		}
-		if cur := session.LastActionID(); cur != 0 &&
-			cur != protocol.ActionIDPracticeGetStatus && cur != protocol.ActionIDPracticeStart {
+		// 只有“状态查询自身”会造成自引用；start 之后应把 start 作为下一次
+		// 状态查询的 PrevAct（实测 start→status 可被服务端受理）。
+		if cur := session.LastActionID(); cur != 0 && cur != protocol.ActionIDPracticeGetStatus {
 			anchorAct = cur
 		}
 		if session.GetStamina() < 5 {
