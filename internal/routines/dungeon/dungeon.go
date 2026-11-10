@@ -1528,6 +1528,22 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 					return scheduler.ErrAttemptsExhausted
 				}
 
+				// 当前阶层数已满但升阶回合条件未满足时，challenge 必然返回
+				// RACE_STEP_ERROR(6)，直接收尾并说明原因。
+				// 线上实测 2026-11-11：finish_layer=40、total_round=521 > 434。
+				if layerNeed, roundNeed, ok := panel.StepUpRequirement(); ok &&
+					layerNeed > 0 && roundNeed > 0 &&
+					panel.NowFinishLayer >= layerNeed && panel.NowTotalRound > roundNeed {
+					slog.Info("锁妖塔当前阶已通关但升阶回合条件未满足，跳过挑战",
+						"role_id", session.RoleID(),
+						"now_step", panel.NowStep,
+						"finish_layer", panel.NowFinishLayer,
+						"layer_need", layerNeed,
+						"total_round", panel.NowTotalRound,
+						"round_need", roundNeed)
+					return nil
+				}
+
 				target := panel.NextLayerID()
 				// 跨阶次时 layer_list 可能清空且 now_finish_layer 归零，
 				// 此时用排行榜中的 self_layer 兜底。线上实测 self_layer 即当前
@@ -1573,6 +1589,12 @@ func NewDemonTowerRoutine() scheduler.ActivityRoutine {
 						return scheduler.ErrAttemptsExhausted
 					case protocol.DemonTowerResultItemPackFull:
 						return scheduler.ErrBagFull
+					case protocol.DemonTowerResultRaceStepError:
+						slog.Info("锁妖塔赛季阶段错误（可能已满阶或需升阶）",
+							"role_id", session.RoleID(), "layer", target,
+							"now_step", panel.NowStep, "finish_layer", panel.NowFinishLayer,
+							"total_round", panel.NowTotalRound)
+						return nil
 					case protocol.DemonTowerResultNotEnoughIngot, protocol.DemonTowerResultBuyNumError:
 						// 本实现从不购买次数；出现元宝/购买类错误说明服务端状态异常，记录后熔断。
 						return scheduler.ErrConditionNotMet

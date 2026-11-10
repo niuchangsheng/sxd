@@ -284,3 +284,83 @@ func TestDemonTowerRoutine_SeasonClosedSkips(t *testing.T) {
 		t.Fatalf("赛季未开放时不应发送业务请求: panel=%d challenge=%d", panelCalls, challengeCalls)
 	}
 }
+
+// buildDemonTowerPanelStepComplete 构造“当前阶已满层”的面板：
+// step_list 携带升阶要求，用于验证回合数超标时不再发送无效 challenge。
+func buildDemonTowerPanelStepComplete(totalRound int32, steps [][3]int32, layers [][2]int32) []byte {
+	w := protocol.NewWriter()
+	w.WriteUint8(protocol.DemonTowerResultSuccess)
+	w.WriteInt32(0)  // is_first
+	w.WriteInt32(31) // season
+	w.WriteInt32(0)  // left_time
+	w.WriteInt32(1)  // now_step
+	var finish int32
+	for _, l := range layers {
+		if l[0] > finish {
+			finish = l[0]
+		}
+	}
+	w.WriteInt32(finish)     // now_finish_layer
+	w.WriteInt32(totalRound) // now_total_round
+	w.WriteInt32(0)          // next_layer_left_time
+	w.WriteInt32(35)         // rank
+	w.WriteUint16(uint16(len(steps)))
+	for _, step := range steps {
+		w.WriteInt32(step[0]) // step_up_id
+		w.WriteInt32(step[1]) // layer_need
+		w.WriteInt32(step[2]) // round_need
+	}
+	w.WriteUint16(uint16(len(layers)))
+	for _, layer := range layers {
+		w.WriteInt32(layer[0])
+		w.WriteInt32(layer[1])
+	}
+	w.WriteInt32(0) // buy_ticket_num
+	w.WriteInt32(39)
+	w.WriteInt32(185) // race_step
+	w.WriteInt32(0)   // ranks
+	return w.Bytes()
+}
+
+// 当前阶层数已满但回合数超出升阶要求时，challenge 必然返回 RACE_STEP_ERROR(6)，
+// 例程应直接收尾，不再发送无效挑战。
+func TestDemonTowerRoutine_StepCompleteRoundsUnmetSkipsChallenge(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	layers := make([][2]int32, 0, 40)
+	for i := int32(1); i <= 40; i++ {
+		layers = append(layers, [2]int32{i, 13})
+	}
+	state := &demonTowerMockState{
+		panels: [][]byte{
+			buildDemonTowerPanelStepComplete(521, [][3]int32{{1, 40, 434}}, layers),
+		},
+	}
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDDemonTowerBaseInfo:
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, []byte{1}))
+			return true
+		case protocol.ActionIDDemonTowerPanel:
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, state.nextPanel()))
+			return true
+		case protocol.ActionIDDemonTowerChallenge:
+			state.mu.Lock()
+			state.challenges = append(state.challenges, -1)
+			state.mu.Unlock()
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DemonTowerResultRaceStepError}))
+			return true
+		}
+		return false
+	})
+
+	if err := dungeon.NewDemonTowerRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("例程不应报错: %v", err)
+	}
+	if got := state.challengLayers(); len(got) != 0 {
+		t.Fatalf("回合条件未满足时不应发起挑战, challenges=%v", got)
+	}
+}

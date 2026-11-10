@@ -663,6 +663,17 @@ func (p *DemonTowerPanel) NextLayerID() int32 {
 	return current
 }
 
+// StepUpRequirement 返回当前阶升阶条件 (step_list 第一条)。
+// 线上实测 2026-11-11：step_list=[{1,40,434}]，now_finish_layer=40，
+// now_total_round=521 > 434，challenge(40) 返回 RACE_STEP_ERROR(6)，
+// 即层数已满但回合数超标，无法升阶。
+func (p *DemonTowerPanel) StepUpRequirement() (layerNeed, roundNeed int32, ok bool) {
+	if p == nil || len(p.StepList) == 0 {
+		return 0, 0, false
+	}
+	return p.StepList[0].LayerNeed, p.StepList[0].RoundNeed, true
+}
+
 // BuildDemonTowerPanelPacket 构造查询锁妖塔主面板封包 (Module 705, Action 0)。
 //
 // 官方 request 为空数组；实服验证空载荷可直接返回面板数据。
