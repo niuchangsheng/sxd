@@ -2207,9 +2207,17 @@ func TestQiMenRoutine_UsesMiracleFightersModules(t *testing.T) {
 	defer sess.Close()
 	defer srvConn.Close()
 
-	var oneKeyCalls, breakCalls, oldModuleCalls atomic.Int32
+	var oneKeyCalls, breakCalls, oldModuleCalls, pveOne, pveTwo atomic.Int32
 	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
 		switch pkt.ActionID {
+		case protocol.ActionIDMiracleFightersPveFight:
+			pveOne.Add(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, []byte{protocol.MiraclePveCompleteAll}))
+			return true
+		case protocol.ActionIDMiracleFightersPveTwoFight:
+			pveTwo.Add(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, []byte{protocol.MiraclePveSuccess}))
+			return true
 		case protocol.ActionIDMiracleFightersInfo:
 			w := protocol.NewWriter()
 			w.WriteUint8(protocol.MiracleFightersResultSuccess)
@@ -2252,6 +2260,9 @@ func TestQiMenRoutine_UsesMiracleFightersModules(t *testing.T) {
 	}
 	if oldModuleCalls.Load() != 0 {
 		t.Fatalf("不应再使用旧模块 486/485/584, 实际请求 %d 次", oldModuleCalls.Load())
+	}
+	if pveOne.Load() != 1 || pveTwo.Load() != 1 {
+		t.Fatalf("应各发起一次 PvE 挑战, 实际 one=%d two=%d", pveOne.Load(), pveTwo.Load())
 	}
 }
 

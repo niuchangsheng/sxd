@@ -67,6 +67,7 @@ func newQiMenMiracleRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			slog.Info("正在执行玩法任务: 奇门遁甲一/二修炼与突破", "role_id", session.RoleID())
+			qimenPveChallenge(ctx, session)
 
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
@@ -193,4 +194,48 @@ func runMiracleFightersModule(
 		}
 	}
 	slog.Info(ids.label+" 未找到可修炼/突破的条目", "role_id", session.RoleID())
+}
+
+// qimenPveChallenge 发起奇门遁甲一/二的 PvE 挑战 (253/1、394/1)。
+//
+// 官方客户端“挑战”按钮直接调 fight（空载荷），战斗由服务端结算；
+// 返回 COMPLETE_ALL(3) 表示已全部通关，FUNCTION_NO_OPEN(1)/LEVEL_LIMIT(2)/
+// CD_TIME(4) 分别对应未开放/等级不足/冷却，均不消耗元宝。
+func qimenPveChallenge(ctx context.Context, session *client.RoleSession) {
+	targets := []struct {
+		label string
+		act   uint32
+	}{
+		{"奇门遁甲一", protocol.ActionIDMiracleFightersPveFight},
+		{"奇门遁甲二", protocol.ActionIDMiracleFightersPveTwoFight},
+	}
+	for _, t := range targets {
+		if ctx.Err() != nil {
+			return
+		}
+		cCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		resp, err := session.Call(cCtx, protocol.NewPacket(t.act, nil), t.act)
+		cancel()
+		if err != nil || resp == nil {
+			slog.Info(t.label+"试炼挑战无回包", "role_id", session.RoleID(), "err", err)
+			continue
+		}
+		if len(resp.Payload) == 0 {
+			continue
+		}
+		switch resp.Payload[0] {
+		case protocol.MiraclePveSuccess:
+			slog.Info(t.label+"试炼挑战成功", "role_id", session.RoleID(), "report_len", len(resp.Payload))
+		case protocol.MiraclePveCompleteAll:
+			slog.Info(t.label+"试炼已全部通关", "role_id", session.RoleID())
+		case protocol.MiraclePveFuncNoOpen:
+			slog.Info(t.label+"试炼未开放", "role_id", session.RoleID())
+		case protocol.MiraclePveLevelLimit:
+			slog.Info(t.label+"试炼等级不足", "role_id", session.RoleID())
+		case protocol.MiraclePveCDTime:
+			slog.Info(t.label+"试炼冷却中", "role_id", session.RoleID())
+		default:
+			slog.Info(t.label+"试炼返回未知结果", "role_id", session.RoleID(), "result", resp.Payload[0])
+		}
+	}
 }

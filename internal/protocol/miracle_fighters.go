@@ -164,3 +164,24 @@ func MiracleFightersResultText(code uint8) string {
 		return fmt.Sprintf("未知结果码(%d)", code)
 	}
 }
+
+// 奇门遁甲 PvE 试炼 (Mod_MiracleFightersPve_Base / MiracleFightersPveTwo_Base)。
+const (
+	// ActionIDMiracleFightersPveInfo 奇门遁甲一试炼信息 (253/0)
+	ActionIDMiracleFightersPveInfo uint32 = 0x00FD0000
+	// ActionIDMiracleFightersPveFight 奇门遁甲一挑战 (253/1)
+	ActionIDMiracleFightersPveFight uint32 = 0x00FD0001
+	// ActionIDMiracleFightersPveTwoInfo 奇门遁甲二试炼信息 (394/0)
+	ActionIDMiracleFightersPveTwoInfo uint32 = 0x018A0000
+	// ActionIDMiracleFightersPveTwoFight 奇门遁甲二挑战 (394/1)
+	ActionIDMiracleFightersPveTwoFight uint32 = 0x018A0001
+)
+
+// 奇门遁甲 PvE 挑战结果码。
+const (
+	MiraclePveSuccess     uint8 = 0
+	MiraclePveFuncNoOpen  uint8 = 1
+	MiraclePveLevelLimit  uint8 = 2
+	MiraclePveCompleteAll uint8 = 3
+	MiraclePveCDTime      uint8 = 4
+)
