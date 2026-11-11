@@ -137,16 +137,21 @@ func NewDaoyuanVipShopRoutine() scheduler.ActivityRoutine {
 
 			// Module 132 是圣域专属协议，优先在圣域会话执行；圣域不可用时
 			// 才回退主服（主服大概率静默丢包）。
+			// 注意：凭据申请可用短超时；圣域会话本身必须绑定长生命周期 ctx，
+			// 若把短超时 ctx 传给 OpenSaintAreaSession，超时后会话会被立即关闭。
 			saCtx, saCancel := context.WithTimeout(ctx, 5*time.Second)
-			sa, openErr := session.OpenSaintAreaSession(saCtx)
+			cred, credErr := session.FetchSaintAreaCredentials(saCtx)
 			saCancel()
-			if openErr == nil {
-				saErr := runAll(sa)
-				sa.Close()
-				if !errors.Is(saErr, errVipShopNoResponse) {
-					return saErr
+			if credErr == nil {
+				sa, openErr := session.OpenSaintAreaSessionWithInfo(ctx, cred)
+				if openErr == nil {
+					saErr := runAll(sa)
+					sa.Close()
+					if !errors.Is(saErr, errVipShopNoResponse) {
+						return saErr
+					}
+					slog.Info("圣域精品杂货商店无回包，改走主服会话", "role_id", session.RoleID())
 				}
-				slog.Info("圣域精品杂货商店无回包，改走主服会话", "role_id", session.RoleID())
 			}
 
 			err := runAll(session)
