@@ -92,6 +92,9 @@ func NewThreeWorldRoutine() scheduler.ActivityRoutine {
 				}
 				slog.Info("人界开始修炼结果", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.ThreeWorldResultText(code))
+				if code != protocol.ThreeWorldSuccess {
+					return scheduler.NewCooldown(2*time.Hour, "人界开始修炼未成功")
+				}
 			case int32(protocol.ThreeWorldComplete):
 				stopResp := call(protocol.BuildHumanWorldStopPacket(), protocol.ActionIDHumanWorldStop)
 				if stopResp == nil {
@@ -104,6 +107,9 @@ func NewThreeWorldRoutine() scheduler.ActivityRoutine {
 				}
 				slog.Info("人界结算修炼结果", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.ThreeWorldResultText(code))
+				if code != protocol.ThreeWorldSuccess {
+					return scheduler.NewCooldown(2*time.Hour, "人界结算修炼未成功")
+				}
 			default:
 				slog.Info("人界修炼状态无需操作", "role_id", session.RoleID(), "state", state)
 			}

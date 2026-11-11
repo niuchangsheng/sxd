@@ -112,9 +112,10 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 					}
 				}
 				return nil
-			case protocol.PartnerPracticeOtherPractice:
-				slog.Info("幻境修炼其他伙伴修炼中，稍后重试", "role_id", session.RoleID())
-				return scheduler.NewCooldown(2*time.Hour, "其他伙伴修炼中")
+			case protocol.PartnerPracticeOtherPractice, protocol.PartnerPracticeFailure:
+				slog.Info("幻境修炼当前无法开始，稍后重试", "role_id", session.RoleID(),
+					"result", code, "result_text", protocol.PartnerPracticeResultText(code))
+				return scheduler.NewCooldown(2*time.Hour, "幻境修炼当前无法开始")
 			case protocol.PartnerPracticeFuncNoOpen:
 				slog.Info("幻境修炼功能未开放，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(2*time.Hour, "幻境修炼未开放")
