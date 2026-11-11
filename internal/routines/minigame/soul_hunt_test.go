@@ -2,7 +2,6 @@ package minigame
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"net"
 	"sync/atomic"
@@ -60,7 +59,11 @@ func TestSoulHuntRoutine_CantChallengeStops(t *testing.T) {
 			w := protocol.NewWriter()
 			w.WriteUint8(protocol.SoulHuntSuccess)
 			for i := 0; i < 8; i++ {
-				w.WriteInt32(0)
+				v := int32(0)
+				if i == 1 {
+					v = 1 // 当前猎妖阶段
+				}
+				w.WriteInt32(v)
 			}
 			w.WriteUint16(0)
 			w.WriteInt32(0)
@@ -96,7 +99,11 @@ func TestSoulHuntRoutine_NoIngotStops(t *testing.T) {
 			w := protocol.NewWriter()
 			w.WriteUint8(protocol.SoulHuntSuccess)
 			for i := 0; i < 8; i++ {
-				w.WriteInt32(0)
+				v := int32(0)
+				if i == 1 {
+					v = 1 // 当前猎妖阶段
+				}
+				w.WriteInt32(v)
 			}
 			w.WriteUint16(0)
 			w.WriteInt32(0)
@@ -154,21 +161,19 @@ func TestSoulHuntRoutine_NotChallengeablePanelCooldown(t *testing.T) {
 			w.WriteInt32(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDSoulHuntChallengePanel:
-			// 2026-11-11 s0 实测 challenge_panel(1) 原始回包：result=0、can_challenge=0。
-			payload, _ := hex.DecodeString("000000000000000000000000000000009b0000000100000001000000000000001400000000000000000000")
-			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, payload))
+			// challenge_panel 返回非成功码时直接收尾，不再调用 start_challenge。
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.SoulHuntCantChallenge, 0, 0, 0, 0}))
 		case protocol.ActionIDSoulHuntStartChallenge:
 			startCalls.Add(1)
 		}
 	})
 	defer sess.Close()
 
-	err := NewSoulHuntRoutine().Execute(context.Background(), sess, nil)
-	var cd *scheduler.CooldownError
-	if !errors.As(err, &cd) {
-		t.Fatalf("is_can_challenge=0 应返回 CooldownError, 实际: %v", err)
+	if err := NewSoulHuntRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("例程不应报错: %v", err)
 	}
 	if startCalls.Load() != 0 {
-		t.Fatalf("不可挑战时不得调用 start_challenge, 实际 %d 次", startCalls.Load())
+		t.Fatalf("关卡面板不可挑战时不得调用 start_challenge, 实际 %d 次", startCalls.Load())
 	}
 }

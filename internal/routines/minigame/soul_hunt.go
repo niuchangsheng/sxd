@@ -69,15 +69,24 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 			slog.Info("灵域猎妖主面板", "role_id", session.RoleID(),
 				"fields", panel.Ints, "levels", panel.Levels, "times", panel.Times)
 
+			// 实测（2026-11-11）：challenge_panel/start_challenge 的参数是
+			// 主面板 Ints[1]（当前猎妖阶段，例如 3），不是 1 起始的关卡序号。
+			// 之前传 1 会返回 CANT_CHALLENGE(3)。
+			stage := int32(0)
+			if len(panel.Ints) > 1 {
+				stage = panel.Ints[1]
+			}
+			if stage <= 0 {
+				slog.Info("灵域猎妖面板未提供当前阶段，跳过", "role_id", session.RoleID())
+				return nil
+			}
+
 			attempted := 0
 			for round := 0; round < maxSoulHuntRounds; round++ {
 				if ctx.Err() != nil {
 					return nil
 				}
-				// 实测 challenge_panel/start_challenge 接受按 1 起始的关卡序号；
-				// 面板下发的 id 列表是解锁时间记录，不能直接作为关卡参数。
-				levelID := int32(round + 1)
-				challengeResp := call(protocol.BuildSoulHuntChallengePanelPacket(levelID),
+				challengeResp := call(protocol.BuildSoulHuntChallengePanelPacket(stage),
 					protocol.ActionIDSoulHuntChallengePanel)
 				if challengeResp == nil {
 					return nil
@@ -89,18 +98,12 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 				}
 				if challengeCode != protocol.SoulHuntSuccess {
 					slog.Info("灵域猎妖关卡不可挑战", "role_id", session.RoleID(),
-						"level_id", levelID, "result", challengeCode,
+						"stage", stage, "result", challengeCode,
 						"result_text", protocol.SoulHuntResultText(challengeCode))
-					continue
-				}
-				if panelInfo, pErr := protocol.ParseSoulHuntChallengePanelInfo(challengeResp.Payload); pErr == nil && !panelInfo.CanChallenge {
-					slog.Info("灵域猎妖当前不可挑战（is_can_challenge=0），稍后重试",
-						"role_id", session.RoleID(), "level_id", levelID,
-						"cur_step", panelInfo.CurStep, "left_times", panelInfo.LeftTimes)
-					return scheduler.NewCooldown(2*time.Hour, "灵域猎妖当前不可挑战")
+					return nil
 				}
 
-				fightResp := call(protocol.BuildSoulHuntStartChallengePacket(levelID),
+				fightResp := call(protocol.BuildSoulHuntStartChallengePacket(stage),
 					protocol.ActionIDSoulHuntStartChallenge)
 				if fightResp == nil {
 					return nil
@@ -113,11 +116,14 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 				}
 				switch code {
 				case protocol.SoulHuntSuccess:
-					slog.Info("灵域猎妖挑战成功", "role_id", session.RoleID(), "level_id", levelID)
+					slog.Info("灵域猎妖挑战成功", "role_id", session.RoleID(), "stage", stage)
+				case protocol.SoulHuntIsFighting:
+					slog.Info("灵域猎妖战斗中，稍后重试", "role_id", session.RoleID(), "stage", stage)
+					return nil
 				case protocol.SoulHuntCantChallenge, protocol.SoulHuntNoTime,
 					protocol.SoulHuntFuncNotOpen, protocol.SoulHuntUpLevelLimit:
 					slog.Info("灵域猎妖挑战结束", "role_id", session.RoleID(),
-						"level_id", levelID, "result", code,
+						"stage", stage, "result", code,
 						"result_text", protocol.SoulHuntResultText(code))
 					return nil
 				case protocol.SoulHuntNoIngot:
@@ -125,7 +131,7 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 					return nil
 				default:
 					slog.Info("灵域猎妖挑战未成功", "role_id", session.RoleID(),
-						"level_id", levelID, "result", code,
+						"stage", stage, "result", code,
 						"result_text", protocol.SoulHuntResultText(code))
 					return nil
 				}

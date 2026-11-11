@@ -118,10 +118,23 @@ func main() {
 	if panel != nil && len(panel.Ints) > 2 {
 		candidates = append(candidates, panel.Ints[2])
 	}
+	if panel != nil && len(panel.Ints) > 1 {
+		candidates = append(candidates, panel.Ints[1])
+	}
 	if raw := os.Getenv("SOULHUNT_START"); raw != "" {
 		var id int32
 		fmt.Sscanf(raw, "%d", &id)
-		pkt := protocol.BuildSoulHuntStartChallengePacket(id)
+		var pkt *protocol.Packet
+		if extra := os.Getenv("SOULHUNT_START_EXTRA"); extra != "" {
+			var e2 int32
+			fmt.Sscanf(extra, "%d", &e2)
+			w := protocol.NewWriter()
+			w.WriteInt32(id)
+			w.WriteInt32(e2)
+			pkt = protocol.NewPacket(protocol.ActionIDSoulHuntStartChallenge, w.Bytes())
+		} else {
+			pkt = protocol.BuildSoulHuntStartChallengePacket(id)
+		}
 		cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		resp, err := sess.Call(cCtx, pkt, protocol.ActionIDSoulHuntStartChallenge)
 		cancel()
