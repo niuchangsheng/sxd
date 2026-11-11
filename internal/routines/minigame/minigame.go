@@ -1266,12 +1266,12 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			// 0. 先通过官方功能开放列表判定门槛，未开放时不再发送会被静默丢弃的业务请求。
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEudemons)
 			if fErr != nil {
-				slog.Info("山海幻兽功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
-				return nil
+				slog.Info("山海幻兽功能开放状态查询失败，稍后重试", "role_id", session.RoleID(), "err", fErr)
+				return scheduler.NewCooldown(30*time.Minute, "山海幻兽功能状态无回包")
 			}
 			if !open {
-				slog.Info("山海幻兽功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDEudemons)
-				return nil
+				slog.Info("山海幻兽功能未开放，稍后重试", "role_id", session.RoleID(), "function_id", protocol.FunctionIDEudemons)
+				return scheduler.NewCooldown(2*time.Hour, "山海幻兽功能未开放")
 			}
 
 			// 1. 查询幻兽面板 (Mod 701, Act 0)
@@ -1280,8 +1280,8 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			panelResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDHuanshouPanel)
 			pCancel()
 			if pErr != nil || panelResp == nil || len(panelResp.Payload) == 0 {
-				slog.Info("山海幻兽功能未开放/不可用，跳过", "role_id", session.RoleID(), "err", pErr)
-				return nil
+				slog.Info("山海幻兽功能未开放/不可用，稍后重试", "role_id", session.RoleID(), "err", pErr)
+				return scheduler.NewCooldown(30*time.Minute, "山海幻兽面板无回包")
 			}
 
 			// 2. 选定入侵章节并挑战 (Mod 696, Act 1 & 2)
@@ -1290,9 +1290,9 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			chapResp, chapErr := session.Call(cCtx, chapPkt, protocol.ActionIDHuanshouInvadeChapter)
 			cCancel()
 			if chapErr != nil || chapResp == nil {
-				slog.Info("山海幻兽入侵章节请求无回包，终止本轮",
+				slog.Info("山海幻兽入侵章节请求无回包，稍后重试",
 					"role_id", session.RoleID(), "err", chapErr)
-				return nil
+				return scheduler.NewCooldown(10*time.Minute, "山海幻兽入侵章节无回包")
 			}
 
 			chalPkt := protocol.BuildHuanshouInvadeChallengePacket(protocol.ActionIDHuanshouInvadeChapter)
@@ -1300,9 +1300,9 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			chalResp, chalErr := session.Call(chCtx, chalPkt, protocol.ActionIDHuanshouInvadeChallenge)
 			chCancel()
 			if chalErr != nil || chalResp == nil {
-				slog.Info("山海幻兽入侵挑战请求无回包，终止本轮",
+				slog.Info("山海幻兽入侵挑战请求无回包，稍后重试",
 					"role_id", session.RoleID(), "err", chalErr)
-				return nil
+				return scheduler.NewCooldown(10*time.Minute, "山海幻兽入侵挑战无回包")
 			}
 
 			// 3. 极速秒完成扫荡 (Mod 696, Act 3)
