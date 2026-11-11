@@ -118,6 +118,26 @@ func main() {
 	if panel != nil && len(panel.Ints) > 2 {
 		candidates = append(candidates, panel.Ints[2])
 	}
+	if raw := os.Getenv("SOULHUNT_START"); raw != "" {
+		var id int32
+		fmt.Sscanf(raw, "%d", &id)
+		pkt := protocol.BuildSoulHuntStartChallengePacket(id)
+		cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		resp, err := sess.Call(cCtx, pkt, protocol.ActionIDSoulHuntStartChallenge)
+		cancel()
+		if err != nil {
+			slog.Warn("start_challenge 无回包", "id", id, "err", err)
+		} else {
+			code, e := protocol.ParseSoulHuntChallengeResult(resp.Payload)
+			if e != nil {
+				slog.Warn("start_challenge 解析失败", "id", id, "err", e)
+			} else {
+				slog.Info("start_challenge 结果", "id", id, "result", code,
+					"result_text", protocol.SoulHuntResultText(code),
+					"payload_hex", hex.EncodeToString(resp.Payload))
+			}
+		}
+	}
 	seen := make(map[int32]bool)
 	for _, id := range candidates {
 		if seen[id] {
