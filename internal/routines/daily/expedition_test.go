@@ -2,11 +2,14 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func expeditionInfoPayload(missionIDs ...int32) []byte {
@@ -59,5 +62,18 @@ func TestExpeditionRoutine_AlreadyStartNotCounted(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("start calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestExpeditionRoutine_PanelSilentDropCooldown(t *testing.T) {
+	sess := newDailyMockSession(t, func(net.Conn, *protocol.Packet) {})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewExpeditionRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("远征面板无回包应返回 CooldownError, 实际: %v", err)
 	}
 }

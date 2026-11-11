@@ -43,12 +43,13 @@ func NewExpeditionRoutine() scheduler.ActivityRoutine {
 
 			infoResp := call(protocol.BuildExpeditionInfoPacket(), protocol.ActionIDExpeditionInfo)
 			if infoResp == nil {
-				return nil
+				slog.Info("远征任务面板无回包，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "远征任务面板无回包")
 			}
 			tasks, err := protocol.ParseExpeditionInfo(infoResp.Payload)
 			if err != nil {
-				slog.Warn("远征任务面板解析失败", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Warn("远征任务面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "远征任务面板解析失败")
 			}
 			inProgress := 0
 			for _, task := range tasks {
@@ -70,12 +71,14 @@ func NewExpeditionRoutine() scheduler.ActivityRoutine {
 				}
 				startResp := call(protocol.BuildExpeditionStartPacket(task.MissionID), protocol.ActionIDExpeditionStart)
 				if startResp == nil {
-					return nil
+					slog.Info("远征任务派遣无回包，稍后重试",
+						"role_id", session.RoleID(), "mission_id", task.MissionID, "started", started)
+					return scheduler.NewCooldown(10*time.Minute, "远征任务派遣无回包")
 				}
 				code, sErr := protocol.ParseExpeditionResult(startResp.Payload)
 				if sErr != nil {
-					slog.Warn("远征任务开始回包解析失败", "role_id", session.RoleID(), "err", sErr)
-					continue
+					slog.Warn("远征任务开始回包解析失败，稍后重试", "role_id", session.RoleID(), "err", sErr)
+					return scheduler.NewCooldown(10*time.Minute, "远征任务回包解析失败")
 				}
 				switch code {
 				case protocol.ExpeditionSuccess:
