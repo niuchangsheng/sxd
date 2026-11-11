@@ -111,13 +111,16 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					oCancel()
 
 					if oErr != nil || openResp == nil {
-						slog.Info("结缘宝箱开启请求无回包（服务端静默丢弃），稍后重试",
+						// 232/30 列表始终可读，而 232/31/34 开箱在活动未开放/不在
+						// 可开箱时段会被服务端静默丢弃（与抓包中活动期开箱成功一致）。
+						// 该状态无法与网络瞬断区分，按活动时段冷却 2 小时复查。
+						slog.Info("结缘宝箱当前不可开启（活动未开放或不在可开箱时段），稍后重试",
 							"role_id", session.RoleID(),
 							"item_id", box.ItemID,
 							"open_count", openCount,
 							"err", oErr,
 						)
-						return scheduler.NewCooldown(30*time.Minute, "结缘宝箱开箱无回包")
+						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱不在可开启时段")
 					}
 
 					// 成功也要校验副作用：重新拉取列表，确认道具数量确实减少。
