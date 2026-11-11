@@ -30,7 +30,34 @@ const towerRoomCallTimeout = 10 * time.Second
 var (
 	towerRoomStepGap  = 2 * time.Second
 	towerRoomEnterGap = 5 * time.Second
+	// towerRoomNow 便于单测注入固定日期。
+	towerRoomNow = time.Now
 )
+
+// towerRoomOpenDay 全服伏魔塔仅在周二、周四、周六开放。
+func towerRoomOpenDay(t time.Time) bool {
+	switch t.Weekday() {
+	case time.Tuesday, time.Thursday, time.Saturday:
+		return true
+	default:
+		return false
+	}
+}
+
+// towerRoomNextOpenDelay 返回距离下一个开放日（当天 00:05）的等待时长。
+func towerRoomNextOpenDelay(now time.Time) time.Duration {
+	next := time.Date(now.Year(), now.Month(), now.Day(), 0, 5, 0, 0, now.Location())
+	for i := 0; i < 8; i++ {
+		next = next.AddDate(0, 0, 1)
+		if towerRoomOpenDay(next) {
+			break
+		}
+	}
+	if d := time.Until(next); d > 0 {
+		return d
+	}
+	return 24 * time.Hour
+}
 
 // NewTowerRoomRoutine 构造全服伏魔塔房间流程任务。
 func NewTowerRoomRoutine() scheduler.ActivityRoutine {
@@ -49,6 +76,13 @@ func NewTowerRoomRoutine() scheduler.ActivityRoutine {
 			}
 			if session.State() != client.StateActive {
 				return nil
+			}
+			// 全服伏魔塔每周二、四、六开放（用户确认，2026-11-11）。
+			if !towerRoomOpenDay(towerRoomNow()) {
+				delay := towerRoomNextOpenDelay(towerRoomNow())
+				slog.Info("全服伏魔塔仅周二/四/六开放，等待开放日",
+					"role_id", session.RoleID(), "retry_in", delay)
+				return scheduler.NewCooldown(delay, "全服伏魔塔非开放日")
 			}
 
 			call := func(pkt *protocol.Packet) *protocol.Packet {

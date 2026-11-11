@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
@@ -14,10 +15,13 @@ import (
 // 缩短步骤间隔，避免单测等待 7 秒。
 func shortenTowerRoomGaps(t *testing.T) {
 	t.Helper()
-	oldStep, oldEnter := towerRoomStepGap, towerRoomEnterGap
+	oldStep, oldEnter, oldNow := towerRoomStepGap, towerRoomEnterGap, towerRoomNow
 	towerRoomStepGap, towerRoomEnterGap = 0, 0
+	// 固定为开放日（2026-11-12 周四）避免测试受当天星期影响。
+	towerRoomNow = func() time.Time { return time.Date(2026, 11, 12, 20, 0, 0, 0, time.Local) }
 	t.Cleanup(func() {
 		towerRoomStepGap, towerRoomEnterGap = oldStep, oldEnter
+		towerRoomNow = oldNow
 	})
 }
 
@@ -134,5 +138,27 @@ func TestTowerRoomRoutine_NotOpenCooldown(t *testing.T) {
 	}
 	if unsealCalls.Load() != 0 {
 		t.Fatalf("未开放时不应解除封印, unseal=%d", unsealCalls.Load())
+	}
+}
+
+// 非开放日（周三）应直接进入冷却，不发送任何 341 请求。
+func TestTowerRoomRoutine_ClosedWeekdaySkips(t *testing.T) {
+	oldNow := towerRoomNow
+	towerRoomNow = func() time.Time { return time.Date(2026, 11, 11, 20, 0, 0, 0, time.Local) }
+	t.Cleanup(func() { towerRoomNow = oldNow })
+
+	var calls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		calls.Add(1)
+	})
+	defer sess.Close()
+
+	err := NewTowerRoomRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("非开放日应返回冷却错误, got %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("非开放日不应发送请求, calls=%d", calls.Load())
 	}
 }
