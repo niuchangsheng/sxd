@@ -489,6 +489,12 @@ func NewOnlineGiftRoutine(cfgs ...OnlineGiftConfig) scheduler.ActivityRoutine {
 	)
 }
 
+// godWelfareMaxPlayerLevel 天神赐福等级奖励可参与的最高角色等级。
+//
+// 对齐官方 GodWelfareView.get_god_welfare_info_callback:
+// `_ctrl.player.level <= 260 && _ctrl.godWelfare.isGeted == false` 才显示入口。
+const godWelfareMaxPlayerLevel = 260
+
 // NewGodBlessRoutine 构造跨服天神赐福福利领用任务 (Feature 6: 天神赐福)。
 func NewGodBlessRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
@@ -531,6 +537,20 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 				"max_point", info.MaxPoint,
 				"remain_seconds", info.RemainSeconds,
 			)
+
+			// 官方 GodWelfareView 仅在 player.level <= 260 且 isGeted=false 时才挂出
+			// 活动入口；超出等级或今日赐福已领取时等级奖励不可领，服务端返回
+			// FAILURE(6)。提前跳过，避免每轮都发一次必然失败的领取请求。
+			pState := session.GetPlayerState()
+			if info.IsGeted == 1 || (pState.Level > 0 && pState.Level > godWelfareMaxPlayerLevel) {
+				slog.Info("天神赐福当前不可参与，跳过",
+					"role_id", session.RoleID(),
+					"player_level", pState.Level,
+					"is_geted", info.IsGeted,
+					"max_player_level", godWelfareMaxPlayerLevel,
+				)
+				return nil
+			}
 
 			// 2. 查询等级奖励列表 (Mod 328, Act 1)
 			listResp, err := call(protocol.BuildGodWelfareLevelAwardInfoPacket(), protocol.ActionIDGodWelfareLevelAwardInfo)
