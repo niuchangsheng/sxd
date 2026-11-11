@@ -112,13 +112,18 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 					}
 				}
 				return nil
-			case protocol.PartnerPracticeOtherPractice, protocol.PartnerPracticeFailure:
+			case protocol.PartnerPracticeOtherPractice:
 				slog.Info("幻境修炼当前无法开始，稍后重试", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.PartnerPracticeResultText(code))
 				return scheduler.NewCooldown(2*time.Hour, "幻境修炼当前无法开始")
 			case protocol.PartnerPracticeFuncNoOpen:
 				slog.Info("幻境修炼功能未开放，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(2*time.Hour, "幻境修炼未开放")
+			case protocol.PartnerPracticeFailure:
+				// 用户确认（2026-11-11）：游戏内点击「开始修炼」提示“已在修炼中”，
+				// 服务端即返回 10。等待修炼完成后再结算，避免频繁重复请求。
+				slog.Info("幻境修炼已在修炼中，等待完成", "role_id", session.RoleID())
+				return scheduler.NewCooldown(2*time.Hour, "幻境修炼已在修炼中")
 			case protocol.PartnerPracticeCDTime, protocol.PartnerPracticeTimeLimit:
 				slog.Info("幻境修炼冷却/时间限制中，稍后重试", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.PartnerPracticeResultText(code))
