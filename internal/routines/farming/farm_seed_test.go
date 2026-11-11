@@ -27,6 +27,27 @@ func TestFarmPurchaseCandidates_PreferredThenOthers(t *testing.T) {
 	}
 }
 
+func TestFarmPurchaseCandidates_CheapestCoinSeedFirst(t *testing.T) {
+	seeds := []protocol.FarmSeedItem{
+		{SeedID: 171, BuyNeedCoin: 1_000_000},
+		{SeedID: 174, BuyNeedCoin: 500_000},
+		{SeedID: 175, BuyNeedCoin: 200_000},
+		{SeedID: 176, BuyNeedIngot: 30},
+		{SeedID: 169, BuyNeedIngot: 20},
+	}
+	got := farmPurchaseCandidates(seeds)
+	// 主力种子 176/169/171/174 优先（由调用方按元宝价跳过），
+	// 其余未知种子按铜钱价格升序（175 在 174 之后）。
+	want := []int32{176, 169, 171, 174, 175}
+	rank := map[int32]int{}
+	for i, id := range got {
+		rank[id] = i
+	}
+	if rank[176] != 0 || rank[169] != 1 || rank[171] != 2 || rank[174] != 3 || rank[175] != 4 {
+		t.Fatalf("candidates order = %v, want %v", got, want)
+	}
+}
+
 func TestFarmPlantCandidates_OnlyOwnedPreferredFirst(t *testing.T) {
 	owned := map[int32]int32{
 		176: 0,

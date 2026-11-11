@@ -1928,15 +1928,19 @@ func NewRuneRefineRoutine() scheduler.ActivityRoutine {
 var farmSeedPreference = []int32{176, 169, 171, 174, 173, 172, 170}
 
 // farmPurchaseCandidates 返回可参与补仓判定的种子编号，主力种子优先，
-// 其余种子按编号升序追加。是否可购买由调用方按元宝/铜钱价格判定。
+// 其余种子按铜钱价格升序（同价按编号）排列，优先选择最便宜的铜钱档，
+// 避免随机买到高价种子。是否可购买由调用方按元宝/铜钱价格判定。
 func farmPurchaseCandidates(seeds []protocol.FarmSeedItem) []int32 {
-	available := make(map[int32]bool, len(seeds))
+	available := make(map[int32]protocol.FarmSeedItem, len(seeds))
 	others := make([]int32, 0, len(seeds))
 	for _, s := range seeds {
-		if s.SeedID <= 0 || available[s.SeedID] {
+		if s.SeedID <= 0 {
 			continue
 		}
-		available[s.SeedID] = true
+		if _, dup := available[s.SeedID]; dup {
+			continue
+		}
+		available[s.SeedID] = s
 		preferred := false
 		for _, id := range farmSeedPreference {
 			if id == s.SeedID {
@@ -1948,11 +1952,17 @@ func farmPurchaseCandidates(seeds []protocol.FarmSeedItem) []int32 {
 			others = append(others, s.SeedID)
 		}
 	}
-	sort.Slice(others, func(i, j int) bool { return others[i] < others[j] })
+	sort.Slice(others, func(i, j int) bool {
+		left, right := available[others[i]], available[others[j]]
+		if left.BuyNeedCoin != right.BuyNeedCoin {
+			return left.BuyNeedCoin < right.BuyNeedCoin
+		}
+		return left.SeedID < right.SeedID
+	})
 
 	out := make([]int32, 0, len(seeds))
 	for _, id := range farmSeedPreference {
-		if available[id] {
+		if _, ok := available[id]; ok {
 			out = append(out, id)
 		}
 	}
