@@ -137,14 +137,8 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 			}
 
 			// 4. 查询种子库存与单价 (ActionIDFarmGetSeeds 0x000D0016)
-			// 确定待种植的种子/伙伴编号 (默认 176 经验丹果树 / 169 仙玲珑经验草)
-			seedID := int32(176) // 0xB0 经验丹果树
-			seedName := "经验丹果树"
-			if dictRepo != nil {
-				if item, dErr := dictRepo.GetItem(int(seedID)); dErr == nil && item != nil {
-					seedName = item.Name
-				}
-			}
+			// 优先主力种子 (176 经验丹果树 / 169 仙玲珑经验草)，同时允许
+			// 任意铜钱计价种子补仓，避免主力种子只剩元宝价时土地荒废。
 
 			// seedOwned 记录种子库存，供后续播种筛选；避免对 0 库存种子
 			// 发送必然被服务端静默丢弃的 plant_new_herbs 请求。
@@ -187,11 +181,14 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 					}
 				}
 
-				// 确保常用主力种子 (176 经验丹果树 与 169 仙玲珑经验草) 库存充足。
+				// 确保有可种植的种子：优先主力种子 (176/169)，但绝不因主力种子
+				// 含元宝计价就让土地长期空闲——任何铜钱计价种子都可补仓。
 				// 购买请求一旦无回包立即终止本轮，避免 PrevAct 链被污染后
 				// 后续播种/采摘全部连续超时。
+				boughtSeed := false
+				ingotOnlySeeds := 0
 			seedBuy:
-				for _, targetSeedID := range []int32{seedID, 169} {
+				for _, targetSeedID := range farmPurchaseCandidates(seedsRes.Seeds) {
 					if blockedUntil := farmSeedBuyBlockedUntil.Load(); blockedUntil > time.Now().Unix() {
 						slog.Info("药园种子购买近期被服务端静默丢弃，退避期间跳过补仓",
 							"role_id", session.RoleID(),
@@ -211,7 +208,8 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 					// 铁律：自动化绝不消耗元宝。新农田种子列表同时给出
 					// buy_need_coin 与 buy_need_ingot，只要元宝价格 > 0 就绝不购买。
 					if meta.BuyNeedIngot > 0 {
-						slog.Info("药园种子含元宝计价，跳过购买以免消耗元宝",
+						ingotOnlySeeds++
+						slog.Debug("药园种子含元宝计价，跳过购买以免消耗元宝",
 							"role_id", session.RoleID(),
 							"seed_id", targetSeedID,
 							"buy_need_coin", meta.BuyNeedCoin,
@@ -220,7 +218,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 						continue
 					}
 					if meta.BuyNeedCoin <= 0 || meta.RemainTimes <= 0 {
-						slog.Info("药园种子不可用铜钱购买或今日次数已用尽，跳过",
+						slog.Debug("药园种子不可用铜钱购买或今日次数已用尽，跳过",
 							"role_id", session.RoleID(),
 							"seed_id", targetSeedID,
 							"buy_need_coin", meta.BuyNeedCoin,
@@ -272,7 +270,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 							"role_id", session.RoleID(), "seed_id", targetSeedID)
 						continue
 					}
-					sName := seedName
+					sName := fmt.Sprintf("种子#%d", targetSeedID)
 					if dictRepo != nil {
 						if item, dErr := dictRepo.GetItem(int(targetSeedID)); dErr == nil && item != nil {
 							sName = item.Name
@@ -284,7 +282,12 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 						"buy_need_coin", meta.BuyNeedCoin, "buy_need_ingot", meta.BuyNeedIngot)
 					// 每次运行最多购买 1 颗：首购后服务端可能把后续购买切换为
 					// 元宝计价，旧列表价格不再可信。剩余补仓交给下一轮。
+					boughtSeed = true
 					break seedBuy
+				}
+				if !boughtSeed && ingotOnlySeeds > 0 {
+					slog.Info("药园所有可购种子均需元宝计价，跳过补仓（不消耗元宝）",
+						"role_id", session.RoleID(), "ingot_only_seeds", ingotOnlySeeds)
 				}
 			}
 
@@ -341,12 +344,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 
 				// 2. 若土地空闲可播种 (State == 1，含采摘后地块)
 				if field.State == 1 {
-					candidates := []int32{seedID}
-					for _, c := range []int32{169, 176, 171, 174, 173, 172, 170} {
-						if c != seedID {
-							candidates = append(candidates, c)
-						}
-					}
+					candidates := farmPlantCandidates(seedOwned)
 
 					for _, sID := range candidates {
 						if seedOwned[sID] <= 0 {
@@ -1924,4 +1922,64 @@ func NewRuneRefineRoutine() scheduler.ActivityRoutine {
 			return nil
 		},
 	)
+}
+
+// farmSeedPreference 药园主力种子优先顺序 (经验丹果树/仙玲珑经验草等)。
+var farmSeedPreference = []int32{176, 169, 171, 174, 173, 172, 170}
+
+// farmPurchaseCandidates 返回可参与补仓判定的种子编号，主力种子优先，
+// 其余种子按编号升序追加。是否可购买由调用方按元宝/铜钱价格判定。
+func farmPurchaseCandidates(seeds []protocol.FarmSeedItem) []int32 {
+	available := make(map[int32]bool, len(seeds))
+	others := make([]int32, 0, len(seeds))
+	for _, s := range seeds {
+		if s.SeedID <= 0 || available[s.SeedID] {
+			continue
+		}
+		available[s.SeedID] = true
+		preferred := false
+		for _, id := range farmSeedPreference {
+			if id == s.SeedID {
+				preferred = true
+				break
+			}
+		}
+		if !preferred {
+			others = append(others, s.SeedID)
+		}
+	}
+	sort.Slice(others, func(i, j int) bool { return others[i] < others[j] })
+
+	out := make([]int32, 0, len(seeds))
+	for _, id := range farmSeedPreference {
+		if available[id] {
+			out = append(out, id)
+		}
+	}
+	return append(out, others...)
+}
+
+// farmPlantCandidates 返回当前有库存的可播种种子，主力种子优先，
+// 其余有库存的种子按编号升序追加，避免只能识别固定几种种子。
+func farmPlantCandidates(seedOwned map[int32]int32) []int32 {
+	others := make([]int32, 0, len(seedOwned))
+	preferred := make(map[int32]bool, len(farmSeedPreference))
+	for _, id := range farmSeedPreference {
+		preferred[id] = true
+	}
+	for id, owned := range seedOwned {
+		if owned <= 0 || preferred[id] {
+			continue
+		}
+		others = append(others, id)
+	}
+	sort.Slice(others, func(i, j int) bool { return others[i] < others[j] })
+
+	out := make([]int32, 0, len(seedOwned))
+	for _, id := range farmSeedPreference {
+		if seedOwned[id] > 0 {
+			out = append(out, id)
+		}
+	}
+	return append(out, others...)
 }
