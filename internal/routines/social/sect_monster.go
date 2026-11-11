@@ -113,33 +113,49 @@ func NewSectMonsterRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 5. 免费喂养一只 (feed_type=0)。
-			monsterType := list.Monsters[0].Type
-			fCtx, fCancel := context.WithTimeout(townCtx, 10*time.Second)
-			feedResp, err := town.Call(fCtx, protocol.BuildSectMonsterFeedPacket(monsterType, 0), protocol.ActionIDSectMonsterFeed)
-			fCancel()
-			if err != nil {
-				slog.Info("宗门灵兽喂养无回包，跳过", "role_id", session.RoleID(), "monster_type", monsterType, "err", err)
-				return nil
+			// 5. 免费喂养 (feed_type=0)。灵兽可能受职业限制，逐一尝试。
+			fed := false
+			for _, monster := range list.Monsters {
+				monsterType := monster.Type
+				fCtx, fCancel := context.WithTimeout(townCtx, 10*time.Second)
+				feedResp, fErr := town.Call(fCtx, protocol.BuildSectMonsterFeedPacket(monsterType, 0), protocol.ActionIDSectMonsterFeed)
+				fCancel()
+				if fErr != nil {
+					slog.Info("宗门灵兽喂养无回包，稍后重试",
+						"role_id", session.RoleID(), "monster_type", monsterType, "err", fErr)
+					return scheduler.NewCooldown(30*time.Minute, "宗门灵兽喂养无回包")
+				}
+				res, pErr := protocol.ParseSectMonsterFeedResult(feedResp.Payload)
+				if pErr != nil {
+					return fmt.Errorf("解析宗门灵兽喂养回包失败: %w", pErr)
+				}
+				switch res.Result {
+				case protocol.SectMonsterResultSuccess:
+					fed = true
+					slog.Info("宗门灵兽喂养成功",
+						"role_id", session.RoleID(),
+						"monster_type", monsterType,
+						"awards", formatSectMonsterAwards(res.Awards),
+					)
+				case protocol.SectMonsterResultJobLimit, protocol.SectMonsterResultFullMemberTimeLimit,
+					protocol.SectMonsterResultNotHaveMonsterType:
+					slog.Info("宗门灵兽该类型当前不可喂养，尝试下一只",
+						"role_id", session.RoleID(), "monster_type", monsterType, "result", res.Result)
+					continue
+				case protocol.SectMonsterResultFeedNumLimit:
+					slog.Info("宗门灵兽免费喂养次数不足，停止", "role_id", session.RoleID())
+				case protocol.SectMonsterResultHasPushed:
+					slog.Info("宗门灵兽今日已喂养", "role_id", session.RoleID())
+				case protocol.SectMonsterResultPackFull:
+					return scheduler.ErrBagFull
+				default:
+					slog.Warn("宗门灵兽喂养失败", "role_id", session.RoleID(),
+						"monster_type", monsterType, "result", res.Result)
+				}
+				break
 			}
-			res, err := protocol.ParseSectMonsterFeedResult(feedResp.Payload)
-			if err != nil {
-				return fmt.Errorf("解析宗门灵兽喂养回包失败: %w", err)
-			}
-			switch res.Result {
-			case protocol.SectMonsterResultSuccess:
-				slog.Info("宗门灵兽喂养成功",
-					"role_id", session.RoleID(),
-					"monster_type", monsterType,
-					"awards", formatSectMonsterAwards(res.Awards),
-				)
-			case protocol.SectMonsterResultFeedNumLimit:
-				slog.Info("宗门灵兽免费喂养次数不足，跳过", "role_id", session.RoleID())
-			case protocol.SectMonsterResultNotHaveMonsterType:
-				slog.Info("宗门灵兽类型无效，跳过", "role_id", session.RoleID(), "monster_type", monsterType)
-			default:
-				slog.Warn("宗门灵兽喂养失败", "role_id", session.RoleID(),
-					"monster_type", monsterType, "result", res.Result)
+			if !fed {
+				slog.Info("宗门灵兽本轮未成功喂养", "role_id", session.RoleID())
 			}
 			return nil
 		},
