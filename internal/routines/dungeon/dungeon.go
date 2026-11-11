@@ -557,7 +557,10 @@ func sweepEliteMissionsWithoutTown(
 			failStreak++
 			slog.Info("精英副本状态无回包", "role_id", session.RoleID(), "dungeon_id", dungeonID,
 				"fail_streak", failStreak, "err", sErr)
-			if failStreak >= 3 {
+			// 单个副本 ID 不可扫荡时服务端也会静默不回包；3 连失会误判为
+			// 全局断线（qq 账号 166~168 连续失败即中止整轮）。提高到 30 连失
+			// 才认为网关异常，其余情况继续尝试后续副本。
+			if failStreak >= 30 {
 				slog.Info("精英副本扫荡连续无回包，进入冷却待恢复", "role_id", session.RoleID(), "swept", swept)
 				return swept, scheduler.NewCooldown(10*time.Minute, "精英副本扫荡连续无回包")
 			}
