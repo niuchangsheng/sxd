@@ -217,6 +217,27 @@ func (b BeelzebubBossStatus) Finished() bool {
 	return b.Times >= maxTimes
 }
 
+// BeelzebubOpenWindow 魔王试炼活动开启时间段（Unix 秒）。
+type BeelzebubOpenWindow struct {
+	Start int32 `json:"start"`
+	End   int32 `json:"end"`
+}
+
+// BeelzebubTrialsOpenTime 魔王试炼开启时间面板。
+//
+// 对齐 Mod_BeelzebubTrials_Base.get_beelzebub_trials_open_time 响应
+// [ByteUtil, [IntUtil, IntUtil], IntUtil, UByteUtil]：
+//   - State: 活动状态字节
+//   - Windows: 活动开启时间段列表（服务端按天/按周期下发）
+//   - AllDeath: 是否已全通
+//   - InActivity: 2=双倍声望时段, 3=非双倍时段
+type BeelzebubTrialsOpenTime struct {
+	State      uint8                 `json:"state"`
+	Windows    []BeelzebubOpenWindow `json:"windows"`
+	AllDeath   bool                  `json:"all_death"`
+	InActivity uint8                 `json:"in_activity"`
+}
+
 // BeelzebubTrialsOpenData 魔王试炼主面板数据。
 type BeelzebubTrialsOpenData struct {
 	InActivity  bool  // 是否处于18:00-19:00双倍声望活动时段
@@ -265,6 +286,22 @@ type BeelzebubMoralInfo struct {
 
 // --- 报文构造函数 (Packet Builders) ---
 // 官方 AS3 Mod_BeelzebubTrials_Base 规范：魔王试炼协议动作均无须携带前序 ActionID
+
+// BuildBeelzebubTrialsGetTeamListPacket 构造获取魔王试炼队伍列表封包 (Module 57, Action 2)。
+//
+// 官方请求类型为 [IntUtil, UByteUtil]：bossID=0 表示全部关卡，
+// teamType 取 ALL_RECORD(4) 时返回全部记录。此前发送空载荷会被服务端静默丢弃。
+func BuildBeelzebubTrialsGetTeamListPacket(bossID int32, teamType uint8) *Packet {
+	w := NewWriter()
+	w.WriteInt32(bossID)
+	w.WriteUint8(teamType)
+	return NewPacket(ActionIDBeelzebubTrialsGetTeamList, w.Bytes())
+}
+
+// BuildBeelzebubTrialsGetOpenTimePacket 构造查询魔王试炼开启时间封包 (Module 57, Action 0)。
+func BuildBeelzebubTrialsGetOpenTimePacket(_ uint32) *Packet {
+	return NewPacket(ActionIDBeelzebubTrialsGetOpenTime, nil)
+}
 
 // BuildBeelzebubTrialsCheckCanChallengePacket 构造检查今日是否可挑战魔王封包 (Module 57, Action 20)。
 func BuildBeelzebubTrialsCheckCanChallengePacket(_ uint32) *Packet {
@@ -383,6 +420,49 @@ func ParseBeelzebubTrialsGetCanChallengeListResponse(payload []byte) ([]int32, e
 		bossIDs = append(bossIDs, bossID)
 	}
 	return bossIDs, nil
+}
+
+// ParseBeelzebubTrialsOpenTimeResponse 解析魔王试炼开启时间回包 (Module 57, Action 0)。
+//
+// 实机 qq 回包: 01 0001 6af33fbc 6af490c4 00000000 03
+// 即 state=1, 1 个时间段 [2026-11-08 19:40:44, 2026-11-09 21:55:16],
+// all_death=0, in_activity=3 (NON_ACTIVITY)。
+func ParseBeelzebubTrialsOpenTimeResponse(payload []byte) (*BeelzebubTrialsOpenTime, error) {
+	r := NewReader(payload)
+	state, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("read open time state: %w", err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("read open window count: %w", err)
+	}
+	windows := make([]BeelzebubOpenWindow, 0, count)
+	for i := 0; i < int(count); i++ {
+		start, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("read open window #%d start: %w", i, err)
+		}
+		end, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("read open window #%d end: %w", i, err)
+		}
+		windows = append(windows, BeelzebubOpenWindow{Start: start, End: end})
+	}
+	allDeath, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("read all death flag: %w", err)
+	}
+	inActivity, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("read in activity flag: %w", err)
+	}
+	return &BeelzebubTrialsOpenTime{
+		State:      state,
+		Windows:    windows,
+		AllDeath:   allDeath == 1,
+		InActivity: inActivity,
+	}, nil
 }
 
 // ParseBeelzebubTrialsOpenResponse 解析打开魔王试炼面板回包 (Module 57, Action 1)。

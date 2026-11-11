@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/hex"
 	"testing"
 )
 
@@ -136,6 +137,54 @@ func TestBuildAndParseBeelzebubTrialsCanChallengeList(t *testing.T) {
 	}
 	if len(list) != 3 || list[0] != 1 || list[1] != 71 || list[2] != 72 {
 		t.Fatalf("unexpected list: %v", list)
+	}
+}
+
+func TestBuildBeelzebubTrialsGetTeamListPacket(t *testing.T) {
+	// 官方 request=[IntUtil, UByteUtil]；空载荷会被服务端静默丢弃（2026-11-11 实机）。
+	pkt := BuildBeelzebubTrialsGetTeamListPacket(0, BeelzebubTrialsAllRecord)
+	if pkt.ActionID != ActionIDBeelzebubTrialsGetTeamList {
+		t.Fatalf("expected ActionID 0x%08X, got 0x%08X", ActionIDBeelzebubTrialsGetTeamList, pkt.ActionID)
+	}
+	want := []byte{0, 0, 0, 0, BeelzebubTrialsAllRecord}
+	if string(pkt.Payload) != string(want) {
+		t.Fatalf("payload = %x, want %x", pkt.Payload, want)
+	}
+	if pkt.HasPrevAct {
+		t.Fatal("team_list 不应自行标记 HasPrevAct")
+	}
+}
+
+func TestBuildAndParseBeelzebubTrialsOpenTime(t *testing.T) {
+	pkt := BuildBeelzebubTrialsGetOpenTimePacket(0x12345678)
+	if pkt.ActionID != ActionIDBeelzebubTrialsGetOpenTime {
+		t.Fatalf("expected ActionID 0x%08X, got 0x%08X", ActionIDBeelzebubTrialsGetOpenTime, pkt.ActionID)
+	}
+
+	// 实机 qq 回包（活动窗口已结束）。
+	live, err := hex.DecodeString("0100016af33fbc6af490c40000000003")
+	if err != nil {
+		t.Fatalf("decode live payload: %v", err)
+	}
+	info, err := ParseBeelzebubTrialsOpenTimeResponse(live)
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if info.State != 1 || info.AllDeath || info.InActivity != BeelzebubTrialsNonActivity {
+		t.Fatalf("unexpected open time: %+v", info)
+	}
+	if len(info.Windows) != 1 {
+		t.Fatalf("expected 1 window, got %d", len(info.Windows))
+	}
+	if info.Windows[0].Start != 0x6af33fbc || info.Windows[0].End != 0x6af490c4 {
+		t.Fatalf("unexpected window: %+v", info.Windows[0])
+	}
+
+	// 空/截断回包必须返回错误，不能当作“已开启”。
+	for _, payload := range [][]byte{{}, {1}, {1, 0, 1}, live[:10], live[:len(live)-1]} {
+		if _, err := ParseBeelzebubTrialsOpenTimeResponse(payload); err == nil {
+			t.Fatalf("expected error on truncated payload %x", payload)
+		}
 	}
 }
 

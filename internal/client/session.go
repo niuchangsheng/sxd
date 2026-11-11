@@ -1197,6 +1197,29 @@ func (s *RoleSession) ClaimTownPracticeExp(ctx context.Context) error {
 	return s.SignFinishedTownPractice(ctx)
 }
 
+// BeelzebubTrialsGetOpenTime 查询魔王试炼活动开启时间段 (Module 57, Action 0)。
+//
+// 活动未开启时服务端会对 create_team 静默丢包，因此建队前必须先以本接口
+// 判定是否处于开启窗口，避免把“活动未开放”误判为资格/协议限制。
+func (s *RoleSession) BeelzebubTrialsGetOpenTime(ctx context.Context) (*protocol.BeelzebubTrialsOpenTime, error) {
+	pkt := protocol.BuildBeelzebubTrialsGetOpenTimePacket(s.LastActionID())
+	timeout := 8 * time.Second
+	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
+		timeout = 300 * time.Millisecond
+	}
+	cCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDBeelzebubTrialsGetOpenTime)
+	if err != nil {
+		return nil, fmt.Errorf("get beelzebub trials open time: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New("empty beelzebub trials open time response")
+	}
+	return protocol.ParseBeelzebubTrialsOpenTimeResponse(resp.Payload)
+}
+
 // BeelzebubTrialsCheckCanChallenge 检查今日是否可挑战魔王试炼 (Module 57, Action 20)。
 func (s *RoleSession) BeelzebubTrialsCheckCanChallenge(ctx context.Context) (bool, error) {
 	pkt := protocol.BuildBeelzebubTrialsCheckCanChallengePacket(s.LastActionID())
@@ -1260,7 +1283,9 @@ func (s *RoleSession) BeelzebubTrialsOpen(ctx context.Context) (*protocol.Beelze
 // BeelzebubTrialsCreateTeam 创建指定魔王挑战队伍 (Module 57, Action 4)。
 func (s *RoleSession) BeelzebubTrialsCreateTeam(ctx context.Context, bossID int32, teamType uint8) (uint8, error) {
 	pkt := protocol.BuildBeelzebubTrialsCreateTeamPacket(bossID, teamType, s.LastActionID())
-	timeout := 8 * time.Second
+	// 服务端拒绝建队时不会回任何错误码；4 秒足以覆盖正常 RTT，又避免单关
+	// 无回包时长时间占用调度（逐关尝试下一个可挑战关卡）。
+	timeout := 4 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
 	}
@@ -3568,6 +3593,18 @@ func runMockGameServer(conn net.Conn) {
 
 		case protocol.ActionIDTowerStopAutoChallenge:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDTowerStopAutoChallenge, []byte{}))
+
+		case protocol.ActionIDBeelzebubTrialsGetOpenTime:
+			// 响应魔王试炼开启时间：当前处于开启窗口内，避免自动化等待。
+			now := time.Now().Unix()
+			tow := protocol.NewWriter()
+			tow.WriteUint8(1)  // state
+			tow.WriteUint16(1) // 1 window
+			tow.WriteInt32(int32(now - 3600))
+			tow.WriteInt32(int32(now + 3600))
+			tow.WriteInt32(0) // all death = false
+			tow.WriteUint8(protocol.BeelzebubTrialsNonActivity)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetOpenTime, tow.Bytes()))
 
 		case protocol.ActionIDBeelzebubTrialsCheckCanChallenge:
 			// 响应魔王试炼可挑战检查

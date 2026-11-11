@@ -177,7 +177,8 @@ func main() {
 		return teamID, true
 	}
 
-	slog.Info("=== 会话已激活，开始魔王试炼建队诊断 ===", "role_id", sess.RoleID(), "server_id", role.ServerID)
+	slog.Info("=== 会话已激活，开始魔王试炼建队诊断 ===", "role_id", sess.RoleID(), "server_id", role.ServerID,
+		"town_id", sess.GetPlayerState().TownID)
 
 	if *cleanup {
 		_ = sess.BeelzebubTrialsExitTeam(ctx)
@@ -239,7 +240,7 @@ func main() {
 		protocol.ActionIDBeelzebubTrialsGetWarResult, *timeout); ok {
 		slog.Info("建队前战报状态", "len", len(resp.Payload), "payload", hex.EncodeToString(resp.Payload))
 	}
-	if resp, ok := call("pre_team_list", protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetTeamList, nil),
+	if resp, ok := call("pre_team_list", protocol.BuildBeelzebubTrialsGetTeamListPacket(0, protocol.BeelzebubTrialsAllRecord),
 		protocol.ActionIDBeelzebubTrialsGetTeamList, *timeout); ok {
 		slog.Info("建队前队伍列表", "len", len(resp.Payload), "payload", hex.EncodeToString(resp.Payload))
 	}
@@ -274,6 +275,7 @@ func main() {
 		prep   func() // 发送建队请求前需要完成的前序动作，用于构造被测 PrevAct 链
 		build  func() *protocol.Packet
 	}
+	townID := int32(sess.GetPlayerState().TownID)
 	baseCreate := func(teamType uint8, withPrev bool) func() *protocol.Packet {
 		return func() *protocol.Packet {
 			pkt := protocol.BuildBeelzebubTrialsCreateTeamPacket(bossID, teamType, sess.LastActionID())
@@ -316,7 +318,7 @@ func main() {
 		{
 			name: "V6_after_team_list", desc: "先拉取队伍列表 (Action 2) 再发出现行建队载荷",
 			prep: func() {
-				_, _ = call("V6:prep_team_list", protocol.NewPacket(protocol.ActionIDBeelzebubTrialsGetTeamList, nil),
+				_, _ = call("V6:prep_team_list", protocol.BuildBeelzebubTrialsGetTeamListPacket(0, protocol.BeelzebubTrialsAllRecord),
 					protocol.ActionIDBeelzebubTrialsGetTeamList, *timeout)
 			},
 			build: baseCreate(protocol.BeelzebubTrialsNotLimit, false),
@@ -392,6 +394,128 @@ func main() {
 					0, byte(bossID >> 24), byte(bossID >> 16), byte(bossID >> 8), byte(bossID),
 				})
 			},
+		},
+		{
+			name: "V16_after_enter_town", desc: "复位城镇场景后发送现行建队载荷",
+			prep: func() {
+				res, tErr := sess.EnterTown(ctx, townID)
+				slog.Info("V16:enter_town", "town_id", townID, "result", res, "err", tErr)
+				time.Sleep(500 * time.Millisecond)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, false),
+		},
+		{
+			name: "V17_leave_war_enter_town", desc: "离开战场并复位城镇后发送现行建队载荷",
+			prep: func() {
+				_ = sess.BeelzebubTrialsLeaveWar(ctx, 0)
+				res, tErr := sess.EnterTown(ctx, townID)
+				slog.Info("V17:enter_town", "town_id", townID, "result", res, "err", tErr)
+				time.Sleep(500 * time.Millisecond)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, false),
+		},
+		{
+			name: "V18_teamlist_then_prevact_create", desc: "官方流程: 队伍列表[0,ALL_RECORD] 后建队并携带 PrevAct",
+			prep: func() {
+				_, _ = call("V18:prep_team_list", protocol.BuildBeelzebubTrialsGetTeamListPacket(0, protocol.BeelzebubTrialsAllRecord),
+					protocol.ActionIDBeelzebubTrialsGetTeamList, *timeout)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, true),
+		},
+		{
+			name: "V19_canlist_teamlist_then_prevact_create", desc: "完整官方流程: 可挑战列表 + 队伍列表后建队并携带 PrevAct",
+			prep: func() {
+				_, _ = call("V19:prep_can_list", protocol.BuildBeelzebubTrialsGetCanChallengeListPacket(sess.LastActionID()),
+					protocol.ActionIDBeelzebubTrialsGetCanChallengeList, *timeout)
+				_, _ = call("V19:prep_team_list", protocol.BuildBeelzebubTrialsGetTeamListPacket(0, protocol.BeelzebubTrialsAllRecord),
+					protocol.ActionIDBeelzebubTrialsGetTeamList, *timeout)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, true),
+		},
+		{
+			name: "V20_type1_same_gang", desc: "teamType=1 (仅限帮派)", build: baseCreate(protocol.BeelzebubTrialsSameGang, false),
+		},
+		{
+			name: "V21_type4_all_record", desc: "teamType=4 (ALL_RECORD)", build: baseCreate(protocol.BeelzebubTrialsAllRecord, false),
+		},
+		{
+			name: "V22_boss_teamlist_then_prevact_create", desc: "队伍列表[boss,ALL_RECORD] 后建队并携带 PrevAct",
+			prep: func() {
+				_, _ = call("V22:prep_team_list", protocol.BuildBeelzebubTrialsGetTeamListPacket(bossID, protocol.BeelzebubTrialsAllRecord),
+					protocol.ActionIDBeelzebubTrialsGetTeamList, *timeout)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, true),
+		},
+		{
+			name: "V23_enter_town_1_then_create", desc: "进入城镇 1 后建队",
+			prep: func() {
+				res, tErr := sess.EnterTown(ctx, 1)
+				slog.Info("V23:enter_town", "town_id", 1, "result", res, "err", tErr)
+				time.Sleep(500 * time.Millisecond)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, false),
+		},
+		{
+			name: "V24_enter_town_13_then_create", desc: "进入城镇 13 后建队",
+			prep: func() {
+				res, tErr := sess.EnterTown(ctx, 13)
+				slog.Info("V24:enter_town", "town_id", 13, "result", res, "err", tErr)
+				time.Sleep(500 * time.Millisecond)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, false),
+		},
+		{
+			name: "V25_enter_town_3_then_create", desc: "进入城镇 3 后建队",
+			prep: func() {
+				res, tErr := sess.EnterTown(ctx, 3)
+				slog.Info("V25:enter_town", "town_id", 3, "result", res, "err", tErr)
+				time.Sleep(500 * time.Millisecond)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, false),
+		},
+		{
+			name: "V29_open_wait_then_create", desc: "开面板后等待 2 秒再建队 (模拟人工操作间隔)",
+			prep: func() {
+				_, _ = call("V29:prep_open_panel", protocol.BuildBeelzebubTrialsOpenPacket(sess.LastActionID()),
+					protocol.ActionIDBeelzebubTrialsOpen, *timeout)
+				time.Sleep(2 * time.Second)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, true),
+		},
+		{
+			name: "V30_open_wait_teamlist_then_create", desc: "开面板等待 2 秒 + 队伍列表后建队",
+			prep: func() {
+				_, _ = call("V30:prep_open_panel", protocol.BuildBeelzebubTrialsOpenPacket(sess.LastActionID()),
+					protocol.ActionIDBeelzebubTrialsOpen, *timeout)
+				time.Sleep(2 * time.Second)
+				_, _ = call("V30:prep_team_list", protocol.BuildBeelzebubTrialsGetTeamListPacket(0, protocol.BeelzebubTrialsAllRecord),
+					protocol.ActionIDBeelzebubTrialsGetTeamList, *timeout)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, true),
+		},
+		{
+			name: "V31_close_open_then_create", desc: "关闭活动面板(Act12) + 重新打开(Act1) 后建队",
+			prep: func() {
+				_, _ = call("V31:prep_close", protocol.NewPacket(protocol.ActionIDBeelzebubTrialsClose, nil),
+					protocol.ActionIDBeelzebubTrialsClose, *timeout)
+				time.Sleep(300 * time.Millisecond)
+				_, _ = call("V31:prep_open_panel", protocol.BuildBeelzebubTrialsOpenPacket(sess.LastActionID()),
+					protocol.ActionIDBeelzebubTrialsOpen, *timeout)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, true),
+		},
+		{
+			name: "V32_close_open_teamlist_then_create", desc: "关闭活动面板 + 重新打开 + 队伍列表后建队",
+			prep: func() {
+				_, _ = call("V32:prep_close", protocol.NewPacket(protocol.ActionIDBeelzebubTrialsClose, nil),
+					protocol.ActionIDBeelzebubTrialsClose, *timeout)
+				time.Sleep(300 * time.Millisecond)
+				_, _ = call("V32:prep_open_panel", protocol.BuildBeelzebubTrialsOpenPacket(sess.LastActionID()),
+					protocol.ActionIDBeelzebubTrialsOpen, *timeout)
+				_, _ = call("V32:prep_team_list", protocol.BuildBeelzebubTrialsGetTeamListPacket(0, protocol.BeelzebubTrialsAllRecord),
+					protocol.ActionIDBeelzebubTrialsGetTeamList, *timeout)
+			},
+			build: baseCreate(protocol.BeelzebubTrialsNotLimit, true),
 		},
 	}
 

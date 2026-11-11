@@ -77,6 +77,18 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 				return nil
 			}
 
+			// 开启时间面板只用于诊断日志：实机 s0/s1 的 State/时间段含义不一致
+			// （同一角色不同登录会话可能返回历史窗口），不能据此跳过玩法；
+			// 真正的可用性以 check_is_can_challenge / 面板关卡状态为准。
+			if openTime, oErr := session.BeelzebubTrialsGetOpenTime(ctx); oErr == nil {
+				slog.Debug("魔王试炼开启时间面板",
+					"role_id", session.RoleID(),
+					"state", openTime.State,
+					"windows", openTime.Windows,
+					"in_activity", openTime.InActivity,
+					"all_death", openTime.AllDeath)
+			}
+
 			slog.Info("正在执行副本任务: 魔王试炼自动挑战与道行领取", "role_id", session.RoleID())
 
 			// 3. 检查今日挑战资格

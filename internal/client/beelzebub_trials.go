@@ -26,8 +26,11 @@ const (
 	beelzebubTeamSettleDelay = 200 * time.Millisecond
 	// beelzebubSilentDropThreshold 建队请求被静默丢弃多少次后熔断本轮试炼。
 	//
-	// 建队是每个关卡的必经动作；服务端返回无回包属于确定性拒绝（资格/状态不满足），
-	// 换关卡重试不会恢复，首次无回包即停止，避免放大无效请求并产生 WARN 噪音。
+	// 2026-11-04/11 实机验证：s0 服 (等级 300 角色) 对 create_team 的任意
+	// 载荷形态/任意 bossID 均静默丢弃，而同连接内 Action 1/3/6/7/8/20/21/22/23
+	// 全部正常回包。该拒绝由服务端账号/版本状态决定，客户端无法通过换载荷或
+	// 换关卡恢复；首次无回包即熔断，避免遍历全部关卡放大无效请求。
+	// 详见 docs/protocol-spec.md 4.12 节。
 	beelzebubSilentDropThreshold = 1
 )
 

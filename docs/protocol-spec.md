@@ -587,7 +587,9 @@ Int32 lucky_item_num
 
 | Action | ActionID | 方法 | 请求 | 回包 |
 | :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x00390000` | 开启时间 | 空 | `UByte state, Uint16 count, count × (Int32 start, Int32 end), Int32 allDeath, UByte inActivity` |
 | 1 | `0x00390001` | 打开面板 | 空 | 活动/道行与可挑战魔王明细 |
+| 2 | `0x00390002` | 队伍列表 | `Int32 bossID, UByte teamType` | 队伍记录列表；`teamType=4 (ALL_RECORD)` 表示全部记录 |
 | 3 | `0x00390003` | 当前队伍信息 | 空 | `Int32 teamID, Uint16 count, count × 成员` |
 | 4 | `0x00390004` | 创建队伍 | `Int32 bossID, UByte teamType` | `UByte result` |
 | 6 | `0x00390006` | 加入队伍 | `Int32 teamID` | `UByte result` |
@@ -603,6 +605,9 @@ Int32 lucky_item_num
 
 > **实采陷阱（2026-11-04 线上验证）**：`get_team_list (2)`、`get_war_result (14)`
 > 在无数据时服务端**静默不回包**，属正常语义，不能据此判定连接异常。
+> 2026-11-11 补充：`get_team_list` 的请求必须为 `[Int32 bossID, UByte teamType]`
+> （官方视图以 `[0, ALL_RECORD(4)]` 拉全量队伍），此前发送空载荷会被静默丢弃，
+> 容易被误判为“服务端不支持队伍列表”。
 > 而 `create_team (4)` 在 s1 服以 5 字节载荷（`Int32 bossID + UByte teamType`）
 > 正常返回 `UByte result=5`；在 s0 服（等级 300 角色）无论采用 4/5/6/8/9 字节载荷、
 > 前置/后置 `PrevAct`、任意 `teamType`（0/2/3）或任意 bossID，服务端均**静默丢弃且无任何回包**，
