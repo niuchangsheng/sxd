@@ -315,6 +315,44 @@ func ParseSoulHuntChallengeResult(payload []byte) (uint8, error) {
 	return ParseActionFirstByte(payload, "灵域猎妖挑战")
 }
 
+// SoulHuntChallengePanelInfo 表示 challenge_panel 的关键状态。
+//
+// 线上 2026-11-11 抓包: challenge_panel(1) = 00 + Int[0,0,0,155,1,1,0,20,0,0]。
+// 官方 SoulHuntGroundView 仅在 is_can_challenge=1 且 _curStep==cur_step 时允许
+// start_challenge；实测该账号首字段为 0，直接 start 会返回 CANT_CHALLENGE(3)。
+type SoulHuntChallengePanelInfo struct {
+	Result       uint8
+	CanChallenge bool
+	CurStep      int32
+	LeftTimes    int32
+}
+
+// ParseSoulHuntChallengePanelInfo 解析 challenge_panel 结果码与挑战资格字段。
+func ParseSoulHuntChallengePanelInfo(payload []byte) (*SoulHuntChallengePanelInfo, error) {
+	r := NewReader(payload)
+	info := &SoulHuntChallengePanelInfo{}
+	var err error
+	if info.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: soul hunt panel result: %v", ErrInvalidPayload, err)
+	}
+	can, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: soul hunt can_challenge: %v", ErrInvalidPayload, err)
+	}
+	cur, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: soul hunt cur_step: %v", ErrInvalidPayload, err)
+	}
+	left, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: soul hunt left_times: %v", ErrInvalidPayload, err)
+	}
+	info.CanChallenge = can != 0
+	info.CurStep = cur
+	info.LeftTimes = left
+	return info, nil
+}
+
 // SoulHuntResultText 返回灵域猎妖结果码文本。
 func SoulHuntResultText(code uint8) string {
 	switch code {

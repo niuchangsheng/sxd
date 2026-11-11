@@ -40,12 +40,12 @@ func NewPartnerLinkRoutine() scheduler.ActivityRoutine {
 			// 先查功能开放列表；未开放时不再发送会被静默丢弃的灵结面板请求。
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDPartnerLink)
 			if fErr != nil {
-				slog.Info("灵结功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
-				return nil
+				slog.Info("灵结功能开放状态查询失败，稍后重试", "role_id", session.RoleID(), "err", fErr)
+				return scheduler.NewCooldown(30*time.Minute, "灵结功能开放状态无回包")
 			}
 			if !open {
-				slog.Info("灵结功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDPartnerLink)
-				return nil
+				slog.Info("灵结功能未开放，稍后重试", "role_id", session.RoleID(), "function_id", protocol.FunctionIDPartnerLink)
+				return scheduler.NewCooldown(2*time.Hour, "灵结功能未开放")
 			}
 
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
@@ -56,13 +56,13 @@ func NewPartnerLinkRoutine() scheduler.ActivityRoutine {
 
 			resp, err := call(protocol.BuildPartnerLinkInfoPacket(), protocol.ActionIDPartnerLinkInfo)
 			if err != nil || resp == nil {
-				slog.Info("灵结功能不可用或未开放，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("灵结功能不可用或未开放，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(30*time.Minute, "灵结面板无回包")
 			}
 			info, err := protocol.ParsePartnerLinkInfoResult(resp.Payload)
 			if err != nil {
-				slog.Info("解析灵结面板失败，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				slog.Info("解析灵结面板失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "灵结面板解析失败")
 			}
 			slog.Info("灵结面板",
 				"role_id", session.RoleID(),
@@ -87,8 +87,9 @@ func NewPartnerLinkRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDPartnerLinkActivate,
 				)
 				if aErr != nil || aResp == nil {
-					slog.Info("激活灵结无回包", "role_id", session.RoleID(), "link_type_id", link.LinkTypeID, "err", aErr)
-					return nil
+					slog.Info("激活灵结无回包，稍后重试",
+						"role_id", session.RoleID(), "link_type_id", link.LinkTypeID, "err", aErr)
+					return scheduler.NewCooldown(10*time.Minute, "灵结激活无回包")
 				}
 				got, pErr := protocol.ParsePartnerLinkActivateResult(aResp.Payload)
 				if pErr != nil {
@@ -115,8 +116,10 @@ func NewPartnerLinkRoutine() scheduler.ActivityRoutine {
 					slog.Info("灵结激活资源不足，停止", "role_id", session.RoleID(), "result", got.Result)
 					return nil
 				case protocol.PartnerLinkResultFailed:
-					slog.Info("灵结激活失败", "role_id", session.RoleID(), "link_type_id", link.LinkTypeID)
-					return nil
+					// 单个灵结类型可能因伙伴/前置条件不满足而失败，继续尝试其它类型。
+					slog.Info("该灵结类型当前不可激活，尝试下一类型",
+						"role_id", session.RoleID(), "link_type_id", link.LinkTypeID)
+					continue
 				default:
 					slog.Info("灵结激活未成功", "role_id", session.RoleID(), "link_type_id", link.LinkTypeID, "result", got.Result)
 					return nil

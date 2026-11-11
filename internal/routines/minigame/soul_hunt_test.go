@@ -2,6 +2,7 @@ package minigame
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"net"
 	"sync/atomic"
@@ -131,5 +132,43 @@ func TestSoulHuntRoutine_StateSilentDropCooldown(t *testing.T) {
 	var cd *scheduler.CooldownError
 	if !errors.As(err, &cd) {
 		t.Fatalf("灵域猎妖状态无回包应返回 CooldownError, 实际: %v", err)
+	}
+}
+
+func TestSoulHuntRoutine_NotChallengeablePanelCooldown(t *testing.T) {
+	var startCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDSoulHuntState:
+			w := protocol.NewWriter().WriteInt32(111)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDSoulHuntMainPanel:
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.SoulHuntSuccess)
+			for i := 0; i < 8; i++ {
+				w.WriteInt32(int32(i))
+			}
+			w.WriteUint16(0)
+			w.WriteInt32(1)
+			w.WriteInt32(1)
+			w.WriteInt32(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDSoulHuntChallengePanel:
+			// 2026-11-11 s0 实测 challenge_panel(1) 原始回包：result=0、can_challenge=0。
+			payload, _ := hex.DecodeString("000000000000000000000000000000009b0000000100000001000000000000001400000000000000000000")
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, payload))
+		case protocol.ActionIDSoulHuntStartChallenge:
+			startCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+
+	err := NewSoulHuntRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("is_can_challenge=0 应返回 CooldownError, 实际: %v", err)
+	}
+	if startCalls.Load() != 0 {
+		t.Fatalf("不可挑战时不得调用 start_challenge, 实际 %d 次", startCalls.Load())
 	}
 }

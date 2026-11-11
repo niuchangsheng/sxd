@@ -93,6 +93,12 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 						"result_text", protocol.SoulHuntResultText(challengeCode))
 					continue
 				}
+				if panelInfo, pErr := protocol.ParseSoulHuntChallengePanelInfo(challengeResp.Payload); pErr == nil && !panelInfo.CanChallenge {
+					slog.Info("灵域猎妖当前不可挑战（is_can_challenge=0），稍后重试",
+						"role_id", session.RoleID(), "level_id", levelID,
+						"cur_step", panelInfo.CurStep, "left_times", panelInfo.LeftTimes)
+					return scheduler.NewCooldown(2*time.Hour, "灵域猎妖当前不可挑战")
+				}
 
 				fightResp := call(protocol.BuildSoulHuntStartChallengePacket(levelID),
 					protocol.ActionIDSoulHuntStartChallenge)
