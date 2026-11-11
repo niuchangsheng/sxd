@@ -90,7 +90,39 @@ func main() {
 	}
 
 	probe(0x02CA0001, nil) // main_panel
-	probe(0x02CA0002, nil) // task_panel
-	probe(0x02CA0003, nil) // gift_panel
+
+	// 圣域 / 仙界跨服会话对照
+	if sa, err := sess.OpenSaintAreaSession(ctx); err != nil {
+		slog.Warn("打开圣域会话失败", "err", err)
+	} else {
+		defer sa.Close()
+		slog.Info("圣域会话已建立", "role_id", sa.RoleID())
+		p := protocol.NewPacket(0x02CA0001, nil)
+		cCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		resp, e := sa.Call(cCtx, p, p.ActionID)
+		cancel()
+		if e != nil {
+			slog.Info("圣域会话 714/1 无回包", "err", e)
+		} else {
+			slog.Info("圣域会话 714/1 回包", "len", len(resp.Payload), "hex", hex.EncodeToString(resp.Payload))
+		}
+	}
+	if cross, err := sess.OpenCrossServerSession(ctx); err != nil {
+		slog.Warn("打开仙界跨服会话失败", "err", err)
+	} else {
+		defer cross.Close()
+		slog.Info("仙界跨服会话已建立", "role_id", cross.RoleID())
+		p := protocol.NewPacket(0x02CA0001, nil)
+		cCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		resp, e := cross.Call(cCtx, p, p.ActionID)
+		cancel()
+		if e != nil {
+			slog.Info("跨服会话 714/1 无回包", "err", e)
+		} else {
+			slog.Info("跨服会话 714/1 回包", "len", len(resp.Payload), "hex", hex.EncodeToString(resp.Payload))
+		}
+	}
+	probe(0x02CA0002, nil)                // task_panel
+	probe(0x02CA0003, nil)                // gift_panel
 	probe(0x02CA0004, []byte{0, 0, 0, 1}) // handbook_panel(1)
 }
