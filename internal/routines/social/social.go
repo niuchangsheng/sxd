@@ -812,7 +812,26 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 官方小助手"家园奖励"直接调用 210/18，不发 210/0。
-			// 线上实测先发 210/0 会污染会话上下文，紧随其后的 210/18 被静默丢弃。
+			// 但未结婚/无家园角色发送 210/18 会被服务端静默丢弃（qq 实测），
+			// 因此先用只读的 210/0 判定婚姻状态：未结婚直接挂起至次日，
+			// 已结婚才发送 210/18，避免每轮固定超时 8 秒。
+			sCtx, sCancel := context.WithTimeout(ctx, callTimeout)
+			selfResp, sErr := session.Call(sCtx,
+				protocol.BuildMarryHomeSelfInfoPacket(session.PlayerID()), protocol.ActionIDMarryHomeSelfInfo)
+			sCancel()
+			if sErr != nil || selfResp == nil {
+				slog.Info("住宅状态查询无回包，稍后重试", "role_id", session.RoleID(), "err", sErr)
+				return scheduler.NewCooldown(30*time.Minute, "住宅状态查询无回包")
+			}
+			selfResult, pErr := protocol.ParseMarryHomeSelfInfoResult(selfResp.Payload)
+			if pErr != nil {
+				return scheduler.NewCooldown(10*time.Minute, "住宅状态解析失败")
+			}
+			if selfResult == protocol.MarryHomeResultNonMarry {
+				slog.Info("账号未处于婚姻状态，跳过住宅家具效果", "role_id", session.RoleID())
+				return scheduler.ErrAttemptsExhausted
+			}
+
 			bCtx, bCancel := context.WithTimeout(ctx, callTimeout)
 			effectResp, bErr := session.Call(bCtx, protocol.BuildMarryHomeBatchFurnitureEffectPacket(), protocol.ActionIDMarryHomeBatchFurnitureEffect)
 			bCancel()

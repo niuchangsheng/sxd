@@ -837,8 +837,10 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildIceCaveInfoPacket(), protocol.ActionIDIceCaveInfo)
 			iCancel()
 			if err != nil {
-				slog.Info("冰窟探险当前不可用/未开放，稍后重试", "role_id", session.RoleID(), "err", err)
-				return scheduler.NewCooldown(30*time.Minute, "冰窟探险信息无回包")
+				// 冰窟探险属于节日狂欢子活动，未开放时服务端不回包（无独立开启时间接口）。
+				// 按“活动未开放”每 30 分钟复查，节日开启后即可自动敲冰。
+				slog.Info("冰窟探险活动未开放，稍后由定时唤醒复查", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "冰窟探险活动未开放")
 			}
 			info, err := protocol.ParseIceCaveInfoResult(infoResp.Payload)
 			if err != nil {
@@ -1280,8 +1282,10 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			panelResp, pErr := session.Call(pCtx, panelPkt, protocol.ActionIDHuanshouPanel)
 			pCancel()
 			if pErr != nil || panelResp == nil || len(panelResp.Payload) == 0 {
-				slog.Info("山海幻兽功能未开放/不可用，稍后重试", "role_id", session.RoleID(), "err", pErr)
-				return scheduler.NewCooldown(30*time.Minute, "山海幻兽面板无回包")
+				// 功能已开放但入侵子活动未到开启时段时，服务端同样不回包。
+				// 按“活动未开放”每 30 分钟复查，开启后自动继续推图/扫荡。
+				slog.Info("山海幻兽入侵活动未开放，稍后由定时唤醒复查", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "山海幻兽入侵活动未开放")
 			}
 
 			// 2. 选定入侵章节并挑战 (Mod 696, Act 1 & 2)

@@ -25,7 +25,8 @@ const (
 
 // NewDaoyuanVipShopRoutine 构造精品杂货 VIP 商店购买任务。
 // errVipShopNoResponse 标记 132 协议在会话上被服务端静默丢弃。
-// 线上主服连接对所有 132 动作均不回包，必须改走圣域独立会话。
+// Module 132 (Mod_StDaoyuanShop) 是圣域专属商店：主服连接对所有 132 动作
+// 均不回包，必须优先改走圣域独立会话 (Mod 293)，避免每轮固定产生一次丢包。
 var errVipShopNoResponse = errors.New("精品杂货协议无回包")
 
 func NewDaoyuanVipShopRoutine() scheduler.ActivityRoutine {
@@ -134,20 +135,24 @@ func NewDaoyuanVipShopRoutine() scheduler.ActivityRoutine {
 				return run(s, protocol.DaoyuanVipShopTabEight, []int32{itemTianHunPack})
 			}
 
+			// Module 132 是圣域专属协议，优先在圣域会话执行；圣域不可用时
+			// 才回退主服（主服大概率静默丢包）。
+			saCtx, saCancel := context.WithTimeout(ctx, 5*time.Second)
+			sa, openErr := session.OpenSaintAreaSession(saCtx)
+			saCancel()
+			if openErr == nil {
+				saErr := runAll(sa)
+				sa.Close()
+				if !errors.Is(saErr, errVipShopNoResponse) {
+					return saErr
+				}
+				slog.Info("圣域精品杂货商店无回包，改走主服会话", "role_id", session.RoleID())
+			}
+
 			err := runAll(session)
-			if !errors.Is(err, errVipShopNoResponse) {
-				return err
-			}
-			// 主服对所有 132 动作静默丢包，线上必须改走圣域独立会话 (Mod 293)。
-			slog.Info("主服精品杂货协议无回包，改走圣域会话", "role_id", session.RoleID())
-			sa, openErr := session.OpenSaintAreaSession(ctx)
-			if openErr != nil {
-				slog.Info("圣域会话不可用，稍后重试", "role_id", session.RoleID(), "err", openErr)
-				return scheduler.NewCooldown(30*time.Minute, "精品杂货商店需圣域会话")
-			}
-			defer sa.Close()
-			if err = runAll(sa); errors.Is(err, errVipShopNoResponse) {
-				return scheduler.NewCooldown(30*time.Minute, "圣域精品杂货商店无回包")
+			if errors.Is(err, errVipShopNoResponse) {
+				// 圣域不可用且主服也丢包：保留冷却，等待圣域会话恢复。
+				return scheduler.NewCooldown(30*time.Minute, "精品杂货商店无回包")
 			}
 			return err
 		},

@@ -117,9 +117,11 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 			warResults, err := session.BeelzebubTrialsAutoChallengeAll(ctx, cfg.PreferBossID)
 			if err != nil {
 				if errors.Is(err, client.ErrBeelzebubTrialsNoResponse) {
-					// 客户端已记录具体关卡与原因；可能是资格/协议限制，稍后重试。
-					slog.Info("魔王试炼服务端连续无响应，稍后重试", "role_id", session.RoleID(), "error", err)
-					return scheduler.NewCooldown(time.Hour, "魔王试炼连续无响应")
+					// 已根因定位为 s0 服务端账号/版本限制（详见 docs/protocol-spec.md 4.12），
+					// 换载荷/换关卡/换会话均无法恢复；延长冷却，减少无效请求。
+					slog.Info("魔王试炼建队被服务端拒绝（账号/版本限制），稍后重试",
+						"role_id", session.RoleID())
+					return scheduler.NewCooldown(4*time.Hour, "魔王试炼建队被服务端拒绝")
 				}
 				if errors.Is(err, context.DeadlineExceeded) {
 					slog.Info("魔王试炼请求超时/被服务端丢弃，稍后重试", "role_id", session.RoleID(), "error", err)

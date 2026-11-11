@@ -55,8 +55,12 @@ func TestSocialRoutines_Execute(t *testing.T) {
 	}
 
 	r2 := NewHomesteadRoutine()
+	// 无响应管道下 210/0 住宅状态查询超时，应返回冷却而非直接报错。
 	if err := r2.Execute(context.Background(), session, nil); err != nil {
-		t.Fatalf("住宅任务执行失败: %v", err)
+		var cd *scheduler.CooldownError
+		if !errors.As(err, &cd) {
+			t.Fatalf("住宅任务执行失败: %v", err)
+		}
 	}
 
 	r2b := NewMarryHomeRoutine()

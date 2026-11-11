@@ -184,12 +184,11 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 			if errors.Is(cErr, ErrBeelzebubTrialsNoResponse) {
 				silentDrops++
 				if silentDrops >= beelzebubSilentDropThreshold {
-					slog.Info("魔王试炼建队请求被服务端静默丢弃，判定当前状态不满足，终止本轮",
+					slog.Info("魔王试炼建队被服务端拒绝（s0 账号/版本限制，非协议错误），终止本轮",
 						"role_id", s.RoleID(),
 						"consecutive_drops", silentDrops,
 						"boss_id", cand.id,
 						"boss_name", cand.name,
-						"error", cErr,
 					)
 					return results, fmt.Errorf("建队请求连续 %d 次无任何回包，疑似服务端资格/协议限制: %w",
 						silentDrops, cErr)
