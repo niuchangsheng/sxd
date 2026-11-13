@@ -71,10 +71,16 @@ func BuildWorshipMarsInfoPacket() *Packet {
 }
 
 // BuildWorshipMarsIncensePacket 构造上香封包 (0x00290001)。
-func BuildWorshipMarsIncensePacket(offeringID int32) *Packet {
+//
+// 业务载荷 [Int offering_id] 之后追加 Uint32 PrevAct，并由会话层在发包瞬间
+// 覆盖为最近一次动作。线上实测 4 字节裸载荷会被服务端静默丢弃（2026-11-14）。
+func BuildWorshipMarsIncensePacket(offeringID int32, prevAct uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(offeringID)
-	return NewPacket(ActionIDWorshipMarsIncense, w.Bytes())
+	w.WriteUint32(prevAct)
+	pkt := NewPacket(ActionIDWorshipMarsIncense, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // BuildWorshipMarsRemainPacket 构造查询剩余次数封包 (0x00290004)。
