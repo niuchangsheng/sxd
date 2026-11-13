@@ -52,7 +52,7 @@ func claimSystemAwards(ctx context.Context, session *client.RoleSession) error {
 		return fmt.Errorf("system award list parse: %w", err)
 	}
 	if len(awards) == 0 {
-		slog.Debug("暂无待领取系统/活动奖励", "role_id", session.RoleID())
+		slog.Info("系统/活动奖励列表为空", "role_id", session.RoleID())
 		return nil
 	}
 	slog.Info("发现待领取系统/活动奖励", "role_id", session.RoleID(), "count", len(awards))
