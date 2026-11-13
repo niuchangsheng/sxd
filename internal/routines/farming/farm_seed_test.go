@@ -1,9 +1,12 @@
 package farming
 
 import (
+	"context"
+	"net"
 	"testing"
 	"time"
 
+	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
 )
 
@@ -106,5 +109,79 @@ func TestFarmSeedBuyBackoffPerRole(t *testing.T) {
 	}
 	if got := farmSeedBuyBlockedUntil("role-s0"); got != 0 {
 		t.Fatalf("s0 backoff = %d, want 0 (按角色隔离)", got)
+	}
+}
+
+// TestTryLegacyCoinTreePlanting 验证摇钱树次数 >0 时会完成伙伴资格检查并播种。
+//
+// 实机受免费次数 (count=0, 回包 12) 限制无法立即观察到成功；本测用 mock
+// 固定 count=1，验证 13/8 PASS(21) 后 13/5 返回 8(SUCCESS) 的完整链路。
+func TestTryLegacyCoinTreePlanting(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDFarmCoinTreeInfo:
+				w := protocol.NewWriter()
+				w.WriteInt32(1) // count
+				w.WriteInt32(0) // remain buy
+				w.WriteInt32(2) // ingot
+				w.WriteInt32(0) // recover cd
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+			case protocol.ActionIDFarmRoleList:
+				w := protocol.NewWriter()
+				w.WriteUint16(1)
+				w.WriteInt32(884402)
+				w.WriteString("伙伴")
+				w.WriteString("sign")
+				w.WriteInt32(94)
+				w.WriteInt64(1000)
+				w.WriteInt64(2000)
+				w.WriteInt32(1)
+				w.WriteInt32(2)
+				w.WriteInt32(3)
+				w.WriteUint8(1)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+			case protocol.ActionIDFarmCheckRoleState:
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, []byte{protocol.FarmCheckRoleStatePass}))
+			case protocol.ActionIDFarmPlantHerbs:
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, []byte{protocol.FarmPlantSuccess}))
+			}
+		}
+	}()
+
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-legacy-farm-test",
+		RoleName:   "摇钱树测试",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	t.Cleanup(sess.Close)
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	planted, retryAfter := tryLegacyCoinTreePlanting(context.Background(), sess,
+		[]protocol.FarmField{{LandID: 162236, State: 1}}, time.Second)
+	if planted != 1 {
+		t.Fatalf("planted = %d, want 1", planted)
+	}
+	if retryAfter != 0 {
+		t.Fatalf("retryAfter = %v, want 0", retryAfter)
 	}
 }
