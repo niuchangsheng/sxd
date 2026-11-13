@@ -44,6 +44,11 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDItemClaimAward, pClaim.ActionID)
 	}
 
+	// 2/29 序列号/系统奖励领取必须为裸 4 字节 [Int award_id]。
+	if pClaim.HasPrevAct || len(pClaim.Payload) != 4 {
+		t.Errorf("2/29 应为裸 4 字节载荷, 实际 len=%d prev=%v", len(pClaim.Payload), pClaim.HasPrevAct)
+	}
+
 	// 2. 结缘宝箱开箱 (Module 232, Action 34)
 	pOpen := protocol.BuildJieYuanBoxOpenPacket(protocol.ItemJieYuanBoxCommon, 4, protocol.ActionIDJieYuanBoxOpenContext)
 	if pOpen.ActionID != protocol.ActionIDJieYuanBoxOpen {
@@ -527,7 +532,8 @@ func TestFeaturePackets_SystemAwardPackets(t *testing.T) {
 		t.Fatalf("2/6 列表封包不符: %+v", p)
 	}
 	c := protocol.BuildClaimAwardPacket(0x055DDC22, protocol.ActionIDSystemAwardList)
-	if c.ActionID != protocol.ActionIDItemClaimAward || !c.HasPrevAct || len(c.Payload) != 8 {
+	// 2026-11-14 实机: 2/29 仅接受裸 4 字节 [Int award_id]；带 PrevAct 会被丢弃。
+	if c.ActionID != protocol.ActionIDItemClaimAward || c.HasPrevAct || len(c.Payload) != 4 {
 		t.Fatalf("2/29 领取封包不符: %+v", c)
 	}
 	if got := hex.EncodeToString(c.Payload[:4]); got != "055ddc22" {

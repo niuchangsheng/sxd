@@ -124,15 +124,12 @@ func readOnlineGiftItems(r *Reader) ([]OnlineGiftItem, error) {
 // 官方抓包: [Int award_id][Uint32 PrevAct]；PrevAct 链由会话层在发包瞬间
 // 用最近一次动作覆盖，因此这里标记 HasPrevAct。
 func BuildClaimAwardPacket(awardSeqID uint32, prevAct uint32) *Packet {
+	// 2026-11-14 实机：带 PrevAct 的 8 字节 2/29 请求对系统奖励被静默丢弃；
+	// 与 35/0、25/0 一致，优先使用裸 [Int award_id] 载荷。prevAct 参数保留兼容。
+	_ = prevAct
 	w := NewWriter()
 	w.WriteUint32(awardSeqID)
-	if prevAct == 0 {
-		prevAct = ActionIDVipAwardQuery
-	}
-	w.WriteUint32(prevAct)
-	pkt := NewPacket(ActionIDItemClaimAward, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDItemClaimAward, w.Bytes())
 }
 
 // BuildSystemAwardListPacket 构造查询系统/活动奖励列表封包 (Module 2, Action 6)。
