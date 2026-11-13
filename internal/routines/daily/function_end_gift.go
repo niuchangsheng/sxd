@@ -58,21 +58,33 @@ func claimSystemAwards(ctx context.Context, session *client.RoleSession) error {
 	slog.Info("发现待领取系统/活动奖励", "role_id", session.RoleID(), "count", len(awards))
 
 	claimed := 0
+	claim := func(awardID uint32) (*protocol.Packet, error) {
+		cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return session.Call(cCtx,
+			protocol.BuildClaimAwardPacket(awardID, session.LastActionID()),
+			protocol.ActionIDItemClaimAward)
+	}
 	for _, award := range awards {
 		if ctx.Err() != nil {
 			break
 		}
 		// 每项之间保留拟人间隔，避免连发被网关限速。
 		time.Sleep(120 * time.Millisecond)
-		cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		claimResp, cErr := session.Call(cCtx,
-			protocol.BuildClaimAwardPacket(award.ID, session.LastActionID()),
-			protocol.ActionIDItemClaimAward)
-		cancel()
+		claimResp, cErr := claim(award.ID)
 		if cErr != nil || claimResp == nil {
-			slog.Info("系统/活动奖励领取无回包", "role_id", session.RoleID(),
+			// 静默丢包会污染 PrevAct 链；回退到最近一次真实回包动作后重试一次。
+			if ack := session.LastAckActionID(); ack != 0 {
+				session.SetLastActionID(ack)
+			}
+			time.Sleep(200 * time.Millisecond)
+			claimResp, cErr = claim(award.ID)
+		}
+		if cErr != nil || claimResp == nil {
+			// 单个奖励不可领（类型不同/条件不满足）不应中断整批，继续下一项。
+			slog.Info("系统/活动奖励领取无回包，跳过该奖励", "role_id", session.RoleID(),
 				"award_id", fmt.Sprintf("0x%08X", award.ID), "err", cErr)
-			break
+			continue
 		}
 		code := uint8(0)
 		if len(claimResp.Payload) > 0 {
