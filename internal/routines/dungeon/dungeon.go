@@ -646,7 +646,21 @@ func executeEliteMissionSweep(
 	totalGainCoins *int64,
 ) (int, error) {
 	if cfg.Sweep.GlobalElite {
-		return sweepEliteMissionsWithoutTown(ctx, session, dictRepo)
+		// 官方客户端 (2026-11-13 /tmp/saodang.pcapng) 在多城镇英雄副本扫荡之外
+		// 仍会使用 Module 25 全局精英扫荡；两者是不同系统，不能互相短路。
+		// 先按城镇执行 35/0→35/2→35/7，再执行 Module 25 全局精英扫荡。
+		heroCfg := cfg
+		heroCfg.Sweep.GlobalElite = false
+		heroSwept, heroErr := executeEliteMissionSweep(ctx, session, dictRepo, heroCfg,
+			sweepHasStamina, totalCostStamina, totalGainExp, totalGainCoins)
+		globalSwept, globalErr := sweepEliteMissionsWithoutTown(ctx, session, dictRepo)
+		if globalErr != nil {
+			return heroSwept, globalErr
+		}
+		if heroErr != nil {
+			return heroSwept + globalSwept, heroErr
+		}
+		return heroSwept + globalSwept, nil
 	}
 	towns := eliteMissionTowns(dictRepo)
 	if len(towns) == 0 {
