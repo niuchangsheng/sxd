@@ -680,3 +680,77 @@ func TestRoleSession_Module25BareStatusNotRewritten(t *testing.T) {
 		}
 	}
 }
+
+// TestRoleSession_ItemUseGridKeepsBarePayload 验证 2 字节 use_grid/sell 不被追加 PrevAct。
+//
+// 2026-11-14 实机: s0 体力道具 2/53 带 PrevAct 时全部超时；
+// 裸 [Int16 grid_id] 正常回包（58 字节）。
+func TestRoleSession_ItemUseGridKeepsBarePayload(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+	captured := make(chan protocol.Packet, 4)
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			captured <- *pkt
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:            "role-item-use-bare",
+		RoleName:          "裸使用物品测试",
+		ServerAddr:        "mock-pipe",
+		HeartbeatInterval: time.Hour,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("session.Start failed: %v", err)
+	}
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	next := func() protocol.Packet {
+		t.Helper()
+		select {
+		case p := <-captured:
+			return p
+		case <-time.After(2 * time.Second):
+			t.Fatal("未捕获到客户端发包")
+			return protocol.Packet{}
+		}
+	}
+
+	// 建立非零 lastActionID，确保旧逻辑会触发自动追加。
+	if err := session.Send(protocol.NewPacket(protocol.ActionIDPlayerGetInfo, []byte{0, 0, 0, 0})); err != nil {
+		t.Fatalf("send get info: %v", err)
+	}
+	next()
+
+	pkt, err := protocol.BuildUseGridItemPacket(8)
+	if err != nil {
+		t.Fatalf("BuildUseGridItemPacket: %v", err)
+	}
+	if err := session.Send(pkt); err != nil {
+		t.Fatalf("send use grid: %v", err)
+	}
+	got := next()
+	if got.ActionID != protocol.ActionIDItemUseGrid {
+		t.Fatalf("ActionID = 0x%08X", got.ActionID)
+	}
+	if len(got.Payload) != 2 || got.Payload[0] != 0 || got.Payload[1] != 8 {
+		t.Fatalf("payload = %x, want 0008 (裸 grid_id)", got.Payload)
+	}
+}

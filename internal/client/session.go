@@ -1885,9 +1885,7 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 	if p != nil {
 		mod := p.ActionID >> 16
 		if prev := s.lastActionID.Load(); prev != 0 {
-			if (p.ActionID == protocol.ActionIDItemGetPackList && len(p.Payload) == 0) ||
-				(p.ActionID == protocol.ActionIDItemUseGrid && len(p.Payload) == 2) ||
-				(p.ActionID == protocol.ActionIDItemSell && len(p.Payload) == 2) {
+			if p.ActionID == protocol.ActionIDItemGetPackList && len(p.Payload) == 0 {
 				cloned := make([]byte, len(p.Payload)+4)
 				copy(cloned, p.Payload)
 				binary.BigEndian.PutUint32(cloned[len(p.Payload):], prev)
