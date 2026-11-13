@@ -1648,8 +1648,19 @@ func runSpiritPoolCore(
 	// 8s 内未能返回），给结算请求更长的等待窗口，避免把慢回包误判为丢包。
 	const executeTimeout = 20 * time.Second
 
-	// 1. 不再额外调用功能开放检查：check_function_open 会推进 PrevAct 链，
-	// 导致后续 282/1 一键淬炼被网关静默丢弃。282/0 面板本身就是开放门禁。
+	// 1. 功能开放门禁：未开放角色 (如 ncs s1 等级 94) 发送 282/0 会被静默丢弃，
+	// 先用 Action 6 开放列表判定，避免每轮空等 8 秒。
+	if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDRefinePool); fErr != nil {
+		slog.Info("粗铁淬炼池功能开放状态查询失败，本轮跳过",
+			"role_id", session.RoleID(), "err", fErr)
+		return nil
+	} else if !open {
+		slog.Info("粗铁淬炼池功能未开放，跳过",
+			"role_id", session.RoleID(), "function_id", protocol.FunctionIDRefinePool)
+		// 保持既有语义：正常跳过，由 30 分钟 Loop 在功能开放后自动重试。
+		return nil
+	}
+
 	// 2. 打开淬炼池面板 (Mod 282, Act 0), 获取各铁槽生产状态。
 	//    2026-11-14 实机：282/0 仅接受空载荷，追加 4 字节 PrevAct 会被静默丢弃；
 	//    282/1 同样只接受裸 3 字节业务字段。因此不再刷新 PrevAct 链锚点。
