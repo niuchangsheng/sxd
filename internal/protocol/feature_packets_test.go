@@ -433,3 +433,51 @@ func TestTreasureHouse_BuildersUseDynamicPrevAct(t *testing.T) {
 		}
 	}
 }
+
+func TestFeaturePackets_JieYuanContextAndOpenResult(t *testing.T) {
+	// 528/1 上下文握手载荷必须与官方抓包一致: [Uint16 0x0704][Uint32 PrevAct]。
+	pCtx := protocol.BuildJieYuanBoxOpenContextPacket(protocol.ActionIDJieYuanBoxList)
+	if pCtx.ActionID != protocol.ActionIDJieYuanBoxOpenContext {
+		t.Fatalf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDJieYuanBoxOpenContext, pCtx.ActionID)
+	}
+	if got, want := hex.EncodeToString(pCtx.Payload), "070400e8001e"; got != want {
+		t.Fatalf("528/1 握手载荷不匹配抓包: got %s want %s", got, want)
+	}
+
+	// 开箱载荷必须与官方抓包一致: [Int item_id][Int count][Uint32 PrevAct=528/1]。
+	pOpen := protocol.BuildJieYuanBoxOpenPacket(protocol.ItemJieYuanBoxAdvanced, 4, protocol.ActionIDJieYuanBoxOpenContext)
+	if got, want := hex.EncodeToString(pOpen.Payload), "00000f620000000402100001"; got != want {
+		t.Fatalf("232/34 开箱载荷不匹配抓包: got %s want %s", got, want)
+	}
+}
+
+func TestFeaturePackets_ParseJieYuanOpenResults(t *testing.T) {
+	// 528/1 握手成功码为 0。
+	code, err := protocol.ParseJieYuanOpenContextResult([]byte{0x00})
+	if err != nil || code != protocol.JieYuanOpenContextResultOK {
+		t.Fatalf("握手成功解析失败: code=%d err=%v", code, err)
+	}
+	// 非 0 结果码原样返回，由调用方按失败分流。
+	code, err = protocol.ParseJieYuanOpenContextResult([]byte{0x01})
+	if err != nil || code != 1 {
+		t.Fatalf("握手失败码解析失败: code=%d err=%v", code, err)
+	}
+	if _, err := protocol.ParseJieYuanOpenContextResult(nil); err == nil {
+		t.Fatal("空握手回包必须返回错误")
+	}
+
+	// 232/34 官方抓包解压后载荷首字节为 0x05（成功）。
+	raw, _ := hex.DecodeString("05000a0000000000010f7b00000000000000010f7b0000")
+	code, err = protocol.ParseJieYuanBoxOpenResult(raw)
+	if err != nil || code != protocol.JieYuanBoxOpenResultSuccess {
+		t.Fatalf("开箱成功解析失败: code=%d err=%v", code, err)
+	}
+	// 失败码不得被误判为成功。
+	code, err = protocol.ParseJieYuanBoxOpenResult([]byte{0x01})
+	if err != nil || code == protocol.JieYuanBoxOpenResultSuccess {
+		t.Fatalf("开箱失败码被误判: code=%d err=%v", code, err)
+	}
+	if _, err := protocol.ParseJieYuanBoxOpenResult(nil); err == nil {
+		t.Fatal("空开箱回包必须返回错误")
+	}
+}

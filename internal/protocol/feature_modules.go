@@ -290,6 +290,15 @@ const (
 )
 
 const (
+	// 结缘宝箱业务结果码 (来源: 2026-11-13 官方客户端抓包 /tmp/jieyuan.pcapng)
+	// JieYuanOpenContextResultOK 528/1 前置上下文握手成功 (回包载荷仅 1 字节 0x00)
+	JieYuanOpenContextResultOK uint8 = 0
+	// JieYuanBoxOpenResultSuccess 232/34 批量开箱成功
+	// 抓包实测官方客户端两次开箱回包首字节均为 0x05，且开箱后 232/30 列表数量随之下降。
+	JieYuanBoxOpenResultSuccess uint8 = 5
+)
+
+const (
 	// 个人吉星高照业务结果码 (对齐 Mod_RollCake_Base 常量)
 	// RollCakeCodeSuccess 操作成功
 	RollCakeCodeSuccess uint8 = 0

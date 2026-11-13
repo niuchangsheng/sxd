@@ -223,7 +223,7 @@ func BuildJieYuanBoxOpenContextPacket(prevAct uint32) *Packet {
 // BuildJieYuanBoxOpenPacket 构造批量开启结缘宝箱请求封包 (Module 232, Action 34)。
 //
 // 抓包显示官方开箱请求为 [Int box_item_id, Int count, Uint32 PrevAct]；
-// PrevAct 默认指向 528/1 前置握手。
+// PrevAct 必须指向紧邻的 528/1 前置握手，否则网关静默丢弃开箱请求。
 func BuildJieYuanBoxOpenPacket(itemID int32, openCount int32, prevAct uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(itemID)
@@ -235,6 +235,29 @@ func BuildJieYuanBoxOpenPacket(itemID int32, openCount int32, prevAct uint32) *P
 	pkt := NewPacket(ActionIDJieYuanBoxOpen, w.Bytes())
 	pkt.HasPrevAct = true
 	return pkt
+}
+
+// ParseJieYuanOpenContextResult 解析 528/1 前置上下文握手回包。
+// 官方抓包回包载荷仅 1 字节 result_code（0x00 表示握手成功）。
+func ParseJieYuanOpenContextResult(payload []byte) (uint8, error) {
+	if len(payload) < 1 {
+		return 0, fmt.Errorf("%w: empty jieyuan context response", ErrInvalidPayload)
+	}
+	return payload[0], nil
+}
+
+// ParseJieYuanBoxOpenResult 解析 232/34 批量开箱回包首字节 result_code。
+//
+// 官方抓包回包为整包 zlib 压缩，解压后结构为:
+//
+//	[Uint32 ActionID][UByte result_code][Uint16 reward_count][reward_count * 10B 奖励条目]
+//
+// 成功码为 5。调用方必须依据结果码分流，禁止仅凭“收到回包”判定开箱成功。
+func ParseJieYuanBoxOpenResult(payload []byte) (uint8, error) {
+	if len(payload) < 1 {
+		return 0, fmt.Errorf("%w: empty jieyuan open response", ErrInvalidPayload)
+	}
+	return payload[0], nil
 }
 
 // --------------------------------------------------------------------------------

@@ -6,6 +6,7 @@ package social
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -102,16 +103,38 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 						openCount = remaining
 					}
 
-					// 官方抓包中开箱请求 TCP 段为 20 字节（8 字节帧头 + item_id/count/PrevAct）。
-					// 线上主服会话仍被静默丢弃；当前以最近一次库存查询动作作为 PrevAct 重试，
-					// 具体 PrevAct/会话归属待原始报文字节确认。
-					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, openCount, prevAct)
+					// 官方抓包（2026-11-13 /tmp/jieyuan.pcapng）确认：每次 232/34 开箱前
+					// 必须先发送 528/1 上下文握手 [Uint16 0x0704][Uint32 PrevAct]，
+					// 且 232/34 的 PrevAct 紧跟该握手 (0x02100001)。缺少握手时网关静默丢弃开箱。
+					ctxPkt := protocol.BuildJieYuanBoxOpenContextPacket(prevAct)
+					cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
+					ctxResp, cErr := session.Call(cCtx, ctxPkt, protocol.ActionIDJieYuanBoxOpenContext)
+					cCancel()
+					if cErr != nil || ctxResp == nil {
+						slog.Info("结缘宝箱上下文握手无回包（活动未开放或不在可开箱时段），稍后重试",
+							"role_id", session.RoleID(), "err", cErr)
+						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱上下文握手无回包")
+					}
+					ctxCode, ctxParseErr := protocol.ParseJieYuanOpenContextResult(ctxResp.Payload)
+					if ctxParseErr != nil {
+						slog.Warn("解析结缘宝箱上下文握手结果失败，终止本轮",
+							"role_id", session.RoleID(), "err", ctxParseErr,
+							"payload_hex", hex.EncodeToString(ctxResp.Payload))
+						return nil
+					}
+					if ctxCode != protocol.JieYuanOpenContextResultOK {
+						slog.Warn("结缘宝箱上下文握手被拒绝，终止本轮",
+							"role_id", session.RoleID(), "result_code", ctxCode)
+						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱上下文握手被拒绝")
+					}
+
+					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, openCount, protocol.ActionIDJieYuanBoxOpenContext)
 					oCtx, oCancel := context.WithTimeout(ctx, 8*time.Second)
 					openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)
 					oCancel()
 
 					if oErr != nil || openResp == nil {
-						// 232/30 列表始终可读，而 232/31/34 开箱在活动未开放/不在
+						// 232/30 列表始终可读，而 232/34 开箱在活动未开放/不在
 						// 可开箱时段会被服务端静默丢弃（与抓包中活动期开箱成功一致）。
 						// 该状态无法与网络瞬断区分，按活动时段冷却 2 小时复查。
 						slog.Info("结缘宝箱当前不可开启（活动未开放或不在可开箱时段），稍后重试",
@@ -121,6 +144,23 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 							"err", oErr,
 						)
 						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱不在可开启时段")
+					}
+
+					openCode, openParseErr := protocol.ParseJieYuanBoxOpenResult(openResp.Payload)
+					if openParseErr != nil {
+						slog.Warn("解析结缘宝箱开箱结果失败，终止本轮",
+							"role_id", session.RoleID(), "err", openParseErr,
+							"payload_len", len(openResp.Payload))
+						return nil
+					}
+					if openCode != protocol.JieYuanBoxOpenResultSuccess {
+						// 非成功码（如次数不足、道具不存在、条件不满足）不得盲目重试。
+						slog.Warn("结缘宝箱开箱失败，终止本轮",
+							"role_id", session.RoleID(),
+							"item_id", box.ItemID,
+							"open_count", openCount,
+							"result_code", openCode)
+						return nil
 					}
 
 					// 成功也要校验副作用：重新拉取列表，确认道具数量确实减少。
