@@ -697,7 +697,7 @@ func (cfg PilgrimageConfig) saintAreaFallbackAllowed(ctx context.Context, sessio
 // 返回 true 表示本轮已处理完毕（跨服链路完成，或按圣域回退策略主动跳过）；
 // 返回 false 表示当前环境不支持仙界跨服连接（凭据缺失或登录失败），
 // 调用方应回退到主服传统取经协议。
-func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg PilgrimageConfig) bool {
+func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg PilgrimageConfig) (handled bool, retryAfter time.Duration) {
 	cfg = normalizePilgrimageConfig(cfg)
 	// 一次巡检最多包含护送、刷新、路况查询、目标探测与多次打劫，放宽整体超时。
 	// rob 回包需等待跨服节点完成战斗计算 (单次预算 15s)，整体预算相应放宽。
@@ -739,7 +739,7 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 	if cross == nil && !cfg.saintAreaFallbackAllowed(crossCtx, session) {
 		slog.Info("取经圣域通道不可用，按策略跳过本轮且不回退仙界",
 			"role_id", session.RoleID(), "fallback_mode", cfg.SaintAreaFallback)
-		return true
+		return true, 0
 	}
 
 	// 3. 回退仙界跨服取经 (Mod 114)，兼容仍开放跨服取经的区服。
@@ -749,12 +749,12 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 		credCancel()
 		if err != nil {
 			slog.Debug("仙界跨服取经不可用，回退传统取经协议", "role_id", session.RoleID(), "error", err)
-			return false
+			return false, 0
 		}
 		st, err := session.OpenCrossServerSessionWithInfo(crossCtx, cred)
 		if err != nil {
 			slog.Warn("仙界跨服会话建立失败，回退传统取经协议", "role_id", session.RoleID(), "error", err)
-			return false
+			return false, 0
 		}
 		cross = st
 		origin = "仙界"
@@ -786,14 +786,14 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 			selfID = session.PlayerID()
 		}
 		if isSa {
-			crossPilgrimageRob(ctx, session, selfID, crossCall, normalizeMsg, cfg, protocol.ParseSaTakeBibleRoadResult)
+			retryAfter = crossPilgrimageRob(ctx, session, selfID, crossCall, normalizeMsg, cfg, protocol.ParseSaTakeBibleRoadResult)
 		} else {
-			crossPilgrimageRob(ctx, session, selfID, crossCall, normalizeMsg, cfg)
+			retryAfter = crossPilgrimageRob(ctx, session, selfID, crossCall, normalizeMsg, cfg)
 		}
 	} else {
 		slog.Debug("取经自动打劫已关闭，仅执行护送巡检", "role_id", session.RoleID())
 	}
-	return true
+	return true, retryAfter
 }
 
 // crossPilgrimageEscort 在圣域/仙界取经连接上巡检使者并启程护送。
@@ -912,7 +912,7 @@ func crossPilgrimageEscort(ctx context.Context, session *client.RoleSession, cro
 // 本流程仅使用免费次数，不消耗元宝清冷却或购买额外打劫次数。
 //
 // selfID 为跨服会话玩家 ID：路况队伍、战报胜负位与 stageServer 均使用跨服 ID 空间。
-func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID int32, crossCall crossTakeBibleCallFunc, normalize func(uint8) uint8, cfg PilgrimageConfig, roadParsers ...func([]byte) (*protocol.StTakeBibleCrossRoadInfo, error)) {
+func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID int32, crossCall crossTakeBibleCallFunc, normalize func(uint8) uint8, cfg PilgrimageConfig, roadParsers ...func([]byte) (*protocol.StTakeBibleCrossRoadInfo, error)) (retryAfter time.Duration) {
 	parseRoad := protocol.ParseStTakeBibleCrossRoadResult
 	if len(roadParsers) > 0 && roadParsers[0] != nil {
 		parseRoad = roadParsers[0]
@@ -950,6 +950,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 	}
 	if cd.CDSeconds > 0 {
 		slog.Info("跨服取经当前处于打劫冷却中", "role_id", session.RoleID(), "cooldown_sec", cd.CDSeconds)
+		retryAfter = time.Duration(cd.CDSeconds+2) * time.Second
 		return
 	}
 
@@ -1194,6 +1195,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		}
 		if cd.CDSeconds > 0 {
 			slog.Info("跨服取经打劫进入冷却，结束本轮打劫", "role_id", session.RoleID(), "cooldown_sec", cd.CDSeconds)
+			retryAfter = time.Duration(cd.CDSeconds+2) * time.Second
 			break
 		}
 		if pErr != nil {
@@ -1234,6 +1236,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		"rob_fame", totalFame,
 		"rob_st_exp", totalStExp,
 	)
+	return retryAfter
 }
 
 // crossTakeBibleRobCD 查询跨服取经打劫冷却。
@@ -1314,7 +1317,12 @@ func NewPilgrimageRoutine(configs ...PilgrimageConfig) scheduler.ActivityRoutine
 
 			// 1. 官方仙界跨服取经 (Module 114, Mod_StTakeBible_Base)
 			// 取经模块只在 Mod 94 登录的仙界跨服连接上生效，主服网关不会响应。
-			if handleCrossPilgrimage(ctx, session, cfg) {
+			if handled, retryAfter := handleCrossPilgrimage(ctx, session, cfg); handled {
+				if retryAfter > 0 {
+					slog.Info("取经打劫冷却中，按冷却结束时间唤醒",
+						"role_id", session.RoleID(), "retry_after", retryAfter.Round(time.Second))
+					return scheduler.NewCooldown(retryAfter, "跨服取经打劫冷却")
+				}
 				return nil
 			}
 
