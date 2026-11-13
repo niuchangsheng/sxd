@@ -231,6 +231,9 @@ func main() {
 			time.Sleep(time.Second)
 		}
 	}
+	// 旧版顶级种子/刷新种子（可能提供免费种子）。
+	call(protocol.NewPacket(0x000D0004, nil), "top_herbs_seed")
+	call(protocol.NewPacket(0x000D0003, nil), "refresh_herbs_seed")
 	// 摇钱树/仙灵树剩余次数与恢复时间（只读）。
 	call(protocol.NewPacket(0x000D000C, nil), "coin_tree_count_info")
 	call(protocol.NewPacket(0x000D0012, nil), "xianling_tree_count_info")
