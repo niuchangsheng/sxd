@@ -137,6 +137,29 @@ func main() {
 		}
 	}
 
+	// 仙界跨服会话对照（用户提示：入口在仙界）
+	if cross, cErr := sess.OpenCrossServerSession(ctx); cErr != nil {
+		slog.Warn("打开仙界跨服会话失败", "err", cErr)
+	} else {
+		defer cross.Close()
+		slog.Info("仙界跨服会话已建立", "role_id", cross.RoleID())
+		if panel := callOn(cross, protocol.BuildSaUnionWorshipPanelPacketWithPrev(cross.LastActionID()), 8*time.Second); panel != nil {
+			slog.Info("跨服会话 419/1 回包", "len", len(panel.Payload), "hex", hex.EncodeToString(panel.Payload))
+		}
+		if os.Getenv("WORSHIP_EXECUTE") == "1" {
+			pkt := protocol.NewPacket(protocol.ActionIDSaUnionWorship, []byte{protocol.SaUnionWorshipUseCoin})
+			if resp := callOn(cross, pkt, 8*time.Second); resp != nil && len(resp.Payload) > 0 {
+				slog.Info("跨服会话膜拜结果", "result", resp.Payload[0],
+					"result_text", protocol.SaUnionWorshipResultText(resp.Payload[0]),
+					"hex", hex.EncodeToString(resp.Payload))
+			}
+		}
+		// 467 Mod_StShanhaiRelic（山海遗迹/万古神墟候选）
+		if panel := callOn(cross, protocol.NewPacket(0x01D30003, nil), 8*time.Second); panel != nil {
+			slog.Info("跨服会话 467/3 vote_panel 回包", "len", len(panel.Payload), "hex", hex.EncodeToString(panel.Payload))
+		}
+	}
+
 	run("A-[UByte type]", []byte{protocol.SaUnionWorshipUseCoin})
 	time.Sleep(500 * time.Millisecond)
 	w := protocol.NewWriter()

@@ -151,7 +151,6 @@ scheduler:
     partner_link: true            # 灵结激活
     star_picture: true            # 法力星图: 仅 has_divination=0 且 free>0 时占星一次, 不循环不买次数
     bailian: true                 # 百炼乾坤一/二一键挑战 (免费)
-    soul_hunt: true               # 灵域猎妖免费挑战 (不买次数)
     era_creation: true            # 纪元造化秘境探索+挑战 (免费)
     cultivation_card: true        # 神仙卡牌收藏集 (仅铜钱商城, 不消耗元宝)
     faxiang_trial: true           # 法相试炼(造物佛手/守护魔兽) 免费领奖+挑战

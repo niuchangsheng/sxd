@@ -134,7 +134,6 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "star_picture", Name: "法力星图占星", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日消耗免费次数占星 (free 用尽即停止，不消耗元宝)", DefaultOn: false},
 		{ID: "era_yanjie", Name: "纪元湮劫战斗", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "纪元湮劫每日推进一关战斗 (免费, 不加体力/元宝)", DefaultOn: false},
 		{ID: "bailian", Name: "百炼乾坤一/二", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "百炼乾坤一 (272) 与二 (320) 一键挑战 (不消耗元宝)", DefaultOn: false},
-		{ID: "soul_hunt", Name: "灵域猎妖", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "灵域猎妖关卡挑战 (仅免费次数, 不买次数)", DefaultOn: false},
 		{ID: "era_creation", Name: "纪元造化秘境", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "先探索再挑战事件并领取战斗奖励 (不消耗元宝)", DefaultOn: false},
 		{ID: "fortune_box", Name: "奇缘宝藏", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "开放时免费开启宝箱 (不买每日礼包)", DefaultOn: false},
 		{ID: "faxiang_trial", Name: "法相试炼(造物佛手/守护魔兽)", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "领奖并免费挑战法相试炼 (不修改魔兽、不买次数)", DefaultOn: false},
@@ -499,8 +498,6 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewEraYanjieRoutine()
 	case "bailian":
 		return minigame.NewBaiLianRoutine()
-	case "soul_hunt":
-		return minigame.NewSoulHuntRoutine()
 	case "era_creation":
 		return minigame.NewEraCreationRoutine()
 	case "cultivation_card":

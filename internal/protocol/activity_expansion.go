@@ -1,10 +1,9 @@
-// Package protocol 提供扩充玩法协议：百炼乾坤一/二、灵域猎妖、幻境修炼与纪元造化秘境。
+// Package protocol 提供扩充玩法协议：百炼乾坤一/二、幻境修炼与纪元造化秘境。
 //
 // 协议依据 docs/protocol/actions.json：
 //
 //	Mod_BaiLianQianKun_Base     (272) get_info 0 / challenge 1 / one_key_challenge 2
 //	Mod_BaiLianQianKunTwo_Base  (320) get_info 0 / challenge 1 / one_key_challenge 2
-//	Mod_SoulHunt_Base           (669) get_activity_state 0 / main_panel 1 / challenge_panel 3 /
 //	                                  start_challenge 5 / task_panel 9 / get_task_award 10
 //	Mod_PartnerPractice_Base    (306) get_partner_practice_info 0 / select_partner 1 /
 //	                                  start_practice 2 / stop_practice 4 / fight 9
@@ -59,29 +58,6 @@ const (
 	BaiLianTwoFighting   uint8 = 12
 	BaiLianTwoLock       uint8 = 13
 	BaiLianTwoPass       uint8 = 14
-)
-
-// 灵域猎妖动作 ID。
-const (
-	ActionIDSoulHuntState          uint32 = 0x029D0000
-	ActionIDSoulHuntMainPanel      uint32 = 0x029D0001
-	ActionIDSoulHuntChallengePanel uint32 = 0x029D0003
-	ActionIDSoulHuntStartChallenge uint32 = 0x029D0005
-	ActionIDSoulHuntTaskPanel      uint32 = 0x029D0009
-	ActionIDSoulHuntTaskAward      uint32 = 0x029D000A
-)
-
-// 灵域猎妖结果码 (Module 669)。
-const (
-	SoulHuntSuccess       uint8 = 0
-	SoulHuntFuncNotOpen   uint8 = 1
-	SoulHuntFailed        uint8 = 2
-	SoulHuntCantChallenge uint8 = 3
-	SoulHuntNoIngot       uint8 = 4
-	SoulHuntNoTime        uint8 = 5
-	SoulHuntIsFighting    uint8 = 6
-	SoulHuntNoPotential   uint8 = 7
-	SoulHuntUpLevelLimit  uint8 = 8
 )
 
 // 幻境修炼动作 ID。
@@ -231,152 +207,6 @@ func ParseActionFirstByte(payload []byte, name string) (uint8, error) {
 		return 0, fmt.Errorf("%s结果码为空", name)
 	}
 	return payload[0], nil
-}
-
-// SoulHuntMainPanel 表示灵域猎妖主面板的关键字段。
-type SoulHuntMainPanel struct {
-	Result uint8
-	Ints   []int32
-	Levels []int32
-	Times  []int32
-}
-
-// ParseSoulHuntMainPanel 解析灵域猎妖主面板 (669/1)。
-//
-// 布局：[UByte result, Int x8, [Int,Int], Int,Int,Int]。
-func ParseSoulHuntMainPanel(payload []byte) (*SoulHuntMainPanel, error) {
-	r := NewReader(DecompressPayloadIfNeeded(payload))
-	p := &SoulHuntMainPanel{}
-	res, err := r.ReadUint8()
-	if err != nil {
-		return nil, fmt.Errorf("灵域猎妖结果码读取失败: %w", err)
-	}
-	p.Result = res
-	for i := 0; i < 8; i++ {
-		v, err := r.ReadInt32()
-		if err != nil {
-			return nil, fmt.Errorf("灵域猎妖面板字段[%d]读取失败: %w", i, err)
-		}
-		p.Ints = append(p.Ints, v)
-	}
-	count, err := r.ReadUint16()
-	if err != nil {
-		return nil, fmt.Errorf("灵域猎妖关卡数量读取失败: %w", err)
-	}
-	for i := 0; i < int(count); i++ {
-		id, err := r.ReadInt32()
-		if err != nil {
-			return nil, fmt.Errorf("灵域猎妖关卡[%d]读取失败: %w", i, err)
-		}
-		if _, err := r.ReadInt32(); err != nil {
-			return nil, fmt.Errorf("灵域猎妖关卡[%d]时间读取失败: %w", i, err)
-		}
-		p.Levels = append(p.Levels, id)
-	}
-	for i := 0; i < 3 && r.Remaining() >= 4; i++ {
-		v, err := r.ReadInt32()
-		if err != nil {
-			break
-		}
-		p.Times = append(p.Times, v)
-	}
-	return p, nil
-}
-
-// SoulHuntEvent 表示灵域猎妖可挑战事件。
-type SoulHuntEvent struct {
-	Result uint8
-	IDs    []int32
-}
-
-// BuildSoulHuntChallengePanelPacket 构造关卡面板查询封包。
-func BuildSoulHuntChallengePanelPacket(levelID int32) *Packet {
-	w := NewWriter()
-	w.WriteInt32(levelID)
-	return NewPacket(ActionIDSoulHuntChallengePanel, w.Bytes())
-}
-
-// BuildSoulHuntStartChallengePacket 构造开始挑战封包。
-func BuildSoulHuntStartChallengePacket(levelID int32) *Packet {
-	w := NewWriter()
-	w.WriteInt32(levelID)
-	return NewPacket(ActionIDSoulHuntStartChallenge, w.Bytes())
-}
-
-// BuildSoulHuntTaskAwardPacket 构造领取任务奖励封包。
-func BuildSoulHuntTaskAwardPacket(taskID int32) *Packet {
-	w := NewWriter()
-	w.WriteInt32(taskID)
-	return NewPacket(ActionIDSoulHuntTaskAward, w.Bytes())
-}
-
-// ParseSoulHuntChallengeResult 解析挑战关卡回包首字节。
-func ParseSoulHuntChallengeResult(payload []byte) (uint8, error) {
-	return ParseActionFirstByte(payload, "灵域猎妖挑战")
-}
-
-// SoulHuntChallengePanelInfo 表示 challenge_panel 的关键状态。
-//
-// 线上 2026-11-11 抓包: challenge_panel(1) = 00 + Int[0,0,0,155,1,1,0,20,0,0]。
-// 官方 SoulHuntGroundView 仅在 is_can_challenge=1 且 _curStep==cur_step 时允许
-// start_challenge；实测该账号首字段为 0，直接 start 会返回 CANT_CHALLENGE(3)。
-type SoulHuntChallengePanelInfo struct {
-	Result       uint8
-	CanChallenge bool
-	CurStep      int32
-	LeftTimes    int32
-}
-
-// ParseSoulHuntChallengePanelInfo 解析 challenge_panel 结果码与挑战资格字段。
-func ParseSoulHuntChallengePanelInfo(payload []byte) (*SoulHuntChallengePanelInfo, error) {
-	r := NewReader(payload)
-	info := &SoulHuntChallengePanelInfo{}
-	var err error
-	if info.Result, err = r.ReadUint8(); err != nil {
-		return nil, fmt.Errorf("%w: soul hunt panel result: %v", ErrInvalidPayload, err)
-	}
-	can, err := r.ReadInt32()
-	if err != nil {
-		return nil, fmt.Errorf("%w: soul hunt can_challenge: %v", ErrInvalidPayload, err)
-	}
-	cur, err := r.ReadInt32()
-	if err != nil {
-		return nil, fmt.Errorf("%w: soul hunt cur_step: %v", ErrInvalidPayload, err)
-	}
-	left, err := r.ReadInt32()
-	if err != nil {
-		return nil, fmt.Errorf("%w: soul hunt left_times: %v", ErrInvalidPayload, err)
-	}
-	info.CanChallenge = can != 0
-	info.CurStep = cur
-	info.LeftTimes = left
-	return info, nil
-}
-
-// SoulHuntResultText 返回灵域猎妖结果码文本。
-func SoulHuntResultText(code uint8) string {
-	switch code {
-	case SoulHuntSuccess:
-		return "成功"
-	case SoulHuntFuncNotOpen:
-		return "功能未开放"
-	case SoulHuntFailed:
-		return "失败"
-	case SoulHuntCantChallenge:
-		return "当前不可挑战"
-	case SoulHuntNoIngot:
-		return "元宝不足"
-	case SoulHuntNoTime:
-		return "次数不足"
-	case SoulHuntIsFighting:
-		return "正在战斗中"
-	case SoulHuntNoPotential:
-		return "潜能不足"
-	case SoulHuntUpLevelLimit:
-		return "等级不足"
-	default:
-		return fmt.Sprintf("未知结果码(%d)", code)
-	}
 }
 
 // BuildPartnerPracticeInfoPacket 构造幻境修炼信息查询封包。

@@ -4,8 +4,6 @@
 //
 // 一次登录顺序查询以下只读状态，输出紧凑状态表，供 18:00/19:37 定时复查使用：
 //
-//	灵域猎妖   669/0 get_activity_state (Int)
-//	           669/3 challenge_panel(1)
 //	全网幻魔塔 521/0 get_open_status (Int)
 //	奇缘宝藏   808/0 is_open (Int)
 //	阶位赛     349/0 get_status
@@ -109,12 +107,6 @@ func main() {
 		return int32(uint32(b[off])<<24 | uint32(b[off+1])<<16 | uint32(b[off+2])<<8 | uint32(b[off+3]))
 	}
 
-	if b := call("soulhunt_state", protocol.NewPacket(0x029D0000, nil), 0x029D0000); b != nil {
-		slog.Info("解析", "soulhunt_state", intAt(b, 0))
-	}
-	if b := call("soulhunt_challenge_1", protocol.NewPacket(0x029D0003, []byte{0, 0, 0, 1}), 0x029D0003); b != nil {
-		slog.Info("解析", "soulhunt_challenge_1_result", b[0])
-	}
 	if b := call("tower_open", protocol.NewPacket(0x02090000, nil), 0x02090000); b != nil {
 		slog.Info("解析", "tower_open", intAt(b, 0))
 	}
