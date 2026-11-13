@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
 )
@@ -51,5 +53,57 @@ func TestDaoyuanVipShopRoutine_PackFullStops(t *testing.T) {
 	err := NewDaoyuanVipShopRoutine().Execute(context.Background(), sess, nil)
 	if !errors.Is(err, scheduler.ErrBagFull) {
 		t.Fatalf("背包已满应返回 ErrBagFull, 实际: %v", err)
+	}
+}
+
+// TestDaoyuanVipShopRoutine_SaintAreaClosedSkips 验证圣域功能未开放时直接跳过，
+// 不再回退主服产生必然的 132 静默丢包。
+func TestDaoyuanVipShopRoutine_SaintAreaClosedSkips(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+	var shopCalls int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerGetFunctions:
+				// 功能列表为空：圣域未开放。
+				_ = protocol.WritePacket(serverConn,
+					protocol.BuildPlayerFunctionsResultPacket(nil))
+			case protocol.ActionIDDaoyuanVipShopList, protocol.ActionIDDaoyuanShopBuy:
+				atomic.AddInt32(&shopCalls, 1)
+			}
+		}
+	}()
+
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-daoyuan-sa-closed",
+		RoleName:   "圣域未开放测试",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	defer sess.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if err := NewDaoyuanVipShopRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if got := atomic.LoadInt32(&shopCalls); got != 0 {
+		t.Fatalf("圣域未开放时不应发送 132 业务请求, 实际 %d 次", got)
 	}
 }

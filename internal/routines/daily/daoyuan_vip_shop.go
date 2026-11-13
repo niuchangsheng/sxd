@@ -135,6 +135,19 @@ func NewDaoyuanVipShopRoutine() scheduler.ActivityRoutine {
 				return run(s, protocol.DaoyuanVipShopTabEight, []int32{itemTianHunPack})
 			}
 
+			// Module 132 是圣域专属协议；圣域功能未开放时 (如低等级角色)
+			// 主服同样静默丢弃，直接跳过，避免每轮空等 8 秒。
+			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDSaintArea); fErr != nil {
+				slog.Info("圣域功能开放状态查询失败，跳过精品杂货",
+					"role_id", session.RoleID(), "err", fErr)
+				return nil
+			} else if !open {
+				slog.Info("圣域功能未开放，跳过精品杂货 (132 仅圣域提供)",
+					"role_id", session.RoleID(),
+					"function_id", protocol.FunctionIDSaintArea)
+				return nil
+			}
+
 			// Module 132 是圣域专属协议，优先在圣域会话执行；圣域不可用时
 			// 才回退主服（主服大概率静默丢包）。
 			// 注意：凭据申请可用短超时；圣域会话本身必须绑定长生命周期 ctx，
