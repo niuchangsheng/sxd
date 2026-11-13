@@ -42,6 +42,26 @@ func blockFarmSeedBuy(roleID string, until int64) {
 	farmSeedBuyBlockedByRole[roleID] = until
 }
 
+// farmLegacyPlantBlockedByRole 旧版摇钱树播种被服务端静默丢弃后的退避。
+// 部分账号 13/5 请求恒定无回包（即使 13/8 资格检查 PASS），需要退避，
+// 避免每 15 分钟药园巡检都空等 8 秒。
+var (
+	farmLegacyPlantBlockMu       sync.Mutex
+	farmLegacyPlantBlockedByRole = make(map[string]int64)
+)
+
+func farmLegacyPlantBlockedUntil(roleID string) int64 {
+	farmLegacyPlantBlockMu.Lock()
+	defer farmLegacyPlantBlockMu.Unlock()
+	return farmLegacyPlantBlockedByRole[roleID]
+}
+
+func blockFarmLegacyPlant(roleID string, until int64) {
+	farmLegacyPlantBlockMu.Lock()
+	defer farmLegacyPlantBlockMu.Unlock()
+	farmLegacyPlantBlockedByRole[roleID] = until
+}
+
 // NewHerbGardenRoutine 构造药园种植与巡检任务。
 // 支持无参调用或注入 dictionary.Repository 字典仓储。
 func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.ActivityRoutine {
@@ -2068,6 +2088,9 @@ func tryLegacyCoinTreePlanting(
 	fields []protocol.FarmField,
 	callTimeout time.Duration,
 ) (planted int, retryAfter time.Duration) {
+	if until := farmLegacyPlantBlockedUntil(session.RoleID()); until > time.Now().Unix() {
+		return 0, 0
+	}
 	empty := make([]int32, 0, len(fields))
 	for _, f := range fields {
 		if f.State == 1 {
@@ -2143,6 +2166,12 @@ func tryLegacyCoinTreePlanting(
 		plantResp := call(protocol.BuildFarmPlantHerbsPacket(landID, chosen, protocol.FarmHerbTypeCoin, 5),
 			protocol.ActionIDFarmPlantHerbs)
 		if plantResp == nil {
+			// 服务端对该账号恒定丢弃 13/5：退避 6 小时，避免每轮药园空等。
+			until := time.Now().Add(6 * time.Hour).Unix()
+			blockFarmLegacyPlant(session.RoleID(), until)
+			slog.Info("旧版摇钱树播种无回包，暂停旧版补种 6 小时",
+				"role_id", session.RoleID(), "land_id", landID,
+				"blocked_until", time.Unix(until, 0))
 			break
 		}
 		code, cErr := protocol.ParseFarmPlantHerbsResult(plantResp.Payload)

@@ -185,3 +185,15 @@ func TestTryLegacyCoinTreePlanting(t *testing.T) {
 		t.Fatalf("retryAfter = %v, want 0", retryAfter)
 	}
 }
+
+// TestFarmLegacyPlantBackoffPerRole 验证旧版播种退避按角色隔离。
+func TestFarmLegacyPlantBackoffPerRole(t *testing.T) {
+	until := time.Now().Add(time.Hour).Unix()
+	blockFarmLegacyPlant("role-legacy-s1", until)
+	if got := farmLegacyPlantBlockedUntil("role-legacy-s1"); got != until {
+		t.Fatalf("s1 backoff = %d, want %d", got, until)
+	}
+	if got := farmLegacyPlantBlockedUntil("role-legacy-s0"); got != 0 {
+		t.Fatalf("s0 backoff = %d, want 0", got)
+	}
+}
