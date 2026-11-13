@@ -3630,7 +3630,7 @@ func RunHeroMissionSweepOnLogin(ctx context.Context, session *client.RoleSession
 		if townID == 5 || townID == 55 {
 			continue
 		}
-		list, err := fetchHeroMissionList(ctx, session, townID)
+		list, err := fetchHeroMissionListWithPrevAct(ctx, session, townID)
 		if err != nil {
 			if ack := session.LastAckActionID(); ack != 0 {
 				session.SetLastActionID(ack)
@@ -3655,6 +3655,13 @@ func RunHeroMissionSweepOnLogin(ctx context.Context, session *client.RoleSession
 					"role_id", session.RoleID(), "town_id", townID, "err", qErr)
 			}
 			swept++
+			// 官方抓包中 35/7 之后紧接 35/4 结算推送，下一城镇的 35/0 在其后发出。
+			// 不等待结算直接查下一城会被服务端静默丢弃，因此保留约 1.2s 的结算窗口。
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1200 * time.Millisecond):
+			}
 		case protocol.HeroMissionResultNoMission:
 			// 该城镇暂无可扫荡副本。
 		case protocol.HeroMissionResultBagFull:
@@ -3670,4 +3677,20 @@ func RunHeroMissionSweepOnLogin(ctx context.Context, session *client.RoleSession
 		}
 	}
 	slog.Info("登录后英雄副本多城镇扫荡完成", "role_id", session.RoleID(), "swept", swept)
+}
+
+// fetchHeroMissionListWithPrevAct 使用旧版带 PrevAct 的 35/0 请求查询列表。
+// 登录钩子专用：该形态已在 s0 实测可被受理并建立后续 35/2 所需的服务端链。
+func fetchHeroMissionListWithPrevAct(ctx context.Context, session *client.RoleSession, townID int) (*protocol.HeroMissionList, error) {
+	pkt := protocol.BuildHeroMissionListWithPrevActPacket(uint16(townID), session.LastActionID())
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
+	resp, err := session.Call(c, pkt, protocol.ActionHeroMissionList)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("dungeon: 英雄副本列表返回空响应")
+	}
+	return protocol.ParseHeroMissionListResponse(resp.Payload)
 }

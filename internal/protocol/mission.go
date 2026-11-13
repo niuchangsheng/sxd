@@ -292,6 +292,21 @@ func BuildHeroMissionListPacket(townID uint16) *Packet {
 	return NewPacket(ActionHeroMissionList, w.Bytes())
 }
 
+// BuildHeroMissionListWithPrevActPacket 构造带 PrevAct 尾部的 35/0 请求。
+//
+// 2026-11-13 官方抓包显示列表请求为 [Uint16 town][Uint32 PrevAct]；
+// 2026-11-14 登录钩子实测：裸 [Uint16 town] 虽能回包，但紧随其后的
+// 35/2 start_practice 会因服务端链未建立而全部被静默丢弃。
+// 该形态专供登录钩子使用，保持与官方抓包一致。
+func BuildHeroMissionListWithPrevActPacket(townID uint16, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint16(townID)
+	w.WriteUint32(prevAct)
+	pkt := NewPacket(ActionHeroMissionList, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
+}
+
 // ParseHeroMissionListResponse 从响应载荷中反序列化英雄副本列表。
 func ParseHeroMissionListResponse(payload []byte) (*HeroMissionList, error) {
 	r := NewReader(payload)
