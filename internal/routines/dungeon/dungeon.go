@@ -423,6 +423,8 @@ func performEliteTownSweep(
 ) (eliteTownOutcome, *protocol.HeroPracticeResult, error) {
 	waiter.drain()
 
+	// 抓包中官方客户端使用 auto_num=1，但该字段语义为“战斗后自动购买翻牌奖励”，
+	// 可能产生元宝消耗；自动化铁律要求禁用，固定使用 0 (免费扫荡)。
 	startRes, startErr := startHeroMissionPractice(ctx, session, townID, 0, 0)
 	if startErr != nil {
 		return eliteTownDone, nil, startErr
@@ -651,24 +653,13 @@ func executeEliteMissionSweep(
 		slog.Info("数据字典中未发现精英副本城镇，跳过精英扫荡", "role_id", session.RoleID())
 		return 0, nil
 	}
-	// 英雄副本列表只对角色当前所在城镇有效；其它城镇会被服务端静默丢弃。
-	// 若已知当前 TownMapID，则只扫荡该城镇，避免逐个城镇空等超时。
-	if currentMap := int(session.GetPlayerState().TownMapID); currentMap > 0 {
-		filtered := make([]int, 0, 1)
-		for _, townID := range towns {
-			if townID == currentMap {
-				filtered = append(filtered, townID)
-			}
-		}
-		if len(filtered) == 0 {
-			slog.Info("当前城镇无精英副本，改用 Module 25 全局精英扫荡",
-				"role_id", session.RoleID(), "town_map_id", currentMap)
-			return sweepEliteMissionsWithoutTown(ctx, session, dictRepo)
-		}
-		slog.Info("精英副本扫荡限定当前城镇",
-			"role_id", session.RoleID(), "town_map_id", currentMap, "all_towns", len(towns))
-		towns = filtered
-	}
+	// 官方客户端实测 (2026-11-13 /tmp/saodang.pcapng)：不切换场景即可对多个城镇
+	// 依次下发 35/0 列表 + 35/2 start_practice + 35/7 quickly，连续扫荡 54/43/40/39。
+	// 因此这里不再限制为“当前城镇”，按字典城镇顺序逐城扫荡。
+	slog.Info("英雄副本多城镇扫荡",
+		"role_id", session.RoleID(),
+		"town_map_id", session.GetPlayerState().TownMapID,
+		"towns", len(towns))
 
 	waiter := heroNotifyWaiterFor(session)
 	var packBase *packItemSnapshot

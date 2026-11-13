@@ -2507,3 +2507,87 @@ func TestSixRealmsRoutine_FinalPathNoReset(t *testing.T) {
 		t.Fatalf("最终道全通后不应发送重置请求, reset_calls=%d", got)
 	}
 }
+
+// TestDungeonSweep_HeroMission_MultiTown 验证按官方抓包连续扫荡多个城镇:
+// 不限制当前 TownMapID，对每个有英雄副本的城镇依次 list -> start -> quickly。
+func TestDungeonSweep_HeroMission_MultiTown(t *testing.T) {
+	sess, srvConn := createTestSession(t, 25)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var mu sync.Mutex
+	var startedTowns []uint16
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionHeroMissionList:
+			townID := uint16(0)
+			if len(pkt.Payload) >= 2 {
+				townID = binary.BigEndian.Uint16(pkt.Payload[:2])
+			}
+			w := protocol.NewWriter()
+			if townID == 4 || townID == 7 {
+				w.WriteUint16(1)
+				w.WriteInt32(int32(160) + int32(townID))
+				w.WriteInt8(1)
+				w.WriteUint8(0)
+				w.WriteInt8(1)
+				// 官方列表尾部: all_buy_times, remain_buy_times, buy_price, finish_mission_num。
+				w.WriteInt8(0)
+				w.WriteInt8(0)
+				w.WriteInt16(0)
+				w.WriteInt32(0)
+			} else {
+				w.WriteUint16(0)
+				w.WriteInt8(0)
+				w.WriteInt8(0)
+				w.WriteInt16(0)
+				w.WriteInt32(0)
+			}
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+			return true
+
+		case protocol.ActionHeroMissionStartPractice:
+			townID := binary.BigEndian.Uint16(pkt.Payload[:2])
+			mu.Lock()
+			startedTowns = append(startedTowns, townID)
+			mu.Unlock()
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.HeroMissionResultSuccess)
+			w.WriteInt32(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
+			return true
+
+		case protocol.ActionHeroMissionQuickly:
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.HeroMissionNotifyFinish)
+			w.WriteUint16(0)
+			w.WriteUint16(0)
+			w.WriteInt16(30)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionNotify, w.Bytes()))
+			return true
+		}
+		return false
+	})
+
+	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		Pipeline: []string{"sweep_elite"},
+	})
+	if err := routine.Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("多城镇英雄副本扫荡失败: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(startedTowns) != 2 {
+		t.Fatalf("期望扫荡 2 个城镇, 实际 %v", startedTowns)
+	}
+	seen := map[uint16]bool{}
+	for _, id := range startedTowns {
+		seen[id] = true
+	}
+	if !seen[4] || !seen[7] {
+		t.Fatalf("期望扫荡城镇 4 与 7, 实际 %v", startedTowns)
+	}
+}
