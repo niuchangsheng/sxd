@@ -481,3 +481,56 @@ func TestFeaturePackets_ParseJieYuanOpenResults(t *testing.T) {
 		t.Fatal("空开箱回包必须返回错误")
 	}
 }
+
+func TestFeaturePackets_ParseSystemAwardList(t *testing.T) {
+	// 2026-11-14 官方抓包 2/6 回包原文（10 条系统/活动奖励）。
+	rawHex := "000a055ddc22000000950047e88eb7e5be97e5b8aee6b4bee4bb99e5aeb4e7bb88e7bb93e5a596e58ab1e5a3b0e69c9b78353030e38081e58c85e5ad90783130e38081e9939ce992b178323030e4b887efbc810000000303001e84800000000004000001f400000000130000000a000005d0055ddc24000000990021e88eb7e5be97e59b9ee5bf86e4b98be9959ce98193e7bc98e5a596e58ab1efbc8100000001100000019000000000055df33e000000990021e88eb7e5be97e59b9ee5bf86e4b98be9959ce98193e7bc98e5a596e58ab1efbc8100000001100000019000000000055ddc2100000088002de88eb7e5be97e5b8aee6b4bee585a5e4beb5e7bb88e7bb93e5a596e58ab1e99d92e9be99e4bba4783132efbc8100000001130000000c000003ef055ddc200000001b004ae88eb7e5be97e5b081e58db0e5a696e9ad94e6af8fe697a5e5a596e58ab15be9939ce992b13230e4b8875defbc8c5be99885e58e8632303030305defbc8c5be5a3b0e69c9b313030305d000000030300030d400000000004000003e8000000000800004e2000000000055df33a00000088002de88eb7e5be97e5b8aee6b4bee585a5e4beb5e7bb88e7bb93e5a596e58ab1e99d92e9be99e4bba4783132efbc8100000001130000000c000003ef055df33d000000970030e88eb7e5be97e5b8aee6b4bee4b883e6989fe5b081e9ad94e7bb88e7bb93e5a596e58ab1e5a3b0e69c9b7831303030210000000104000003e800000000055ddc23000000970030e88eb7e5be97e5b8aee6b4bee4b883e6989fe5b081e9ad94e7bb88e7bb93e5a596e58ab1e5a3b0e69c9b7831303030210000000104000003e800000000055df3350000001b004ae88eb7e5be97e5b081e58db0e5a696e9ad94e6af8fe697a5e5a596e58ab15be9939ce992b13230e4b8875defbc8c5be99885e58e8632303030305defbc8c5be5a3b0e69c9b313030305d000000030300030d400000000004000003e8000000000800004e2000000000055df33c000000950047e88eb7e5be97e5b8aee6b4bee4bb99e5aeb4e7bb88e7bb93e5a596e58ab1e5a3b0e69c9b78353030e38081e58c85e5ad90783130e38081e9939ce992b178323030e4b887efbc810000000303001e84800000000004000001f400000000130000000a000005d0"
+	raw, err := hex.DecodeString(rawHex)
+	if err != nil {
+		t.Fatalf("抓包 hex 解码失败: %v", err)
+	}
+	awards, err := protocol.ParseSystemAwardListResult(raw)
+	if err != nil {
+		t.Fatalf("解析系统奖励列表失败: %v", err)
+	}
+	if len(awards) != 10 {
+		t.Fatalf("期望 10 条奖励, 实际 %d", len(awards))
+	}
+	first := awards[0]
+	if first.ID != 0x055DDC22 {
+		t.Fatalf("首条奖励 ID = 0x%08X, want 0x055DDC22", first.ID)
+	}
+	if first.Text != "获得帮派仙宴终结奖励声望x500、包子x10、铜钱x200万！" {
+		t.Fatalf("首条奖励文本不符: %q", first.Text)
+	}
+	if len(first.Detail) != 3 {
+		t.Fatalf("首条奖励明细数 = %d, want 3", len(first.Detail))
+	}
+	if first.Detail[0].Type != 3 || first.Detail[0].Num != 2000000 {
+		t.Fatalf("首条奖励明细[0] = %+v, want type=3 num=2000000", first.Detail[0])
+	}
+	if first.Detail[1].Type != 4 || first.Detail[1].Num != 500 {
+		t.Fatalf("首条奖励明细[1] = %+v, want type=4 num=500", first.Detail[1])
+	}
+	if first.Detail[2].Type != 0x13 || first.Detail[2].Num != 10 {
+		t.Fatalf("首条奖励明细[2] = %+v, want type=0x13 num=10", first.Detail[2])
+	}
+
+	if _, err := protocol.ParseSystemAwardListResult(nil); err == nil {
+		t.Fatal("空载荷必须返回错误")
+	}
+}
+
+func TestFeaturePackets_SystemAwardPackets(t *testing.T) {
+	p := protocol.BuildSystemAwardListPacket(protocol.ActionIDTownEnter)
+	if p.ActionID != protocol.ActionIDSystemAwardList || !p.HasPrevAct || len(p.Payload) != 4 {
+		t.Fatalf("2/6 列表封包不符: %+v", p)
+	}
+	c := protocol.BuildClaimAwardPacket(0x055DDC22, protocol.ActionIDSystemAwardList)
+	if c.ActionID != protocol.ActionIDItemClaimAward || !c.HasPrevAct || len(c.Payload) != 8 {
+		t.Fatalf("2/29 领取封包不符: %+v", c)
+	}
+	if got := hex.EncodeToString(c.Payload[:4]); got != "055ddc22" {
+		t.Fatalf("2/29 奖励 ID 编码不符: %s", got)
+	}
+}

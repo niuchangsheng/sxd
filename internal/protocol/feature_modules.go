@@ -51,6 +51,11 @@ const (
 	// ActionIDItemClaimAward 领取序列号礼包奖励 (Module 2, Action 29 -> 0x0002001D, 来自 haha.pcapng)
 	// 注意: 非在线成长礼包; 在线成长礼包见 ActionIDPlayerGetOnlineGift (Module 0, Action 30)
 	ActionIDItemClaimAward uint32 = 0x0002001D
+	// ActionIDSystemAwardList 查询待领取的系统/活动奖励列表 (Module 2, Action 6 -> 0x00020006)
+	// 2026-11-14 官方抓包: 回包 [Uint16 count][每项 Int 奖励ID, Int 类型, Short 文本长度,
+	// UTF-8 文本, Int 奖励个数, 奖励个数 × (UByte 类型, Int 数量, Int 参数)]；
+	// 随后逐项用 2/29 领取。旧代码只有领取封包，没有列表查询，导致这类奖励长期漏领。
+	ActionIDSystemAwardList uint32 = 0x00020006
 	// ActionIDVipAwardQuery 查询 VIP/序列号礼包面板 (Module 42, Action 17 -> 0x002A0011, 来自 haha.pcapng)
 	ActionIDVipAwardQuery uint32 = 0x002A0011
 

@@ -120,6 +120,9 @@ func readOnlineGiftItems(r *Reader) ([]OnlineGiftItem, error) {
 // --------------------------------------------------------------------------------
 
 // BuildClaimAwardPacket 构造领取指定序列号礼包封包 (Module 2, Action 29)。
+//
+// 官方抓包: [Int award_id][Uint32 PrevAct]；PrevAct 链由会话层在发包瞬间
+// 用最近一次动作覆盖，因此这里标记 HasPrevAct。
 func BuildClaimAwardPacket(awardSeqID uint32, prevAct uint32) *Packet {
 	w := NewWriter()
 	w.WriteUint32(awardSeqID)
@@ -127,7 +130,92 @@ func BuildClaimAwardPacket(awardSeqID uint32, prevAct uint32) *Packet {
 		prevAct = ActionIDVipAwardQuery
 	}
 	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDItemClaimAward, w.Bytes())
+	pkt := NewPacket(ActionIDItemClaimAward, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// BuildSystemAwardListPacket 构造查询系统/活动奖励列表封包 (Module 2, Action 6)。
+//
+// 官方抓包请求为空载荷 + PrevAct 尾部。
+func BuildSystemAwardListPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = ActionIDTownEnter
+	}
+	w.WriteUint32(prevAct)
+	pkt := NewPacket(ActionIDSystemAwardList, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// SystemAward 表示一条待领取的系统/活动奖励。
+type SystemAward struct {
+	ID     uint32 // 奖励 ID，用于 2/29 领取
+	Kind   int32  // 奖励类型/状态字段
+	Text   string // 奖励描述 (UTF-8)
+	Count  int32  // 奖励条目数
+	Detail []SystemAwardItem
+}
+
+// SystemAwardItem 表示奖励明细中的一项。
+type SystemAwardItem struct {
+	Type  uint8 // 奖励类型
+	Num   int32 // 数量
+	Param int32 // 附加参数 (道具 ID 等)
+}
+
+// ParseSystemAwardListResult 解析 2/6 系统/活动奖励列表。
+//
+// 线格式: [Uint16 count] + count ×
+// [Int32 id][Int32 kind][Uint16 text_len][text bytes]
+// [Int32 item_count][item_count × (Uint8 type, Int32 num, Int32 param)]。
+func ParseSystemAwardListResult(payload []byte) ([]SystemAward, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read system award count: %v", ErrInvalidPayload, err)
+	}
+	awards := make([]SystemAward, 0, count)
+	for i := 0; i < int(count); i++ {
+		var a SystemAward
+		if a.ID, err = r.ReadUint32(); err != nil {
+			return awards, nil
+		}
+		if a.Kind, err = r.ReadInt32(); err != nil {
+			return awards, nil
+		}
+		textLen, err := r.ReadUint16()
+		if err != nil {
+			return awards, nil
+		}
+		text, err := r.ReadBytes(int(textLen))
+		if err != nil {
+			return awards, nil
+		}
+		a.Text = string(text)
+		if a.Count, err = r.ReadInt32(); err != nil {
+			return awards, nil
+		}
+		if a.Count < 0 || a.Count > 1000 {
+			return awards, nil
+		}
+		for j := 0; j < int(a.Count); j++ {
+			var it SystemAwardItem
+			if it.Type, err = r.ReadUint8(); err != nil {
+				return awards, nil
+			}
+			if it.Num, err = r.ReadInt32(); err != nil {
+				return awards, nil
+			}
+			if it.Param, err = r.ReadInt32(); err != nil {
+				return awards, nil
+			}
+			a.Detail = append(a.Detail, it)
+		}
+		awards = append(awards, a)
+	}
+	return awards, nil
 }
 
 // ParseClaimAwardResult 解析礼包领取结果。

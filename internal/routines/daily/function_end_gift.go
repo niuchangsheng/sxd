@@ -22,6 +22,8 @@ type OnlineGiftConfig struct {
 	ClaimFunctionEndGifts bool
 	// MaxClaimsPerGift 单个终结礼包连续领取次数上限 (默认 20，防止服务端异常导致死循环)
 	MaxClaimsPerGift int
+	// ClaimSystemAwards 是否领取系统/活动奖励列表 (Module 2/6 -> 2/29，默认 true)
+	ClaimSystemAwards bool
 }
 
 // DefaultOnlineGiftConfig 返回默认策略: 领取全部免费终结礼包。
@@ -29,7 +31,63 @@ func DefaultOnlineGiftConfig() OnlineGiftConfig {
 	return OnlineGiftConfig{
 		ClaimFunctionEndGifts: true,
 		MaxClaimsPerGift:      20,
+		ClaimSystemAwards:     true,
 	}
+}
+
+// claimSystemAwards 查询并领取系统/活动奖励 (Module 2 Action 6 列表 + Action 29 领取)。
+//
+// 官方抓包 (2026-11-14 /tmp/faxiang2.pcapng) 显示该列表聚合了帮派终结奖励、
+// 封印妖魔每日奖励、回忆之镜道缘奖励等；此前自动化只实现了 2/29 领取封包，
+// 没有列表查询入口，导致这些奖励长期漏领。
+func claimSystemAwards(ctx context.Context, session *client.RoleSession) error {
+	qCtx, qCancel := context.WithTimeout(ctx, 5*time.Second)
+	resp, err := session.Call(qCtx, protocol.BuildSystemAwardListPacket(session.LastActionID()), protocol.ActionIDSystemAwardList)
+	qCancel()
+	if err != nil || resp == nil {
+		return fmt.Errorf("system award list: %w", err)
+	}
+	awards, err := protocol.ParseSystemAwardListResult(resp.Payload)
+	if err != nil {
+		return fmt.Errorf("system award list parse: %w", err)
+	}
+	if len(awards) == 0 {
+		slog.Debug("暂无待领取系统/活动奖励", "role_id", session.RoleID())
+		return nil
+	}
+	slog.Info("发现待领取系统/活动奖励", "role_id", session.RoleID(), "count", len(awards))
+
+	claimed := 0
+	for _, award := range awards {
+		if ctx.Err() != nil {
+			break
+		}
+		// 每项之间保留拟人间隔，避免连发被网关限速。
+		time.Sleep(120 * time.Millisecond)
+		cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		claimResp, cErr := session.Call(cCtx,
+			protocol.BuildClaimAwardPacket(award.ID, session.LastActionID()),
+			protocol.ActionIDItemClaimAward)
+		cancel()
+		if cErr != nil || claimResp == nil {
+			slog.Info("系统/活动奖励领取无回包", "role_id", session.RoleID(),
+				"award_id", fmt.Sprintf("0x%08X", award.ID), "err", cErr)
+			break
+		}
+		code := uint8(0)
+		if len(claimResp.Payload) > 0 {
+			code = claimResp.Payload[0]
+		}
+		switch code {
+		case protocol.ItemActionSuccess, protocol.ItemSuccess:
+			claimed++
+		default:
+			slog.Info("系统/活动奖励未领取", "role_id", session.RoleID(),
+				"award_id", fmt.Sprintf("0x%08X", award.ID), "result", code, "text", award.Text)
+		}
+	}
+	slog.Info("系统/活动奖励领取完成", "role_id", session.RoleID(), "claimed", claimed, "total", len(awards))
+	return nil
 }
 
 // functionEndClaimInterval 连续领取同一礼包之间的拟人延迟。

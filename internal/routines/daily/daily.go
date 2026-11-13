@@ -388,6 +388,20 @@ func NewOnlineGiftRoutine(cfgs ...OnlineGiftConfig) scheduler.ActivityRoutine {
 				}
 			}
 
+			// 0.5 系统/活动奖励 (Module 2/6 列表 -> 2/29 逐项领取)。
+			// 与 712 在线礼包状态无关，必须在状态检查前执行，否则活动未开放时整批漏领。
+			if cfg.ClaimSystemAwards {
+				if err := claimSystemAwards(ctx, session); err != nil {
+					if errors.Is(err, scheduler.ErrBagFull) {
+						return err
+					}
+					slog.Warn("系统/活动奖励领取异常，继续尝试在线礼包",
+						"role_id", session.RoleID(),
+						"err", err,
+					)
+				}
+			}
+
 			// 1. 读取服务端下发的在线礼包状态 (update_player_data prop 82)。
 			// 客户端 ActivitiesView.onlineGiftActivity: -1 时直接移除活动, 不查询也不领取。
 			st := session.GetPlayerState()
