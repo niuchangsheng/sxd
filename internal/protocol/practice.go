@@ -291,6 +291,12 @@ type PracticeStatusResult struct {
 }
 
 // BuildPracticeGetStatusPacket 构造查询副本扫荡状态请求封包 (Mod_MissionPractice_Base.get_practice_info, ActionID=0x00190000)。
+//
+// 官方抓包 c2s_m25_a0.bin 为 [Int32 missionID][Uint32 PrevAct]（8 字节）。
+// 2026-11-14 实机（s0/s1 双服）发现当前服务端对带 PrevAct 的 25/0 请求
+// 全部静默丢弃；仅 4 字节裸 [Int32 missionID] 可稳定回包。
+// 自动化路径使用 BuildPracticeGetStatusBarePacket；本函数保留官方抓包形态
+// 供 golden 测试与协议文档使用。
 func BuildPracticeGetStatusPacket(missionID int32, prevAct uint32) (*Packet, error) {
 	w := NewWriter()
 	w.WriteInt32(missionID)
@@ -299,6 +305,17 @@ func BuildPracticeGetStatusPacket(missionID int32, prevAct uint32) (*Packet, err
 	}
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDPracticeGetStatus, w.Bytes()), nil
+}
+
+// BuildPracticeGetStatusBarePacket 构造裸 [Int32 missionID] 状态查询封包。
+//
+// 实机验证（2026-11-14，s0/s1）：4 字节裸载荷稳定回包；追加任意 PrevAct
+// （会话链/42/0x00040019）均被静默丢弃。会话层需避免对 Module 25 的
+// 自动 PrevAct 改写，否则 4 字节载荷会被覆盖成前序动作号。
+func BuildPracticeGetStatusBarePacket(missionID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(missionID)
+	return NewPacket(ActionIDPracticeGetStatus, w.Bytes())
 }
 
 // ParsePracticeStatusResult 解析副本扫荡状态响应载荷。

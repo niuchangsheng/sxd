@@ -48,18 +48,18 @@ func TestHeroMissionList_OfficialSchema(t *testing.T) {
 	}
 }
 
-// TestHeroMissionListPacket_RequestLayout 验证列表请求载荷:
-// [town_id u16][PrevAct 4 字节占位]，并标记 HasPrevAct 由会话层动态覆盖。
+// TestHeroMissionListPacket_RequestLayout 验证列表请求为裸 2 字节 [town_id u16]。
+// 2026-11-14 实机: 追加 PrevAct 会被服务端静默丢弃，s0/s1 均如此。
 func TestHeroMissionListPacket_RequestLayout(t *testing.T) {
 	pkt := protocol.BuildHeroMissionListPacket(13)
 	if pkt.ActionID != protocol.ActionHeroMissionList {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionHeroMissionList, pkt.ActionID)
 	}
-	if len(pkt.Payload) != 6 {
-		t.Fatalf("期望 6 字节载荷 (town_id + PrevAct), 实际 %d 字节", len(pkt.Payload))
+	if len(pkt.Payload) != 2 {
+		t.Fatalf("期望 2 字节载荷 (town_id), 实际 %d 字节", len(pkt.Payload))
 	}
-	if !pkt.HasPrevAct {
-		t.Errorf("Module 35 请求必须标记 HasPrevAct 以维持动作链")
+	if pkt.HasPrevAct {
+		t.Errorf("英雄副本列表请求必须为裸载荷，不能标记 HasPrevAct")
 	}
 	if got := binary.BigEndian.Uint16(pkt.Payload[:2]); got != 13 {
 		t.Errorf("期望 town_id=13, 实际 %d", got)

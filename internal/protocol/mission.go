@@ -282,17 +282,14 @@ type HeroMissionList struct {
 
 // BuildHeroMissionListPacket 构造查询指定城镇英雄副本列表请求封包 (Module 35, Action 0)。
 //
-// 官方 DataBase.netCall 在 request 之后统一追加 4 字节前序动作 (tmpBuff)。
-// 实机验证 (2026-11-07): Module 35 请求若省略该尾部会使服务端动作链失步，
-// 导致紧接着的 Module 2 player_sell_item 被静默丢弃 (8 秒无回包)。
-// 因此这里写入 4 字节占位并由会话层 HasPrevAct 在发包时替换为最近动作号。
+// 官方 request=[ShortUtil]，2026-11-14 实机验证（s0/s1 双服）：
+// 仅 2 字节 [Uint16 town] 可正常回包；追加 4 字节 PrevAct（会话链、固定 42、
+// 最后一次真实回包动作均试过）服务端都静默丢弃并空等 8 秒。
+// 因此本动作必须保持裸载荷，不能标记 HasPrevAct。
 func BuildHeroMissionListPacket(townID uint16) *Packet {
 	w := NewWriter()
 	w.WriteUint16(townID)
-	w.WriteUint32(0) // PrevAct 占位，发送时由 RoleSession.Send 动态覆盖
-	pkt := NewPacket(ActionHeroMissionList, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionHeroMissionList, w.Bytes())
 }
 
 // ParseHeroMissionListResponse 从响应载荷中反序列化英雄副本列表。

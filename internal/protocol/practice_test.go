@@ -104,6 +104,22 @@ func TestPractice_QuicklyRoundtrip(t *testing.T) {
 
 // TestGolden_Module25_LiveFilesReplay 遍历 test/testdata/golden/ 下提取的真实 Module 25 封包切片，
 // 在纯离线状态下验证大端序编码、流式解压以及请求/响应结构体反序列化逐字节对齐。
+// TestBuildPracticeGetStatusBarePacket 验证裸 4 字节状态查询载荷。
+// 2026-11-14 实机: 带 PrevAct 的 25/0 全被静默丢弃，裸载荷稳定回包。
+func TestBuildPracticeGetStatusBarePacket(t *testing.T) {
+	pkt := protocol.BuildPracticeGetStatusBarePacket(854)
+	if pkt.ActionID != protocol.ActionIDPracticeGetStatus {
+		t.Fatalf("ActionID = 0x%08X, want 0x%08X", pkt.ActionID, protocol.ActionIDPracticeGetStatus)
+	}
+	want := []byte{0x00, 0x00, 0x03, 0x56}
+	if !bytes.Equal(pkt.Payload, want) {
+		t.Fatalf("payload = %x, want %x", pkt.Payload, want)
+	}
+	if pkt.HasPrevAct {
+		t.Fatal("裸状态查询不能标记 HasPrevAct")
+	}
+}
+
 func TestGolden_Module25_LiveFilesReplay(t *testing.T) {
 	// 1. C2S Action 0: 查询扫荡状态请求包 (c2s_m25_a0.bin)
 	t.Run("C2S_Action0_GetStatus", func(t *testing.T) {

@@ -497,11 +497,8 @@ func sweepEliteMissionsWithoutTown(
 			"role_id", session.RoleID(), "err", err)
 		return 0, nil
 	}
-	anchorAct := session.LastActionID()
-	if anchorAct == 0 || anchorAct == protocol.ActionIDPracticeGetStatus || anchorAct == protocol.ActionIDPracticeStart {
-		anchorAct = 42 // 登录后的玩家初始化动作，实测可作为 Module 25 的 PrevAct 锚点
-	}
-	slog.Info("开始全局精英副本扫荡", "role_id", session.RoleID(), "dungeons", len(ids), "anchor_act", anchorAct)
+	slog.Info("开始全局精英副本扫荡", "role_id", session.RoleID(), "dungeons", len(ids),
+		"last_action", fmt.Sprintf("0x%08X", session.LastActionID()))
 
 	swept := 0
 	failStreak := 0
@@ -520,13 +517,7 @@ func sweepEliteMissionsWithoutTown(
 			}
 			// 重连后服务端场景/动作链需要短暂恢复时间。
 			failStreak = 0
-			anchorAct = session.LastActionID()
 			time.Sleep(1500 * time.Millisecond)
-		}
-		// 只有“状态查询自身”会造成自引用；start 之后应把 start 作为下一次
-		// 状态查询的 PrevAct（实测 start→status 可被服务端受理）。
-		if cur := session.LastActionID(); cur != 0 && cur != protocol.ActionIDPracticeGetStatus {
-			anchorAct = cur
 		}
 		if session.GetStamina() < 5 {
 			slog.Info("体力不足，结束全局精英扫荡",
@@ -540,13 +531,9 @@ func sweepEliteMissionsWithoutTown(
 		case <-time.After(350 * time.Millisecond):
 		}
 
-		// Module 25 会自动用会话最近动作覆盖 PrevAct；连续 status 会自引用
-		// 0x00190000 被丢弃，因此每次查询前把链重置到登录锚点。
-		session.SetLastActionID(anchorAct)
-		statusPkt, pErr := protocol.BuildPracticeGetStatusPacket(int32(dungeonID), anchorAct)
-		if pErr != nil {
-			continue
-		}
+		// Module 25 状态查询在现行服务端只接受裸 4 字节 missionID；
+		// 带 PrevAct 会被静默丢弃（2026-11-14 s0/s1 实测）。
+		statusPkt := protocol.BuildPracticeGetStatusBarePacket(int32(dungeonID))
 		statusTimeout := 8 * time.Second
 		if failStreak > 0 {
 			// 连续失败时缩短超时，避免 190 个副本 × 8s 长时间卡住。

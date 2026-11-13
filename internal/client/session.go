@@ -1896,7 +1896,7 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 					Payload:    cloned,
 					HasPrevAct: true,
 				}
-			} else if (p.HasPrevAct || mod == 3 || mod == 4 || mod == 25 || mod == 32 || p.ActionID == s.cfg.HeartbeatActionID) && len(p.Payload) >= 4 {
+			} else if (p.HasPrevAct || mod == 3 || mod == 4 || mod == 32 || p.ActionID == s.cfg.HeartbeatActionID) && len(p.Payload) >= 4 {
 				cloned := make([]byte, len(p.Payload))
 				copy(cloned, p.Payload)
 				binary.BigEndian.PutUint32(cloned[len(cloned)-4:], prev)

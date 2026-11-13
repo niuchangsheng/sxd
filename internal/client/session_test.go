@@ -602,3 +602,81 @@ func TestRoleSession_SyncQuests(t *testing.T) {
 		t.Fatalf("会话快照中任务状态未正确更新: %+v", quests)
 	}
 }
+
+// TestRoleSession_Module25BareStatusNotRewritten 验证裸 [Int32 mission] 状态查询
+// 不会被会话层的 PrevAct 改写覆盖成前序动作号。
+//
+// 2026-11-14 实机: 25/0 只接受 4 字节裸载荷；旧实现因 mod==25 自动覆盖末尾
+// 4 字节，把 mission_id 改成了 lastActionID，导致全局精英扫荡全部超时。
+func TestRoleSession_Module25BareStatusNotRewritten(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+	captured := make(chan protocol.Packet, 4)
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			captured <- *pkt
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:            "role-mod25-bare",
+		RoleName:          "裸状态查询测试",
+		ServerAddr:        "mock-pipe",
+		HeartbeatInterval: time.Hour,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("session.Start failed: %v", err)
+	}
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	next := func() protocol.Packet {
+		t.Helper()
+		select {
+		case p := <-captured:
+			return p
+		case <-time.After(2 * time.Second):
+			t.Fatal("未捕获到客户端发包")
+			return protocol.Packet{}
+		}
+	}
+
+	// 建立非零 lastActionID。
+	if err := session.Send(protocol.NewPacket(protocol.ActionIDPlayerGetInfo, []byte{0, 0, 0, 0})); err != nil {
+		t.Fatalf("send get info: %v", err)
+	}
+	next()
+
+	if err := session.Send(protocol.BuildPracticeGetStatusBarePacket(854)); err != nil {
+		t.Fatalf("send bare status: %v", err)
+	}
+	pkt := next()
+	if pkt.ActionID != protocol.ActionIDPracticeGetStatus {
+		t.Fatalf("ActionID = 0x%08X", pkt.ActionID)
+	}
+	want := []byte{0x00, 0x00, 0x03, 0x56}
+	if len(pkt.Payload) != len(want) {
+		t.Fatalf("payload len = %d, want %d (payload=%x)", len(pkt.Payload), len(want), pkt.Payload)
+	}
+	for i := range want {
+		if pkt.Payload[i] != want[i] {
+			t.Fatalf("payload = %x, want %x", pkt.Payload, want)
+		}
+	}
+}

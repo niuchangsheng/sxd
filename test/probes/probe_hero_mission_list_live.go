@@ -1,18 +1,23 @@
 //go:build probe
 
-// 目标协议: [Module 35] Mod_HeroMission_Base.get_hero_mission_list (0x00230000)
-// 基准对齐: 原版客户端 com.protocols.Mod_HeroMission_Base
+// 目标: 定位 s1 英雄副本列表 35/0 全城镇静默丢包的根因。
 //
-//	request=[ShortUtil(town_id)]
-//	response=[[IntUtil,ByteUtil,UByteUtil,ByteUtil],ByteUtil,ByteUtil,ShortUtil,IntUtil]
+// 背景: niuchangsheng s1 (等级 94) 的多城镇英雄副本扫荡对 54/43/40... 全部
+// 8 秒超时；同账号 s0 (等级 300) 首个城镇可正常回包。本探针在 s1 上对比：
 //
-// 运行命令: SXD_CONFIG=configs/s0.yaml go run -tags=probe test/probes/probe_hero_mission_list_live.go
-// 预期表现: 只读探测精英副本城镇列表，打印原始 Hex 与官方字段解析结果，不发起任何扫荡/消耗体力请求。
+//	35/8 特殊英雄副本列表 (空请求)
+//	35/0 当前城镇/目标城镇 [Uint16 town + PrevAct] (现行构造)
+//	35/0 纯 [Uint16 town] (无 PrevAct)
+//	35/0 [Uint16 town + 固定 PrevAct=42]
+//	35/0 [Uint16 town + 最后一次真实回包动作]
+//
+// 运行: SXD_CONFIG=configs/niuchangsheng.yaml go run -tags=probe test/probes/probe_hero_mission_list_live.go -role 1
 package main
 
 import (
 	"context"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -24,24 +29,26 @@ import (
 	"sxd-pie-ng/internal/protocol"
 )
 
-// eliteTowns 来自 Pieb.db: SELECT DISTINCT map FROM Missions WHERE MissionType=1
-var eliteTowns = []uint16{4, 5, 7, 8, 9, 13, 14, 15, 21, 22, 23, 24, 26, 27, 29, 33, 35, 39, 40, 43, 54, 55}
-
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
-
 	cfgPath := os.Getenv("SXD_CONFIG")
 	if cfgPath == "" {
-		cfgPath = "configs/config.yaml"
+		cfgPath = "configs/niuchangsheng.yaml"
 	}
+	roleIdx := flag.Int("role", 1, "配置中的角色下标 (0=s0, 1=s1)")
+	flag.Parse()
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		slog.Error("加载配置失败", "path", cfgPath, "err", err)
+		slog.Error("加载配置失败", "err", err)
 		return
 	}
-
 	acc := cfg.Accounts[0]
-	role := acc.Roles[0]
+	if *roleIdx < 0 || *roleIdx >= len(acc.Roles) {
+		slog.Error("角色下标越界", "role", *roleIdx, "roles", len(acc.Roles))
+		return
+	}
+	role := acc.Roles[*roleIdx]
 
 	ticketCache := platform.NewTicketCache(90 * time.Minute)
 	xdAuth, err := platform.NewXindongAuthenticator()
@@ -52,15 +59,13 @@ func main() {
 	xdAuth.SetCookie(acc.Cookie)
 	ticketCache.RegisterAuthenticator(xdAuth)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
-
 	ticket, err := ticketCache.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)
 	if err != nil {
 		slog.Error("换票失败", "err", err)
 		return
 	}
-
 	roleCfg := client.SessionConfig{
 		RoleID:               fmt.Sprintf("%s-%s", role.ServerID, role.RoleName),
 		RoleName:             role.RoleName,
@@ -69,115 +74,104 @@ func main() {
 		ServerID:             role.ServerID,
 		Platform:             acc.Platform,
 		Authenticator:        client.DefaultAuthenticator,
-		MaxReconnectAttempts: 1,
+		MaxReconnectAttempts: 3,
 	}
 	client.ApplyTicket(&roleCfg, ticket)
-
 	sess := client.NewRoleSession(roleCfg)
 	if err := sess.Start(ctx); err != nil {
 		slog.Error("启动会话失败", "err", err)
 		return
 	}
 	defer sess.Close()
-
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(40 * time.Second)
 	for sess.State() != client.StateActive && time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if sess.State() != client.StateActive {
-		slog.Error("会话未能在时限内激活", "state", sess.State())
+		slog.Error("会话未激活", "state", sess.State())
 		return
 	}
-	st := sess.GetPlayerState()
-	slog.Info("会话已激活", "role", sess.RoleName(), "level", st.Level, "stamina", sess.GetStamina())
+	slog.Info("会话已激活", "role_id", sess.RoleID(), "level", sess.GetPlayerState().Level,
+		"town_map_id", sess.GetPlayerState().TownMapID,
+		"last_action", fmt.Sprintf("0x%08X", sess.LastActionID()),
+		"last_ack", fmt.Sprintf("0x%08X", sess.LastAckActionID()))
 
-	for _, townID := range eliteTowns {
-		payload := buildTownPayload(townID)
-		pkt := protocol.NewPacket(protocol.ActionIDHeroGetList, payload)
-		c, cc := context.WithTimeout(ctx, 4*time.Second)
-		resp, cErr := sess.Call(c, pkt, protocol.ActionIDHeroGetList)
-		cc()
-		fmt.Printf("\n=== town=%d payload=%s ===\n", townID, hex.EncodeToString(payload))
-		if cErr != nil || resp == nil {
-			fmt.Printf("no response: %v\n", cErr)
-			continue
+	call := func(pkt *protocol.Packet, act uint32, name string) *protocol.Packet {
+		cCtx, cCancel := context.WithTimeout(ctx, 6*time.Second)
+		defer cCancel()
+		resp, cErr := sess.Call(cCtx, pkt, act)
+		if cErr != nil {
+			slog.Warn("无回包", "call", name, "err", cErr)
+			return nil
 		}
-		fmt.Printf("resp (%dB): %s\n", len(resp.Payload), hex.EncodeToString(resp.Payload))
-		hl, pErr := parseHeroMissionList(resp.Payload)
-		if pErr != nil {
-			fmt.Printf("parse err: %v\n", pErr)
-			continue
+		limit := len(resp.Payload)
+		if limit > 50 {
+			limit = 50
 		}
-		fmt.Printf("missions=%d all_buy_times=%d remain_buy_times=%d buy_price=%d finish_num=%d\n",
-			len(hl.Missions), hl.AllBuyTimes, hl.RemainBuyTimes, hl.BuyPrice, hl.FinishMissionNum)
-		for _, m := range hl.Missions {
-			fmt.Printf("  mission=%d can_challenge=%d rank=%d finished=%d\n",
-				m.MissionID, m.CanChallenge, m.Rank, m.Finished)
-		}
-		time.Sleep(100 * time.Millisecond)
+		slog.Info("有回包", "call", name, "len", len(resp.Payload),
+			"hex", hex.EncodeToString(resp.Payload[:limit]))
+		return resp
 	}
-}
 
-func buildTownPayload(townID uint16) []byte {
-	w := protocol.NewWriter()
-	w.WriteUint16(townID)
-	return w.Bytes()
-}
+	// 1. 特殊英雄副本列表 (35/8，空请求)。
+	call(protocol.NewPacket(protocol.ActionHeroMissionSpecialList, nil),
+		protocol.ActionHeroMissionSpecialList, "special_list")
 
-type heroMissionEntry struct {
-	MissionID    int32
-	CanChallenge int8
-	Rank         uint8
-	Finished     int8
-}
+	town := func(id uint16, prev uint32, withPrevFlag bool) *protocol.Packet {
+		w := protocol.NewWriter()
+		w.WriteUint16(id)
+		if prev != 0 {
+			w.WriteUint32(prev)
+		}
+		pkt := protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes())
+		pkt.HasPrevAct = withPrevFlag
+		return pkt
+	}
 
-type heroMissionList struct {
-	Missions         []heroMissionEntry
-	AllBuyTimes      int8
-	RemainBuyTimes   int8
-	BuyPrice         int16
-	FinishMissionNum int32
-}
+	cur := uint16(sess.GetPlayerState().TownMapID)
+	for _, tc := range []struct {
+		name string
+		town uint16
+		pkt  *protocol.Packet
+	}{
+		{"cur_town_builder", cur, protocol.BuildHeroMissionListPacket(cur)},
+		{"town54_builder", 54, protocol.BuildHeroMissionListPacket(54)},
+		{"town54_bare", 54, town(54, 0, false)},
+		{"town54_prev42", 54, town(54, 42, false)},
+		{"town54_prev_ack", 54, town(54, sess.LastAckActionID(), false)},
+	} {
+		call(tc.pkt, protocol.ActionHeroMissionList, tc.name)
+		time.Sleep(time.Second)
+	}
 
-// parseHeroMissionList 按官方 schema 解析:
-// [[IntUtil,ByteUtil,UByteUtil,ByteUtil],ByteUtil,ByteUtil,ShortUtil,IntUtil]
-func parseHeroMissionList(payload []byte) (*heroMissionList, error) {
-	r := protocol.NewReader(payload)
-	count, err := r.ReadUint16()
-	if err != nil {
-		return nil, err
+	// 2. Module 25 get_status 载荷对比：裸 [Int32 mission] vs [mission + PrevAct]。
+	// 会话层会对 mod==25 且长度>=4 的载荷自动覆盖末尾 4 字节，
+	// 这里先把 lastActionID 置 0 以保留原始载荷。
+	const missionID int32 = 166
+	statusPkt := func(payload []byte) *protocol.Packet {
+		return protocol.NewPacket(protocol.ActionIDPracticeGetStatus, payload)
 	}
-	out := &heroMissionList{Missions: make([]heroMissionEntry, 0, count)}
-	for i := 0; i < int(count); i++ {
-		mid, e := r.ReadInt32()
-		if e != nil {
-			return nil, e
+	missionBytes := []byte{
+		byte(missionID >> 24), byte(missionID >> 16), byte(missionID >> 8), byte(missionID),
+	}
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+	}{
+		{"status_bare_mission", missionBytes},
+		{"status_mission_prev42", append(append([]byte{}, missionBytes...), 0, 0, 0, 42)},
+		{"status_mission_prev0", append(append([]byte{}, missionBytes...), 0, 0, 0, 0)},
+		// 官方抓包 c2s_m25_a0.bin 使用的 PrevAct=0x00040019 (Module 4 Act 25)。
+		{"status_mission_prev_sections", append(append([]byte{}, missionBytes...), 0x00, 0x04, 0x00, 0x19)},
+		{"status_sections_anchor", append(append([]byte{}, missionBytes...), 0x00, 0x04, 0x00, 0x19)},
+	} {
+		sess.SetLastActionID(0) // 禁止会话层改写末尾 4 字节
+		if tc.name == "status_sections_anchor" {
+			// 模拟现行代码：lastActionID=0x00040019 时由会话层覆盖末尾 4 字节。
+			sess.SetLastActionID(0x00040019)
 		}
-		can, e := r.ReadInt8()
-		if e != nil {
-			return nil, e
-		}
-		rank, e := r.ReadUint8()
-		if e != nil {
-			return nil, e
-		}
-		fin, e := r.ReadInt8()
-		if e != nil {
-			return nil, e
-		}
-		out.Missions = append(out.Missions, heroMissionEntry{MissionID: mid, CanChallenge: can, Rank: rank, Finished: fin})
+		call(statusPkt(tc.payload), protocol.ActionIDPracticeGetStatus, tc.name)
+		time.Sleep(time.Second)
 	}
-	if out.AllBuyTimes, err = r.ReadInt8(); err != nil {
-		return nil, err
-	}
-	if out.RemainBuyTimes, err = r.ReadInt8(); err != nil {
-		return nil, err
-	}
-	if out.BuyPrice, err = r.ReadInt16(); err != nil {
-		return nil, err
-	}
-	if out.FinishMissionNum, err = r.ReadInt32(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	slog.Info("探针结束")
 }
