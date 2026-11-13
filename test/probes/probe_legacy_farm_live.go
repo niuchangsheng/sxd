@@ -100,6 +100,23 @@ func main() {
 		return resp
 	}
 
+	callSlow := func(pkt *protocol.Packet, name string, timeout time.Duration) *protocol.Packet {
+		cCtx, cCancel := context.WithTimeout(ctx, timeout)
+		defer cCancel()
+		resp, cErr := sess.Call(cCtx, pkt, pkt.ActionID)
+		if cErr != nil {
+			slog.Warn("无回包(长超时)", "call", name, "err", cErr)
+			return nil
+		}
+		limit := len(resp.Payload)
+		if limit > 80 {
+			limit = 80
+		}
+		slog.Info("有回包(长超时)", "call", name, "len", len(resp.Payload),
+			"hex", hex.EncodeToString(resp.Payload[:limit]))
+		return resp
+	}
+
 	// 13/0 旧版土地列表。
 	var landResp *protocol.Packet
 	if pkt, bErr := protocol.BuildFarmGetInfoPacket(protocol.FarmGetInfoRequest{PrevAct: sess.LastActionID()}); bErr == nil {
@@ -199,9 +216,28 @@ func main() {
 				slog.Info("伙伴播种资格未通过", "role_id", role.id, "type", herbType, "result", checkResp.Payload[0])
 				continue
 			}
-			plantPkt := protocol.NewPacket(0x000D0005,
-				protocol.NewWriter().WriteInt32(landID).WriteInt32(role.id).WriteUint8(herbType).WriteInt8(5).Bytes())
-			resp := call(plantPkt, fmt.Sprintf("legacy_plant_role%d_type%d", role.id, herbType))
+			time.Sleep(time.Second)
+			base := protocol.NewWriter().WriteInt32(landID).WriteInt32(role.id).WriteUint8(herbType).WriteInt8(5).Bytes()
+			var resp *protocol.Packet
+			for _, pv := range []struct {
+				name string
+				prev uint32
+			}{
+				{"bare", 0},
+				{"prev_check", 0x000D0008},
+				{"prev_info", 0x000D000C},
+			} {
+				payload := append([]byte{}, base...)
+				if pv.prev != 0 {
+					payload = append(payload, byte(pv.prev>>24), byte(pv.prev>>16), byte(pv.prev>>8), byte(pv.prev))
+				}
+				sess.SetLastActionID(0)
+				resp = callSlow(protocol.NewPacket(0x000D0005, payload),
+					fmt.Sprintf("legacy_plant_role%d_type%d_%s", role.id, herbType, pv.name), 8*time.Second)
+				if resp != nil {
+					break
+				}
+			}
 			if resp == nil {
 				continue
 			}
@@ -234,6 +270,35 @@ func main() {
 	// 旧版顶级种子/刷新种子（可能提供免费种子）。
 	call(protocol.NewPacket(0x000D0004, nil), "top_herbs_seed")
 	call(protocol.NewPacket(0x000D0003, nil), "refresh_herbs_seed")
+	// 新农场 13/24 是否接受“伙伴 role_id”作为播种对象（s1 无种子时）。
+	if plantPkt, bErr := protocol.BuildFarmPlantPacket(protocol.FarmPlantRequest{
+		LandID: 162236,
+	}); bErr == nil {
+		_ = plantPkt
+	}
+	for _, role := range roles {
+		plantPkt, bErr := protocol.BuildFarmPlantPacket(protocol.FarmPlantRequest{
+			LandID:       162236,
+			SeedOrRoleID: role.id,
+		})
+		if bErr != nil {
+			continue
+		}
+		if resp := call(plantPkt, fmt.Sprintf("new_plant_role%d", role.id)); resp != nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	// 旧版 13/5 用“地块序号 0..3”而非大 land_id。
+	for idx := int32(0); idx < 4; idx++ {
+		pkt := protocol.NewPacket(0x000D0005,
+			protocol.NewWriter().WriteInt32(idx).WriteInt32(roles[0].id).WriteUint8(2).WriteInt8(5).Bytes())
+		if resp := call(pkt, fmt.Sprintf("legacy_plant_index%d", idx)); resp != nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
 	// 摇钱树/仙灵树剩余次数与恢复时间（只读）。
 	call(protocol.NewPacket(0x000D000C, nil), "coin_tree_count_info")
 	call(protocol.NewPacket(0x000D0012, nil), "xianling_tree_count_info")

@@ -197,6 +197,22 @@ classDiagram
 - `0x000D0018 (13, 24)`：种植指定作物（参数：土地编号 `SoilID`、种子编号 `SeedID`、伙伴编号 `RoleID`）。
 - `0x000D0019 (13, 25)`：收获成熟作物（参数：土地编号 `SoilID`）。
 
+**2026-11-14 实机结论（niuchangsheng s0/s1）**：
+
+| 观察 | 结果 |
+| :--- | :--- |
+| s0 新农场 | `13/23 buy_new_herbs` 裸 `[Int32 seed]` 可购买；`13/24` 裸 8 字节播种成功，一轮 `planted=5 harvested=5 gain_coins=5000020` |
+| s1 新农场 | `13/23` 的裸 4B / 带 PrevAct / 0 尾四种形态全部静默丢弃；`13/22` 种子列表仍正常回包 |
+| s1 旧版播种 | `13/8 check_role_state` 返回 `21=PASS`；`13/5 plant_herbs` 的裸/带 PrevAct/地块序号 0..3/进入城镇后 等全部形态均无回包 |
+| s1 旧版收获 | `13/6 harvest`（kind 14/15）无回包；`13/2/3/4` 旧种子接口无回包 |
+| s1 库存 | 背包 23 件、仓库 0 件，无 169~176 种子 |
+| s1 摇钱树 | `13/12` 免费次数恢复至 `count=1` 后，`13/5 type=3` 仍全部无回包 |
+
+结论：s1 服务端对该账号未实现/未开放药园播种入口，客户端无法通过换载荷修正。
+自动化对 `13/23` 与 `13/5` 均按角色退避 6 小时，避免每轮空等；s0 药园正常产出。
+复现探针：`test/probes/probe_legacy_farm_live.go`、`probe_farm_buy_live.go`、
+`probe_farm_scene_plant_live.go`、`probe_pack_seeds_live.go`。
+
 ### 4.3 Module 21 (0x15): 仙旅奇缘事件 (`Mod_TravelEvent_Base`)
 > 官方微端类名为 `Mod_TravelEvent_Base`（旧文档误记为 `Mod_Fate_Base`）；社区攻略常写作「仙履奇缘」，游戏内正式名称为「仙旅奇缘」。
 - `0x00150000 (21, 0)` `get_activity_info`：查询今日活动进度。
