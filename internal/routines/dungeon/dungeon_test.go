@@ -349,8 +349,8 @@ func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
 
 		case protocol.ActionHeroMissionStartPractice:
 			startCount.Add(1)
-			if len(pkt.Payload) != 8 {
-				t.Errorf("start_practice 载荷应为 4 字节业务 + 4 字节 PrevAct, 实际 %d: %X", len(pkt.Payload), pkt.Payload)
+			if len(pkt.Payload) != 4 {
+				t.Errorf("start_practice 载荷应为裸 4 字节业务字段, 实际 %d: %X", len(pkt.Payload), pkt.Payload)
 			}
 			startedTown.Store(int32(binary.BigEndian.Uint16(pkt.Payload[:2])))
 			if pkt.Payload[2] != 0 {
@@ -364,8 +364,8 @@ func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
 
 		case protocol.ActionHeroMissionQuickly:
 			quickCount.Add(1)
-			if len(pkt.Payload) != 4 {
-				t.Errorf("quickly 请求应仅携带 4 字节 PrevAct 占位, 实际 %X", pkt.Payload)
+			if len(pkt.Payload) != 2 {
+				t.Errorf("quickly 请求应为裸 2 字节 count, 实际 %X", pkt.Payload)
 			}
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionQuickly, []byte{protocol.HeroMissionResultSuccess}))
 			// 模拟服务端推送扫荡结束
