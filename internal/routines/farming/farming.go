@@ -173,9 +173,12 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 
 				// 无空闲/待采摘土地时服务端会静默丢弃 buy_seed 请求；
 				// 先判断是否存在可播种土地 (空闲 1 或成熟待采摘 3，采摘后会变空闲)。
+				// 只有已空闲 (State==1) 的土地才需要补仓。成熟待采摘 (State==3)
+				// 可能因特殊作物无法采摘而无法腾出土地；若把它当作可播种地，
+				// 会出现“买了种子却无地可种”的纯消耗（s0 实测 150 万铜钱买种后 planted=0）。
 				hasPlantableLand := false
 				for _, f := range infoRes.Fields {
-					if f.State == 1 || f.State == 3 {
+					if f.State == 1 {
 						hasPlantableLand = true
 						break
 					}
@@ -187,6 +190,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				// 后续播种/采摘全部连续超时。
 				boughtSeed := false
 				ingotOnlySeeds := 0
+				lowBalanceSeeds := 0
 			seedBuy:
 				for _, targetSeedID := range farmPurchaseCandidates(seedsRes.Seeds) {
 					if blockedUntil := farmSeedBuyBlockedUntil.Load(); blockedUntil > time.Now().Unix() {
@@ -223,6 +227,18 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 							"seed_id", targetSeedID,
 							"buy_need_coin", meta.BuyNeedCoin,
 							"remain_times", meta.RemainTimes,
+						)
+						continue
+					}
+					// 保留与种子价格等额的铜钱余额：低余额账号 (s0 实测 190 万)
+					// 不应把 79% 的铜钱押在一颗种子上。余额不足时优先使用库存种子。
+					if coins := session.GetPlayerState().Coins; !farmCanAffordSeed(coins, meta.BuyNeedCoin) {
+						lowBalanceSeeds++
+						slog.Debug("药园铜钱余额不足，跳过购买该种子",
+							"role_id", session.RoleID(),
+							"seed_id", targetSeedID,
+							"buy_need_coin", meta.BuyNeedCoin,
+							"coins", coins,
 						)
 						continue
 					}
@@ -288,6 +304,11 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				if !boughtSeed && ingotOnlySeeds > 0 {
 					slog.Info("药园所有可购种子均需元宝计价，跳过补仓（不消耗元宝）",
 						"role_id", session.RoleID(), "ingot_only_seeds", ingotOnlySeeds)
+				}
+				if !boughtSeed && lowBalanceSeeds > 0 {
+					slog.Info("药园铜钱余额不足，跳过种子补仓（优先使用库存种子）",
+						"role_id", session.RoleID(), "low_balance_seeds", lowBalanceSeeds,
+						"coins", session.GetPlayerState().Coins)
 				}
 			}
 
@@ -1922,6 +1943,17 @@ func NewRuneRefineRoutine() scheduler.ActivityRoutine {
 			return nil
 		},
 	)
+}
+
+// farmCanAffordSeed 判断当前铜钱余额是否足以购买种子且保留等额余额。
+//
+// 余额未知 (<=0，例如尚未同步) 时不拦截，避免误伤正常账号；
+// 已知余额时要求 coins >= 2 × price，防止低余额账号被单颗种子掏空。
+func farmCanAffordSeed(coins int64, price int32) bool {
+	if coins <= 0 {
+		return true
+	}
+	return int64(price)*2 <= coins
 }
 
 // farmSeedPreference 药园主力种子优先顺序 (经验丹果树/仙玲珑经验草等)。

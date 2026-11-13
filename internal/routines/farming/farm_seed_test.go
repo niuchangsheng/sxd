@@ -48,6 +48,25 @@ func TestFarmPurchaseCandidates_CheapestCoinSeedFirst(t *testing.T) {
 	}
 }
 
+func TestFarmCanAffordSeed_KeepsEqualReserve(t *testing.T) {
+	cases := []struct {
+		coins int64
+		price int32
+		want  bool
+	}{
+		{coins: 0, price: 1_000_000, want: true},          // 余额未知不拦截
+		{coins: 1_900_000, price: 1_500_000, want: false}, // s0 实测：1.5M 占余额 79%
+		{coins: 3_000_000, price: 1_500_000, want: true},
+		{coins: 1_000_000, price: 500_000, want: true},
+		{coins: 900_000, price: 500_000, want: false},
+	}
+	for _, c := range cases {
+		if got := farmCanAffordSeed(c.coins, c.price); got != c.want {
+			t.Errorf("farmCanAffordSeed(%d, %d) = %v, want %v", c.coins, c.price, got, c.want)
+		}
+	}
+}
+
 func TestFarmPlantCandidates_OnlyOwnedPreferredFirst(t *testing.T) {
 	owned := map[int32]int32{
 		176: 0,
