@@ -81,8 +81,11 @@ func NewMarryHomeRoutine() scheduler.ActivityRoutine {
 			// 会话上下文，紧随其后的 Module 210 请求会被静默丢弃 (不回包直至超时)。
 			// 直接领取即可，服务端会用结果码 (已领取 12 / 非活动时间 18 / 上限 20)
 			// 表达当日状态，无需客户端预判。
+			//
+			// 210/19 官方请求仅 [Int player_id]，不能追加 PrevAct：
+			// 8 字节请求会被服务端静默丢弃 (Issue #37 实测)，与 210/0 保持一致。
 			playerID := int32(session.PlayerID())
-			pkt := protocol.BuildMarryHomeGetCakePacket(playerID, session.LastActionID())
+			pkt := protocol.BuildMarryHomeGetCakePacket(playerID)
 			cCtx, cancel := context.WithTimeout(ctx, callTimeout)
 			resp, err := session.Call(cCtx, pkt, protocol.ActionIDMarryHomeGetCake)
 			cancel()

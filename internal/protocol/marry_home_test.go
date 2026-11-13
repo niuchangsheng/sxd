@@ -10,15 +10,15 @@ import (
 )
 
 func TestMarryHomeGetCakePacket(t *testing.T) {
-	pkt := BuildMarryHomeGetCakePacket(106732, 0)
-	if pkt.ActionID != ActionIDMarryHomeGetCake || !pkt.HasPrevAct {
+	pkt := BuildMarryHomeGetCakePacket(106732)
+	if pkt.ActionID != ActionIDMarryHomeGetCake || pkt.HasPrevAct {
 		t.Fatalf("封包类型不符: %+v", pkt)
 	}
-	// Int32 player_id + Uint32 PrevAct
-	if len(pkt.Payload) != 8 {
+	// 官方 get_cake 请求仅 Int32 player_id，不能追加 PrevAct。
+	if len(pkt.Payload) != 4 {
 		t.Fatalf("载荷长度不符: %d", len(pkt.Payload))
 	}
-	want := "0001a0ec00010000"
+	want := "0001a0ec"
 	if got := hex.EncodeToString(pkt.Payload); got != want {
 		t.Fatalf("载荷不符: got=%s want=%s", got, want)
 	}

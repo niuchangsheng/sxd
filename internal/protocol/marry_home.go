@@ -52,18 +52,14 @@ type MarryHomeCakeResult struct {
 
 // BuildMarryHomeGetCakePacket 构造领取家园小蛋糕封包。
 //
-// 官方请求为 [Int player_id]（家园主人 player_id，自家即当前角色），
-// 末尾追加 PrevAct 由会话层在发包瞬间覆盖。
-func BuildMarryHomeGetCakePacket(playerID int32, prevAct uint32) *Packet {
+// 官方 Main.swf 中 get_cake(210/19) 请求与 get_self_home_info(210/0) 一样，
+// 仅包含 [Int player_id]，没有 PrevAct 尾部。
+// 线上实测 (Issue #37): 追加 Uint32 PrevAct 的 8 字节请求会被服务端静默丢弃，
+// 客户端一直等到超时；改为 4 字节后与 210/0 行为一致。
+func BuildMarryHomeGetCakePacket(playerID int32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(playerID)
-	if prevAct == 0 {
-		prevAct = ActionIDTownEnter
-	}
-	w.WriteUint32(prevAct)
-	pkt := NewPacket(ActionIDMarryHomeGetCake, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+	return NewPacket(ActionIDMarryHomeGetCake, w.Bytes())
 }
 
 // ParseMarryHomeCakeResult 解析领取家园小蛋糕回包。
