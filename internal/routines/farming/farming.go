@@ -466,6 +466,21 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				}
 			}
 
+			// 新农场种子商店不可用时（低等级账号 buy_new_herbs 静默丢弃），
+			// 回退旧版摇钱树：消耗免费恢复的摇钱树次数，用伙伴在空闲地播种。
+			if plantedCount == 0 {
+				legacyPlanted, retryAfter := tryLegacyCoinTreePlanting(ctx, session, infoRes.Fields, 8*time.Second)
+				if legacyPlanted > 0 {
+					plantedCount += legacyPlanted
+					slog.Info("旧版摇钱树播种完成",
+						"role_id", session.RoleID(), "planted", legacyPlanted)
+				} else if retryAfter > 0 {
+					slog.Info("摇钱树免费次数恢复中，按恢复时间唤醒",
+						"role_id", session.RoleID(), "retry_after", retryAfter.Round(time.Second))
+					return scheduler.NewCooldown(retryAfter, "摇钱树免费次数恢复")
+				}
+			}
+
 			slog.Info("药园土地巡检与作业完成",
 				"role_id", session.RoleID(),
 				"total_fields", len(infoRes.Fields),
@@ -2040,4 +2055,109 @@ func farmPlantCandidates(seedOwned map[int32]int32) []int32 {
 		}
 	}
 	return append(out, others...)
+}
+
+// tryLegacyCoinTreePlanting 旧版摇钱树回退：使用免费恢复的摇钱树次数，
+// 与伙伴列表中的角色在空闲土地上播种 (13/5 type=3)。
+//
+// 返回 planted 为本轮成功播种数；retryAfter > 0 表示当前次数为 0，
+// 应在免费次数恢复后再唤醒。
+func tryLegacyCoinTreePlanting(
+	ctx context.Context,
+	session *client.RoleSession,
+	fields []protocol.FarmField,
+	callTimeout time.Duration,
+) (planted int, retryAfter time.Duration) {
+	empty := make([]int32, 0, len(fields))
+	for _, f := range fields {
+		if f.State == 1 {
+			empty = append(empty, f.LandID)
+		}
+	}
+	if len(empty) == 0 {
+		return 0, 0
+	}
+
+	call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
+		cCtx, cancel := context.WithTimeout(ctx, callTimeout)
+		defer cancel()
+		resp, err := session.Call(cCtx, pkt, act)
+		if err != nil || resp == nil {
+			return nil
+		}
+		return resp
+	}
+
+	infoResp := call(protocol.BuildFarmCoinTreeInfoPacket(), protocol.ActionIDFarmCoinTreeInfo)
+	if infoResp == nil {
+		slog.Debug("摇钱树次数查询无回包，跳过旧版播种", "role_id", session.RoleID())
+		return 0, 0
+	}
+	info, pErr := protocol.ParseFarmCoinTreeInfo(infoResp.Payload)
+	if pErr != nil {
+		slog.Warn("解析摇钱树次数失败", "role_id", session.RoleID(), "err", pErr)
+		return 0, 0
+	}
+	if info.Count <= 0 {
+		if info.RecoverCD > 0 {
+			return 0, time.Duration(info.RecoverCD+5) * time.Second
+		}
+		return 0, 0
+	}
+
+	rolesResp := call(protocol.BuildFarmRoleListPacket(), protocol.ActionIDFarmRoleList)
+	if rolesResp == nil {
+		slog.Debug("旧版伙伴列表无回包，跳过旧版播种", "role_id", session.RoleID())
+		return 0, 0
+	}
+	roles, rErr := protocol.ParseFarmRoleIDs(rolesResp.Payload)
+	if rErr != nil || len(roles) == 0 {
+		slog.Debug("旧版伙伴列表不可用", "role_id", session.RoleID(), "err", rErr)
+		return 0, 0
+	}
+
+	// 找一个能种摇钱树的伙伴 (check_role_state == PASS)。
+	var chosen int32
+	for _, roleID := range roles {
+		checkResp := call(protocol.BuildFarmCheckRoleStatePacket(roleID, protocol.FarmHerbTypeCoin),
+			protocol.ActionIDFarmCheckRoleState)
+		if checkResp == nil {
+			continue
+		}
+		code, cErr := protocol.ParseFarmCheckRoleStateResult(checkResp.Payload)
+		if cErr == nil && code == protocol.FarmCheckRoleStatePass {
+			chosen = roleID
+			break
+		}
+	}
+	if chosen == 0 {
+		slog.Info("旧版伙伴均不满足摇钱树播种条件", "role_id", session.RoleID())
+		return 0, 0
+	}
+
+	remaining := info.Count
+	for _, landID := range empty {
+		if remaining <= 0 {
+			break
+		}
+		plantResp := call(protocol.BuildFarmPlantHerbsPacket(landID, chosen, protocol.FarmHerbTypeCoin, 5),
+			protocol.ActionIDFarmPlantHerbs)
+		if plantResp == nil {
+			break
+		}
+		code, cErr := protocol.ParseFarmPlantHerbsResult(plantResp.Payload)
+		if cErr != nil {
+			break
+		}
+		if code != protocol.FarmPlantSuccess {
+			slog.Info("旧版摇钱树播种未成功",
+				"role_id", session.RoleID(), "land_id", landID, "result", code)
+			break
+		}
+		planted++
+		remaining--
+		slog.Info("旧版摇钱树播种成功",
+			"role_id", session.RoleID(), "land_id", landID, "role_id_used", chosen)
+	}
+	return planted, 0
 }
