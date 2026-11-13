@@ -1072,7 +1072,7 @@ func NewFameBlessingRoutine() scheduler.ActivityRoutine {
 			dropped := false
 			for done < remain {
 				cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
-				resp, cErr := session.Call(cCtx, protocol.BuildWorshipMarsIncensePacket(protocol.WorshipMarsOfferingFree, session.LastActionID()), protocol.ActionIDWorshipMarsIncense)
+				resp, cErr := session.Call(cCtx, protocol.BuildWorshipMarsIncensePacket(protocol.WorshipMarsOfferingFree), protocol.ActionIDWorshipMarsIncense)
 				cCancel()
 				if cErr != nil {
 					slog.Info("上香无应答", "role_id", session.RoleID(), "done", done, "err", cErr)
