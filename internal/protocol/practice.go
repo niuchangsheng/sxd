@@ -92,6 +92,18 @@ func BuildStartPracticePacket(req StartPracticeRequest) (*Packet, error) {
 	return NewPacket(ActionIDPracticeStart, w.Bytes()), nil
 }
 
+// BuildStartPracticeBarePacket 构造裸 7 字节开始扫荡封包。
+//
+// 2026-11-14 实机（s0/s1）：25/1 仅接受 [Int32 mission][Int16 count][Int8 autoSale]，
+// 追加 PrevAct（官方抓包形态）会被静默丢弃；回包首字节 0=成功。
+func BuildStartPracticeBarePacket(req StartPracticeRequest) (*Packet, error) {
+	w := NewWriter()
+	w.WriteInt32(req.MissionID)
+	w.WriteInt16(req.Count)
+	w.WriteInt8(req.AutoSale)
+	return NewPacket(ActionIDPracticeStart, w.Bytes()), nil
+}
+
 // ParseStartPracticeRequest 从封包载荷中反序列化开始扫荡请求参数。
 func ParseStartPracticeRequest(payload []byte) (*StartPracticeRequest, error) {
 	r := NewReader(payload)

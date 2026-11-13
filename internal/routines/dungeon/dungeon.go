@@ -569,11 +569,11 @@ func sweepEliteMissionsWithoutTown(
 			}
 		}
 
-		startPkt, bErr := protocol.BuildStartPracticePacket(protocol.StartPracticeRequest{
+		// 25/1 仅接受裸 7 字节业务字段；带 PrevAct 会被静默丢弃（2026-11-14 实测）。
+		startPkt, bErr := protocol.BuildStartPracticeBarePacket(protocol.StartPracticeRequest{
 			MissionID: best.MissionID,
 			Count:     1,
 			AutoSale:  1,
-			PrevAct:   protocol.ActionIDPracticeGetStatus,
 		})
 		if bErr != nil {
 			continue
@@ -3679,18 +3679,27 @@ func RunHeroMissionSweepOnLogin(ctx context.Context, session *client.RoleSession
 	slog.Info("登录后英雄副本多城镇扫荡完成", "role_id", session.RoleID(), "swept", swept)
 }
 
-// fetchHeroMissionListWithPrevAct 使用旧版带 PrevAct 的 35/0 请求查询列表。
-// 登录钩子专用：该形态已在 s0 实测可被受理并建立后续 35/2 所需的服务端链。
+// fetchHeroMissionListWithPrevAct 查询英雄副本列表（登录钩子专用）。
+//
+// 2026-11-14 实机：裸 [Uint16 town] 在 s0/s1 均稳定回包；带 PrevAct 的旧形态
+// 在多次运行中整轮静默丢弃。因此优先裸载荷，失败后再回退旧形态，
+// 兼顾早期 s0 抓包（旧形态可建立服务端链）与当前服务端行为。
 func fetchHeroMissionListWithPrevAct(ctx context.Context, session *client.RoleSession, townID int) (*protocol.HeroMissionList, error) {
-	pkt := protocol.BuildHeroMissionListWithPrevActPacket(uint16(townID), session.LastActionID())
-	c, cancel := context.WithTimeout(ctx, 8*time.Second)
-	resp, err := session.Call(c, pkt, protocol.ActionHeroMissionList)
-	cancel()
-	if err != nil {
-		return nil, err
+	callList := func(pkt *protocol.Packet, timeout time.Duration) (*protocol.HeroMissionList, error) {
+		c, cancel := context.WithTimeout(ctx, timeout)
+		resp, err := session.Call(c, pkt, protocol.ActionHeroMissionList)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			return nil, errors.New("dungeon: 英雄副本列表返回空响应")
+		}
+		return protocol.ParseHeroMissionListResponse(resp.Payload)
 	}
-	if resp == nil {
-		return nil, errors.New("dungeon: 英雄副本列表返回空响应")
+
+	if list, err := callList(protocol.BuildHeroMissionListPacket(uint16(townID)), 8*time.Second); err == nil {
+		return list, nil
 	}
-	return protocol.ParseHeroMissionListResponse(resp.Payload)
+	return callList(protocol.BuildHeroMissionListWithPrevActPacket(uint16(townID), session.LastActionID()), 4*time.Second)
 }

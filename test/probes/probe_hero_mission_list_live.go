@@ -173,5 +173,121 @@ func main() {
 		call(statusPkt(tc.payload), protocol.ActionIDPracticeGetStatus, tc.name)
 		time.Sleep(time.Second)
 	}
+
+	// 2b. Module 25 start_practice 载荷对比（裸 7 字节 vs 带 PrevAct 11 字节）。
+	// 先用裸状态查询拿到一个真实可扫荡 mission。
+	if stResp := call(statusPkt(missionBytes), protocol.ActionIDPracticeGetStatus, "status_for_start"); stResp != nil {
+		if st, stErr := protocol.ParsePracticeStatusResult(stResp.Payload); stErr == nil && len(st.Missions) > 0 {
+			best := st.Missions[0]
+			startBytes := func(prev uint32) []byte {
+				out := []byte{
+					byte(best.MissionID >> 24), byte(best.MissionID >> 16), byte(best.MissionID >> 8), byte(best.MissionID),
+					0, 1, // count=1
+					1, // auto_sale
+				}
+				if prev != 0 {
+					out = append(out, byte(prev>>24), byte(prev>>16), byte(prev>>8), byte(prev))
+				}
+				return out
+			}
+			startOK := false
+			for _, tc := range []struct {
+				name string
+				prev uint32
+			}{
+				{"start25_bare", 0},
+				{"start25_prev_status", protocol.ActionIDPracticeGetStatus},
+				{"start25_prev42", 42},
+			} {
+				sess.SetLastActionID(0)
+				if call(protocol.NewPacket(protocol.ActionIDPracticeStart, startBytes(tc.prev)),
+					protocol.ActionIDPracticeStart, tc.name) != nil {
+					startOK = true
+					break
+				}
+				time.Sleep(time.Second)
+			}
+			if startOK {
+				quickBytes := func(prev uint32) []byte {
+					out := []byte{0, 0} // count=0
+					if prev != 0 {
+						out = append(out, byte(prev>>24), byte(prev>>16), byte(prev>>8), byte(prev))
+					}
+					return out
+				}
+				for _, tc := range []struct {
+					name string
+					prev uint32
+				}{
+					{"quickly25_bare", 0},
+					{"quickly25_prev_start", protocol.ActionIDPracticeStart},
+					{"quickly25_prev_status", protocol.ActionIDPracticeGetStatus},
+				} {
+					sess.SetLastActionID(0)
+					if call(protocol.NewPacket(protocol.ActionIDPracticeQuickly, quickBytes(tc.prev)),
+						protocol.ActionIDPracticeQuickly, tc.name) != nil {
+						break
+					}
+					time.Sleep(time.Second)
+				}
+			}
+		}
+	}
+
+	// 3. Module 35 start_practice / quickly 载荷对比。
+	// start 是写操作：只在首个有回包的形态上继续 quickly，避免重复开扫荡。
+	startPkt := func(town uint16, auto, typ byte, prev uint32) *protocol.Packet {
+		w := protocol.NewWriter()
+		w.WriteUint16(town)
+		w.WriteUint8(auto)
+		w.WriteUint8(typ)
+		if prev != 0 {
+			w.WriteUint32(prev)
+		}
+		pkt := protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes())
+		pkt.HasPrevAct = false
+		return pkt
+	}
+	started := false
+	for _, tc := range []struct {
+		name string
+		prev uint32
+	}{
+		{"start_bare", 0},
+		{"start_prev_list", protocol.ActionHeroMissionList},
+		{"start_prev42", 42},
+	} {
+		sess.SetLastActionID(0)
+		if call(startPkt(54, 0, 0, tc.prev), protocol.ActionHeroMissionStartPractice, tc.name) != nil {
+			started = true
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if started {
+		quickPkt := func(prev uint32) *protocol.Packet {
+			w := protocol.NewWriter()
+			w.WriteInt16(0)
+			if prev != 0 {
+				w.WriteUint32(prev)
+			}
+			pkt := protocol.NewPacket(protocol.ActionHeroMissionQuickly, w.Bytes())
+			pkt.HasPrevAct = false
+			return pkt
+		}
+		for _, tc := range []struct {
+			name string
+			prev uint32
+		}{
+			{"quickly_bare", 0},
+			{"quickly_prev_start", protocol.ActionHeroMissionStartPractice},
+		} {
+			sess.SetLastActionID(0)
+			if call(quickPkt(tc.prev), protocol.ActionHeroMissionQuickly, tc.name) != nil {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+	}
 	slog.Info("探针结束")
 }

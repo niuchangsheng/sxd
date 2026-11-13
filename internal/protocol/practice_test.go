@@ -120,6 +120,27 @@ func TestBuildPracticeGetStatusBarePacket(t *testing.T) {
 	}
 }
 
+// TestBuildStartPracticeBarePacket 验证裸 7 字节开始扫荡载荷。
+// 2026-11-14 实机: 25/1 带 PrevAct 会被静默丢弃，裸载荷返回 0=成功。
+func TestBuildStartPracticeBarePacket(t *testing.T) {
+	pkt, err := protocol.BuildStartPracticeBarePacket(protocol.StartPracticeRequest{
+		MissionID: 854, Count: 1, AutoSale: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildStartPracticeBarePacket: %v", err)
+	}
+	if pkt.ActionID != protocol.ActionIDPracticeStart {
+		t.Fatalf("ActionID = 0x%08X", pkt.ActionID)
+	}
+	want := []byte{0x00, 0x00, 0x03, 0x56, 0x00, 0x01, 0x01}
+	if !bytes.Equal(pkt.Payload, want) {
+		t.Fatalf("payload = %x, want %x", pkt.Payload, want)
+	}
+	if pkt.HasPrevAct {
+		t.Fatal("裸开始扫荡不能标记 HasPrevAct")
+	}
+}
+
 func TestGolden_Module25_LiveFilesReplay(t *testing.T) {
 	// 1. C2S Action 0: 查询扫荡状态请求包 (c2s_m25_a0.bin)
 	t.Run("C2S_Action0_GetStatus", func(t *testing.T) {
