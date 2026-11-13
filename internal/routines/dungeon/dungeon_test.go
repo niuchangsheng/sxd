@@ -1949,8 +1949,11 @@ func TestDungeonSweep_EliteSweep_AllTowns(t *testing.T) {
 	if err := routine.Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("执行精英副本扫荡失败: %v", err)
 	}
-	if got := heroSweepCount.Load(); got != 22 {
-		t.Fatalf("期望扫荡全部 22 个精英城镇, 实际 %d 个", got)
+	// 22 个精英城镇中，5 (MissionLock=1101600) 与 55 (71031) 在当前账号
+	// 未解锁/无英雄副本，服务端会静默丢弃请求并污染 PrevAct 链，例程主动跳过，
+	// 因此实际扫荡城镇为 20 个。
+	if got := heroSweepCount.Load(); got != 20 {
+		t.Fatalf("期望扫荡 20 个可用精英城镇 (跳过 5/55), 实际 %d 个", got)
 	}
 }
 

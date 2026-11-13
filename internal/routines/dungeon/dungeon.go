@@ -669,7 +669,20 @@ func executeEliteMissionSweep(
 	}
 	// 官方客户端实测 (2026-11-13 /tmp/saodang.pcapng)：不切换场景即可对多个城镇
 	// 依次下发 35/0 列表 + 35/2 start_practice + 35/7 quickly，连续扫荡 54/43/40/39。
-	// 因此这里不再限制为“当前城镇”，按字典城镇顺序逐城扫荡。
+	// 官方顺序是从高等级城镇向低等级；低等级/未解锁城镇的列表请求会被服务端
+	// 静默丢弃并污染 PrevAct 链，因此这里按 MissionLock 降序（倒序）扫荡，
+	// 且首个列表失败即终止本轮，避免后续请求全部超时。
+	for i, j := 0, len(towns)-1; i < j; i, j = i+1, j-1 {
+		towns[i], towns[j] = towns[j], towns[i]
+	}
+	// 官方抓包 (saodang.pcapng) 中 35/0 的 PrevAct 均为心跳 0x00000017。
+	// 实测活动面板 (0/42) 等查询后直接发 35/0 会被服务端静默丢弃；
+	// 先补发一次心跳，把 PrevAct 链锚点恢复为心跳动作再开始扫荡。
+	if hb := protocol.BuildPlayerHeartbeatPacket(int32(session.LastActionID())); hb != nil {
+		if err := session.Send(hb); err == nil {
+			time.Sleep(80 * time.Millisecond)
+		}
+	}
 	slog.Info("英雄副本多城镇扫荡",
 		"role_id", session.RoleID(),
 		"town_map_id", session.GetPlayerState().TownMapID,
@@ -685,6 +698,12 @@ func executeEliteMissionSweep(
 	for _, townID := range towns {
 		if ctx.Err() != nil {
 			return successRounds, ctx.Err()
+		}
+		// 城镇 5 (MissionLock=1101600) 与 55 (71031) 在当前账号上未解锁/无英雄副本，
+		// 官方抓包同样从 54 开始扫荡。请求这两城会被静默丢弃并污染 PrevAct 链，
+		// 因此跳过，保证首个请求 (54) 成功、后续城镇链保持有效。
+		if townID == 5 || townID == 55 {
+			continue
 		}
 		if !sweepHasStamina() {
 			slog.Info("当前角色体力不足，精英副本扫荡阶段结束",
@@ -710,8 +729,13 @@ func executeEliteMissionSweep(
 
 			list, listErr := fetchHeroMissionList(ctx, session, townID)
 			if listErr != nil {
-				// 列表查询被服务端静默丢弃说明当前城镇上下文不匹配；重试无意义。
-				slog.Info("查询英雄副本列表失败/服务端未响应，跳过该城镇",
+				// 服务端静默丢弃时 lastActionID 已被推进到未送达的动作，
+				// 会让后续请求的 PrevAct 全部失配。回退到最近一次真实回包的动作，
+				// 再尝试下一个城镇，避免一次失败拖垮整轮。
+				if ack := session.LastAckActionID(); ack != 0 {
+					session.SetLastActionID(ack)
+				}
+				slog.Info("查询英雄副本列表失败，跳过该城镇",
 					"role_id", session.RoleID(), "town_id", townID, "err", listErr)
 				break
 			}
@@ -3593,4 +3617,70 @@ func challengeStoryMission(
 		"remaining_stamina", remStamina,
 	)
 	return true
+}
+
+// RunHeroMissionSweepOnLogin 登录后立即执行英雄副本多城镇扫荡 (Module 35)。
+//
+// 35/0 对上下文非常敏感：线上实测一旦先查询过活动面板 (0/42) 等模块，
+// 服务端会把后续 35/0 静默丢弃。官方抓包中 35/0 紧跟心跳，且从城镇 54 开始。
+// 因此该扫荡必须在调度器启动、其它例程发请求之前执行。
+//
+// 只使用免费扫荡 (auto_num=0)，不等待每城结算推送，避免阻塞登录流程。
+func RunHeroMissionSweepOnLogin(ctx context.Context, session *client.RoleSession, dictRepo dictionary.Repository) {
+	if session == nil || session.State() != client.StateActive {
+		return
+	}
+	towns := eliteMissionTowns(dictRepo)
+	for i, j := 0, len(towns)-1; i < j; i, j = i+1, j-1 {
+		towns[i], towns[j] = towns[j], towns[i]
+	}
+	swept := 0
+	for _, townID := range towns {
+		if ctx.Err() != nil {
+			break
+		}
+		// 5/55 在当前账号未解锁或无英雄副本，请求会被静默丢弃并污染链。
+		if townID == 5 || townID == 55 {
+			continue
+		}
+		list, err := fetchHeroMissionList(ctx, session, townID)
+		if err != nil {
+			if ack := session.LastAckActionID(); ack != 0 {
+				session.SetLastActionID(ack)
+			}
+			slog.Info("登录后英雄副本列表失败，跳过该城镇",
+				"role_id", session.RoleID(), "town_id", townID, "err", err)
+			continue
+		}
+		if list == nil || len(list.Missions) == 0 {
+			continue
+		}
+		startRes, sErr := startHeroMissionPractice(ctx, session, townID, 0, 0)
+		if sErr != nil {
+			slog.Info("登录后英雄副本开始扫荡无回包",
+				"role_id", session.RoleID(), "town_id", townID, "err", sErr)
+			continue
+		}
+		switch startRes.Result {
+		case protocol.HeroMissionResultSuccess:
+			if _, qErr := quicklyHeroMissionPractice(ctx, session); qErr != nil {
+				slog.Info("登录后英雄副本快速完成无回包",
+					"role_id", session.RoleID(), "town_id", townID, "err", qErr)
+			}
+			swept++
+		case protocol.HeroMissionResultNoMission:
+			// 该城镇暂无可扫荡副本。
+		case protocol.HeroMissionResultBagFull:
+			slog.Info("登录后英雄副本扫荡背包已满，终止", "role_id", session.RoleID())
+			return
+		case protocol.HeroMissionResultNotEnoughPower, protocol.HeroMissionResultNotEnoughIngot:
+			slog.Info("登录后英雄副本扫荡资源不足，终止",
+				"role_id", session.RoleID(), "result", startRes.Result)
+			return
+		default:
+			slog.Info("登录后英雄副本扫荡未成功",
+				"role_id", session.RoleID(), "town_id", townID, "result", startRes.Result)
+		}
+	}
+	slog.Info("登录后英雄副本多城镇扫荡完成", "role_id", session.RoleID(), "swept", swept)
 }

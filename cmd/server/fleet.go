@@ -22,6 +22,7 @@ import (
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/routines"
 	"sxd-pie-ng/internal/routines/daily"
+	"sxd-pie-ng/internal/routines/dungeon"
 	"sxd-pie-ng/internal/routines/farming"
 	"sxd-pie-ng/internal/scheduler"
 	"sxd-pie-ng/internal/web"
@@ -38,6 +39,8 @@ type rolePlan struct {
 	eff     config.SchedulerConfig
 	factory *routines.RegistryFactory
 	enabled map[string]bool
+
+	dictRepo dictionary.Repository
 
 	sess *client.RoleSession
 }
@@ -84,8 +87,9 @@ func buildRolePlans(
 				roleID:  roleID,
 				cfg:     buildSessionConfig(acc, role, roleID),
 				eff:     eff,
-				factory: factory,
-				enabled: buildRoutineEnabledMap(eff),
+				factory:  factory,
+				enabled:  buildRoutineEnabledMap(eff),
+				dictRepo: dictRepo,
 			})
 		}
 	}
@@ -299,6 +303,10 @@ func startPlans(ctx context.Context, plans []*rolePlan) {
 			}
 			if p.enabled["rebirth_land"] {
 				daily.RunRebirthAltarOnLogin(ctx, p.sess)
+			}
+			// 英雄副本 35/0 对上下文敏感：必须在其它例程查询活动面板之前执行。
+			if p.enabled["dungeon"] {
+				dungeon.RunHeroMissionSweepOnLogin(ctx, p.sess, p.dictRepo)
 			}
 		}()
 	}
