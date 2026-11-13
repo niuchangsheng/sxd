@@ -166,14 +166,12 @@ type RefinePoolRefineResult struct {
 // 请求封包构造
 // --------------------------------------------------------------------------------
 
-// BuildRefinePoolOpenPacket 构造打开淬炼池面板封包 (Module 282, Action 0)。
-func BuildRefinePoolOpenPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTownEnter
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDRefinePoolOpen, w.Bytes())
+// BuildRefinePoolOpenPacket 构造打开粗铁淬炼池面板封包 (Module 282, Action 0)。
+//
+// 官方 request=[]；2026-11-14 实机（s0）验证：空载荷稳定回包（130 字节），
+// 追加 4 字节 PrevAct 会被静默丢弃。prevAct 参数保留仅为兼容旧调用。
+func BuildRefinePoolOpenPacket(_ uint32) *Packet {
+	return NewPacket(ActionIDRefinePoolOpen, nil)
 }
 
 // BuildRefinePoolPanelPacket 构造查询淬炼池资源面板封包 (Module 534, Action 5)。
@@ -191,17 +189,13 @@ func BuildRefinePoolPanelPacket(prevAct uint32) *Packet {
 //
 // target 为 RefinePoolTargetXuanTie/RefinePoolTargetLingCai, cost 为
 // RefinePoolCostCoins/RefinePoolCostIngot, mode 为 RefinePoolTypeNormal/RefinePoolTypeOneKey。
-// 请求线格式: UByte target, UByte cost, UByte mode, prevAct。
-// 请求本身不携带槽位数量; 服务端在 OneKey 模式下自动处理全部已完成槽位。
-func BuildRefineExecutePacket(target, cost, mode uint8, prevAct uint32) *Packet {
+// 2026-11-14 实机（s0）：仅裸 3 字节 [target][cost][mode] 可回包，
+// 追加 PrevAct 会被静默丢弃。prevAct 参数保留仅为兼容旧调用。
+func BuildRefineExecutePacket(target, cost, mode uint8, _ uint32) *Packet {
 	w := NewWriter()
 	w.WriteUint8(target)
 	w.WriteUint8(cost)
 	w.WriteUint8(mode)
-	if prevAct == 0 {
-		prevAct = ActionIDRefinePoolPanel
-	}
-	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDRefineExecute, w.Bytes())
 }
 

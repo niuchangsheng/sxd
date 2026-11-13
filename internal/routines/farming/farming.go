@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -22,10 +21,26 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
-// farmSeedBuyBlockedUntil 记录药园种子购买被服务端静默丢弃后的退避截止时间
-// (Unix 秒)。购买请求需要药园场景上下文，主服会话下可能被丢弃；退避期间
-// 只巡检/采摘/播种，不再重复发送必然超时的请求。
-var farmSeedBuyBlockedUntil atomic.Int64
+// farmSeedBuyBlockedUntil 按角色记录药园种子购买的退避截止时间 (Unix 秒)。
+// 不同角色/区服对 buy_new_herbs 的受理情况不同，退避必须按角色隔离，
+// 避免 s1 的拒绝把 s0 的正常补仓一起阻塞。
+// 购买请求需要药园场景上下文，部分会话下可能被丢弃；退避期间只巡检/采摘/播种。
+var (
+	farmSeedBuyBlockMu       sync.Mutex
+	farmSeedBuyBlockedByRole = make(map[string]int64)
+)
+
+func farmSeedBuyBlockedUntil(roleID string) int64 {
+	farmSeedBuyBlockMu.Lock()
+	defer farmSeedBuyBlockMu.Unlock()
+	return farmSeedBuyBlockedByRole[roleID]
+}
+
+func blockFarmSeedBuy(roleID string, until int64) {
+	farmSeedBuyBlockMu.Lock()
+	defer farmSeedBuyBlockMu.Unlock()
+	farmSeedBuyBlockedByRole[roleID] = until
+}
 
 // NewHerbGardenRoutine 构造药园种植与巡检任务。
 // 支持无参调用或注入 dictionary.Repository 字典仓储。
@@ -34,9 +49,6 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 	if len(dictRepos) > 0 {
 		dictRepo = dictRepos[0]
 	}
-	// 每个例程实例独立开始退避周期；生产环境启动时只构造一次。
-	farmSeedBuyBlockedUntil.Store(0)
-
 	return scheduler.NewBaseRoutine(
 		"herb_garden",
 		"farming",
@@ -193,7 +205,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				lowBalanceSeeds := 0
 			seedBuy:
 				for _, targetSeedID := range farmPurchaseCandidates(seedsRes.Seeds) {
-					if blockedUntil := farmSeedBuyBlockedUntil.Load(); blockedUntil > time.Now().Unix() {
+					if blockedUntil := farmSeedBuyBlockedUntil(session.RoleID()); blockedUntil > time.Now().Unix() {
 						slog.Info("药园种子购买近期被服务端静默丢弃，退避期间跳过补仓",
 							"role_id", session.RoleID(),
 							"blocked_until", time.Unix(blockedUntil, 0))
@@ -269,7 +281,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 						// 服务端静默丢弃。退避 6 小时并继续巡检土地，
 						// 避免每次 15 分钟都空等 8 秒。
 						until := time.Now().Add(6 * time.Hour).Unix()
-						farmSeedBuyBlockedUntil.Store(until)
+						blockFarmSeedBuy(session.RoleID(), until)
 						slog.Info("药园种子购买被静默丢弃，暂停补仓 6 小时并继续巡检土地",
 							"role_id", session.RoleID(), "seed_id", targetSeedID,
 							"blocked_until", time.Unix(until, 0), "err", bCallErr)
@@ -1639,30 +1651,15 @@ func runSpiritPoolCore(
 	// 1. 不再额外调用功能开放检查：check_function_open 会推进 PrevAct 链，
 	// 导致后续 282/1 一键淬炼被网关静默丢弃。282/0 面板本身就是开放门禁。
 	// 2. 打开淬炼池面板 (Mod 282, Act 0), 获取各铁槽生产状态。
-	//    先用 0/2 全量资产刷新 PrevAct 链锚点：长会话中被静默丢弃的请求会
-	//    污染本地 lastActionID，导致 282/1 一键淬炼被服务端静默丢弃
-	//    （2026-11-11 与 852/16 同源问题）。
-	anchor := session.LastAckActionID()
-	if anchor == 0 {
-		anchor = session.LastActionID()
-	}
-	syncCtx, syncCancel := context.WithTimeout(ctx, callTimeout)
-	syncResp, syncErr := session.Call(syncCtx, protocol.BuildPlayerGetInfoPacket(int32(anchor)),
-		protocol.ActionIDPlayerGetInfo)
-	syncCancel()
-	if syncErr != nil || syncResp == nil {
-		slog.Debug("淬炼池 PrevAct 链刷新无回包，沿用本地锚点",
-			"role_id", session.RoleID(), "err", syncErr)
-	} else if ack := session.LastAckActionID(); ack != 0 {
-		anchor = ack
-	}
-	openPkt := protocol.BuildRefinePoolOpenPacket(anchor)
+	//    2026-11-14 实机：282/0 仅接受空载荷，追加 4 字节 PrevAct 会被静默丢弃；
+	//    282/1 同样只接受裸 3 字节业务字段。因此不再刷新 PrevAct 链锚点。
+	openPkt := protocol.BuildRefinePoolOpenPacket(0)
 	oCtx, oCancel := context.WithTimeout(ctx, callTimeout)
 	openResp, err := session.Call(oCtx, openPkt, protocol.ActionIDRefinePoolOpen)
 	oCancel()
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			slog.Info("打开粗铁淬炼池面板无回包（可能为网关瞬断），稍后重试",
+			slog.Info("打开粗铁淬炼池面板无回包，稍后重试",
 				"role_id", session.RoleID(),
 				"target", targetName,
 			)

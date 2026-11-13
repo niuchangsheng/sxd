@@ -2,6 +2,7 @@ package farming
 
 import (
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
 )
@@ -90,5 +91,20 @@ func TestFarmPlantCandidates_OnlyOwnedPreferredFirst(t *testing.T) {
 func TestFarmPlantCandidates_Empty(t *testing.T) {
 	if got := farmPlantCandidates(map[int32]int32{176: 0, 169: 0}); len(got) != 0 {
 		t.Fatalf("expected no candidates, got %v", got)
+	}
+}
+
+// TestFarmSeedBuyBackoffPerRole 验证购买退避按角色隔离。
+//
+// 2026-11-14 实测: s1 的 buy_new_herbs 被拒绝时，旧实现用包级退避
+// 同时阻塞了 s0 的正常补仓。
+func TestFarmSeedBuyBackoffPerRole(t *testing.T) {
+	until := time.Now().Add(time.Hour).Unix()
+	blockFarmSeedBuy("role-s1", until)
+	if got := farmSeedBuyBlockedUntil("role-s1"); got != until {
+		t.Fatalf("s1 backoff = %d, want %d", got, until)
+	}
+	if got := farmSeedBuyBlockedUntil("role-s0"); got != 0 {
+		t.Fatalf("s0 backoff = %d, want 0 (按角色隔离)", got)
 	}
 }

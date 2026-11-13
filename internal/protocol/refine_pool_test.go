@@ -18,7 +18,7 @@ func TestRefinePoolBuilders(t *testing.T) {
 	if open.ActionID != protocol.ActionIDRefinePoolOpen {
 		t.Fatalf("open ActionID = 0x%08X, want 0x%08X", open.ActionID, protocol.ActionIDRefinePoolOpen)
 	}
-	if got, want := hex.EncodeToString(open.Payload), "00eb000d"; got != want {
+	if got, want := hex.EncodeToString(open.Payload), ""; got != want {
 		t.Fatalf("open payload = %s, want %s", got, want)
 	}
 
@@ -37,7 +37,7 @@ func TestRefinePoolBuilders(t *testing.T) {
 	if exec.ActionID != protocol.ActionIDRefineExecute {
 		t.Fatalf("exec ActionID = 0x%08X, want 0x%08X", exec.ActionID, protocol.ActionIDRefineExecute)
 	}
-	if got, want := hex.EncodeToString(exec.Payload), "05070a02160005"; got != want {
+	if got, want := hex.EncodeToString(exec.Payload), "05070a"; got != want {
 		t.Fatalf("exec payload = %s, want %s", got, want)
 	}
 
@@ -48,7 +48,7 @@ func TestRefinePoolBuilders(t *testing.T) {
 		protocol.RefinePoolTypeOneKey,
 		protocol.ActionIDRefinePoolPanel,
 	)
-	if got, want := hex.EncodeToString(lingCai.Payload), "06070a02160005"; got != want {
+	if got, want := hex.EncodeToString(lingCai.Payload), "06070a"; got != want {
 		t.Fatalf("lingcai exec payload = %s, want %s", got, want)
 	}
 }

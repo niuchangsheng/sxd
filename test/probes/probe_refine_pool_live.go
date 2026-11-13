@@ -1,27 +1,18 @@
 //go:build probe
 
-// 目标协议: 粗铁淬炼池 (Mod_RefinePool 282 / Mod 534 资源面板)
-// 基准对齐: docs/protocol-spec.md 4.7 与 haha.pcapng 三步链路
+// 目标: 定位粗铁淬炼池 282/0 open_panel 静默丢包的载荷形态。
 //
-//	open_panel  282/0 0x011A0000
-//	panel_534   534/5 0x02160005
-//	refine      282/1 0x011A0001 [target, cost, mode, prevAct]
+// 背景: niuchangsheng s0/s1 每 10 分钟尝试打开淬炼池面板均 8 秒超时；
+// 官方 request=[]，现行构造追加 4 字节 PrevAct。结合 25/0、35/0、2/53 的
+// 实机结论，怀疑服务端只接受空载荷。
 //
-// 运行命令:
-//
-//	SXD_CONFIG=configs/niuchangsheng.yaml SXD_PROBE_REFINE_VARIANT=A go run -tags=probe test/probes/probe_refine_pool_live.go
-//
-// 变体:
-//
-//	A = open -> refine（跳过 534）
-//	B = open -> 534 -> refine（官方三步链路）
-//
-// 仅在 open 面板显示 DoneCount>0 时执行一次一键淬炼（铜钱档），不消耗元宝。
+// 运行: SXD_CONFIG=configs/niuchangsheng.yaml go run -tags=probe test/probes/probe_refine_pool_live.go -role 0
 package main
 
 import (
 	"context"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -39,94 +30,134 @@ func main() {
 	if cfgPath == "" {
 		cfgPath = "configs/niuchangsheng.yaml"
 	}
-	variant := os.Getenv("SXD_PROBE_REFINE_VARIANT")
-	if variant == "" {
-		variant = "A"
-	}
+	roleIdx := flag.Int("role", 0, "配置中的角色下标 (0=s0, 1=s1)")
+	flag.Parse()
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		slog.Error("加载配置失败", "err", err)
 		return
 	}
 	acc := cfg.Accounts[0]
-	role := acc.Roles[0]
-	tc := platform.NewTicketCache(90 * time.Minute)
-	xd, _ := platform.NewXindongAuthenticator()
-	xd.SetCookie(acc.Cookie)
-	tc.RegisterAuthenticator(xd)
+	role := acc.Roles[*roleIdx]
+
+	ticketCache := platform.NewTicketCache(90 * time.Minute)
+	xdAuth, err := platform.NewXindongAuthenticator()
+	if err != nil {
+		slog.Error("创建认证器失败", "err", err)
+		return
+	}
+	xdAuth.SetCookie(acc.Cookie)
+	ticketCache.RegisterAuthenticator(xdAuth)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
-	ticket, err := tc.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)
+	ticket, err := ticketCache.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)
 	if err != nil {
 		slog.Error("换票失败", "err", err)
 		return
 	}
-	rc := client.SessionConfig{
-		RoleID: fmt.Sprintf("%s-%s", role.ServerID, role.RoleName), RoleName: role.RoleName,
-		Username: acc.Username, ServerAddr: ticket.GatewayURL, ServerID: role.ServerID,
-		Platform: acc.Platform, Authenticator: client.DefaultAuthenticator, MaxReconnectAttempts: 3,
+	roleCfg := client.SessionConfig{
+		RoleID:               fmt.Sprintf("%s-%s", role.ServerID, role.RoleName),
+		RoleName:             role.RoleName,
+		Username:             acc.Username,
+		ServerAddr:           ticket.GatewayURL,
+		ServerID:             role.ServerID,
+		Platform:             acc.Platform,
+		Authenticator:        client.DefaultAuthenticator,
+		MaxReconnectAttempts: 3,
 	}
-	client.ApplyTicket(&rc, ticket)
-	sess := client.NewRoleSession(rc)
+	client.ApplyTicket(&roleCfg, ticket)
+	sess := client.NewRoleSession(roleCfg)
 	if err := sess.Start(ctx); err != nil {
 		slog.Error("启动会话失败", "err", err)
 		return
 	}
 	defer sess.Close()
-	for sess.State() != client.StateActive && ctx.Err() == nil {
+	deadline := time.Now().Add(40 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 	}
-	call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-		c, cc := context.WithTimeout(ctx, timeout)
-		defer cc()
-		resp, err := sess.Call(c, pkt, act)
-		if err != nil {
-			slog.Warn("无回包", "action", fmt.Sprintf("0x%08X", act), "err", err)
+	if sess.State() != client.StateActive {
+		slog.Error("会话未激活", "state", sess.State())
+		return
+	}
+	slog.Info("会话已激活", "role_id", sess.RoleID(),
+		"last_action", fmt.Sprintf("0x%08X", sess.LastActionID()),
+		"last_ack", fmt.Sprintf("0x%08X", sess.LastAckActionID()))
+
+	call := func(pkt *protocol.Packet, act uint32, name string) *protocol.Packet {
+		cCtx, cCancel := context.WithTimeout(ctx, 6*time.Second)
+		defer cCancel()
+		resp, cErr := sess.Call(cCtx, pkt, act)
+		if cErr != nil {
+			slog.Warn("无回包", "call", name, "err", cErr)
 			return nil
 		}
-		slog.Info("回包", "action", fmt.Sprintf("0x%08X", act), "len", len(resp.Payload),
-			"hex", hex.EncodeToString(resp.Payload[:min(40, len(resp.Payload))]))
+		limit := len(resp.Payload)
+		if limit > 40 {
+			limit = 40
+		}
+		slog.Info("有回包", "call", name, "len", len(resp.Payload), "hex", hex.EncodeToString(resp.Payload[:limit]))
 		return resp
 	}
 
-	openResp := call(protocol.BuildRefinePoolOpenPacket(sess.LastActionID()), protocol.ActionIDRefinePoolOpen, 8*time.Second)
+	ack := sess.LastAckActionID()
+	prev := []byte{byte(ack >> 24), byte(ack >> 16), byte(ack >> 8), byte(ack)}
+	var openResp *protocol.Packet
+	for _, v := range []struct {
+		name    string
+		payload []byte
+	}{
+		{"open_bare", nil},
+		{"open_prev_ack", prev},
+		{"open_prev0", []byte{0, 0, 0, 0}},
+	} {
+		sess.SetLastActionID(0)
+		if resp := call(protocol.NewPacket(protocol.ActionIDRefinePoolOpen, v.payload),
+			protocol.ActionIDRefinePoolOpen, v.name); resp != nil {
+			openResp = resp
+			break
+		}
+		time.Sleep(time.Second)
+	}
 	if openResp == nil {
+		slog.Info("282/0 三种形态均无回包")
 		return
 	}
-	panel, err := protocol.ParseRefinePoolOpenResponse(openResp.Payload)
-	if err != nil {
-		slog.Error("解析面板失败", "err", err)
+	panel, pErr := protocol.ParseRefinePoolOpenResponse(openResp.Payload)
+	if pErr != nil {
+		slog.Warn("解析淬炼池面板失败", "err", pErr)
 		return
 	}
-	counts := map[uint8]int{}
+	done := 0
 	for _, iron := range panel.Irons {
-		counts[iron.ProduceStatus]++
+		if iron.ProduceStatus == protocol.RefinePoolProduceDone {
+			done++
+		}
 	}
-	slog.Info("面板", "irons", len(panel.Irons), "status_counts", counts,
-		"done", panel.DoneCount(), "coins_need", panel.CoinsNeed, "level", panel.Level)
-	if panel.DoneCount() == 0 {
-		slog.Info("无已完成槽位，不执行淬炼")
+	slog.Info("淬炼池面板", "irons", len(panel.Irons), "done", done, "level", panel.Level)
+	if done == 0 {
+		slog.Info("无已完成槽位，跳过 282/1 载荷测试")
 		return
 	}
 
-	prev := uint32(protocol.ActionIDRefinePoolOpen)
-	if variant == "B" {
-		if r := call(protocol.BuildRefinePoolPanelPacket(protocol.ActionIDRefinePoolOpen), protocol.ActionIDRefinePoolPanel, 8*time.Second); r == nil {
-			slog.Warn("534 资源面板无回包，仍尝试执行")
-		} else {
-			prev = protocol.ActionIDRefinePoolPanel
+	// 282/1 refine 载荷对比：裸 3 字节 vs 7 字节带 PrevAct。
+	base := []byte{protocol.RefinePoolTargetXuanTie, protocol.RefinePoolCostCoins, protocol.RefinePoolTypeOneKey}
+	execPrev := append(append([]byte{}, base...), byte((protocol.ActionIDRefinePoolOpen>>24)&0xFF), byte((protocol.ActionIDRefinePoolOpen>>16)&0xFF), byte((protocol.ActionIDRefinePoolOpen>>8)&0xFF), byte(protocol.ActionIDRefinePoolOpen&0xFF))
+	for _, v := range []struct {
+		name    string
+		payload []byte
+	}{
+		{"exec_bare", base},
+		{"exec_prev_open", execPrev},
+	} {
+		sess.SetLastActionID(0)
+		if call(protocol.NewPacket(protocol.ActionIDRefineExecute, v.payload),
+			protocol.ActionIDRefineExecute, v.name) != nil {
+			break
 		}
+		time.Sleep(time.Second)
 	}
-	execPkt := protocol.BuildRefineExecutePacket(protocol.RefinePoolTargetXuanTie, protocol.RefinePoolCostCoins, protocol.RefinePoolTypeOneKey, prev)
-	resp := call(execPkt, protocol.ActionIDRefineExecute, 25*time.Second)
-	if resp == nil {
-		return
-	}
-	res, err := protocol.ParseRefineExecuteResponse(resp.Payload)
-	if err != nil {
-		slog.Warn("解析执行回包失败", "err", err)
-		return
-	}
-	slog.Info("执行结果", "result", res.Result, "awards", len(res.Awards),
-		"lian_qi_jing_hua", res.LianQiJingHua, "level", res.Level)
+	slog.Info("探针结束")
 }
