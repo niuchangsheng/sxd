@@ -1488,6 +1488,21 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 						)
 						return nil
 					}
+					// 功能未开启等已归类的业务状态按 Info 记录，避免每轮产生 WARN 噪音；
+					// 只有真正未识别/异常的结果码才用 WARN。
+					var cdErr *scheduler.CooldownError
+					if errors.As(err, &cdErr) {
+						slog.Info("悟法领域感悟暂不可执行，按冷却重试",
+							"role_id", session.RoleID(),
+							"field_type", fieldType,
+							"draw_type", drawType,
+							"result", result.Result,
+							"result_text", protocol.WuFaResultText(result.Result),
+							"rest_times", result.RestTimes,
+							"cooldown", cdErr.Reason,
+						)
+						return err
+					}
 					slog.Warn("悟法领域感悟抽卡返回业务失败",
 						"role_id", session.RoleID(),
 						"field_type", fieldType,
