@@ -96,6 +96,17 @@ func TryReplenishStamina(ctx context.Context, session *client.RoleSession) (bool
 		useCtx, useCancel := context.WithTimeout(ctx, 3*time.Second)
 		useResp, useErr := session.Call(useCtx, usePkt, protocol.ActionIDItemUseGrid)
 		useCancel()
+		if useErr != nil {
+			// 单次无回包可能只是网关瞬断/限流；同一格位重试一次再降级到下一优先级。
+			select {
+			case <-ctx.Done():
+				return false, "", 0, ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
+			useCtx, useCancel = context.WithTimeout(ctx, 3*time.Second)
+			useResp, useErr = session.Call(useCtx, usePkt, protocol.ActionIDItemUseGrid)
+			useCancel()
+		}
 
 		if useErr != nil {
 			slog.Warn("使用体力道具未收到有效响应",
