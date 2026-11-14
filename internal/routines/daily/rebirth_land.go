@@ -270,8 +270,16 @@ func runAltarDraws(
 		"anchor", fmt.Sprintf("0x%08X", anchor),
 		"last_action", fmt.Sprintf("0x%08X", session.LastActionID()),
 		"last_ack", fmt.Sprintf("0x%08X", session.LastAckActionID()))
-	if poolResp := call(protocol.BuildEraRebirthLandPoolPanelPrevActPacket(anchor),
-		protocol.ActionIDEraRebirthLandPoolPanel); poolResp != nil {
+	// 面板仅用于诊断；部分账号面板请求会被静默丢弃，但紧随其后的抽取仍可
+	// 正常回包。因此面板查询失败时不打印无回包日志，避免误报。
+	var poolResp *protocol.Packet
+	{
+		cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
+		poolResp, _ = session.Call(cCtx, protocol.BuildEraRebirthLandPoolPanelPrevActPacket(anchor),
+			protocol.ActionIDEraRebirthLandPoolPanel)
+		cCancel()
+	}
+	if poolResp != nil {
 		r := protocol.NewReader(poolResp.Payload)
 		vals := make([]int32, 0, 6)
 		for i := 0; i < 6; i++ {

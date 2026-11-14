@@ -82,11 +82,11 @@ func buildRolePlans(
 			}
 
 			plans = append(plans, &rolePlan{
-				acc:     acc,
-				role:    role,
-				roleID:  roleID,
-				cfg:     buildSessionConfig(acc, role, roleID),
-				eff:     eff,
+				acc:      acc,
+				role:     role,
+				roleID:   roleID,
+				cfg:      buildSessionConfig(acc, role, roleID),
+				eff:      eff,
 				factory:  factory,
 				enabled:  buildRoutineEnabledMap(eff),
 				dictRepo: dictRepo,
@@ -296,13 +296,14 @@ func startPlans(ctx context.Context, plans []*rolePlan) {
 			slog.Info("角色会话启动中",
 				"role_id", p.roleID, "server_id", p.role.ServerID, "server_addr", p.cfg.ServerAddr)
 			// 登录后置任务（调度器在 startPlans 之后才启动）：
-			//   1. 淬炼池 282/1 对 PrevAct 上下文敏感，先执行；
-			//   2. 渡业台 852/16 随后执行（内部会先用 0/2 重建链）。
-			if p.enabled["spirit_pool"] {
-				farming.RunSpiritPoolOnLogin(ctx, p.sess, p.factory.SpiritPoolConfig())
-			}
+			//   1. 渡业台 852/16 要求“登录后第一个业务请求”，必须先执行；
+			//   2. 淬炼池 282 对上下文不敏感（裸载荷实测随时可用），随后执行；
+			//   3. 英雄副本 35/0 对上下文敏感，最后执行。
 			if p.enabled["rebirth_land"] {
 				daily.RunRebirthAltarOnLogin(ctx, p.sess)
+			}
+			if p.enabled["spirit_pool"] {
+				farming.RunSpiritPoolOnLogin(ctx, p.sess, p.factory.SpiritPoolConfig())
 			}
 			// 英雄副本 35/0 对上下文敏感：必须在其它例程查询活动面板之前执行。
 			if p.enabled["dungeon"] {
