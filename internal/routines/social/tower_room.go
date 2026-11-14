@@ -34,6 +34,9 @@ var (
 	towerRoomNow = time.Now
 )
 
+// towerRoomOpenHour 全服伏魔塔开放时段起点（14:00–23:59）。
+const towerRoomOpenHour = 14
+
 // towerRoomOpenDay 全服伏魔塔仅在周二、周四、周六开放。
 func towerRoomOpenDay(t time.Time) bool {
 	switch t.Weekday() {
@@ -44,16 +47,25 @@ func towerRoomOpenDay(t time.Time) bool {
 	}
 }
 
-// towerRoomNextOpenDelay 返回距离下一个开放日（当天 00:05）的等待时长。
+// towerRoomOpenNow 全服伏魔塔仅在周二/四/六的 14:00–23:59 开放。
+func towerRoomOpenNow(t time.Time) bool {
+	return towerRoomOpenDay(t) && t.Hour() >= towerRoomOpenHour
+}
+
+// towerRoomNextOpenDelay 返回距离下一个开放时段（开放日 14:00）的等待时长。
 func towerRoomNextOpenDelay(now time.Time) time.Duration {
-	next := time.Date(now.Year(), now.Month(), now.Day(), 0, 5, 0, 0, now.Location())
+	todayOpen := time.Date(now.Year(), now.Month(), now.Day(), towerRoomOpenHour, 0, 0, 0, now.Location())
+	if towerRoomOpenDay(todayOpen) && now.Before(todayOpen) {
+		return todayOpen.Sub(now)
+	}
+	next := todayOpen
 	for i := 0; i < 8; i++ {
 		next = next.AddDate(0, 0, 1)
 		if towerRoomOpenDay(next) {
 			break
 		}
 	}
-	if d := time.Until(next); d > 0 {
+	if d := next.Sub(now); d > 0 {
 		return d
 	}
 	return 24 * time.Hour
@@ -78,9 +90,9 @@ func NewTowerRoomRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			// 全服伏魔塔每周二、四、六开放（用户确认，2026-11-11）。
-			if !towerRoomOpenDay(towerRoomNow()) {
+			if !towerRoomOpenNow(towerRoomNow()) {
 				delay := towerRoomNextOpenDelay(towerRoomNow())
-				slog.Info("全服伏魔塔仅周二/四/六开放，等待开放日",
+				slog.Info("全服伏魔塔仅周二/四/六 14:00-23:59 开放，等待开放时段",
 					"role_id", session.RoleID(), "retry_in", delay)
 				return scheduler.NewCooldown(delay, "全服伏魔塔非开放日")
 			}

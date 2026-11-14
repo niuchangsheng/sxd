@@ -162,3 +162,29 @@ func TestTowerRoomRoutine_ClosedWeekdaySkips(t *testing.T) {
 		t.Fatalf("非开放日不应发送请求, calls=%d", calls.Load())
 	}
 }
+
+// TestTowerRoom_OpenWindow 验证开放时段：周二/四/六 14:00–23:59。
+func TestTowerRoom_OpenWindow(t *testing.T) {
+	satBefore := time.Date(2026, 11, 14, 13, 59, 0, 0, time.Local)
+	satOpen := time.Date(2026, 11, 14, 14, 0, 0, 0, time.Local)
+	satLate := time.Date(2026, 11, 14, 23, 59, 0, 0, time.Local)
+	fri := time.Date(2026, 11, 13, 15, 0, 0, 0, time.Local)
+
+	if towerRoomOpenNow(satBefore) {
+		t.Fatal("周六 13:59 不应视为开放")
+	}
+	if !towerRoomOpenNow(satOpen) || !towerRoomOpenNow(satLate) {
+		t.Fatal("周六 14:00 与 23:59 应视为开放")
+	}
+	if towerRoomOpenNow(fri) {
+		t.Fatal("周五不应视为开放")
+	}
+
+	if d := towerRoomNextOpenDelay(satBefore); d < 59*time.Second || d > 61*time.Second {
+		t.Fatalf("周六 13:59 距离开放应约 1 分钟（60s）, got %v", d)
+	}
+	want := time.Date(2026, 11, 14, 14, 0, 0, 0, time.Local).Sub(fri)
+	if d := towerRoomNextOpenDelay(fri); d != want {
+		t.Fatalf("周五 15:00 应等待到周六 14:00, got %v want %v", d, want)
+	}
+}
