@@ -154,9 +154,22 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 			// 冷却未结束时不会发包；否则第二次摘取会被服务端判为失败。
 			waitHarvestCD := func() bool {
 				query := func() int32 {
-					resp := call(protocol.BuildPlayerGetWarCdTimePacket(
-						protocol.WarCdTypePeach, session.LastActionID()),
-						protocol.ActionIDPlayerGetWarCdTime, getPeachWarCDQueryTimeout)
+					// 冷却查询为只读诊断，瞬时超时重试一次，避免单次丢包刷日志。
+					var resp *protocol.Packet
+					for attempt := 0; attempt < 2; attempt++ {
+						cCtx, cancel := context.WithTimeout(ctx, getPeachWarCDQueryTimeout)
+						r, err := session.Call(cCtx, protocol.BuildPlayerGetWarCdTimePacket(
+							protocol.WarCdTypePeach, session.LastActionID()),
+							protocol.ActionIDPlayerGetWarCdTime)
+						cancel()
+						if err == nil && r != nil {
+							resp = r
+							break
+						}
+						if attempt == 0 {
+							time.Sleep(500 * time.Millisecond)
+						}
+					}
 					if resp == nil {
 						// 冷却诊断接口异常时不阻断摘取主流程。
 						return -1
