@@ -84,3 +84,13 @@ func TestBuildEraRebirthLandPoolPanelPrevActPacket(t *testing.T) {
 		t.Fatalf("载荷长度 = %d, 期望 4", len(pkt.Payload))
 	}
 }
+
+func TestBuildEraRebirthLandTodayAwardPrevActPacket(t *testing.T) {
+	pkt := protocol.BuildEraRebirthLandTodayAwardPrevActPacket(0x0354000D)
+	if pkt.ActionID != protocol.ActionIDEraRebirthLandTodayAward || pkt.HasPrevAct {
+		t.Fatalf("852/14 PrevAct 变体封包不符: %+v", pkt)
+	}
+	if len(pkt.Payload) != 4 || pkt.Payload[3] != 0x0D {
+		t.Fatalf("852/14 PrevAct 载荷不符: %x", pkt.Payload)
+	}
+}

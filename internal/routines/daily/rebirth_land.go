@@ -79,6 +79,15 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 			// 3. 领取渡业仙池免费奖励 / 今日奖励 (852/13, 852/14)。
 			claim := func(pkt *protocol.Packet, act uint32, label string) (uint8, bool) {
 				resp := call(pkt, act)
+				if resp == nil && act == protocol.ActionIDEraRebirthLandTodayAward {
+					// 裸载荷被静默丢弃时，改用服务端最后受理动作号重试一次。
+					anchor := session.LastAckActionID()
+					resp = call(protocol.BuildEraRebirthLandTodayAwardPrevActPacket(anchor), act)
+					if resp != nil {
+						slog.Info("轮回净地今日奖励 PrevAct 变体已响应",
+							"role_id", session.RoleID(), "anchor", fmt.Sprintf("0x%08X", anchor))
+					}
+				}
 				if resp == nil {
 					slog.Info("轮回净地领取无回包", "role_id", session.RoleID(), "scene", label)
 					return 0, false

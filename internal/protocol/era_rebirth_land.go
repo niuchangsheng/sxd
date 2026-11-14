@@ -132,6 +132,17 @@ func BuildEraRebirthLandTodayAwardPacket() *Packet {
 	return NewPacket(ActionIDEraRebirthLandTodayAward, nil)
 }
 
+// BuildEraRebirthLandTodayAwardPrevActPacket 构造带显式 PrevAct 的今日奖励封包 (852/14)。
+//
+// 线上实测裸载荷 852/14 被网关静默丢弃，而同链路的 852/13 正常回包；
+// 与 852/12 一致，部分请求需要携带服务端最后受理的动作号。这里写入显式锚点
+// 且不置 HasPrevAct，避免会话用被丢弃的本地动作号覆盖。
+func BuildEraRebirthLandTodayAwardPrevActPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDEraRebirthLandTodayAward, w.Bytes())
+}
+
 // BuildEraRebirthLandDrawPacket 构造渡业台抽取封包 (852/16)。
 //
 // 线格式: Int type, Uint32 PrevAct；type 实测为 0（普通抽取）。

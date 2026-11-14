@@ -168,3 +168,48 @@ func TestRunRebirthAltarOnLogin_DrawsUntilInsufficient(t *testing.T) {
 		t.Fatalf("元宝发生变化: before=%d after=%d", beforeIngots, ingots)
 	}
 }
+
+// TestRebirthLandRoutine_TodayAwardPrevActFallback 验证 852/14 裸载荷被静默
+// 丢弃后，使用服务端最后受理动作号重试一次。
+func TestRebirthLandRoutine_TodayAwardPrevActFallback(t *testing.T) {
+	var todayBare, todayPrev atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDGameAssistantInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildGameAssistantInfoResultPacket([]protocol.DailyActivityTask{
+				{TaskID: DailyTaskRebirthLand, CurTimes: 0, MaxTimes: 1, PerActiveAdd: 20},
+			}))
+		case protocol.ActionIDEraRebirthLandPoolPanel:
+			w := protocol.NewWriter()
+			for i := 0; i < 6; i++ {
+				w.WriteInt32(0)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDEraRebirthLandDraw:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				eraDrawPayload(protocol.EraRebirthResultNotEnoughFu)))
+		case protocol.ActionIDEraRebirthLandFreeAward:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.EraRebirthResultAlreadyGet}))
+		case protocol.ActionIDEraRebirthLandTodayAward:
+			if len(pkt.Payload) == 0 {
+				todayBare.Add(1)
+				return // 模拟网关静默丢弃裸载荷
+			}
+			todayPrev.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.EraRebirthResultNoCanGetGift}))
+		case protocol.ActionIDEraRebirthLandFreeBack:
+			_ = protocol.WritePacket(conn, protocol.BuildEraRebirthFreeBackResultPacket(
+				protocol.EraRebirthResultNoFreeStorage, nil))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewRebirthLandRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("rebirth land: %v", err)
+	}
+	if todayBare.Load() != 1 || todayPrev.Load() != 1 {
+		t.Fatalf("852/14 应先裸载荷后 PrevAct 重试, bare=%d prev=%d", todayBare.Load(), todayPrev.Load())
+	}
+}
