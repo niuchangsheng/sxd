@@ -43,8 +43,8 @@ func TestBuildEraRebirthLandDrawPacket(t *testing.T) {
 	if pkt.ActionID != protocol.ActionIDEraRebirthLandDraw {
 		t.Fatalf("ActionID = 0x%08X, 期望 0x%08X", pkt.ActionID, protocol.ActionIDEraRebirthLandDraw)
 	}
-	if pkt.HasPrevAct {
-		t.Fatal("852/16 必须保持显式 PrevAct，不能被会话层改写")
+	if !pkt.HasPrevAct {
+		t.Fatal("852/16 必须由会话层用最近发送动作覆盖 PrevAct")
 	}
 	want := []byte{0x00, 0x00, 0x00, 0x00, 0x03, 0x54, 0x00, 0x0c}
 	if len(pkt.Payload) != len(want) {
