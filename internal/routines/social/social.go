@@ -113,7 +113,8 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					if cErr != nil || ctxResp == nil {
 						slog.Info("结缘宝箱上下文握手无回包（活动未开放或不在可开箱时段），稍后重试",
 							"role_id", session.RoleID(), "err", cErr)
-						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱上下文握手无回包")
+						// 活动窗口无公开接口可查，30 分钟轮询以便在开启后尽快开箱。
+						return scheduler.NewCooldown(30*time.Minute, "结缘宝箱活动未开放")
 					}
 					ctxCode, ctxParseErr := protocol.ParseJieYuanOpenContextResult(ctxResp.Payload)
 					if ctxParseErr != nil {
