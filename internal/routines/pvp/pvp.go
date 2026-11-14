@@ -470,8 +470,9 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 	)
 
 	if panel.ReduceChallengeCount <= 0 {
+		// 面板显示今日挑战次数为 0，挂起至次日避免每轮重复打开跨服面板。
 		slog.Info("仙界竞技场今日挑战次数已用尽", "role_id", session.RoleID())
-		return nil
+		return scheduler.ErrAttemptsExhausted
 	}
 
 	// 3. 对手列表为空且仍有刷新次数时，主动刷新一次。

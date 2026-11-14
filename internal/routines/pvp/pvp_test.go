@@ -723,6 +723,25 @@ func TestCelestialArenaRoutine_NoChallengeTimesSuspends(t *testing.T) {
 	}
 }
 
+// TestCelestialArenaRoutine_ZeroTimesFromPanelSuspends 验证面板直接返回 0 次挑战时
+// 不发起挑战并挂起至次日。
+func TestCelestialArenaRoutine_ZeroTimesFromPanelSuspends(t *testing.T) {
+	session, challengeCalls := startStArenaMock(t, stArenaMockConfig{
+		initialTimes:    0,
+		challengeResult: protocol.StArenaResultSuccess,
+		replyChallenge:  true,
+	})
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer execCancel()
+	if err := NewCelestialArenaRoutine().Execute(execCtx, session, nil); !errors.Is(err, scheduler.ErrAttemptsExhausted) {
+		t.Fatalf("面板次数为 0 应返回 ErrAttemptsExhausted, 实际: %v", err)
+	}
+	if got := challengeCalls.Load(); got != 0 {
+		t.Errorf("次数为 0 时不应发起挑战, 实际 %d 次", got)
+	}
+}
+
 // TestWorldBossRoutine_MaxTimesSuspends 验证「今日参战次数已满」时返回
 // ErrAttemptsExhausted 挂起至次日，而不是每 5 分钟重复发起参战。
 func TestWorldBossRoutine_MaxTimesSuspends(t *testing.T) {
