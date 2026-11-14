@@ -723,6 +723,83 @@ func TestCelestialArenaRoutine_NoChallengeTimesSuspends(t *testing.T) {
 	}
 }
 
+// TestWorldBossRoutine_MaxTimesSuspends 验证「今日参战次数已满」时返回
+// ErrAttemptsExhausted 挂起至次日，而不是每 5 分钟重复发起参战。
+func TestWorldBossRoutine_MaxTimesSuspends(t *testing.T) {
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() { _ = c1.Close(); _ = c2.Close() })
+
+	var fightCalls atomic.Int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(c2)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerLogin:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerLogin, []byte{
+					0x00, 0x00, 0x00, 0x00, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x00, 0x10, 0x85, 0x01,
+				}))
+			case protocol.ActionIDPlayerInitStep1:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep1,
+					[]byte{0x00, 0x00, 0x13, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x13, 0x0f, 0x00, 0x00, 0x13, 0x12}))
+			case protocol.ActionIDPlayerInitStep2:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00}))
+			case protocol.ActionIDPlayerInitStep3:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep3, make([]byte, 8)))
+			case protocol.ActionIDPlayerGetInfo:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerGetInfo, []byte{
+					0x00, 0x09, 0xe6, 0xa2, 0xa6, 0xe4, 0xb8, 0x80, 0xe5, 0x9c, 0xba,
+					0x00, 0x00, 0x01, 0x2c,
+					0x00, 0x00, 0x9a, 0x37,
+					0x00, 0x00, 0x00, 0x08, 0x6f, 0x93, 0xac, 0xf8,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0a, 0xd1,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0f, 0x99,
+					0x00, 0x00, 0x01, 0x2c,
+				}))
+			case protocol.ActionHeartbeat:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+			case protocol.ActionIDWorldBossList:
+				_ = protocol.WritePacket(c2, protocol.BuildWorldBossListResultPacket([]protocol.WorldBossEntry{{
+					BossID: 1, MapID: 1, Level: 100, State: protocol.WorldBossStateOpen,
+				}}))
+			case protocol.ActionIDWorldBossFight:
+				fightCalls.Add(1)
+				_ = protocol.WritePacket(c2, protocol.BuildWorldBossFightResultPacket(protocol.WorldBossResultMaxTimes))
+			}
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role_world_boss_maxtimes",
+		RoleName:   "世界Boss次数测试",
+		ServerAddr: "world-boss-maxtimes-pipe",
+		Dialer:     func(ctx context.Context, network, addr string) (net.Conn, error) { return c1, nil },
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("启动测试会话失败: %v", err)
+	}
+	t.Cleanup(session.Close)
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("会话未进入激活态: %s", session.State())
+	}
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer execCancel()
+	if err := NewWorldBossRoutine().Execute(execCtx, session, nil); !errors.Is(err, scheduler.ErrAttemptsExhausted) {
+		t.Fatalf("参战次数已满应返回 ErrAttemptsExhausted, 实际: %v", err)
+	}
+	if got := fightCalls.Load(); got != 1 {
+		t.Errorf("次数已满后应停止参战, 实际发起 %d 次", got)
+	}
+}
+
 // TestWorldBossRoutine_Executes 覆盖世界 Boss 巡检与开战参战成功路径。
 func TestWorldBossRoutine_Executes(t *testing.T) {
 	session := client.NewRoleSession(client.SessionConfig{

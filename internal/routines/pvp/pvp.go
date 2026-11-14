@@ -1033,6 +1033,11 @@ func NewWorldBossRoutine() scheduler.ActivityRoutine {
 			case protocol.WorldBossResultNotEnoughIngot:
 				slog.Warn("世界Boss参战提示元宝不足 (自动化不主动消耗元宝)",
 					"role_id", session.RoleID(), "boss_id", open.BossID)
+			case protocol.WorldBossResultMaxTimes:
+				// 今日参战次数已满：挂起至次日，避免每次调度都重复发起参战。
+				slog.Info("世界Boss今日参战次数已满，今日不再参战",
+					"role_id", session.RoleID(), "boss_id", open.BossID)
+				return scheduler.ErrAttemptsExhausted
 			default:
 				slog.Info("世界Boss参战未成功",
 					"role_id", session.RoleID(),
