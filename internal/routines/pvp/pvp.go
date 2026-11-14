@@ -417,8 +417,7 @@ func NewCelestialArenaRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			slog.Info("正在执行对抗任务: 仙界竞技场自动积分赛挑战", "role_id", session.RoleID())
-			runStArenaChallenge(ctx, session, jitter)
-			return nil
+			return runStArenaChallenge(ctx, session, jitter)
 		},
 	)
 }
@@ -426,7 +425,7 @@ func NewCelestialArenaRoutine() scheduler.ActivityRoutine {
 // runStArenaChallenge 在仙界跨服连接上完成一轮竞技场积分赛挑战。
 //
 // 跨服凭据缺失或节点登录失败时仅记录日志并跳过，不阻断主服日常任务批次。
-func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) {
+func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 	// 单轮最多消耗 30 次挑战，叠加拟人抖动后可能持续数分钟，预留充足预算；
 	// 外层调度 ctx 若先到期会提前取消。
 	crossCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -438,14 +437,14 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 	credCancel()
 	if err != nil {
 		slog.Debug("仙界竞技场不可用，跳过", "role_id", session.RoleID(), "error", err)
-		return
+		return nil
 	}
 
 	// 2. 建立仙界跨服会话并调用 Mod 214。
 	cross, err := session.OpenCrossServerSessionWithInfo(crossCtx, cred)
 	if err != nil {
 		slog.Warn("仙界竞技场跨服会话建立失败", "role_id", session.RoleID(), "error", err)
-		return
+		return nil
 	}
 	defer cross.Close()
 
@@ -458,7 +457,7 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 	panel, err := loadStArenaPanel(call)
 	if err != nil {
 		slog.Warn("打开仙界竞技场面板失败", "role_id", session.RoleID(), "error", err)
-		return
+		return nil
 	}
 	slog.Info("仙界竞技场面板已打开",
 		"role_id", session.RoleID(),
@@ -472,23 +471,23 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 
 	if panel.ReduceChallengeCount <= 0 {
 		slog.Info("仙界竞技场今日挑战次数已用尽", "role_id", session.RoleID())
-		return
+		return nil
 	}
 
 	// 3. 对手列表为空且仍有刷新次数时，主动刷新一次。
 	if len(panel.ChallengeList) == 0 {
 		if panel.ReduceRefreshTime <= 0 {
 			slog.Info("仙界竞技场暂无可挑战对手且刷新次数已用尽", "role_id", session.RoleID())
-			return
+			return nil
 		}
 		panel, err = refreshStArenaOpponents(call, panel)
 		if err != nil {
 			slog.Warn("刷新仙界竞技场对手列表失败", "role_id", session.RoleID(), "error", err)
-			return
+			return nil
 		}
 		if len(panel.ChallengeList) == 0 {
 			slog.Info("仙界竞技场刷新后仍无可挑战对手", "role_id", session.RoleID())
-			return
+			return nil
 		}
 	}
 
@@ -500,13 +499,13 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 	for battle := 1; remaining > 0 && battle <= stArenaMaxBattles; battle++ {
 		if err := ctx.Err(); err != nil {
 			slog.Info("仙界竞技场挑战已取消，提前退出", "role_id", session.RoleID(), "error", err)
-			return
+			return nil
 		}
 
 		target, ok := SelectStArenaOpponent(panel.ChallengeList)
 		if !ok {
 			slog.Info("仙界竞技场暂无可挑战对手", "role_id", session.RoleID())
-			return
+			return nil
 		}
 		slog.Info("仙界竞技场锁定最弱对手",
 			"role_id", session.RoleID(),
@@ -523,7 +522,7 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 		})
 		if err != nil {
 			slog.Warn("构造仙界竞技场挑战封包失败", "role_id", session.RoleID(), "error", err)
-			return
+			return nil
 		}
 
 		beforeIntegral := panel.Integral
@@ -542,11 +541,11 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 					"error", err,
 					"reconcile_error", rErr,
 				)
-				return
+				return nil
 			}
 			if reconciled.ReduceChallengeCount >= remaining {
 				slog.Warn("仙界竞技场挑战无结算回包", "role_id", session.RoleID(), "target_player_id", target.StPlayerID, "error", err)
-				return
+				return nil
 			}
 			slog.Warn("仙界竞技场挑战回包超时但服务端已扣次，按已结算继续",
 				"role_id", session.RoleID(),
@@ -560,7 +559,7 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 			result, pErr := protocol.ParseStArenaChallengeResult(resp.Payload)
 			if pErr != nil {
 				slog.Warn("解析仙界竞技场挑战结果失败", "role_id", session.RoleID(), "error", pErr)
-				return
+				return nil
 			}
 			if !result.Success() {
 				switch result.Result {
@@ -570,39 +569,40 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 					if staleRetries > stArenaMaxStaleRetries {
 						slog.Info("仙界竞技场目标持续不在列表，结束本轮挑战",
 							"role_id", session.RoleID(), "result", result.Result, "retries", staleRetries)
-						return
+						return nil
 					}
 					panel, err = loadStArenaPanel(call)
 					if err != nil {
 						slog.Warn("重新拉取仙界竞技场面板失败", "role_id", session.RoleID(), "error", err)
-						return
+						return nil
 					}
 					if len(panel.ChallengeList) == 0 && panel.ReduceRefreshTime > 0 {
 						panel, err = refreshStArenaOpponents(call, panel)
 						if err != nil {
 							slog.Warn("刷新仙界竞技场对手列表失败", "role_id", session.RoleID(), "error", err)
-							return
+							return nil
 						}
 					}
 					continue
 				case protocol.StArenaResultCDTime:
 					slog.Info("仙界竞技场挑战冷却中，结束本轮挑战",
 						"role_id", session.RoleID(), "target_player_id", target.StPlayerID)
-					return
+					return nil
 				case protocol.StArenaResultFuncEnd:
-					slog.Info("仙界竞技场不在积分赛阶段或功能已关闭，结束本轮挑战",
+					slog.Info("仙界竞技场不在积分赛阶段或功能已关闭，30 分钟后再试",
 						"role_id", session.RoleID(), "result", result.Result)
-					return
+					return scheduler.NewCooldown(30*time.Minute, "仙界竞技场非积分赛阶段")
 				case protocol.StArenaResultNotEnoughChallengeTimes:
-					slog.Info("仙界竞技场挑战次数不足，结束本轮挑战", "role_id", session.RoleID())
-					return
+					// 当日挑战次数已耗尽，挂起至次日重置，避免每个调度周期重复打开面板。
+					slog.Info("仙界竞技场挑战次数不足，今日不再挑战", "role_id", session.RoleID())
+					return scheduler.ErrAttemptsExhausted
 				default:
 					slog.Info("仙界竞技场挑战被服务端拒绝，结束本轮挑战",
 						"role_id", session.RoleID(),
 						"target_player_id", target.StPlayerID,
 						"result", result.Result,
 					)
-					return
+					return nil
 				}
 			}
 		}
@@ -615,7 +615,7 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 			refreshed, rErr = loadStArenaPanel(call)
 			if rErr != nil {
 				slog.Warn("仙界竞技场结算后刷新面板失败", "role_id", session.RoleID(), "error", rErr)
-				return
+				return nil
 			}
 		}
 		if report := findStArenaReport(refreshed.ReportList, playerID, target.StPlayerID); report != nil {
@@ -651,7 +651,7 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 				"before_times", remaining,
 				"after_times", refreshed.ReduceChallengeCount,
 			)
-			return
+			return nil
 		}
 		remaining = refreshed.ReduceChallengeCount
 		panel = refreshed
@@ -664,9 +664,10 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 	if remaining > 0 {
 		slog.Warn("仙界竞技场达到单轮挑战上限，剩余次数留待下次调度",
 			"role_id", session.RoleID(), "remaining", remaining)
-		return
+		return nil
 	}
 	slog.Info("仙界竞技场挑战次数已用尽", "role_id", session.RoleID(), "remaining", remaining)
+	return nil
 }
 
 // loadStArenaPanel 打开仙界竞技场面板并解析完整状态。

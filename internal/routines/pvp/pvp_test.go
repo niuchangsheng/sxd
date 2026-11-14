@@ -6,6 +6,7 @@ package pvp
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -676,6 +677,49 @@ func TestCelestialArenaRoutine_NotInListReloadsPanel(t *testing.T) {
 	want := int32(stArenaMaxStaleRetries + 1)
 	if got := challengeCalls.Load(); got != want {
 		t.Errorf("NOT_IN_LIST 应按最大重试次数重拉面板后退出, 期望 %d 次挑战, 实际 %d 次", want, got)
+	}
+}
+
+// TestCelestialArenaRoutine_FuncEndCooldown 验证结果码 15 (FUNC_END，非积分赛阶段)
+// 会返回 30 分钟冷却而不是每个调度周期重复打开面板；只发起一次挑战。
+func TestCelestialArenaRoutine_FuncEndCooldown(t *testing.T) {
+	session, challengeCalls := startStArenaMock(t, stArenaMockConfig{
+		initialTimes:    5,
+		challengeResult: protocol.StArenaResultFuncEnd,
+		replyChallenge:  true,
+	})
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer execCancel()
+	err := NewCelestialArenaRoutine().Execute(execCtx, session, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("FUNC_END 应返回 CooldownError, 实际: %v", err)
+	}
+	if wait := time.Until(cd.Until); wait < 25*time.Minute || wait > 35*time.Minute {
+		t.Fatalf("冷却时长应在 30 分钟附近, 实际 %v", wait)
+	}
+	if got := challengeCalls.Load(); got != 1 {
+		t.Errorf("FUNC_END 后应停止挑战, 实际发起 %d 次", got)
+	}
+}
+
+// TestCelestialArenaRoutine_NoChallengeTimesSuspends 验证挑战次数不足时
+// 返回 ErrAttemptsExhausted 挂起至次日，避免无意义轮询。
+func TestCelestialArenaRoutine_NoChallengeTimesSuspends(t *testing.T) {
+	session, challengeCalls := startStArenaMock(t, stArenaMockConfig{
+		initialTimes:    5,
+		challengeResult: protocol.StArenaResultNotEnoughChallengeTimes,
+		replyChallenge:  true,
+	})
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer execCancel()
+	if err := NewCelestialArenaRoutine().Execute(execCtx, session, nil); !errors.Is(err, scheduler.ErrAttemptsExhausted) {
+		t.Fatalf("次数不足应返回 ErrAttemptsExhausted, 实际: %v", err)
+	}
+	if got := challengeCalls.Load(); got != 1 {
+		t.Errorf("次数不足后应停止挑战, 实际发起 %d 次", got)
 	}
 }
 
