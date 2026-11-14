@@ -1997,6 +1997,11 @@ func NewGourdRealmRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 //
 // 先查询批量炼化信息；字段语义依赖客户端资源 SWF，当前只做数据检测，
 // 语义对齐前不执行 batch_rune_use，避免误消耗符文/元宝。
+// runeRefineBlocked 标记本会话内符文批量炼化不可用。
+// s1（95 级）16/3 稳定超时，而 s0（300 级）正常返回；按会话缓存避免每
+// 45 分钟固定丢包。
+var runeRefineBlocked sync.Map // *client.RoleSession -> bool
+
 func NewRuneRefineRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
@@ -2013,11 +2018,16 @@ func NewRuneRefineRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			if _, blocked := runeRefineBlocked.Load(session); blocked {
+				slog.Debug("符文批量炼化本会话不可用，跳过", "role_id", session.RoleID())
+				return nil
+			}
 			cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
 			resp, err := session.Call(cCtx, protocol.BuildRuneBatchListPacket(), protocol.ActionIDRuneBatchList)
 			cCancel()
 			if err != nil {
-				slog.Info("符文炼化功能不可用，跳过", "role_id", session.RoleID(), "err", err)
+				runeRefineBlocked.Store(session, true)
+				slog.Info("符文炼化功能不可用，本会话跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
 			info, err := protocol.ParseRuneBatchListResult(resp.Payload)
