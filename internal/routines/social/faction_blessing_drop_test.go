@@ -46,3 +46,27 @@ func TestFactionLuckyWheelRoutine_PanelSilentDropCooldownNotPermanent(t *testing
 		t.Fatal("瞬断不应标记帮派模块永久不可用")
 	}
 }
+
+func TestFactionLuckyWheelRoutine_NoFactionProbeMarksUnavailable(t *testing.T) {
+	oldTimeout := factionLuckyWheelOpenTimeout
+	factionLuckyWheelOpenTimeout = 150 * time.Millisecond
+	defer func() { factionLuckyWheelOpenTimeout = oldTimeout }()
+
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		// 转盘面板静默丢弃；免费白檀香探测返回“无此帮派成员”。
+		if pkt.ActionID == protocol.ActionIDFactionIncense {
+			_ = protocol.WritePacket(conn,
+				protocol.NewPacket(pkt.ActionID, []byte{protocol.FactionIncenseResultMemberNotExist}))
+		}
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := NewFactionLuckyWheelRoutine().Execute(ctx, sess, nil); err != nil {
+		t.Fatalf("确认无帮派应静默跳过, 实际: %v", err)
+	}
+	if !sess.IsFactionFeatureUnavailable() {
+		t.Fatal("上香探测返回 MEMBER_NOT_EXIST 时应标记帮派模块不可用")
+	}
+}

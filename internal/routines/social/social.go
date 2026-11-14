@@ -482,6 +482,9 @@ func factionIncenseResultText(result uint8) string {
 // maxLuckyWheelSpins 单次调度的最大转盘次数，防止服务端异常未扣减青龙令时死循环。
 const maxLuckyWheelSpins = 100
 
+// factionLuckyWheelOpenTimeout 转盘面板 (69/1) 的等待时长；单测可缩短。
+var factionLuckyWheelOpenTimeout = 8 * time.Second
+
 // NewFactionLuckyWheelRoutine 构造帮派转盘自动抽奖任务。
 //
 // 协议对齐 2026 客户端 Mod_LuckyWheel_Base:
@@ -509,15 +512,44 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 
 			// 1. 查询转盘状态与剩余青龙令 (Mod 69, Act 1)
 			openPkt := protocol.BuildLuckyWheelOpenPacket(protocol.ActionIDTownEnter)
-			openCtx, openCancel := context.WithTimeout(ctx, 8*time.Second)
+			openCtx, openCancel := context.WithTimeout(ctx, factionLuckyWheelOpenTimeout)
 			openResp, openErr := session.Call(openCtx, openPkt, protocol.ActionIDLuckyWheelOpen)
 			openCancel()
 			if openErr != nil || openResp == nil {
 				if errors.Is(openErr, context.DeadlineExceeded) {
-					// 单次丢包可能只是瞬断，不能直接永久禁用帮派模块。
-					slog.Info("帮派转盘面板无回包，稍后重试",
+					// 面板 (69/1) 在未加入帮派的角色上会被服务端静默丢弃。
+					// 若并发执行的帮派祭神例程已判定无帮派，直接跳过，避免每轮空等。
+					if session.IsFactionFeatureUnavailable() {
+						slog.Info("帮派模块对当前角色不可用，跳过帮派转盘", "role_id", session.RoleID())
+						return nil
+					}
+					// 用免费白檀香探测结果码，区分“未加入帮派”和偶发丢包。
+					probeCtx, probeCancel := context.WithTimeout(ctx, 8*time.Second)
+					probeResp, probeErr := session.Call(probeCtx,
+						protocol.BuildFactionIncensePacket(protocol.FactionOfferingWhiteSandalwood),
+						protocol.ActionIDFactionIncense)
+					probeCancel()
+					if probeErr == nil && probeResp != nil {
+						if code, pErr := protocol.ParseFactionIncenseResult(probeResp.Payload); pErr == nil {
+							switch code {
+							case protocol.FactionIncenseResultMemberNotExist, protocol.FactionIncenseResultFactionNotExist:
+								session.MarkFactionFeatureUnavailable()
+								slog.Info("帮派转盘无回包，免费白檀香返回“无此帮派成员/帮派”，确认未加入帮派，跳过",
+									"role_id", session.RoleID(), "result_code", code)
+							case protocol.FactionIncenseResultSuccess, protocol.FactionIncenseResultCountUsed:
+								slog.Info("帮派转盘面板无回包，但帮派上下文正常，稍后重试",
+									"role_id", session.RoleID(), "result_code", code)
+							default:
+								slog.Info("帮派转盘面板无回包，上香探测返回未知结果码",
+									"role_id", session.RoleID(), "result_code", code)
+							}
+							return nil
+						}
+					}
+					// 两次请求均无回包不能判定未入帮派，避免把帮派模块永久禁用。
+					slog.Info("帮派转盘面板与上香探测均无回包，可能为瞬断，稍后重试",
 						"role_id", session.RoleID())
-					return scheduler.NewCooldown(30*time.Minute, "帮派转盘面板无回包")
+					return scheduler.NewCooldown(30*time.Minute, "帮派转盘面板与探测均无回包")
 				}
 				slog.Warn("查询帮派转盘状态失败，稍后重试", "role_id", session.RoleID(), "err", openErr)
 				return scheduler.NewCooldown(30*time.Minute, "帮派转盘状态查询失败")
