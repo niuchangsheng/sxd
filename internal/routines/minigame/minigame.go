@@ -2932,8 +2932,9 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 
 			// 2.1 设置优先使用免费次数 (Mod 594, Act 4) 必须紧跟在主面板/领钥匙之后、
 			// 任何养成面板采集之前发送。线上实测: Mod 57 请求以及动态选奖采集的
-			// 养成面板请求都会让服务端进入其他上下文，随后 Act 4 被静默丢弃，
-			// 整轮免费抽奖因此被跳过。设置失败时直接放弃抽奖，避免误扣元宝。
+			// 养成面板请求都会让服务端进入其他上下文，随后 Act 4 被静默丢弃。
+			// 2026-11-14 进一步验证：官方裸 1 字节与旧的 8 字节载荷均无回包，
+			// 确认为服务端上下文/资格限制；设置失败时放弃抽奖，避免误扣元宝。
 			flagResp := call(protocol.BuildTreasureHouseUseFreeFlagPacket(1, prevAct),
 				protocol.ActionIDTreasureHouseSetUseFreeFlag, 8*time.Second)
 			if flagResp == nil {
