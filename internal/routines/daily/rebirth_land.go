@@ -203,6 +203,10 @@ func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
 		defer cancel()
 		resp, err := session.Call(cCtx, pkt, act)
 		if err != nil {
+			// 会话正在重连时请求根本没有发出，不计为服务端静默丢包。
+			if session.State() != client.StateActive {
+				return nil
+			}
 			slog.Info("登录后渡业台协议无回包", "role_id", session.RoleID(),
 				"action", act, "err", err)
 			return nil
@@ -217,6 +221,9 @@ func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
 	}
 	if cooldown != nil {
 		slog.Info("登录后渡业台抽取未完成", "role_id", session.RoleID())
+		// 会话重连导致登录钩子未完成时撤销标记，让后续定时任务重新尝试，
+		// 否则本进程内渡业台将永久跳过。
+		altarAttempted.Delete(session)
 	}
 }
 
