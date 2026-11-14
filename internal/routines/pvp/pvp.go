@@ -1219,11 +1219,13 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 				return fmt.Errorf("解析跨服PK状态失败: %w", err)
 			}
 			if status.Status != protocol.WorldPkStatusOn {
-				slog.Info("跨服PK当前未开放，稍后重试",
+				wake := nextWorldPkOpenAt(time.Now())
+				slog.Info("跨服PK当前未开放，等待下次开放",
 					"role_id", session.RoleID(),
 					"status", status.Status,
+					"wake_at", wake,
 				)
-				return scheduler.NewCooldown(time.Hour, "跨服PK未开放")
+				return scheduler.NewCooldown(time.Until(wake), "跨服PK未开放")
 			}
 
 			// 领取奖励必须在 join_pk 之前，避免进入匹配队列后奖励请求被丢弃。
@@ -1300,6 +1302,18 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 }
 
 // 跨服PK匹配等待时间（单测可缩短）。
+// worldPkOpenHour 阶位赛每日开放时刻（用户观察约 20:00）。
+const worldPkOpenHour = 20
+
+// nextWorldPkOpenAt 返回下一次阶位赛开放时刻：当天 20:00，已过则次日 20:00。
+func nextWorldPkOpenAt(now time.Time) time.Time {
+	open := time.Date(now.Year(), now.Month(), now.Day(), worldPkOpenHour, 0, 0, 0, now.Location())
+	if !now.Before(open) {
+		open = open.AddDate(0, 0, 1)
+	}
+	return open
+}
+
 var (
 	worldPkBattleWait = 10 * time.Second
 	worldPkCDWait     = 1200 * time.Millisecond

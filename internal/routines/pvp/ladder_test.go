@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
@@ -121,5 +122,21 @@ func TestCrossServerLadderRoutine_OffSkipsRewards(t *testing.T) {
 	}
 	if claimCalls.Load() != 0 {
 		t.Fatalf("OFF 时不应领取奖励, calls = %d", claimCalls.Load())
+	}
+}
+
+func TestNextWorldPkOpenAt(t *testing.T) {
+	loc := time.Local
+	before := time.Date(2026, 11, 14, 19, 30, 0, 0, loc)
+	if got, want := nextWorldPkOpenAt(before), time.Date(2026, 11, 14, 20, 0, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("开放前应唤醒当天 20:00, got %v want %v", got, want)
+	}
+	after := time.Date(2026, 11, 14, 22, 30, 0, 0, loc)
+	if got, want := nextWorldPkOpenAt(after), time.Date(2026, 11, 15, 20, 0, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("关闭后应唤醒次日 20:00, got %v want %v", got, want)
+	}
+	atOpen := time.Date(2026, 11, 14, 20, 0, 0, 0, loc)
+	if got, want := nextWorldPkOpenAt(atOpen), time.Date(2026, 11, 15, 20, 0, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("整点 20:00 应指向次日, got %v want %v", got, want)
 	}
 }
