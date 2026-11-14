@@ -197,6 +197,12 @@ func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
 	if _, loaded := altarAttempted.LoadOrStore(session, true); loaded {
 		return
 	}
+	// 会话激活后服务端场景/动作链仍需短暂稳定；过早发包会被静默丢弃。
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(time.Second):
+	}
 	const callTimeout = 8 * time.Second
 	call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 		cCtx, cancel := context.WithTimeout(ctx, callTimeout)
@@ -286,6 +292,8 @@ func runAltarDraws(
 	ingotsBefore := session.GetPlayerState().Ingots
 	draws := 0
 	var drawCooldown error
+	// 面板与抽取之间、连续抽取之间节流，避免服务端频率限制导致静默丢包。
+	time.Sleep(500 * time.Millisecond)
 	for draws < maxAltarDrawsPerRun && ctx.Err() == nil {
 		drawPkt := protocol.BuildEraRebirthLandDrawPacket(0, session.LastActionID())
 		slog.Info("轮回净地渡业台抽取请求", "role_id", session.RoleID(), "draws", draws,
@@ -310,6 +318,8 @@ func runAltarDraws(
 		draws++
 		slog.Info("渡业台抽取成功", "role_id", session.RoleID(),
 			"draws", draws, "first", res.First, "second", res.Second)
+		// 连续抽取之间节流，避免触发服务端频率限制。
+		time.Sleep(700 * time.Millisecond)
 	}
 	if ingotsAfter := session.GetPlayerState().Ingots; ingotsAfter != ingotsBefore {
 		slog.Error("渡业台抽取导致元宝变化，疑似协议漂移，立即熔断",
