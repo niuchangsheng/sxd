@@ -968,16 +968,32 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 			slog.Info("住宅状态", "role_id", session.RoleID(), "self_result", selfResult,
 				"payload_hex", hex.EncodeToString(selfResp.Payload))
 
-			// 210/18 需要家园场景上下文：先按官方客户端调用 get_player_home_info。
-			// 缺少该前置时 210/18 会被服务端静默丢弃（2026-11-14 s1 实测）。
+			// 210/0 的返回值无法判定婚姻状态；用免费家园蛋糕 (210/19) 的结果码
+			// 探测：3=未结婚/无家园，此时不再请求 210/18（会静默丢弃）。
 			pCtx, pCancel := context.WithTimeout(ctx, callTimeout)
-			homeResp, pErr := session.Call(pCtx,
-				protocol.BuildMarryHomePlayerInfoPacket(session.PlayerID()),
-				protocol.ActionIDMarryHomePlayerInfo)
+			cakeResp, pErr := session.Call(pCtx,
+				protocol.BuildMarryHomeGetCakePacket(session.PlayerID()),
+				protocol.ActionIDMarryHomeGetCake)
 			pCancel()
-			if pErr != nil || homeResp == nil {
-				slog.Info("住宅信息查询无回包，稍后重试", "role_id", session.RoleID(), "err", pErr)
-				return scheduler.NewCooldown(2*time.Hour, "住宅信息无回包")
+			if pErr != nil || cakeResp == nil {
+				slog.Info("住宅婚姻状态探测无回包，稍后重试", "role_id", session.RoleID(), "err", pErr)
+				return scheduler.NewCooldown(2*time.Hour, "住宅婚姻状态探测无回包")
+			}
+			cakeRes, cErr := protocol.ParseMarryHomeCakeResult(cakeResp.Payload)
+			if cErr != nil {
+				slog.Warn("解析住宅蛋糕结果失败，稍后重试", "role_id", session.RoleID(), "err", cErr)
+				return scheduler.NewCooldown(30*time.Minute, "住宅蛋糕结果解析失败")
+			}
+			switch cakeRes.Result {
+			case protocol.MarryHomeResultNonMarryStatus:
+				slog.Info("家园蛋糕返回未结婚/无家园，跳过家具效果", "role_id", session.RoleID())
+				return scheduler.ErrAttemptsExhausted
+			case protocol.MarryHomeResultFunctionNoOpen:
+				slog.Info("家园功能未开放，跳过家具效果", "role_id", session.RoleID())
+				return scheduler.ErrAttemptsExhausted
+			case protocol.MarryHomeResultNonActivityTime:
+				slog.Info("家园活动未开放，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(2*time.Hour, "家园活动未开放")
 			}
 
 			bCtx, bCancel := context.WithTimeout(ctx, callTimeout)
