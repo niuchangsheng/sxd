@@ -26,6 +26,9 @@ import (
 
 const towerRoomCallTimeout = 10 * time.Second
 
+// towerRoomMaxBattles 单轮最多连续战斗场次（抓包中为 3 场）。
+const towerRoomMaxBattles = 3
+
 // 步骤间隔与进入战斗等待，测试中可缩短。
 var (
 	towerRoomStepGap  = 2 * time.Second
@@ -178,8 +181,53 @@ func NewTowerRoomRoutine() scheduler.ActivityRoutine {
 					"result", code, "result_text", protocol.TowerRoomResultText(code))
 				return nil
 			}
-			slog.Info("全服伏魔塔首场战斗已进入，后续楼层挑战动作待抓包补齐",
+			slog.Info("全服伏魔塔首场战斗已进入",
 				"role_id", session.RoleID(), "room_id", createRes.RoomID)
+
+			// 5. 战斗循环：341/15 开始战斗 -> 服务端推送 341/14 战报与
+			// 341/17 结果 -> 341/13 进入下一场。抓包中单轮连续 3 场。
+			battles := 0
+			for battles < towerRoomMaxBattles {
+				if ctx.Err() != nil {
+					return nil
+				}
+				startResp := call(protocol.BuildTowerRoomStartBattlePacket(session.LastActionID()))
+				if startResp == nil {
+					return scheduler.NewCooldown(15*time.Minute, "全服伏魔塔开始战斗无回包")
+				}
+				if code, ok := firstResult(startResp); !ok {
+					slog.Warn("全服伏魔塔开始战斗回包为空", "role_id", session.RoleID())
+					return nil
+				} else if code != protocol.TowerRoomResultSuccess {
+					slog.Info("全服伏魔塔开始战斗未成功", "role_id", session.RoleID(),
+						"result", code, "result_text", protocol.TowerRoomResultText(code))
+					return nil
+				}
+				battles++
+				slog.Info("全服伏魔塔战斗已开始", "role_id", session.RoleID(), "battles", battles)
+
+				if err := waitGap(ctx, towerRoomStepGap); err != nil {
+					return nil
+				}
+				if battles >= towerRoomMaxBattles {
+					break
+				}
+				nextResp := call(protocol.BuildTowerRoomNextPacket(session.LastActionID()))
+				if nextResp == nil {
+					return scheduler.NewCooldown(15*time.Minute, "全服伏魔塔进入下一场无回包")
+				}
+				if code, ok := firstResult(nextResp); !ok {
+					slog.Warn("全服伏魔塔进入下一场回包为空", "role_id", session.RoleID())
+					return nil
+				} else if code != protocol.TowerRoomResultSuccess {
+					slog.Info("全服伏魔塔进入下一场未成功，结束本轮",
+						"role_id", session.RoleID(), "result", code,
+						"result_text", protocol.TowerRoomResultText(code))
+					break
+				}
+			}
+			slog.Info("全服伏魔塔本轮战斗完成",
+				"role_id", session.RoleID(), "room_id", createRes.RoomID, "battles", battles)
 			return nil
 		},
 	)

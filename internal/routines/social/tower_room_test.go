@@ -29,7 +29,7 @@ func shortenTowerRoomGaps(t *testing.T) {
 func TestTowerRoomRoutine_HappyPath(t *testing.T) {
 	shortenTowerRoomGaps(t)
 
-	var createCalls, unsealCalls, enterCalls atomic.Int32
+	var createCalls, unsealCalls, enterCalls, battleCalls atomic.Int32
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDTowerRoomOpen:
@@ -44,6 +44,9 @@ func TestTowerRoomRoutine_HappyPath(t *testing.T) {
 		case protocol.ActionIDTowerRoomNext:
 			enterCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{4}))
+		case protocol.ActionIDTowerRoomStartBattle:
+			battleCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{4}))
 		}
 	})
 	defer sess.Close()
@@ -51,9 +54,10 @@ func TestTowerRoomRoutine_HappyPath(t *testing.T) {
 	if err := NewTowerRoomRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("tower room routine: %v", err)
 	}
-	if createCalls.Load() != 1 || unsealCalls.Load() != 1 || enterCalls.Load() != 1 {
-		t.Fatalf("调用次数 create=%d unseal=%d enter=%d, 期望各 1 次",
-			createCalls.Load(), unsealCalls.Load(), enterCalls.Load())
+	// 首场进入 1 次 + 两场之间各进入 1 次 = 3 次；开始战斗 3 场。
+	if createCalls.Load() != 1 || unsealCalls.Load() != 1 || enterCalls.Load() != 3 || battleCalls.Load() != 3 {
+		t.Fatalf("调用次数 create=%d unseal=%d enter=%d battle=%d, 期望 1/1/3/3",
+			createCalls.Load(), unsealCalls.Load(), enterCalls.Load(), battleCalls.Load())
 	}
 }
 

@@ -26,8 +26,14 @@ const (
 	ActionIDTowerRoomCreate uint32 = 0x01550004
 	// ActionIDTowerRoomUnseal 解除封印 (341/12)，实测。
 	ActionIDTowerRoomUnseal uint32 = 0x0155000C
-	// ActionIDTowerRoomNext 解除封印后的下一步动作 (341/13)，语义待确认。
+	// ActionIDTowerRoomNext 进入下一场战斗 (341/13)，实测。
 	ActionIDTowerRoomNext uint32 = 0x0155000D
+	// ActionIDTowerRoomBattleReport 战斗报告推送 (341/14)，服务端主动下发。
+	ActionIDTowerRoomBattleReport uint32 = 0x0155000E
+	// ActionIDTowerRoomStartBattle 开始战斗 (341/15)，实测。
+	ActionIDTowerRoomStartBattle uint32 = 0x0155000F
+	// ActionIDTowerRoomResultNotify 战斗结果/状态推送 (341/17)，服务端主动下发。
+	ActionIDTowerRoomResultNotify uint32 = 0x01550011
 )
 
 // TowerRoomResultSuccess 房间流程成功结果码 (与登录回包 SUCCESS=4 一致)。
@@ -55,9 +61,17 @@ func BuildTowerRoomUnsealPacket(prevAct uint32) *Packet {
 	return buildTowerRoomPacket(ActionIDTowerRoomUnseal, prevAct)
 }
 
-// BuildTowerRoomNextPacket 构造解除封印后的下一步封包 (341/13，语义待确认)。
+// BuildTowerRoomNextPacket 构造进入下一场战斗封包 (341/13)。
 func BuildTowerRoomNextPacket(prevAct uint32) *Packet {
 	return buildTowerRoomPacket(ActionIDTowerRoomNext, prevAct)
+}
+
+// BuildTowerRoomStartBattlePacket 构造开始战斗封包 (341/15)。
+//
+// 官方抓包请求载荷仅 4 字节 PrevAct；开始后服务端推送 341/14 战报与
+// 341/17 结果，随后客户端再发 341/13 进入下一场。
+func BuildTowerRoomStartBattlePacket(prevAct uint32) *Packet {
+	return buildTowerRoomPacket(ActionIDTowerRoomStartBattle, prevAct)
 }
 
 func buildTowerRoomPacket(actionID, prevAct uint32) *Packet {
