@@ -309,36 +309,47 @@ func PartnerPracticeResultText(code uint8) string {
 	}
 }
 
+// eraCreationPrevPacket 构造带 4 字节 PrevAct 占位的 866 请求；
+// 抓包中官方客户端的 866 请求均带 PrevAct 尾部。
+func eraCreationPrevPacket(actionID uint32, prefix []byte) *Packet {
+	payload := make([]byte, 0, len(prefix)+4)
+	payload = append(payload, prefix...)
+	payload = append(payload, 0, 0, 0, 0)
+	pkt := NewPacket(actionID, payload)
+	pkt.HasPrevAct = true
+	return pkt
+}
+
 // BuildEraCreationPanelPacket 构造纪元造化秘境面板查询封包。
 func BuildEraCreationPanelPacket() *Packet {
-	return NewPacket(ActionIDEraCreationPanel, nil)
+	return eraCreationPrevPacket(ActionIDEraCreationPanel, nil)
 }
 
 // BuildEraCreationExplorePacket 构造探索封包。
 func BuildEraCreationExplorePacket() *Packet {
-	return NewPacket(ActionIDEraCreationExplore, nil)
+	return eraCreationPrevPacket(ActionIDEraCreationExplore, nil)
 }
 
 // BuildEraCreationFightEventPacket 构造事件查询封包。
 func BuildEraCreationFightEventPacket() *Packet {
-	return NewPacket(ActionIDEraCreationFightEvent, nil)
+	return eraCreationPrevPacket(ActionIDEraCreationFightEvent, nil)
 }
 
 // BuildEraCreationFightPacket 构造挑战事件封包。
 func BuildEraCreationFightPacket(eventID int32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(eventID)
-	return NewPacket(ActionIDEraCreationFight, w.Bytes())
+	return eraCreationPrevPacket(ActionIDEraCreationFight, w.Bytes())
 }
 
 // BuildEraCreationAwardPanelPacket 构造战斗奖励面板查询封包。
 func BuildEraCreationAwardPanelPacket() *Packet {
-	return NewPacket(ActionIDEraCreationAwardPanel, nil)
+	return eraCreationPrevPacket(ActionIDEraCreationAwardPanel, nil)
 }
 
 // BuildEraCreationChooseAwardPacket 构造领取战斗奖励封包。
 func BuildEraCreationChooseAwardPacket() *Packet {
-	return NewPacket(ActionIDEraCreationChoose, nil)
+	return eraCreationPrevPacket(ActionIDEraCreationChoose, nil)
 }
 
 // EraCreationExploreResult 表示探索回包。
@@ -386,12 +397,18 @@ func ParseEraCreationFightEvent(payload []byte) (*EraCreationEventList, error) {
 	if err != nil {
 		return out, nil
 	}
-	for i := 0; i < int(count) && r.Remaining() >= 4; i++ {
+	for i := 0; i < int(count); i++ {
 		id, err := r.ReadInt32()
 		if err != nil {
 			break
 		}
 		out.IDs = append(out.IDs, id)
+		// 每个事件为 4 个 Int，读取剩余 3 个字段保持对齐。
+		for j := 0; j < 3; j++ {
+			if _, err := r.ReadInt32(); err != nil {
+				return out, nil
+			}
+		}
 	}
 	return out, nil
 }
