@@ -27,8 +27,9 @@ func TestCultivationCardRoutine_ClaimsTaskBuysAndOpens(t *testing.T) {
 			awardCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.CultivationCardSuccess}))
 		case protocol.ActionIDCultivationShopInfo:
+			// shop 1 = 铜钱 1,000,000；left_number=1 表示仍可购买。
 			w := protocol.NewWriter()
-			w.WriteUint16(1).WriteInt32(10).WriteInt32(1).WriteInt32(0)
+			w.WriteUint16(1).WriteInt32(1).WriteInt32(1).WriteInt32(0)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDCultivationBuyShop:
 			buyCalls.Add(1)
@@ -54,7 +55,7 @@ func TestCultivationCardRoutine_ClaimsTaskBuysAndOpens(t *testing.T) {
 	}
 }
 
-func TestCultivationCardRoutine_BuysCheapestPositiveSlot(t *testing.T) {
+func TestCultivationCardRoutine_BuysCheapestAffordableCoinGood(t *testing.T) {
 	var buySlot atomic.Int32
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
@@ -62,8 +63,14 @@ func TestCultivationCardRoutine_BuysCheapestPositiveSlot(t *testing.T) {
 			w := protocol.NewWriter().WriteInt32(4).WriteUint16(0)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDCultivationShopInfo:
+			// shop 4 = 元宝 20；shop 3 = 铜钱 5,000,000；shop 1 = 铜钱 1,000,000。
+			// Mock 铜钱余额 1,000,000，只能买 shop 1，绝不能碰元宝档。
 			w := protocol.NewWriter()
-			w.WriteUint16(2).WriteInt32(10).WriteInt32(520).WriteInt32(6).WriteInt32(3).WriteInt32(398)
+			w.WriteUint16(3)
+			w.WriteInt32(4).WriteInt32(5)
+			w.WriteInt32(3).WriteInt32(1)
+			w.WriteInt32(1).WriteInt32(1)
+			w.WriteInt32(0)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDCultivationBuyShop:
 			r := protocol.NewReader(pkt.Payload)
@@ -80,8 +87,42 @@ func TestCultivationCardRoutine_BuysCheapestPositiveSlot(t *testing.T) {
 	if err := NewCultivationCardRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("cultivation card: %v", err)
 	}
-	if buySlot.Load() != 6 {
-		t.Fatalf("应购买最小正数值档位 6, 实际 %d", buySlot.Load())
+	if buySlot.Load() != 1 {
+		t.Fatalf("应购买余额可负担的铜钱档位 1, 实际 %d", buySlot.Load())
+	}
+}
+
+func TestCultivationCardRoutine_NeverBuysIngotGood(t *testing.T) {
+	var buyCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDCultivationTaskInfo:
+			w := protocol.NewWriter().WriteInt32(4).WriteUint16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDCultivationShopInfo:
+			// 仅有元宝档 (shop 4/5) 与买不起的铜钱档 (shop 3, 500 万)。
+			w := protocol.NewWriter()
+			w.WriteUint16(3)
+			w.WriteInt32(4).WriteInt32(5)
+			w.WriteInt32(5).WriteInt32(2)
+			w.WriteInt32(3).WriteInt32(1)
+			w.WriteInt32(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDCultivationBuyShop:
+			buyCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.CultivationCardSuccess}))
+		case protocol.ActionIDCultivationBagInfo:
+			w := protocol.NewWriter().WriteUint16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewCultivationCardRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("cultivation card: %v", err)
+	}
+	if got := buyCalls.Load(); got != 0 {
+		t.Fatalf("元宝/不可负担档位不应购买, buy calls = %d", got)
 	}
 }
 

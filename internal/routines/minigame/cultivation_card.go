@@ -48,7 +48,8 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
-			// 1. 卡包商城：仅铜钱定价（currency=0）。购买最便宜的一档。
+			// 1. 卡包商城：shop_info 只回 [shop_id, left_number]；价格与货币查静态表。
+			//    严格只购买铜钱结算 (cost_item_id=1747) 且余额足够的条目，绝不碰元宝档。
 			shopResp := call(protocol.BuildCultivationCardShopInfoPacket(), protocol.ActionIDCultivationShopInfo)
 			if shopResp == nil {
 				return nil
@@ -58,20 +59,36 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 				slog.Warn("神仙卡牌商城解析失败", "role_id", session.RoleID(), "err", err)
 			} else if len(items) > 0 {
 				slog.Info("神仙卡牌商城", "role_id", session.RoleID(), "items", len(items), "extra", extra)
-				cheapest := items[0]
-				for _, item := range items {
-					if item.Price > 0 && (cheapest.Price <= 0 || item.Price < cheapest.Price) {
-						cheapest = item
+				coins := session.GetPlayerState().Coins
+				var chosen *protocol.CultivationCardShopGood
+				for _, it := range items {
+					if it.LeftNumber <= 0 {
+						continue
+					}
+					good := protocol.GetCultivationCardShopGood(it.ShopID)
+					if good == nil {
+						continue
+					}
+					if good.CostItemID != protocol.CultivationCardCostCoin {
+						continue // 元宝/活动积分档位一律跳过
+					}
+					if coins < int64(good.CostItemNum) {
+						continue
+					}
+					if chosen == nil || good.CostItemNum < chosen.CostItemNum {
+						chosen = good
 					}
 				}
-				if cheapest.Price > 0 {
-					buyResp := call(protocol.BuildCultivationCardBuyShopPacket(cheapest.ItemID),
+				if chosen == nil {
+					slog.Info("神仙卡牌商城无可购买的铜钱档位", "role_id", session.RoleID(), "coins", coins)
+				} else {
+					buyResp := call(protocol.BuildCultivationCardBuyShopPacket(chosen.ID),
 						protocol.ActionIDCultivationBuyShop)
 					if buyResp != nil {
 						code, bErr := protocol.ParseActionFirstByte(buyResp.Payload, "神仙卡牌购买")
 						if bErr == nil {
 							slog.Info("神仙卡牌商城购买结果", "role_id", session.RoleID(),
-								"shop_id", cheapest.ItemID, "slot_value", cheapest.Price,
+								"shop_id", chosen.ID, "cost_coin", chosen.CostItemNum,
 								"result", code, "result_text", protocol.CultivationCardResultText(code))
 						}
 					}

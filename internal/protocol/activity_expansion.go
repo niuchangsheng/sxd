@@ -475,10 +475,13 @@ type CultivationCardBag struct {
 	Count  int32
 }
 
-// CultivationCardShopItem 表示卡包商城条目。
+// CultivationCardShopItem 表示卡包商城条目 [shop_id, left_number]。
+//
+// 客户端 CultivationCardGameData.shop_info 将两个 Int 解为 shop_id 与
+// left_number（剩余可购次数）；静态价格与货币在 CultivationCardGameTypeData.objShop。
 type CultivationCardShopItem struct {
-	ItemID int32
-	Price  int32
+	ShopID     int32
+	LeftNumber int32
 }
 
 // BuildCultivationCardPanelPacket 构造收藏集面板查询封包。
@@ -581,10 +584,10 @@ func ParseCultivationCardBags(payload []byte) ([]CultivationCardBag, error) {
 	return bags, nil
 }
 
-// ParseCultivationCardShop 解析卡包商城 [[Int slot, Int price], Int extra]。
+// ParseCultivationCardShop 解析卡包商城 [[Int shop_id, Int left_number], Int extra]。
 //
-// 实测尾随 Int 不是货币类型（不同角色分别为 0/398），仅作活动积分记录；
-// 卡包商城按既有玩法约定使用铜钱结算。
+// 尾随 Int 是玩家当前活动积分（不同角色不同，客户端 COST_ITEM[10442]）。
+// 条目价格与货币需查静态表 CultivationCardShopGoods，不能把 left_number 当价格。
 func ParseCultivationCardShop(payload []byte) ([]CultivationCardShopItem, int32, error) {
 	r := NewReader(DecompressPayloadIfNeeded(payload))
 	count, err := r.ReadUint16()
@@ -594,11 +597,11 @@ func ParseCultivationCardShop(payload []byte) ([]CultivationCardShopItem, int32,
 	items := make([]CultivationCardShopItem, 0, count)
 	for i := 0; i < int(count); i++ {
 		var item CultivationCardShopItem
-		if item.ItemID, err = r.ReadInt32(); err != nil {
-			return items, 0, fmt.Errorf("卡包商城[%d] id 读取失败: %w", i, err)
+		if item.ShopID, err = r.ReadInt32(); err != nil {
+			return items, 0, fmt.Errorf("卡包商城[%d] shop_id 读取失败: %w", i, err)
 		}
-		if item.Price, err = r.ReadInt32(); err != nil {
-			return items, 0, fmt.Errorf("卡包商城[%d] 价格读取失败: %w", i, err)
+		if item.LeftNumber, err = r.ReadInt32(); err != nil {
+			return items, 0, fmt.Errorf("卡包商城[%d] left_number 读取失败: %w", i, err)
 		}
 		items = append(items, item)
 	}
