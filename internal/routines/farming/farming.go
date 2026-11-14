@@ -1552,13 +1552,23 @@ func NewPilgrimageRoutine(configs ...PilgrimageConfig) scheduler.ActivityRoutine
 	)
 }
 
-// NewCrystalMineRoutine 构造仙界矿山开采任务。
-// NewCrystalMineRoutine 构造仙界矿山收益领取任务 (Module 264, Mod_StMine_Base)。
+// NewCrystalMineRoutine 构造仙界矿山任务 (Module 264, Mod_StMine_Base)。
 //
-// 先查询矿山状态；未开放/超级城镇关闭时跳过。开放时进入当前矿脉、
-// 领取收益并离开。不购买抢夺次数、不清除冷却、不延长保护时间。
+// 重要：矿山位于仙界跨服节点，主服会话 264/0 恒返回 FAILED(13)，必须先用
+// StcLogin/StTown 建立仙界跨服会话再执行 264 系列动作。
+//
+// 流程与官方客户端对齐:
+//  1. 功能开放门禁 FunctionTypeData 157 (StMine)；
+//  2. get_mine_mountain_info(264/0) 查询矿山状态；
+//  3. enter_mine_mountain(264/1) 进入当前矿脉并解析玩家矿洞 + 矿洞列表；
+//  4. 被夺矿洞在期限内 → recapture_mine_hole(264/5)；
+//  5. 有未领取收益 → receive_award(264/7)；
+//  6. 未占据矿洞 → 优先占领空矿洞，否则抢夺等级最低的可抢矿洞 (264/3)；
+//  7. leave_mine_mountain(264/2) 退出面板（不放弃矿洞）。
+//
+// 不购买抢夺次数 (264/10)、不清除抢夺冷却 (264/11)、不延长保护时间 (264/12)，
+// 全程不消耗元宝。结果码按 Mod_StMine_Base 常量分流。
 func NewCrystalMineRoutine() scheduler.ActivityRoutine {
-	const callTimeout = 8 * time.Second
 	return scheduler.NewBaseRoutine(
 		"crystal_mine",
 		"farming",
@@ -1573,105 +1583,316 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			queryInfo := func() (*protocol.StMineInfo, error) {
-				iCtx, iCancel := context.WithTimeout(ctx, callTimeout)
-				infoResp, qErr := session.Call(iCtx, protocol.BuildStMineInfoPacket(), protocol.ActionIDStMineInfo)
-				iCancel()
-				if qErr != nil || infoResp == nil {
-					return nil, qErr
-				}
-				return protocol.ParseStMineInfoResult(infoResp.Payload)
-			}
-			info, err := queryInfo()
-			if err != nil {
-				slog.Info("仙界矿山不可用，稍后重试", "role_id", session.RoleID(), "err", err)
-				return scheduler.NewCooldown(30*time.Minute, "仙界矿山信息无回包")
-			}
-			slog.Info("仙界矿山状态",
-				"role_id", session.RoleID(),
-				"result", info.Result,
-				"level", info.Level,
-				"cur_mountain", info.CurMountain,
-			)
-			if info.Result == protocol.StMineResultResting {
-				// 休息中表示角色仍停留在矿脉/矿洞内。官方客户端关闭
-				// StMineHolesView 时会发送 leave_mine_mountain 退出休息状态，
-				// 然后重新打开矿山面板；这里照做后再重新查询一次。
-				slog.Info("仙界矿山休息中，先退出休息状态", "role_id", session.RoleID())
-				lCtx, lCancel := context.WithTimeout(ctx, callTimeout)
-				leaveResp, lErr := session.Call(lCtx, protocol.BuildStMineLeavePacket(), protocol.ActionIDStMineLeave)
-				lCancel()
-				if lErr != nil || leaveResp == nil {
-					slog.Info("退出矿山休息状态无回包，稍后重试", "role_id", session.RoleID(), "err", lErr)
-					return scheduler.NewCooldown(10*time.Minute, "退出矿山休息状态无回包")
-				}
-				if leaveCode, pErr := protocol.ParseStMineActionResult(leaveResp.Payload); pErr != nil {
-					slog.Warn("解析退出矿山回包失败，稍后重试", "role_id", session.RoleID(), "err", pErr)
-					return scheduler.NewCooldown(10*time.Minute, "退出矿山回包解析失败")
-				} else if leaveCode != protocol.StMineResultSuccess {
-					slog.Info("退出矿山休息状态未成功", "role_id", session.RoleID(), "result", leaveCode)
-					return scheduler.NewCooldown(10*time.Minute, "退出矿山休息状态未成功")
-				}
-				info, err = queryInfo()
-				if err != nil {
-					return scheduler.NewCooldown(30*time.Minute, "退出休息后矿山信息无回包")
-				}
-				slog.Info("退出休息状态后重新查询矿山",
-					"role_id", session.RoleID(), "result", info.Result,
-					"level", info.Level, "cur_mountain", info.CurMountain)
-			}
-			switch info.Result {
-			case protocol.StMineResultSuccess:
-				// 继续
-			case protocol.StMineResultFunctionUnopen, protocol.StMineResultSuperTownClosed:
-				slog.Info("仙界矿山未开放，稍后重试", "role_id", session.RoleID(), "result", info.Result)
-				return scheduler.NewCooldown(2*time.Hour, "仙界矿山未开放")
-			default:
-				slog.Info("仙界矿山暂不可进入，稍后重试", "role_id", session.RoleID(), "result", info.Result)
-				return scheduler.NewCooldown(time.Hour, "仙界矿山暂不可进入")
-			}
-
-			// 进入当前矿脉
-			eCtx, eCancel := context.WithTimeout(ctx, 8*time.Second)
-			enterResp, err := session.Call(eCtx, protocol.BuildStMineEnterPacket(info.CurMountain), protocol.ActionIDStMineEnter)
-			eCancel()
-			if err != nil {
-				return fmt.Errorf("进入仙界矿山失败: %w", err)
-			}
-			enterResult, err := protocol.ParseStMineActionResult(enterResp.Payload)
-			if err != nil {
-				return fmt.Errorf("解析进入矿山回包失败: %w", err)
-			}
-			if enterResult != protocol.StMineResultSuccess {
-				slog.Info("进入仙界矿山未成功", "role_id", session.RoleID(), "result", enterResult)
+			// 功能开放门禁：未开放时直接跳过，避免每轮空等超时。
+			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDStMine); fErr != nil {
+				slog.Info("仙界矿山功能开放状态查询失败，本轮跳过",
+					"role_id", session.RoleID(), "err", fErr)
+				return nil
+			} else if !open {
+				slog.Info("仙界矿山功能未开放，本轮跳过",
+					"role_id", session.RoleID(), "function_id", protocol.FunctionIDStMine)
 				return nil
 			}
-			defer func() {
-				lCtx, lCancel := context.WithTimeout(ctx, callTimeout)
-				defer lCancel()
-				_, _ = session.Call(lCtx, protocol.BuildStMineLeavePacket(), protocol.ActionIDStMineLeave)
-			}()
 
-			// 领取收益
-			rCtx, rCancel := context.WithTimeout(ctx, callTimeout)
-			rewardResp, err := session.Call(rCtx, protocol.BuildStMineReceiveAwardPacket(), protocol.ActionIDStMineReceiveAward)
-			rCancel()
-			if err != nil {
-				slog.Info("矿山收益领取无应答", "role_id", session.RoleID(), "err", err)
-				return nil
+			// 仙界矿山位于仙界跨服节点：主服会话 264/0 恒返回 FAILED(13)，
+			// 必须通过 StcLogin/StTown 进入仙界跨服城镇后执行 264 系列动作。
+			cross, cErr := openCrystalMineSession(ctx, session)
+			if cErr != nil {
+				slog.Info("仙界矿山跨服会话建立失败，稍后重试",
+					"role_id", session.RoleID(), "err", cErr)
+				return scheduler.NewCooldown(30*time.Minute, "仙界矿山跨服会话不可用")
 			}
-			rewardResult, err := protocol.ParseStMineActionResult(rewardResp.Payload)
-			if err != nil {
-				return fmt.Errorf("解析矿山收益回包失败: %w", err)
-			}
-			if rewardResult == protocol.StMineResultSuccess {
-				slog.Info("仙界矿山收益领取成功", "role_id", session.RoleID())
-			} else {
-				slog.Info("仙界矿山收益未领取", "role_id", session.RoleID(), "result", rewardResult)
-			}
-			return nil
+			defer cross.Close()
+			return runCrystalMine(ctx, cross)
 		},
 	)
+}
+
+// runCrystalMine 在仙界跨服会话上执行矿山查询、进入、领取与抢夺。
+func runCrystalMine(ctx context.Context, session *client.RoleSession) error {
+	const callTimeout = 8 * time.Second
+	call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
+		cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
+		defer cCancel()
+		resp, err := session.Call(cCtx, pkt, act)
+		if err != nil {
+			slog.Info("仙界矿山协议无回包", "role_id", session.RoleID(),
+				"action", act, "err", err)
+			return nil
+		}
+		return resp
+	}
+
+	infoResp := call(protocol.BuildStMineInfoPacket(), protocol.ActionIDStMineInfo)
+	if infoResp == nil {
+		return scheduler.NewCooldown(30*time.Minute, "仙界矿山信息无回包")
+	}
+	info, err := protocol.ParseStMineInfoResult(infoResp.Payload)
+	if err != nil {
+		slog.Warn("解析仙界矿山信息失败，稍后重试", "role_id", session.RoleID(), "err", err)
+		return scheduler.NewCooldown(30*time.Minute, "仙界矿山信息解析失败")
+	}
+	slog.Info("仙界矿山状态",
+		"role_id", session.RoleID(),
+		"result", info.Result,
+		"level", info.Level,
+		"cur_mountain", info.CurMountain,
+	)
+	if info.Result == protocol.StMineResultResting {
+		// 仍停留在矿脉/矿洞内时先退出休息状态，再重新查询。
+		leaveResp := call(protocol.BuildStMineLeavePacket(), protocol.ActionIDStMineLeave)
+		if leaveResp == nil {
+			return scheduler.NewCooldown(10*time.Minute, "退出矿山休息状态无回包")
+		}
+		if leaveCode, pErr := protocol.ParseStMineActionResult(leaveResp.Payload); pErr != nil {
+			return scheduler.NewCooldown(10*time.Minute, "退出矿山回包解析失败")
+		} else if leaveCode != protocol.StMineResultSuccess {
+			slog.Info("退出矿山休息状态未成功", "role_id", session.RoleID(), "result", leaveCode)
+			return scheduler.NewCooldown(10*time.Minute, "退出矿山休息状态未成功")
+		}
+		infoResp = call(protocol.BuildStMineInfoPacket(), protocol.ActionIDStMineInfo)
+		if infoResp == nil {
+			return scheduler.NewCooldown(30*time.Minute, "退出休息后矿山信息无回包")
+		}
+		if info, err = protocol.ParseStMineInfoResult(infoResp.Payload); err != nil {
+			return scheduler.NewCooldown(30*time.Minute, "退出休息后矿山信息解析失败")
+		}
+		slog.Info("退出休息状态后重新查询矿山",
+			"role_id", session.RoleID(), "result", info.Result,
+			"level", info.Level, "cur_mountain", info.CurMountain)
+	}
+	switch info.Result {
+	case protocol.StMineResultSuccess:
+		// 继续
+	case protocol.StMineResultFunctionUnopen, protocol.StMineResultSuperTownClosed:
+		slog.Info("仙界矿山未开放，稍后重试", "role_id", session.RoleID(), "result", info.Result)
+		return scheduler.NewCooldown(2*time.Hour, "仙界矿山未开放")
+	default:
+		slog.Info("仙界矿山暂不可进入，稍后重试", "role_id", session.RoleID(), "result", info.Result)
+		return scheduler.NewCooldown(time.Hour, "仙界矿山暂不可进入")
+	}
+
+	mountain := info.CurMountain
+	if mountain == 0 {
+		mountain = pickStMineMountain(info)
+	}
+	enterResp := call(protocol.BuildStMineEnterPacket(mountain), protocol.ActionIDStMineEnter)
+	if enterResp == nil {
+		return scheduler.NewCooldown(10*time.Minute, "进入矿山无回包")
+	}
+	holes, err := protocol.ParseStMineEnterResponse(enterResp.Payload)
+	if err != nil {
+		slog.Warn("解析进入矿山回包失败，稍后重试", "role_id", session.RoleID(), "err", err)
+		return scheduler.NewCooldown(10*time.Minute, "进入矿山回包解析失败")
+	}
+	if holes.Result != protocol.StMineResultSuccess {
+		slog.Info("进入仙界矿山未成功", "role_id", session.RoleID(),
+			"result", holes.Result, "result_text", protocol.StMineResultText(holes.Result))
+		if holes.Result == protocol.StMineResultMountainLevelUnlock {
+			return scheduler.NewCooldown(2*time.Hour, "矿脉等级未解锁")
+		}
+		return scheduler.NewCooldown(time.Hour, "进入仙界矿山未成功")
+	}
+	defer func() {
+		lCtx, lCancel := context.WithTimeout(ctx, callTimeout)
+		defer lCancel()
+		_, _ = session.Call(lCtx, protocol.BuildStMineLeavePacket(), protocol.ActionIDStMineLeave)
+	}()
+	slog.Info("进入仙界矿山",
+		"role_id", session.RoleID(),
+		"mountain", mountain,
+		"skill_level", holes.SkillLevel,
+		"remain_rob_count", holes.RemainRobCount,
+		"next_rob_timestamp", holes.NextRobTimestamp,
+		"player_hole", holes.PlayerHole.HoleID,
+		"player_status", holes.PlayerHole.Status,
+		"receive_count", holes.PlayerHole.ReceiveCount,
+		"candidates", len(holes.Holes),
+	)
+
+	now := int32(time.Now().Unix())
+
+	// 1. 被夺矿洞：期限内抢回。
+	if ph := holes.PlayerHole; ph.HoleID > 0 &&
+		ph.Status == protocol.StMineHoleBeRobbed &&
+		ph.RecaptureTimestamp > now {
+		recapResp := call(protocol.BuildStMineRecapturePacket(), protocol.ActionIDStMineRecapture)
+		if recapResp == nil {
+			return scheduler.NewCooldown(10*time.Minute, "抢回矿洞无回包")
+		}
+		code, pErr := protocol.ParseStMineActionResult(recapResp.Payload)
+		if pErr != nil {
+			return scheduler.NewCooldown(10*time.Minute, "抢回矿洞回包解析失败")
+		}
+		slog.Info("仙界矿山抢回矿洞", "role_id", session.RoleID(),
+			"hole_id", ph.HoleID, "result", code, "result_text", protocol.StMineResultText(code))
+		if code == protocol.StMineResultSuccess {
+			return nil
+		}
+	}
+
+	// 2. 领取已积累收益。
+	if holes.PlayerHole.ReceiveCount > 0 {
+		rewardResp := call(protocol.BuildStMineReceiveAwardPacket(), protocol.ActionIDStMineReceiveAward)
+		if rewardResp == nil {
+			return scheduler.NewCooldown(10*time.Minute, "矿山收益领取无回包")
+		}
+		code, pErr := protocol.ParseStMineActionResult(rewardResp.Payload)
+		if pErr != nil {
+			return scheduler.NewCooldown(10*time.Minute, "矿山收益回包解析失败")
+		}
+		switch code {
+		case protocol.StMineResultSuccess:
+			slog.Info("仙界矿山收益领取成功", "role_id", session.RoleID(),
+				"receive_count", holes.PlayerHole.ReceiveCount)
+		case protocol.StMineResultHasNoAward:
+			slog.Info("仙界矿山暂无可领取收益", "role_id", session.RoleID())
+		default:
+			slog.Info("仙界矿山收益未领取", "role_id", session.RoleID(),
+				"result", code, "result_text", protocol.StMineResultText(code))
+		}
+	}
+
+	// 3. 已有矿洞则保持占据，不主动放弃。
+	if holes.PlayerHole.HoleID > 0 {
+		slog.Info("仙界矿山已占据矿洞，保持现状", "role_id", session.RoleID(),
+			"hole_id", holes.PlayerHole.HoleID, "status", holes.PlayerHole.Status)
+		return nil
+	}
+
+	// 4. 未占据矿洞：检查次数与冷却。
+	if holes.RemainRobCount == 0 {
+		slog.Info("仙界矿山抢夺次数已用尽", "role_id", session.RoleID())
+		return scheduler.NewCooldown(2*time.Hour, "仙界矿山抢夺次数已用尽")
+	}
+	if holes.NextRobTimestamp > now {
+		wait := time.Duration(holes.NextRobTimestamp-now) * time.Second
+		if wait < time.Minute {
+			wait = time.Minute
+		}
+		if wait > 2*time.Hour {
+			wait = 2 * time.Hour
+		}
+		slog.Info("仙界矿山抢夺冷却中", "role_id", session.RoleID(),
+			"next_rob_timestamp", holes.NextRobTimestamp)
+		return scheduler.NewCooldown(wait, "仙界矿山抢夺冷却")
+	}
+
+	target, ok := pickStMineHole(holes.Holes, session.PlayerID())
+	if !ok {
+		slog.Info("仙界矿山暂无可占领矿洞", "role_id", session.RoleID())
+		return scheduler.NewCooldown(30*time.Minute, "仙界矿山暂无可占领矿洞")
+	}
+	robResp := call(protocol.BuildStMineRobHolePacket(target.HoleID, target.PlayerID),
+		protocol.ActionIDStMineRobHole)
+	if robResp == nil {
+		return scheduler.NewCooldown(10*time.Minute, "抢夺矿洞无回包")
+	}
+	robCode, pErr := protocol.ParseStMineActionResult(robResp.Payload)
+	if pErr != nil {
+		return scheduler.NewCooldown(10*time.Minute, "抢夺矿洞回包解析失败")
+	}
+	slog.Info("仙界矿山抢夺矿洞", "role_id", session.RoleID(),
+		"hole_id", target.HoleID, "owner_player_id", target.PlayerID,
+		"owner_level", target.PlayerLevel, "result", robCode,
+		"result_text", protocol.StMineResultText(robCode))
+	switch robCode {
+	case protocol.StMineResultSuccess:
+		// 占领成功后立即领取一次收益，避免可领收益被抢。
+		if r := call(protocol.BuildStMineReceiveAwardPacket(), protocol.ActionIDStMineReceiveAward); r != nil {
+			if c, e := protocol.ParseStMineActionResult(r.Payload); e == nil {
+				slog.Info("仙界矿山占领后领取收益", "role_id", session.RoleID(),
+					"result", c, "result_text", protocol.StMineResultText(c))
+			}
+		}
+		return nil
+	case protocol.StMineResultAwardHasNotReceive:
+		return scheduler.NewCooldown(10*time.Minute, "需先领取当前收益")
+	case protocol.StMineResultRobCD:
+		wait := 10 * time.Minute
+		if holes.NextRobTimestamp > now {
+			wait = time.Duration(holes.NextRobTimestamp-now) * time.Second
+			if wait < time.Minute {
+				wait = time.Minute
+			}
+		}
+		return scheduler.NewCooldown(wait, "仙界矿山抢夺冷却")
+	case protocol.StMineResultRobCountLimit:
+		return scheduler.NewCooldown(2*time.Hour, "仙界矿山抢夺次数已用尽")
+	default:
+		slog.Info("仙界矿山抢夺未成功，稍后重试", "role_id", session.RoleID(),
+			"result", robCode, "result_text", protocol.StMineResultText(robCode))
+		return scheduler.NewCooldown(30*time.Minute, "仙界矿山抢夺未成功")
+	}
+	return nil
+}
+
+// pickStMineMountain 选择要进入的矿脉：优先有空位的最高等级矿脉，
+// 否则回退到与角色矿山等级一致的矿脉，再否则取最高等级矿脉。
+func pickStMineMountain(info *protocol.StMineInfo) uint8 {
+	var freeBest, levelBest, anyBest uint8
+	for _, m := range info.Mountains {
+		if m.Level == 0 {
+			continue
+		}
+		if m.UsedCount < m.TotalCount && m.Level > freeBest {
+			freeBest = m.Level
+		}
+		if m.Level == info.Level {
+			levelBest = m.Level
+		}
+		if m.Level > anyBest {
+			anyBest = m.Level
+		}
+	}
+	if freeBest > 0 {
+		return freeBest
+	}
+	if levelBest > 0 {
+		return levelBest
+	}
+	if anyBest > 0 {
+		return anyBest
+	}
+	return 1
+}
+
+// openCrystalMineSession 建立仙界跨服会话；单测可替换为复用 mock 会话。
+var openCrystalMineSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+	return s.OpenCrossServerSession(ctx)
+}
+
+// pickStMineHole 选择可占领矿洞：优先空矿洞，其次等级最低的可抢矿洞。
+func pickStMineHole(holes []protocol.StMineHole, selfPlayerID int32) (protocol.StMineHole, bool) {
+	var empty *protocol.StMineHole
+	var weakest *protocol.StMineHole
+	for i := range holes {
+		h := &holes[i]
+		if h.HoleID == 0 {
+			continue
+		}
+		if selfPlayerID > 0 && h.PlayerID == selfPlayerID {
+			continue
+		}
+		if h.Status == protocol.StMineHoleEmpty || h.PlayerID == 0 {
+			if empty == nil || h.HoleID < empty.HoleID {
+				empty = h
+			}
+			continue
+		}
+		if h.Status == protocol.StMineHoleRob || h.Status == protocol.StMineHoleCanBeRob {
+			if weakest == nil || h.PlayerLevel < weakest.PlayerLevel {
+				weakest = h
+			}
+		}
+	}
+	if empty != nil {
+		return *empty, true
+	}
+	if weakest != nil {
+		return *weakest, true
+	}
+	return protocol.StMineHole{}, false
 }
 
 // NewSpiritPoolRoutine 构造粗铁淬炼池与异兽提炼任务 (Feature 5: 淬炼粗铁)。

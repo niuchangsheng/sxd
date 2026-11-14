@@ -8,7 +8,10 @@
 //
 // 运行命令: SXD_CONFIG=configs/s0.yaml go run -tags=probe test/probes/probe_crystal_mine_routine_live.go
 //
-// 预期表现: 仅当矿山开放时进入当前矿脉领取收益；未开放/关闭时跳过。
+// 目标会话: 仙界跨服会话 (主服 264/0 恒返回 FAILED(13))。
+//
+// 预期表现: 功能开放时进入矿脉，领取已有收益并占领/抢夺一个矿洞；
+// 未开放/关闭时按结果码进入冷却。
 package main
 
 import (
@@ -21,6 +24,7 @@ import (
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/config"
 	"sxd-pie-ng/internal/platform"
+	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/routines/farming"
 	"sxd-pie-ng/internal/scheduler"
 )
@@ -91,6 +95,28 @@ func main() {
 	}
 	slog.Info("会话已激活", "role_id", sess.RoleID(), "player_id", sess.PlayerID())
 
+	logMineTask := func(stage string) {
+		cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		resp, cErr := sess.Call(cCtx, protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
+		if cErr != nil || resp == nil {
+			slog.Warn("活跃度查询失败", "stage", stage, "err", cErr)
+			return
+		}
+		panel, pErr := protocol.ParseGameAssistantInfo(resp.Payload)
+		if pErr != nil {
+			slog.Warn("活跃度解析失败", "stage", stage, "err", pErr)
+			return
+		}
+		if task, ok := panel.FindTask(51); ok {
+			slog.Info("抢夺仙界矿山活跃度", "stage", stage,
+				"cur", task.CurTimes, "max", task.MaxTimes, "per", task.PerActiveAdd)
+		} else {
+			slog.Info("活跃度面板未包含任务51", "stage", stage)
+		}
+	}
+	logMineTask("before")
+
 	for _, r := range []struct {
 		name string
 		rt   scheduler.ActivityRoutine
@@ -103,4 +129,5 @@ func main() {
 			slog.Info("Routine 执行完成", "name", r.name)
 		}
 	}
+	logMineTask("after")
 }

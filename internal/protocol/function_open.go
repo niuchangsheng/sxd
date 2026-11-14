@@ -83,6 +83,8 @@ const (
 	FunctionIDFiveBlessings int32 = 136
 	// FunctionIDLunHuiJingDi 轮回净地功能编号 (FunctionTypeData: LunHuiJingDi)
 	FunctionIDLunHuiJingDi int32 = 292
+	// FunctionIDStMine 仙界矿山功能编号 (FunctionTypeData: StMine，通关天庭女儿国(1)开启)
+	FunctionIDStMine int32 = 157
 )
 
 // BuildCheckFunctionOpenPacket 构造功能开放状态查询封包。
