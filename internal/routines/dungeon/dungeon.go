@@ -23,6 +23,16 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
+// 任务推图会话状态。
+//
+// 魔王试炼 (Mod 57) 等请求会让服务端在本次会话内进入特殊上下文，
+// 之后 get_sections 会被静默丢弃；因此每个会话只执行一次完整任务推图，
+// 若上下文已被污染则不再重试，避免每 30 分钟固定丢包。
+var (
+	questCycleDone  sync.Map // *client.RoleSession -> bool
+	questContextBad sync.Map // *client.RoleSession -> bool
+)
+
 // QuestCycleFeatureConfig 剧情推图任务闭环配置
 type QuestCycleFeatureConfig struct {
 	Enabled              bool `json:"enabled"`
@@ -970,7 +980,9 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 		"dungeon",
 		"dungeon",
 		scheduler.ScheduleLoop,
-		scheduler.PriorityNormal,
+		// 高于所有 Cron 玩法：魔王试炼等 Mod 57 请求会污染会话上下文，
+		// 导致后续 get_sections 被静默丢弃，任务推图必须先跑。
+		scheduler.RoutinePriority(200),
 		30*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -1073,12 +1085,21 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						}
 					}
 
-					clearedMissions := make(map[int]bool)
-					executeQuestCycle(
-						ctx, session, dictRepo, cfg, questEnsureStamina,
-						&totalCostStamina, &totalGainExp, &totalGainCoins,
-						clearedMissions,
-					)
+					if _, done := questCycleDone.Load(session); done {
+						slog.Info("本会话已完成主线任务推图，跳过", "role_id", session.RoleID())
+					} else if _, bad := questContextBad.Load(session); bad {
+						slog.Info("本会话任务上下文已不可用，跳过任务推图", "role_id", session.RoleID())
+					} else {
+						clearedMissions := make(map[int]bool)
+						executeQuestCycle(
+							ctx, session, dictRepo, cfg, questEnsureStamina,
+							&totalCostStamina, &totalGainExp, &totalGainCoins,
+							clearedMissions,
+						)
+						if _, polluted := questContextBad.Load(session); !polluted {
+							questCycleDone.Store(session, true)
+						}
+					}
 				}
 			}
 
@@ -3408,6 +3429,7 @@ func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapI
 			return nil, lastErr
 		}
 	}
+	questContextBad.Store(session, true)
 	return nil, lastErr
 }
 
