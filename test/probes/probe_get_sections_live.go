@@ -33,6 +33,7 @@ func main() {
 	}
 	roleIdx := flag.Int("role", 1, "配置中的角色下标 (0=s0, 1=s1)")
 	missionID := flag.Int("mission", 560, "关卡 ID")
+	waitBefore := flag.Duration("wait", 0, "登录后等待多久再请求 (用于验证长会话是否影响 get_sections)")
 	flag.Parse()
 
 	cfg, err := config.Load(cfgPath)
@@ -102,6 +103,10 @@ func main() {
 	slog.Info("候选参数", "map", m.MapID, "map_key", m.MapKey, "section", m.SectionID,
 		"current_town", sess.GetPlayerState().TownID)
 
+	if *waitBefore > 0 {
+		slog.Info("等待后再请求", "wait", *waitBefore)
+		time.Sleep(*waitBefore)
+	}
 	if _, sErr := sess.SyncQuests(ctx); sErr != nil {
 		slog.Warn("同步任务列表失败", "err", sErr)
 	}
