@@ -1400,8 +1400,14 @@ func BuildTreasureHouseMainPanelPacket(prevAct uint32) *Packet {
 }
 
 // BuildTreasureHouseUseFreeFlagPacket 构造设置优先使用免费次数封包 (Module 594, Action 4)。
+//
+// 官方 Main.swf 请求仅 1 字节 [Byte flag]；2026-11-14 实机发送
+// [Int flag][PrevAct] (8 字节) 被服务端静默丢弃，导致整轮免费抽奖被跳过。
 func BuildTreasureHouseUseFreeFlagPacket(flag int32, prevAct uint32) *Packet {
-	return BuildTreasureHouseConfirmPacket(flag, prevAct)
+	_ = prevAct
+	w := NewWriter()
+	w.WriteUint8(uint8(flag))
+	return NewPacket(ActionIDTreasureHouseSetUseFreeFlag, w.Bytes())
 }
 
 // BuildTreasureHouseGetFreeItemPacket 构造领取免费钥匙封包 (Module 594, Action 8)。

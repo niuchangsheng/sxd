@@ -423,7 +423,6 @@ func TestTreasureHouse_BuildersUseDynamicPrevAct(t *testing.T) {
 		protocol.BuildTreasureHousePoolPacket(0),
 		protocol.BuildTreasureHouseGetFreeItemPacket(0),
 		protocol.BuildTreasureHouseSelectPacket([]protocol.TreasureAwardSelect{{TierID: 1, ItemID: 4}}, 0),
-		protocol.BuildTreasureHouseUseFreeFlagPacket(1, 0),
 		protocol.BuildTreasureHouseDrawPacket(0),
 	}
 	for _, p := range packets {
@@ -436,6 +435,12 @@ func TestTreasureHouse_BuildersUseDynamicPrevAct(t *testing.T) {
 		if len(p.Payload) < 4 {
 			t.Errorf("action 0x%08X 载荷长度 %d，不足以承载 PrevAct 尾部", p.ActionID, len(p.Payload))
 		}
+	}
+
+	// 594/4 例外：官方请求为裸 [Byte flag]，不能追加 PrevAct。
+	flagPkt := protocol.BuildTreasureHouseUseFreeFlagPacket(1, 0)
+	if flagPkt.HasPrevAct || len(flagPkt.Payload) != 1 || flagPkt.Payload[0] != 1 {
+		t.Errorf("594/4 应为裸 1 字节 [Byte 1], 实际 %+v", flagPkt)
 	}
 }
 
