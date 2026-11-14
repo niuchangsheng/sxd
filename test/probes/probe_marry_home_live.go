@@ -33,6 +33,7 @@ const (
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
 	claim := flag.Bool("claim", false, "调用 get_cake 领取一次家园奖励")
+	roleIdx := flag.Int("role", 0, "配置中的角色下标")
 	flag.Parse()
 	cfgPath := os.Getenv("SXD_CONFIG")
 	if cfgPath == "" {
@@ -44,7 +45,7 @@ func main() {
 		return
 	}
 	acc := cfg.Accounts[0]
-	role := acc.Roles[0]
+	role := acc.Roles[*roleIdx]
 	tc := platform.NewTicketCache(90 * time.Minute)
 	xd, _ := platform.NewXindongAuthenticator()
 	xd.SetCookie(acc.Cookie)
