@@ -2376,6 +2376,18 @@ func errSessionTerminated(ctx context.Context, err error) bool {
 }
 
 // questBeginNPCID / questEndNPCID 安全读取任务字典中的 NPC 编号，供 Mod 3 对话前置链使用。
+// questPrevAct 返回任务链路应携带的 PrevAct。
+//
+// 服务端按「最后实际处理并回包的动作」校验链；被静默丢弃的请求也会推进
+// RoleSession.LastActionID，但不会推进 LastAckActionID。任务链使用 LastAck
+// 可避免一次丢包导致后续 get_sections/accept_quest 全部被丢弃。
+func questPrevAct(session *client.RoleSession) uint32 {
+	if ack := session.LastAckActionID(); ack != 0 {
+		return ack
+	}
+	return session.LastActionID()
+}
+
 func questBeginNPCID(q *dictionary.Quest) int32 {
 	if q == nil {
 		return 0
@@ -2411,7 +2423,7 @@ func questEndNPCID(q *dictionary.Quest) int32 {
 func queryNPCQuestState(ctx context.Context, session *client.RoleSession, npcID, questID int32) (*int32, error) {
 	npcPkt, _ := protocol.BuildGetNPCQuestsPacket(protocol.GetNPCQuestsRequest{
 		NPCID:   npcID,
-		PrevAct: session.LastActionID(),
+		PrevAct: questPrevAct(session),
 	})
 	npcCtx, npcCancel := context.WithTimeout(ctx, 8*time.Second)
 	npcResp, npcErr := session.Call(npcCtx, npcPkt, protocol.ActionIDQuestGetNPCQuests)
@@ -2440,7 +2452,7 @@ func queryNPCQuestState(ctx context.Context, session *client.RoleSession, npcID,
 func tryAcceptQuest(ctx context.Context, session *client.RoleSession, questID int32) (bool, uint8, error) {
 	accPkt, _ := protocol.BuildAcceptQuestPacket(protocol.AcceptQuestRequest{
 		QuestID: questID,
-		PrevAct: session.LastActionID(),
+		PrevAct: questPrevAct(session),
 	})
 	accCtx, accCancel := context.WithTimeout(ctx, 8*time.Second)
 	accResp, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
@@ -2806,7 +2818,7 @@ func executeAuthoritativeQuestCycle(
 			// 3A. 对话类任务 (MissionID == 0 或 TalkQuest == 1)
 			if q.MissionID == 0 || q.TalkQuest == 1 {
 				slog.Info("正在交付对话剧情任务", "role_id", session.RoleID(), "quest_id", q.ID, "title", q.Title)
-				finPkt := protocol.BuildFinishQuestPacket(it.QuestID, session.LastActionID())
+				finPkt := protocol.BuildFinishQuestPacket(it.QuestID, questPrevAct(session))
 				finCtx, finCancel := context.WithTimeout(ctx, 8*time.Second)
 				_, _ = session.Call(finCtx, finPkt, protocol.ActionIDQuestFinish)
 				finCancel()
@@ -2874,7 +2886,7 @@ func executeAuthoritativeQuestCycle(
 //   - completedState == -1 (0xFF): 任务物品不足或未达成 (NPCDialogViewLang.QuestItem)
 func submitCompleteQuest(ctx context.Context, session *client.RoleSession, questID, endNPCID int32) (succeeded bool, packFull bool) {
 	sendSubmit := func() (*protocol.Packet, error) {
-		subPkt := protocol.BuildSubmitCompleteQuestPacket(questID, session.LastActionID())
+		subPkt := protocol.BuildSubmitCompleteQuestPacket(questID, questPrevAct(session))
 		subCtx, subCancel := context.WithTimeout(ctx, 8*time.Second)
 		defer subCancel()
 		return session.Call(subCtx, subPkt, protocol.ActionIDQuestSubmitComplete)
@@ -2909,12 +2921,12 @@ func submitCompleteQuest(ctx context.Context, session *client.RoleSession, quest
 	}
 
 	// 若任务尚未标记 finish (state == -1)，补发一次 finish_quest (0x00030004) 后重试 complete_quest (0x00030005)
-	finPkt := protocol.BuildFinishQuestPacket(questID, session.LastActionID())
+	finPkt := protocol.BuildFinishQuestPacket(questID, questPrevAct(session))
 	finCtx, finCancel := context.WithTimeout(ctx, 8*time.Second)
 	_, _ = session.Call(finCtx, finPkt, protocol.ActionIDQuestFinish)
 	finCancel()
 
-	subPkt2 := protocol.BuildSubmitCompleteQuestPacket(questID, session.LastActionID())
+	subPkt2 := protocol.BuildSubmitCompleteQuestPacket(questID, questPrevAct(session))
 	subCtx2, subCancel2 := context.WithTimeout(ctx, 8*time.Second)
 	resp2, err2 := session.Call(subCtx2, subPkt2, protocol.ActionIDQuestSubmitComplete)
 	subCancel2()
@@ -3028,7 +3040,7 @@ func advanceQuestMission(
 		// 必须直接走剧情副本，避免每次空等 5 秒。
 		targetInSections := false
 		if mapID > 0 {
-			secPkt := protocol.BuildMissionGetSectionsPacket(mapID, session.LastActionID())
+			secPkt := protocol.BuildMissionGetSectionsPacket(mapID, questPrevAct(session))
 			secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
 			secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 			secCancel()
@@ -3123,7 +3135,7 @@ func advanceQuestMission(
 			// 精英关卡与普通章节关卡相互独立，不做同章节前置扫描，直接挑战目标关卡。
 			var prereqMission *dictionary.Mission
 			if !isEliteQuest && targetMission.MapID > 0 {
-				secPkt := protocol.BuildMissionGetSectionsPacket(int32(targetMission.MapID), session.LastActionID())
+				secPkt := protocol.BuildMissionGetSectionsPacket(int32(targetMission.MapID), questPrevAct(session))
 				secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
 				secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 				secCancel()
@@ -3402,12 +3414,12 @@ func challengeStoryMission(
 	}
 
 	// 0. 激活章节关卡列表上下文 (Mod 4, Act 0: get_sections)，对齐官方前置调用链
-	if session.LastActionID() != protocol.ActionIDMissionGetSections {
+	if session.LastAckActionID() != protocol.ActionIDMissionGetSections {
 		mapID := int32(m.MapID)
 		if mapID <= 0 {
 			mapID = int32(m.SectionID)
 		}
-		secPkt := protocol.BuildMissionGetSectionsPacket(mapID, session.LastActionID())
+		secPkt := protocol.BuildMissionGetSectionsPacket(mapID, questPrevAct(session))
 		secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
 		_, _ = session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
 		secCancel()
@@ -3417,7 +3429,7 @@ func challengeStoryMission(
 	}
 
 	// 1. 进入副本 (Mod 4, Act 1: enter_mission, 前置对齐 ActionIDMissionGetSections)
-	prevAct := session.LastActionID()
+	prevAct := questPrevAct(session)
 	enterPkt := protocol.BuildMissionPlotEnterPacket(int32(m.ID), prevAct)
 	slog.Info("准备进入剧情副本",
 		"role_id", session.RoleID(),
@@ -3532,7 +3544,7 @@ func challengeStoryMission(
 			}
 		}
 
-		fightPkt := protocol.BuildMissionFightMonsterPacket(mtID, 0, 0, session.LastActionID())
+		fightPkt := protocol.BuildMissionFightMonsterPacket(mtID, 0, 0, questPrevAct(session))
 		fightCtx, fightCancel := context.WithTimeout(ctx, 8*time.Second)
 		fightResp, fightErr := session.Call(fightCtx, fightPkt, protocol.ActionIDMissionFightMonster)
 		fightCancel()
