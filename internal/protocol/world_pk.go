@@ -100,6 +100,8 @@ func BuildWorldPkJoinResultPacket(result uint8) *Packet {
 const (
 	ActionIDWorldPkReceiveSpecial uint32 = 0x015D000E
 	ActionIDWorldPkSetAutoMatch   uint32 = 0x015D0010
+	// ActionIDWorldPkSetSkipWar 设置跳过战斗（自动结算）开关 (349/17)
+	ActionIDWorldPkSetSkipWar uint32 = 0x015D0011
 	ActionIDWorldPkAwardPanel     uint32 = 0x015D0019
 	ActionIDWorldPkOpenTaskPanel  uint32 = 0x015D001A
 	ActionIDWorldPkTaskAward      uint32 = 0x015D001B
@@ -113,6 +115,31 @@ const (
 	WorldPkRewardPackFull     uint8 = 13
 	WorldPkRewardNotCompleted uint8 = 22
 )
+
+// BuildWorldPkSetSkipWarPacket 构造跳过战斗开关封包 (349/17)：[Byte on]。
+func BuildWorldPkSetSkipWarPacket(on bool) *Packet {
+	v := uint8(0)
+	if on {
+		v = 1
+	}
+	return NewPacket(ActionIDWorldPkSetSkipWar, []byte{v})
+}
+
+// ParseWorldPkJoinDetail 解析 join_pk 回包：
+// [UByte result][Int info][Int countdown]（result=6 时 countdown 为剩余冷却秒数）。
+func ParseWorldPkJoinDetail(payload []byte) (result uint8, info int32, countdown int32, err error) {
+	if len(payload) < 1 {
+		return 0, 0, 0, fmt.Errorf("%w: empty world pk join", ErrInvalidPayload)
+	}
+	result = payload[0]
+	if len(payload) >= 5 {
+		info = int32(readU32(payload[1:5]))
+	}
+	if len(payload) >= 9 {
+		countdown = int32(readU32(payload[5:9]))
+	}
+	return result, info, countdown, nil
+}
 
 // BuildWorldPkSetAutoMatchPacket 构造自动匹配开关封包 [Byte]。
 func BuildWorldPkSetAutoMatchPacket(on bool) *Packet {

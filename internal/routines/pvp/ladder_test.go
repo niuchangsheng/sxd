@@ -22,7 +22,15 @@ func ladderTaskPanelPayload(taskID int32) []byte {
 	return w.Bytes()
 }
 
+func shortenWorldPkWaits(t *testing.T) {
+	t.Helper()
+	oldBattle, oldCD := worldPkBattleWait, worldPkCDWait
+	worldPkBattleWait, worldPkCDWait = 0, 0
+	t.Cleanup(func() { worldPkBattleWait, worldPkCDWait = oldBattle, oldCD })
+}
+
 func TestCrossServerLadderRoutine_ClaimsRewards(t *testing.T) {
+	shortenWorldPkWaits(t)
 	orig := openLadderRewardSession
 	openLadderRewardSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
 		return s, nil
@@ -60,6 +68,7 @@ func TestCrossServerLadderRoutine_ClaimsRewards(t *testing.T) {
 }
 
 func TestCrossServerLadderRoutine_PackFull(t *testing.T) {
+	shortenWorldPkWaits(t)
 	orig := openLadderRewardSession
 	openLadderRewardSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
 		return s, nil
@@ -91,6 +100,7 @@ func TestCrossServerLadderRoutine_PackFull(t *testing.T) {
 }
 
 func TestCrossServerLadderRoutine_OffSkipsRewards(t *testing.T) {
+	shortenWorldPkWaits(t)
 	var claimCalls atomic.Int32
 	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {

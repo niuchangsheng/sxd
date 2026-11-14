@@ -1231,31 +1231,89 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 				return rErr
 			}
 
-			jCtx, jCancel := context.WithTimeout(ctx, callTimeout)
-			joinResp, err := session.Call(jCtx, protocol.BuildWorldPkJoinPacket(), protocol.ActionIDWorldPkJoin)
-			jCancel()
-			if err != nil {
-				return fmt.Errorf("跨服PK加入失败: %w", err)
+			// 抓包 (/tmp/jiewei.pcapng)：官方客户端勾选自动匹配 + 跳过战斗后，
+			// 约每 1 秒发送一次 join_pk；result=6(TIME_CD) 时回包带剩余秒数，
+			// 冷却归零后服务端推送 349/5 战报。每次战斗约 10 秒。
+			if resp := call3(session, protocol.BuildWorldPkSetAutoMatchPacket(true),
+				protocol.ActionIDWorldPkSetAutoMatch); resp != nil {
+				slog.Info("跨服PK自动匹配已开启", "role_id", session.RoleID())
 			}
-			result, err := protocol.ParseWorldPkJoinResult(joinResp.Payload)
-			if err != nil {
-				return fmt.Errorf("解析跨服PK加入回包失败: %w", err)
+			if resp := call3(session, protocol.BuildWorldPkSetSkipWarPacket(true),
+				protocol.ActionIDWorldPkSetSkipWar); resp != nil {
+				slog.Info("跨服PK跳过战斗已开启", "role_id", session.RoleID())
 			}
-			switch result.Result {
-			case protocol.WorldPkResultSuccess:
-				slog.Info("跨服PK加入成功", "role_id", session.RoleID())
-			case protocol.WorldPkResultLowLevel:
-				slog.Info("跨服PK等级不足", "role_id", session.RoleID())
-			case protocol.WorldPkResultTimeCD:
-				slog.Info("跨服PK冷却中", "role_id", session.RoleID())
-			case protocol.WorldPkResultTimesLimit:
-				slog.Info("跨服PK次数上限", "role_id", session.RoleID())
-			case protocol.WorldPkResultActivityNotOpen:
-				slog.Info("跨服PK活动未开放", "role_id", session.RoleID())
-			default:
-				slog.Info("跨服PK加入未成功", "role_id", session.RoleID(), "result", result.Result)
+
+			const maxWorldPkJoins = 30
+			for i := 0; i < maxWorldPkJoins; i++ {
+				if ctx.Err() != nil {
+					return nil
+				}
+				jCtx, jCancel := context.WithTimeout(ctx, callTimeout)
+				joinResp, jErr := session.Call(jCtx, protocol.BuildWorldPkJoinPacket(), protocol.ActionIDWorldPkJoin)
+				jCancel()
+				if jErr != nil || joinResp == nil {
+					slog.Info("跨服PK加入无回包，结束本轮", "role_id", session.RoleID(), "attempt", i+1, "err", jErr)
+					return scheduler.NewCooldown(10*time.Minute, "跨服PK加入无回包")
+				}
+				result, _, countdown, pErr := protocol.ParseWorldPkJoinDetail(joinResp.Payload)
+				if pErr != nil {
+					slog.Warn("解析跨服PK加入回包失败", "role_id", session.RoleID(), "err", pErr)
+					return nil
+				}
+				switch result {
+				case protocol.WorldPkResultSuccess:
+					slog.Info("跨服PK匹配成功，等待战斗结算", "role_id", session.RoleID(),
+						"attempt", i+1, "countdown", countdown)
+					if !waitWorldPk(ctx, worldPkBattleWait) {
+						return nil
+					}
+				case protocol.WorldPkResultTimeCD:
+					slog.Info("跨服PK冷却中", "role_id", session.RoleID(),
+						"attempt", i+1, "countdown", countdown)
+					if !waitWorldPk(ctx, worldPkCDWait) {
+						return nil
+					}
+				case protocol.WorldPkResultTimesLimit:
+					slog.Info("跨服PK次数上限，结束本轮", "role_id", session.RoleID(), "attempt", i+1)
+					return nil
+				case protocol.WorldPkResultActivityNotOpen:
+					slog.Info("跨服PK活动未开放，结束本轮", "role_id", session.RoleID())
+					return nil
+				default:
+					slog.Info("跨服PK加入未成功，结束本轮", "role_id", session.RoleID(),
+						"attempt", i+1, "result", result)
+					return nil
+				}
 			}
+			slog.Info("跨服PK本轮匹配循环完成", "role_id", session.RoleID(), "joins", maxWorldPkJoins)
 			return nil
 		},
 	)
+}
+
+// 跨服PK匹配等待时间（单测可缩短）。
+var (
+	worldPkBattleWait = 10 * time.Second
+	worldPkCDWait     = 1200 * time.Millisecond
+)
+
+// call3 以固定超时发送请求并等待回包。
+func call3(session *client.RoleSession, pkt *protocol.Packet, act uint32) *protocol.Packet {
+	c, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	resp, err := session.Call(c, pkt, act)
+	if err != nil {
+		return nil
+	}
+	return resp
+}
+
+// waitWorldPk 按上下文等待；被取消时返回 false。
+func waitWorldPk(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
 }
