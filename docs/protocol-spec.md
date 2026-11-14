@@ -1137,3 +1137,23 @@ Int left_day, Int mount_count, Int title_count, Int cur_level
 >   `accept_quest(478)` 立即返回 `5 SUCCEED`（即使对话回包的任务列表为空）。
 > - 自动化通过 `dictionary.Repository.GetTownNPCIDByNPCID` 解析行号；
 >   解析失败时退回直接接取。
+
+### 4.26 Module 859 (0x035B): 神仙卡牌收藏集 (`Mod_CultivationCardGame_Base`)
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 3 | `0x035B0003` | `card_bag_info` | 空 | `[[Int item_id, Int count]]` |
+| 4 | `0x035B0004` | `open_card_bag` | `Int item_id, Int count` | `UByte result, ...` |
+| 7 | `0x035B0007` | `shop_info` | 空 | `[[Int shop_id, Int left_number], Int activity_point]` |
+| 8 | `0x035B0008` | `buy_shop` | `Int shop_id` | `UByte result` |
+
+> **线上/客户端结论（2026-11-14）**：
+>
+> - `shop_info` 每项是 `[shop_id, left_number]`（剩余可购次数），**不是**价格。
+>   价格、货币、礼包内容来自静态表
+>   `com.assist.server.source.CultivationCardGameTypeData.objShop`，已收录到
+>   `internal/protocol/cultivation_card_shop.go`。
+> - 货币编号：`1747` 铜钱、`10442` 活动积分、`3345` 元宝。
+>   自动化只购买 `cost_item_id=1747`、`left_number>0` 且铜钱余额足够的档位；
+>   元宝档一律跳过。此前把 `left_number` 当价格会误选元宝/积分档。
+> - `shop_info` 尾随 Int 是玩家当前活动积分。
