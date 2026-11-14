@@ -140,7 +140,9 @@ func BuildEraRebirthLandDrawPacket(drawType int32, prevAct uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(drawType)
 	w.WriteUint32(prevAct)
-	return &Packet{ActionID: ActionIDEraRebirthLandDraw, Payload: w.Bytes(), HasPrevAct: true}
+	// 显式携带面板 PrevAct，且不交给会话层改写：852/16 对心跳等其它
+	// 前序动作敏感，心跳插入后会被静默丢弃（2026-11-14 ncs 实测）。
+	return &Packet{ActionID: ActionIDEraRebirthLandDraw, Payload: w.Bytes()}
 }
 
 // EraRebirthDrawResult 表示渡业台抽取回包 [UByte result, Int, Int]。
