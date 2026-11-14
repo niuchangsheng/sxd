@@ -293,15 +293,15 @@ func FilterOpenableJieYuanBoxes(boxes []JieYuanBoxItem) []JieYuanBoxItem {
 	return openable
 }
 
-// BuildJieYuanBoxOpenContextPacket 构造结缘宝箱开箱前置上下文协议包 (Module 528, Action 1)。
-func BuildJieYuanBoxOpenContextPacket(prevAct uint32) *Packet {
+// BuildJieYuanBoxOpenContextPacket 构造结缘宝箱开箱前置设置包 (Module 528, Action 1)。
+//
+// 528/1 是 set_setting，描述符 request=[Byte setting_id, Byte value]，固定为
+// [0x07 0x04]（结缘宝箱合成档位=4）。2026-11-14 线上实测：裸 2 字节稳定返回 0；
+// 追加 4 字节 PrevAct 的 6 字节载荷会被服务端静默丢弃。
+func BuildJieYuanBoxOpenContextPacket() *Packet {
 	w := NewWriter()
-	// 依据 haha.pcapng 帧实采: 07 04 + PrevAct
-	w.WriteUint16(0x0704)
-	if prevAct == 0 {
-		prevAct = ActionIDJieYuanBoxList
-	}
-	w.WriteUint32(prevAct)
+	w.WriteUint8(0x07)
+	w.WriteUint8(0x04)
 	return NewPacket(ActionIDJieYuanBoxOpenContext, w.Bytes())
 }
 

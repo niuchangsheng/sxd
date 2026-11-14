@@ -55,6 +55,18 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 功能未开放时 232/30 仍会返回背包宝箱，但 232/34 开箱会被服务端
+			// 静默丢弃（2026-11-14 s1 实测：功能 140 未开放，所有开箱载荷均无回包）。
+			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDLinkFate); fErr != nil {
+				slog.Info("结缘宝箱功能开放状态查询失败，本轮跳过",
+					"role_id", session.RoleID(), "err", fErr)
+				return scheduler.NewCooldown(30*time.Minute, "结缘宝箱功能状态查询失败")
+			} else if !open {
+				slog.Info("结缘宝箱功能未开放，跳过",
+					"role_id", session.RoleID(), "function_id", protocol.FunctionIDLinkFate)
+				return nil
+			}
+
 			slog.Info("正在执行结缘任务: 结缘宝箱自动开启 (每批最多10个，严格排除传说宝箱)",
 				"role_id", session.RoleID(),
 				"max_batch_size", maxBatch,
@@ -89,7 +101,6 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			}
 
 			var totalOpened int
-			prevAct := protocol.ActionIDJieYuanBoxList
 
 			for _, box := range openable {
 				remaining := box.Count
@@ -103,18 +114,16 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 						openCount = remaining
 					}
 
-					// 官方抓包（2026-11-13 /tmp/jieyuan.pcapng）确认：每次 232/34 开箱前
-					// 必须先发送 528/1 上下文握手 [Uint16 0x0704][Uint32 PrevAct]，
-					// 且 232/34 的 PrevAct 紧跟该握手 (0x02100001)。缺少握手时网关静默丢弃开箱。
-					ctxPkt := protocol.BuildJieYuanBoxOpenContextPacket(prevAct)
+					// 每次 232/34 开箱前先发送 528/1 set_setting [0x07 0x04]（裸 2 字节），
+					// 232/34 的 PrevAct 紧跟该设置动作 (0x02100001)。缺少设置时开箱被静默丢弃。
+					ctxPkt := protocol.BuildJieYuanBoxOpenContextPacket()
 					cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
 					ctxResp, cErr := session.Call(cCtx, ctxPkt, protocol.ActionIDJieYuanBoxOpenContext)
 					cCancel()
 					if cErr != nil || ctxResp == nil {
-						slog.Info("结缘宝箱上下文握手无回包（活动未开放或不在可开箱时段），稍后重试",
+						slog.Info("结缘宝箱开箱设置 528/1 无回包，稍后重试",
 							"role_id", session.RoleID(), "err", cErr)
-						// 活动窗口无公开接口可查，30 分钟轮询以便在开启后尽快开箱。
-						return scheduler.NewCooldown(30*time.Minute, "结缘宝箱活动未开放")
+						return scheduler.NewCooldown(30*time.Minute, "结缘宝箱设置无回包")
 					}
 					ctxCode, ctxParseErr := protocol.ParseJieYuanOpenContextResult(ctxResp.Payload)
 					if ctxParseErr != nil {
@@ -208,8 +217,6 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					openedNow := remaining - afterCount
 					totalOpened += int(openedNow)
 					remaining = afterCount
-					// 库存核对查询是本轮最后一个已发送动作。
-					prevAct = protocol.ActionIDJieYuanBoxList
 
 					time.Sleep(50 * time.Millisecond)
 				}

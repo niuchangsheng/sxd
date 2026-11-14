@@ -440,13 +440,13 @@ func TestTreasureHouse_BuildersUseDynamicPrevAct(t *testing.T) {
 }
 
 func TestFeaturePackets_JieYuanContextAndOpenResult(t *testing.T) {
-	// 528/1 上下文握手载荷必须与官方抓包一致: [Uint16 0x0704][Uint32 PrevAct]。
-	pCtx := protocol.BuildJieYuanBoxOpenContextPacket(protocol.ActionIDJieYuanBoxList)
+	// 528/1 set_setting 必须为裸 2 字节 [Byte 7][Byte 4]；追加 PrevAct 会被静默丢弃。
+	pCtx := protocol.BuildJieYuanBoxOpenContextPacket()
 	if pCtx.ActionID != protocol.ActionIDJieYuanBoxOpenContext {
 		t.Fatalf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDJieYuanBoxOpenContext, pCtx.ActionID)
 	}
-	if got, want := hex.EncodeToString(pCtx.Payload), "070400e8001e"; got != want {
-		t.Fatalf("528/1 握手载荷不匹配抓包: got %s want %s", got, want)
+	if got, want := hex.EncodeToString(pCtx.Payload), "0704"; got != want {
+		t.Fatalf("528/1 设置载荷不匹配: got %s want %s", got, want)
 	}
 
 	// 开箱载荷必须与官方抓包一致: [Int item_id][Int count][Uint32 PrevAct=528/1]。

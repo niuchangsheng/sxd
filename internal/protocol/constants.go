@@ -88,6 +88,8 @@ const (
 	ActionIDPlayerGetOnlineGift uint32 = 0x0000001E
 	// ActionIDPlayerGetCurrentOnlineGift 查询在线成长礼包当前状态协议号 (Module 0, Action 31 -> 0x0000001F, Mod_Player_Base.get_player_current_online_gift)
 	ActionIDPlayerGetCurrentOnlineGift uint32 = 0x0000001F
+	// ActionIDActivityTimeList 运营活动时间表 (Module 0, Action 67 -> 0x00000043, Mod_Player_Base.operation_activity_time_list)
+	ActionIDActivityTimeList uint32 = 0x00000043
 	// ActionIDPlayerStartPractice 角色开始城镇打坐练功 (Module 0, Action 36 -> 0x00000024, Mod_Player_Base.start_practice)
 	ActionIDPlayerStartPractice uint32 = 0x00000024
 	// ActionIDPlayerGetPracticeData 获取角色城镇打坐练功数据 (Module 0, Action 37 -> 0x00000025, Mod_Player_Base.get_practice_data)

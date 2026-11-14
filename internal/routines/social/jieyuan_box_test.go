@@ -18,6 +18,9 @@ func TestJieYuanBoxRoutine_SendsBatchOpenRequest(t *testing.T) {
 	var listCalls, ctxCalls, openCalls atomic.Int32
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetFunctions:
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(
+				[]int32{protocol.FunctionIDLinkFate}))
 		case protocol.ActionIDJieYuanBoxList:
 			n := listCalls.Add(1)
 			w := protocol.NewWriter()
@@ -31,9 +34,9 @@ func TestJieYuanBoxRoutine_SendsBatchOpenRequest(t *testing.T) {
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDJieYuanBoxOpenContext:
 			ctxCalls.Add(1)
-			// 官方抓包: 528/1 载荷 [Uint16 0x0704][Uint32 PrevAct(最近一次动作)]。
-			if got, want := hex.EncodeToString(pkt.Payload), "070400e8001e"; got != want {
-				t.Errorf("528/1 握手载荷 = %s, want %s", got, want)
+			// 528/1 set_setting 必须为裸 2 字节 [0x07 0x04]，追加 PrevAct 会被静默丢弃。
+			if got, want := hex.EncodeToString(pkt.Payload), "0704"; got != want {
+				t.Errorf("528/1 设置载荷 = %s, want %s", got, want)
 			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.JieYuanOpenContextResultOK}))
 		case protocol.ActionIDJieYuanBoxOpen:
@@ -65,6 +68,9 @@ func TestJieYuanBoxRoutine_StopsOnOpenFailureCode(t *testing.T) {
 	var listCalls, openCalls atomic.Int32
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetFunctions:
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(
+				[]int32{protocol.FunctionIDLinkFate}))
 		case protocol.ActionIDJieYuanBoxList:
 			n := listCalls.Add(1)
 			w := protocol.NewWriter()
@@ -105,6 +111,9 @@ func TestJieYuanBoxRoutine_StopsOnContextReject(t *testing.T) {
 	var openCalls atomic.Int32
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetFunctions:
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(
+				[]int32{protocol.FunctionIDLinkFate}))
 		case protocol.ActionIDJieYuanBoxList:
 			w := protocol.NewWriter()
 			w.WriteUint16(1)
@@ -125,5 +134,28 @@ func TestJieYuanBoxRoutine_StopsOnContextReject(t *testing.T) {
 	}
 	if openCalls.Load() != 0 {
 		t.Fatalf("握手被拒绝后不得发送开箱请求, 实际 %d 次", openCalls.Load())
+	}
+}
+
+func TestJieYuanBoxRoutine_SkipsWhenFunctionClosed(t *testing.T) {
+	var listCalls, ctxCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetFunctions:
+			// 功能 140 未开放。
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(nil))
+		case protocol.ActionIDJieYuanBoxList:
+			listCalls.Add(1)
+		case protocol.ActionIDJieYuanBoxOpenContext:
+			ctxCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+
+	if err := NewJieYuanBoxRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("功能未开放应静默跳过: %v", err)
+	}
+	if listCalls.Load() != 0 || ctxCalls.Load() != 0 {
+		t.Fatalf("功能未开放不应发宝箱请求, list=%d ctx=%d", listCalls.Load(), ctxCalls.Load())
 	}
 }
