@@ -67,6 +67,22 @@ const (
 	FunctionIDGetPeach int32 = 56
 	// FunctionIDPetAnimal 叶公好龙培养功能编号 (FunctionTypeData: PetAnimal)
 	FunctionIDPetAnimal int32 = 60
+	// FunctionIDPartnerPractice 幻境修炼功能编号 (FunctionTypeData: PartnerPractice)
+	FunctionIDPartnerPractice int32 = 170
+	// FunctionIDPartnerExpedition 远征任务功能编号 (FunctionTypeData: expeditiontask)
+	FunctionIDPartnerExpedition int32 = 200
+	// FunctionIDEraCreationRealm 造化秘境功能编号 (FunctionTypeData: EraCreationRealm)
+	FunctionIDEraCreationRealm int32 = 299
+	// FunctionIDBaiLianQianKun 百炼乾坤功能编号 (FunctionTypeData: BaiLianQianKun)
+	FunctionIDBaiLianQianKun int32 = 160
+	// FunctionIDEraYanJie 纪元湮劫功能编号 (FunctionTypeData: JiYuanYanJie)
+	FunctionIDEraYanJie int32 = 294
+	// FunctionIDDragonball 神龙上供功能编号 (FunctionTypeData: Dragonball)
+	FunctionIDDragonball int32 = 89
+	// FunctionIDFiveBlessings 五福临门功能编号 (FunctionTypeData: FindImmortal2)
+	FunctionIDFiveBlessings int32 = 136
+	// FunctionIDLunHuiJingDi 轮回净地功能编号 (FunctionTypeData: LunHuiJingDi)
+	FunctionIDLunHuiJingDi int32 = 292
 )
 
 // BuildCheckFunctionOpenPacket 构造功能开放状态查询封包。

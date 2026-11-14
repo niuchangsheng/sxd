@@ -3745,6 +3745,13 @@ func NewFiveBlessingsRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDFiveBlessings); fErr != nil {
+				slog.Info("五福临门功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			} else if !open {
+				slog.Info("五福临门功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDFiveBlessings)
+				return nil
+			}
 			slog.Info("正在执行益智任务: 五福临门免费祈福", "role_id", session.RoleID())
 
 			return executeFiveBlessings(ctx, session, jitter)

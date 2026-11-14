@@ -2472,6 +2472,14 @@ func runMockGameServer(conn net.Conn) {
 				protocol.FunctionIDRefinePool,
 				protocol.FunctionIDMarryHome,
 				protocol.FunctionIDAwakeForbiddenBook,
+				protocol.FunctionIDPartnerPractice,
+				protocol.FunctionIDPartnerExpedition,
+				protocol.FunctionIDEraCreationRealm,
+				protocol.FunctionIDBaiLianQianKun,
+				protocol.FunctionIDEraYanJie,
+				protocol.FunctionIDDragonball,
+				protocol.FunctionIDFiveBlessings,
+				protocol.FunctionIDLunHuiJingDi,
 			}
 			w := protocol.NewWriter()
 			w.WriteUint16(uint16(len(ids)))

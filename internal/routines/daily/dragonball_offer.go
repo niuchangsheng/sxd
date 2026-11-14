@@ -36,6 +36,13 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDDragonball); fErr != nil {
+				slog.Info("神龙上供功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			} else if !open {
+				slog.Info("神龙上供功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDDragonball)
+				return nil
+			}
 			slog.Info("正在执行日常任务: 神龙普通上供", "role_id", session.RoleID())
 
 			// collectTmp 把祭坛临时格中的龙珠收取到背包，腾出空间继续上供。

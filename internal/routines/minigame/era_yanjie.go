@@ -40,6 +40,13 @@ func NewEraYanjieRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEraYanJie); fErr != nil {
+				slog.Info("纪元湮劫功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
+				return nil
+			} else if !open {
+				slog.Info("纪元湮劫功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDEraYanJie)
+				return nil
+			}
 
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
 				cCtx, cancel := context.WithTimeout(ctx, timeout)

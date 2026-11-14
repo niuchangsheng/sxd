@@ -22,6 +22,10 @@ var dailyAutomationFunctionIDs = []int32{
 	protocol.FunctionIDFaction, protocol.FunctionIDTreasureHouse,
 	protocol.FunctionIDStTrials, protocol.FunctionIDStPracticeRoom,
 	protocol.FunctionIDTravelEvent, protocol.FunctionIDRollCake,
+	protocol.FunctionIDPartnerPractice, protocol.FunctionIDPartnerExpedition,
+	protocol.FunctionIDEraCreationRealm, protocol.FunctionIDBaiLianQianKun,
+	protocol.FunctionIDEraYanJie, protocol.FunctionIDDragonball,
+	protocol.FunctionIDFiveBlessings, protocol.FunctionIDLunHuiJingDi,
 	protocol.FunctionIDFindImmortal, protocol.FunctionIDFishing,
 }
 
