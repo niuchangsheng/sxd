@@ -57,6 +57,7 @@ type WuxingEntry struct {
 // WuxingRole 表示 453/1 阵容列表中的一个伙伴。
 type WuxingRole struct {
 	RoleID int32
+	Pos    uint8
 	Name   string
 }
 
@@ -155,32 +156,55 @@ func ParseWuxingPanel(payload []byte) ([]WuxingEntry, error) {
 	return entries, nil
 }
 
-// ParseWuxingLineup 解析 453/1 阵容列表，返回 role_id 与伙伴名。
+// ParseWuxingLineup 解析 453/1 阵容列表，返回 role_id、号位与伙伴名。
 //
-// 回包为非固定结构，这里按「Int role_id + 若干字段 + Short 长度 + UTF-8 名称」
-// 的顺序做宽松扫描，仅用于按名称映射主角/李逍遥/玲珑等。
+// 抓包结构（713 字节）：[UInt16 count] + 若干条目，每个条目为
+//
+//	[Int role_id][Byte pos] + 若干属性字段 + [Short name_len][UTF-8 name]
+//
+// 属性字段长度不固定，这里以「role_id 后紧跟 <=9 的号位字节」定位条目，
+// 并在其后 48 字节内查找名称，仅用于按名称映射主角/李逍遥/玲珑。
 func ParseWuxingLineup(payload []byte) ([]WuxingRole, error) {
 	p := DecompressPayloadIfNeeded(payload)
 	roles := make([]WuxingRole, 0, 8)
-	for i := 0; i+6 < len(p); i++ {
-		l := int(p[i])<<8 | int(p[i+1])
-		if l < 2 || l > 24 || i+2+l > len(p) {
+	seen := make(map[int32]bool)
+	for k := 0; k+5 < len(p); k++ {
+		id := int32(readU32(p[k:]))
+		if id < 1000 || id > 5_000_000 || seen[id] {
 			continue
 		}
-		name := p[i+2 : i+2+l]
+		pos := p[k+4]
+		if pos > 9 {
+			continue
+		}
+		name, ok := findWuxingName(p, k+5, 48)
+		if !ok {
+			continue
+		}
+		seen[id] = true
+		roles = append(roles, WuxingRole{RoleID: id, Pos: pos, Name: name})
+	}
+	return roles, nil
+}
+
+// findWuxingName 在 [from, from+window) 内查找 [Short len][UTF-8 名称]。
+func findWuxingName(p []byte, from, window int) (string, bool) {
+	end := from + window
+	if end > len(p) {
+		end = len(p)
+	}
+	for j := from; j+2 < end; j++ {
+		l := int(p[j])<<8 | int(p[j+1])
+		if l < 6 || l > 24 || j+2+l > len(p) {
+			continue
+		}
+		name := p[j+2 : j+2+l]
 		if !isMostlyUTF8Chinese(name) {
 			continue
 		}
-		if i < 4 {
-			continue
-		}
-		roles = append(roles, WuxingRole{
-			RoleID: int32(readU32(p[i-4:])),
-			Name:   string(name),
-		})
-		i += 1 + l
+		return string(name), true
 	}
-	return roles, nil
+	return "", false
 }
 
 func readU32(b []byte) uint32 {

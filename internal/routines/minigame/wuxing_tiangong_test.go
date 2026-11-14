@@ -14,7 +14,8 @@ const wuxingRoutinePanelHex = "000000001800050404000024a80000001f000016be0000000
 
 func wuxingLineupBytes() []byte {
 	build := func(roleID int32, name string) []byte {
-		out := []byte{byte(roleID >> 24), byte(roleID >> 16), byte(roleID >> 8), byte(roleID)}
+		out := []byte{byte(roleID >> 24), byte(roleID >> 16), byte(roleID >> 8), byte(roleID), 8}
+		out = append(out, make([]byte, 8)...) // 属性字段填充
 		out = append(out, byte(len(name)>>8), byte(len(name)))
 		return append(out, []byte(name)...)
 	}

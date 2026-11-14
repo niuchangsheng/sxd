@@ -48,7 +48,8 @@ func TestWuxing_Builders(t *testing.T) {
 func TestWuxing_ParseLineup(t *testing.T) {
 	// [Int role_id][Short len][UTF-8 name] 连续排列。
 	build := func(roleID int32, name string) []byte {
-		out := []byte{byte(roleID >> 24), byte(roleID >> 16), byte(roleID >> 8), byte(roleID)}
+		out := []byte{byte(roleID >> 24), byte(roleID >> 16), byte(roleID >> 8), byte(roleID), 8}
+		out = append(out, make([]byte, 8)...) // 属性字段填充
 		out = append(out, byte(len(name)>>8), byte(len(name)))
 		return append(out, []byte(name)...)
 	}
