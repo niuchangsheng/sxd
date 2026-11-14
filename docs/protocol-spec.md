@@ -1173,3 +1173,16 @@ Int left_day, Int mount_count, Int title_count, Int cur_level
 >   追加 4 字节 PrevAct 的 6 字节载荷会被服务端静默丢弃。
 > - 功能 140（LinkFateBox）未开放时，232/30 仍返回背包中的宝箱，但 232/34
 >   任何载荷形态都会被静默丢弃。自动化先查功能开放状态，未开放直接跳过。
+
+### 4.28 Module 637 (0x027D): 周末狂欢礼
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | `0x027D0000` | `panel_info` | 空 | `Int is_notice, [[Int day, Int received, Int can_receive, Int can_get_back]], Int curr_day` |
+| 1 | `0x027D0001` | `get_award` | `Int day` | `UByte result, [Int,Int]` |
+| 2 | `0x027D0002` | `get_back` | `Int day` | 补领（消耗元宝，自动化不调用） |
+
+> **结论（2026-11-14，对照客户端 WeekendRevelryGiftPackData）**：
+> `day_list` 每项第一个 Int 是**日期**而非礼包 id；只有 `can_receive=1` 时
+> 才能调用 `get_award(day)`，否则服务端会静默丢弃。此前的实现对所有日期逐一
+> 请求，导致 `637/1` 出现无回包。

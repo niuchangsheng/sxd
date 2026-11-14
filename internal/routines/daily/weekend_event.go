@@ -44,17 +44,25 @@ func NewWeekendEventRoutine() scheduler.ActivityRoutine {
 			// 1. 周末狂欢礼：逐个槽位领取免费奖励。
 			if panelResp := call(protocol.BuildWeekendGiftPanelPacket(), protocol.ActionIDWeekendGiftPanel); panelResp != nil {
 				slog.Info("周末狂欢礼面板", "role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
-				giftIDs, pErr := protocol.ParseWeekendGiftIDs(panelResp.Payload)
+				panel, pErr := protocol.ParseWeekendGiftPanel(panelResp.Payload)
 				if pErr != nil {
 					slog.Warn("解析周末狂欢礼面板失败", "role_id", session.RoleID(), "err", pErr)
 					goto fruit
 				}
-				slog.Info("周末狂欢礼可领取档位", "role_id", session.RoleID(), "gift_ids", giftIDs)
-				for _, idx := range giftIDs {
+				claimDays := make([]int32, 0, len(panel.Days))
+				for _, d := range panel.Days {
+					// 只有 can_receive 的日期可领；其余日期请求会被服务端静默丢弃。
+					if d.CanReceive != 0 {
+						claimDays = append(claimDays, d.Day)
+					}
+				}
+				slog.Info("周末狂欢礼可领取日期", "role_id", session.RoleID(),
+					"days", claimDays, "curr_day", panel.CurrDay)
+				for _, day := range claimDays {
 					if ctx.Err() != nil {
 						return nil
 					}
-					resp := call(protocol.BuildWeekendGiftAwardPacket(idx), protocol.ActionIDWeekendGiftAward)
+					resp := call(protocol.BuildWeekendGiftAwardPacket(day), protocol.ActionIDWeekendGiftAward)
 					if resp == nil {
 						// 周末狂欢礼不可用时仍继续尝试水果机，两者独立。
 						goto fruit
@@ -66,19 +74,19 @@ func NewWeekendEventRoutine() scheduler.ActivityRoutine {
 					}
 					switch code {
 					case protocol.WeekendGiftResultSuccess:
-						slog.Info("周末狂欢礼领取成功", "role_id", session.RoleID(), "index", idx)
+						slog.Info("周末狂欢礼领取成功", "role_id", session.RoleID(), "day", day)
 					case protocol.WeekendGiftResultHasGet, protocol.WeekendGiftResultCannotGet,
 						protocol.WeekendGiftResultDayError:
-						slog.Debug("周末狂欢礼暂不可领取", "role_id", session.RoleID(), "index", idx, "result", code)
+						slog.Debug("周末狂欢礼暂不可领取", "role_id", session.RoleID(), "day", day, "result", code)
 					case protocol.WeekendGiftResultPackFull:
 						return scheduler.ErrBagFull
 					case protocol.WeekendGiftResultNotOpen:
 						slog.Info("周末狂欢礼未开放", "role_id", session.RoleID())
 						goto fruit
 					case protocol.WeekendGiftResultNotEnoughIngot:
-						slog.Info("周末狂欢礼该档需要元宝，跳过", "role_id", session.RoleID(), "index", idx)
+						slog.Info("周末狂欢礼该档需要元宝，跳过", "role_id", session.RoleID(), "day", day)
 					default:
-						slog.Info("周末狂欢礼领取未成功", "role_id", session.RoleID(), "index", idx, "result", code)
+						slog.Info("周末狂欢礼领取未成功", "role_id", session.RoleID(), "day", day, "result", code)
 					}
 				}
 			}

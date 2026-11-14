@@ -2076,6 +2076,20 @@ func executeQuestCycle(
 
 	slog.Info("启动主线/支线任务闭环自动化驱动", "role_id", session.RoleID(), "town_id", session.GetPlayerState().TownID)
 
+	// 魔王试炼/竞技场等战斗玩法结束后，服务端可能仍保留战场上下文；
+	// 此时 get_sections 会被静默丢弃。按官方客户端 gotoTownAtId 复位城镇场景。
+	if mapID := session.GetPlayerState().TownMapID; mapID > 0 {
+		if code, tErr := session.EnterTown(ctx, int32(mapID)); tErr != nil {
+			slog.Info("任务推图前复位城镇场景失败", "role_id", session.RoleID(),
+				"map_id", mapID, "err", tErr)
+		} else if code != 0 {
+			slog.Info("任务推图前复位城镇场景被拒绝", "role_id", session.RoleID(),
+				"map_id", mapID, "result", code)
+		} else {
+			slog.Info("任务推图前已复位城镇场景", "role_id", session.RoleID(), "map_id", mapID)
+		}
+	}
+
 	// 0. 主动向服务端全量同步当前任务列表 (Module 3, Action 9: town_quest_show)
 	// 在 2026 真实网关中，town_quest_show 返回状态枚举 (QuestType):
 	//   0 = Acceptable (可接取)
@@ -3362,6 +3376,13 @@ func missionLevelLocked(missionLock, playerLevel int) bool {
 // 2026-11-14 线上：同一会话中 get_sections(21) 偶发超时（随后重放同载荷即可成功），
 // 属于网关瞬时丢包而非参数错误。超时缩短为 3 秒并重试一次，避免整轮任务被跳过。
 func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapID int32) (*protocol.Packet, error) {
+	// 3/9 任务列表回包后立刻发 4/0 会被网关丢弃（2026-11-14 线上：间隔 0ms 丢包，
+	// 间隔 600ms 稳定回包），因此首发前统一留出 500ms 间隔。
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(500 * time.Millisecond):
+	}
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {

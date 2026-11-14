@@ -81,6 +81,11 @@ func startMockDungeonServerWithFunctions(srvConn net.Conn, functionIDs []int32, 
 			if handler != nil && handler(pkt) {
 				continue
 			}
+			if pkt.ActionID == protocol.ActionIDTownEnter {
+				// 任务推图前复位城镇场景，默认成功。
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDTownEnter, []byte{0x00}))
+				continue
+			}
 			if pkt.ActionID == protocol.ActionTownMissionActive {
 				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionTownMissionActive, nil))
 				continue

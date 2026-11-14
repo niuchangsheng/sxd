@@ -88,28 +88,56 @@ func ParseFirstByteResult(payload []byte, scene string) (uint8, error) {
 	return payload[0], nil
 }
 
-// ParseWeekendGiftIDs 解析狂欢礼面板 [Int day, [Int gain_id, Int,Int,Int], Int]。
-func ParseWeekendGiftIDs(payload []byte) ([]int32, error) {
+// WeekendGiftDay 表示周末狂欢礼某一天的状态 [day, received, can_receive, can_get_back]。
+type WeekendGiftDay struct {
+	Day        int32
+	Received   int32
+	CanReceive int32
+	CanGetBack int32
+}
+
+// WeekendGiftPanel 表示周末狂欢礼面板 [is_notice, day_list, curr_day]。
+type WeekendGiftPanel struct {
+	IsNotice int32
+	Days     []WeekendGiftDay
+	CurrDay  int32
+}
+
+// ParseWeekendGiftPanel 解析狂欢礼面板。
+//
+// 客户端 WeekendRevelryGiftPackData.panel_info 将 day_list 每项解为
+// [day, received, can_receive, can_get_back]；get_award 只接受 day 且必须
+// 在 can_receive 为真时调用，否则服务端会静默丢弃。
+func ParseWeekendGiftPanel(payload []byte) (*WeekendGiftPanel, error) {
 	r := NewReader(DecompressPayloadIfNeeded(payload))
-	if _, err := r.ReadInt32(); err != nil {
-		return nil, fmt.Errorf("周末狂欢礼天数读取失败: %w", err)
+	p := &WeekendGiftPanel{}
+	var err error
+	if p.IsNotice, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("周末狂欢礼通知读取失败: %w", err)
 	}
 	count, err := r.ReadUint16()
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("周末狂欢礼天数读取失败: %w", err)
 	}
-	ids := make([]int32, 0, count)
+	p.Days = make([]WeekendGiftDay, 0, count)
 	for i := 0; i < int(count); i++ {
-		id, err := r.ReadInt32()
-		if err != nil {
-			return ids, fmt.Errorf("周末狂欢礼[%d] id 读取失败: %w", i, err)
+		var d WeekendGiftDay
+		if d.Day, err = r.ReadInt32(); err != nil {
+			return p, fmt.Errorf("周末狂欢礼[%d] day 读取失败: %w", i, err)
 		}
-		for j := 0; j < 3; j++ {
-			if _, err = r.ReadInt32(); err != nil {
-				return ids, fmt.Errorf("周末狂欢礼[%d] 字段读取失败: %w", i, err)
-			}
+		if d.Received, err = r.ReadInt32(); err != nil {
+			return p, fmt.Errorf("周末狂欢礼[%d] received 读取失败: %w", i, err)
 		}
-		ids = append(ids, id)
+		if d.CanReceive, err = r.ReadInt32(); err != nil {
+			return p, fmt.Errorf("周末狂欢礼[%d] can_receive 读取失败: %w", i, err)
+		}
+		if d.CanGetBack, err = r.ReadInt32(); err != nil {
+			return p, fmt.Errorf("周末狂欢礼[%d] can_get_back 读取失败: %w", i, err)
+		}
+		p.Days = append(p.Days, d)
 	}
-	return ids, nil
+	if r.Remaining() >= 4 {
+		p.CurrDay, _ = r.ReadInt32()
+	}
+	return p, nil
 }
