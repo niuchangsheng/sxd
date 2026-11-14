@@ -3040,10 +3040,7 @@ func advanceQuestMission(
 		// 必须直接走剧情副本，避免每次空等 5 秒。
 		targetInSections := false
 		if mapID > 0 {
-			secPkt := protocol.BuildMissionGetSectionsPacket(mapID, questPrevAct(session))
-			secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
-			secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
-			secCancel()
+			secResp, secErr := fetchMissionSections(ctx, session, mapID)
 			if secErr != nil {
 				if errSessionTerminated(ctx, secErr) {
 					return clearedPrereq || lastCount > initialCount
@@ -3135,10 +3132,7 @@ func advanceQuestMission(
 			// 精英关卡与普通章节关卡相互独立，不做同章节前置扫描，直接挑战目标关卡。
 			var prereqMission *dictionary.Mission
 			if !isEliteQuest && targetMission.MapID > 0 {
-				secPkt := protocol.BuildMissionGetSectionsPacket(int32(targetMission.MapID), questPrevAct(session))
-				secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
-				secResp, secErr := session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
-				secCancel()
+				secResp, secErr := fetchMissionSections(ctx, session, int32(targetMission.MapID))
 				if errSessionTerminated(ctx, secErr) {
 					return clearedPrereq || lastCount > initialCount
 				}
@@ -3363,6 +3357,39 @@ func missionLevelLocked(missionLock, playerLevel int) bool {
 
 // challengeStoryMission 使用 Module 4 (Mod_Mission_Base) 完整五步状态机通关指定剧情关卡：
 // enter_mission (0x00040001) -> fight_monster (0x00040002) -> rank_mission (0x00040003) -> open_box (0x00040004) -> pickup_award (0x00040005)。
+// fetchMissionSections 拉取章节关卡列表，带一次快速重试。
+//
+// 2026-11-14 线上：同一会话中 get_sections(21) 偶发超时（随后重放同载荷即可成功），
+// 属于网关瞬时丢包而非参数错误。超时缩短为 3 秒并重试一次，避免整轮任务被跳过。
+func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapID int32) (*protocol.Packet, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		secCtx, secCancel := context.WithTimeout(ctx, 3*time.Second)
+		resp, err := session.Call(secCtx,
+			protocol.BuildMissionGetSectionsPacket(mapID, questPrevAct(session)),
+			protocol.ActionIDMissionGetSections)
+		secCancel()
+		if err == nil && resp != nil {
+			return resp, nil
+		}
+		lastErr = err
+		if lastErr == nil {
+			lastErr = errors.New("dungeon: empty mission sections response")
+		}
+		if errSessionTerminated(ctx, err) {
+			return nil, lastErr
+		}
+	}
+	return nil, lastErr
+}
+
 func challengeStoryMission(
 	ctx context.Context,
 	session *client.RoleSession,
@@ -3419,10 +3446,7 @@ func challengeStoryMission(
 		if mapID <= 0 {
 			mapID = int32(m.SectionID)
 		}
-		secPkt := protocol.BuildMissionGetSectionsPacket(mapID, questPrevAct(session))
-		secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
-		_, _ = session.Call(secCtx, secPkt, protocol.ActionIDMissionGetSections)
-		secCancel()
+		_, _ = fetchMissionSections(ctx, session, mapID)
 		if ctx.Err() != nil || session.State() == client.StateClosed {
 			return false
 		}
