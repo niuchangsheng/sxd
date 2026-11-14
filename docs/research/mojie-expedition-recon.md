@@ -74,7 +74,24 @@ level_section, team_life, show_buy_tips(Int), boxes[]`
 5. 战斗结果非 `2`（失败/Boss 死亡/次数不足/怪物队伍已灭）即停止；
 6. 不购买宝箱（仅发送 reject_buy_box），不消耗元宝。
 
-## 实机验证（qq s0，2026-11-15 00:24）
+## 隐仙伙伴抓包（/tmp/mojieyuanzheng2.pcapng，2026-11-15 00:00）
+
+```
+429/63 [0x45=69]  start_expedition_single 隐仙
+429/12            notify_enter_mission: mission=7, town=0x9a(154)
+429/13 [154]      enter_town
+429/74            get_mission_data_m7 → teams=[2,1], refines=[got,cur,need,week,week_max(20)]
+429/17            move_to (446,408)/(816,410)   # MonsterPos7 + 20px
+429/75 [1|2]      fight_monster_m7
+429/76            notify_mission_data_change_m7（PLAYER_FIGHT 更新周计数）
+429/29            quit
+```
+
+- M7 与 M6 结构一致（5 字段 refines），但队伍 1/2 的点击坐标分别为 (446,408)、(816,410)。
+- 本次连续战斗 10 场后客户端主动 quit，未达本周上限。
+- 客户端会在一支队伍失败/耗尽后切换到另一支队伍，例程已改为按队伍轮转。
+
+## 实机验证（qq s0，2026-11-15 00:24 / 00:54）
 
 ```
 魔界远征面板 tumoling=0 week_stone=10/20 week_stone2=12/20 souls=3

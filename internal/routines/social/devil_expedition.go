@@ -35,11 +35,24 @@ var devilMissionTownFallback = map[uint8]int32{
 	protocol.DevilMissionYinYang: 144,
 }
 
-// devilFightPos 返回各类型首个怪物队伍的点击坐标（与客户端 MonsterPos 对齐）。
-var devilFightPos = map[uint8][2]uint16{
-	protocol.DevilMissionYinYang:    {436, 413},
-	protocol.DevilMissionMonsterGod: {380, 261},
-	protocol.DevilMissionHermit:     {446, 408},
+// devilFightPos 各类型怪物队伍的点击坐标（客户端 MonsterPos + 20px，按队伍 id-1 索引）。
+var devilFightPos = map[uint8][][2]uint16{
+	protocol.DevilMissionYinYang:    {{436, 413}, {802, 413}},
+	protocol.DevilMissionMonsterGod: {{380, 261}, {710, 271}, {1040, 248}},
+	protocol.DevilMissionHermit:     {{446, 408}, {816, 410}},
+}
+
+// devilTeamPos 返回指定队伍的点击坐标；越界时回退到首个位置。
+func devilTeamPos(missionType uint8, teamID int32) [2]uint16 {
+	positions := devilFightPos[missionType]
+	if len(positions) == 0 {
+		return [2]uint16{}
+	}
+	idx := int(teamID) - 1
+	if idx < 0 || idx >= len(positions) {
+		idx = 0
+	}
+	return positions[idx]
 }
 
 // devilEntryMissionTown 保存服务端下发的关卡/城镇。
@@ -279,15 +292,18 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				}
 				_ = call(protocol.BuildDevilRejectBuyBoxPacket(), protocol.ActionIDDevilRejectBuyBox, callTimeout)
 
-				teamID := devilFirstTeamID(data.TeamIDs)
-				if teamID <= 0 {
+				teams := devilSortedTeams(data.TeamIDs)
+				if len(teams) == 0 {
 					slog.Info("魔界远征没有可挑战的怪物队伍", "role_id", session.RoleID(), "mission", name)
 					_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
 					continue
 				}
-				pos := devilFightPos[missionType]
+				// 按队伍逐个尝试：当前队伍战斗失败后切换到下一个队伍，全部失败才结束。
+				teamIdx := 0
 				fights := 0
-				for fights < maxFights && ctx.Err() == nil {
+				for fights < maxFights && ctx.Err() == nil && teamIdx < len(teams) {
+					teamID := teams[teamIdx]
+					pos := devilTeamPos(missionType, teamID)
 					// 429/17 无回包（官方 response 为空），只发送不等待。
 					if sendErr := session.Send(protocol.BuildDevilMoveToPacket(pos[0], pos[1], pos[0], pos[1])); sendErr != nil {
 						slog.Info("魔界远征移动发送失败", "role_id", session.RoleID(), "err", sendErr)
@@ -305,10 +321,11 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 						break
 					}
 					if fightCode != protocol.DevilResultSuccess {
-						slog.Info("魔界远征战斗结束", "role_id", session.RoleID(),
-							"mission", name, "fights", fights,
+						slog.Info("魔界远征队伍战斗结束", "role_id", session.RoleID(),
+							"mission", name, "team_id", teamID, "fights", fights,
 							"result", fightCode, "result_text", protocol.DevilResultText(fightCode))
-						break
+						teamIdx++
+						continue
 					}
 					fights++
 					slog.Info("魔界远征战斗成功", "role_id", session.RoleID(),
@@ -385,18 +402,15 @@ func devilRefinesCapped(refines []protocol.DevilRefine) bool {
 	return true
 }
 
-// devilFirstTeamID 返回可挑战的首个怪物队伍编号（客户端按 id 降序，取最小 id）。
-func devilFirstTeamID(ids []int32) int32 {
-	if len(ids) == 0 {
-		return 0
-	}
-	first := ids[0]
-	for _, id := range ids[1:] {
-		if id < first {
-			first = id
+// devilSortedTeams 返回升序排列的怪物队伍编号（客户端按 id 降序展示，先打最小 id）。
+func devilSortedTeams(ids []int32) []int32 {
+	out := append([]int32(nil), ids...)
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
 		}
 	}
-	return first
+	return out
 }
 
 // nextDevilOpenAt 返回下一次魔界远征开放时刻（每周五 00:05，活动持续五六日）。

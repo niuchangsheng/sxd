@@ -84,3 +84,26 @@ func TestBuildDevilPackets(t *testing.T) {
 		t.Fatalf("魔神战斗动作 = 0x%08X", got)
 	}
 }
+
+// 2026-11-15 /tmp/mojieyuanzheng2.pcapng 隐仙伙伴 (M7) 关卡数据。
+const devilM7DataHex = "02000100000001010000012c0006e5908ce5b098030000000200000001fc000000000000000700000001000000090000000000000000000101000000000000000000000000000000020000000200006d200000000100006d1f0000000100000000000000000000000200000000000000140000000600000009000000010000"
+
+func TestParseDevilMissionDataM7(t *testing.T) {
+	raw, err := hex.DecodeString(devilM7DataHex)
+	if err != nil {
+		t.Fatalf("hex: %v", err)
+	}
+	data, err := protocol.ParseDevilMissionData(protocol.DevilMissionHermit, raw)
+	if err != nil {
+		t.Fatalf("ParseDevilMissionData(M7): %v", err)
+	}
+	if data.Result != protocol.DevilResultSuccess {
+		t.Fatalf("result = %d", data.Result)
+	}
+	if len(data.TeamIDs) != 2 || data.TeamIDs[0] != 2 || data.TeamIDs[1] != 1 {
+		t.Fatalf("隐仙怪物队伍 = %v, want [2 1]", data.TeamIDs)
+	}
+	if len(data.Refines) != 1 || data.Refines[0].WeekMax != 20 || data.Refines[0].NeedBout != 2 {
+		t.Fatalf("隐仙炼化进度不符: %+v", data.Refines)
+	}
+}

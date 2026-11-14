@@ -154,10 +154,11 @@ func TestDevilExpeditionRoutine_YinYangFightsUntilFailed(t *testing.T) {
 	if enterCalls.Load() != 1 {
 		t.Fatalf("仅双生伙伴应进入关卡, enter calls = %d", enterCalls.Load())
 	}
-	if fightCalls.Load() != 3 {
-		t.Fatalf("应在第 3 场失败后停止, fight calls = %d", fightCalls.Load())
+	// 队伍 1 连续成功 2 场后失败，切换队伍 2 再失败，共 4 场。
+	if fightCalls.Load() != 4 {
+		t.Fatalf("两个队伍均失败后应停止, fight calls = %d", fightCalls.Load())
 	}
-	if moveCalls.Load() != 3 {
+	if moveCalls.Load() != 4 {
 		t.Fatalf("每次战斗前应移动, move calls = %d", moveCalls.Load())
 	}
 	if quitCalls.Load() == 0 {
