@@ -972,8 +972,10 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 			statusResp, err := session.Call(stCtx, protocol.BuildImperialExamStatusPacket(), protocol.ActionIDImperialExamStatus)
 			stCancel()
 			if err != nil {
-				slog.Info("金榜题名功能不可用，稍后重试", "role_id", session.RoleID(), "err", err)
-				return scheduler.NewCooldown(10*time.Minute, "金榜题名状态查询无回包")
+				// 该模块在非活动期/未开放时会被服务端静默丢弃；本任务只做状态检测、
+				// 不提交答案，10 分钟轮询只会持续丢包。改为 6 小时低频探测。
+				slog.Info("金榜题名状态查询无回包，6 小时后再试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(6*time.Hour, "金榜题名状态查询无回包")
 			}
 			status, err := protocol.ParseImperialExamStatusResult(statusResp.Payload)
 			if err != nil {
