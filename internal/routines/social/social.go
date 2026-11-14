@@ -963,9 +963,33 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 			if pErr != nil {
 				return scheduler.NewCooldown(10*time.Minute, "住宅状态解析失败")
 			}
-			if selfResult == protocol.MarryHomeResultNonMarry {
+			switch selfResult {
+			case protocol.MarryHomeResultSuccess:
+				// 正常，继续。
+			case protocol.MarryHomeResultNonMarry:
 				slog.Info("账号未处于婚姻状态，跳过住宅家具效果", "role_id", session.RoleID())
 				return scheduler.ErrAttemptsExhausted
+			case protocol.MarryHomeResultNonActivityTime:
+				slog.Info("家园活动未开放，稍后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(2*time.Hour, "家园活动未开放")
+			case protocol.MarryHomeResultFunctionNoOpen:
+				slog.Info("家园功能未开放，跳过", "role_id", session.RoleID())
+				return scheduler.ErrAttemptsExhausted
+			default:
+				slog.Info("住宅状态不可用，稍后重试", "role_id", session.RoleID(), "result", selfResult)
+				return scheduler.NewCooldown(30*time.Minute, "住宅状态不可用")
+			}
+
+			// 210/18 需要家园场景上下文：先按官方客户端调用 get_player_home_info。
+			// 缺少该前置时 210/18 会被服务端静默丢弃（2026-11-14 s1 实测）。
+			pCtx, pCancel := context.WithTimeout(ctx, callTimeout)
+			homeResp, pErr := session.Call(pCtx,
+				protocol.BuildMarryHomePlayerInfoPacket(session.PlayerID()),
+				protocol.ActionIDMarryHomePlayerInfo)
+			pCancel()
+			if pErr != nil || homeResp == nil {
+				slog.Info("住宅信息查询无回包，稍后重试", "role_id", session.RoleID(), "err", pErr)
+				return scheduler.NewCooldown(2*time.Hour, "住宅信息无回包")
 			}
 
 			bCtx, bCancel := context.WithTimeout(ctx, callTimeout)

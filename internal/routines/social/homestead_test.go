@@ -37,6 +37,9 @@ func newHomesteadTestSession(t *testing.T, selfResult uint8, effects []protocol.
 			switch pkt.ActionID {
 			case protocol.ActionIDMarryHomeSelfInfo:
 				_ = protocol.WritePacket(serverConn, protocol.BuildMarryHomeSelfInfoResultPacket(selfResult))
+			case protocol.ActionIDMarryHomePlayerInfo:
+				// 家园场景前置查询，任意非空回包即可。
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 			case protocol.ActionIDMarryHomeBatchFurnitureEffect:
 				_ = protocol.WritePacket(serverConn,
 					protocol.BuildMarryHomeBatchFurnitureEffectResultPacket(effects))
@@ -90,13 +93,16 @@ func TestHomesteadRoutine_MarriedClaimsFurnitureEffect(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 
-	called := false
-	for _, act := range *actions {
-		if act == protocol.ActionIDMarryHomeBatchFurnitureEffect {
-			called = true
+	infoIdx, effectIdx := -1, -1
+	for i, act := range *actions {
+		switch act {
+		case protocol.ActionIDMarryHomePlayerInfo:
+			infoIdx = i
+		case protocol.ActionIDMarryHomeBatchFurnitureEffect:
+			effectIdx = i
 		}
 	}
-	if !called {
-		t.Fatal("已婚角色应发送 210/18 家具效果请求")
+	if infoIdx < 0 || effectIdx < 0 || infoIdx > effectIdx {
+		t.Fatalf("已婚角色应先发 210/2 再发 210/18, actions=%v", *actions)
 	}
 }

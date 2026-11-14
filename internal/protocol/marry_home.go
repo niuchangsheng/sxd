@@ -101,6 +101,19 @@ func BuildMarryHomeCakeResultPacket(res MarryHomeCakeResult) *Packet {
 	return NewPacket(ActionIDMarryHomeGetCake, w.Bytes())
 }
 
+// ActionIDMarryHomePlayerInfo 查询玩家家园信息 (Module 210, Action 2 -> 0x00D20002)。
+//
+// 官方客户端进入家园时先 get_player_home_info 建立家园场景上下文，
+// 再调用 batch_get_furniture_effect；缺少该前置时 210/18 会被静默丢弃。
+const ActionIDMarryHomePlayerInfo uint32 = 0x00D20002
+
+// BuildMarryHomePlayerInfoPacket 构造玩家家园信息查询封包，仅 4 字节 player_id。
+func BuildMarryHomePlayerInfoPacket(playerID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(playerID)
+	return NewPacket(ActionIDMarryHomePlayerInfo, w.Bytes())
+}
+
 // ActionIDMarryHomeBatchFurnitureEffect 批量领取家具效果/家园奖励
 // (Module 210, Action 18 -> 0x00D20012)。
 const ActionIDMarryHomeBatchFurnitureEffect uint32 = 0x00D20012
