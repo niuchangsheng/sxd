@@ -9,7 +9,10 @@ package daily
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -19,6 +22,39 @@ import (
 
 // dailyActivityTarget 每日活跃度目标 (红包装励门槛)。
 const dailyActivityTarget = 1200
+
+// incompleteDailyTasks 汇总未完成的每日任务，按剩余可获活跃度降序，
+// 格式 task_id:cur/max(+remain_active)，最多返回 limit 条，便于线上定位缺口。
+func incompleteDailyTasks(panel *protocol.DailyActivityPanel, limit int) string {
+	if panel == nil {
+		return ""
+	}
+	tasks := make([]protocol.DailyActivityTask, 0, len(panel.Tasks))
+	for _, task := range panel.Tasks {
+		if task.TaskID > protocol.DailyActivityTaskWeeklyThreshold {
+			continue
+		}
+		if task.RemainingTimes() <= 0 || task.PerActiveAdd <= 0 {
+			continue
+		}
+		tasks = append(tasks, task)
+	}
+	sort.Slice(tasks, func(i, j int) bool {
+		if li, ri := tasks[i].RemainingActive(), tasks[j].RemainingActive(); li != ri {
+			return li > ri
+		}
+		return tasks[i].TaskID < tasks[j].TaskID
+	})
+	if limit > 0 && len(tasks) > limit {
+		tasks = tasks[:limit]
+	}
+	parts := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		parts = append(parts, fmt.Sprintf("%d:%d/%d(+%d)",
+			task.TaskID, task.CurTimes, task.MaxTimes, task.RemainingActive()))
+	}
+	return strings.Join(parts, ",")
+}
 
 // NewDailyActivityReportRoutine 构造每日活跃度汇总任务。
 func NewDailyActivityReportRoutine() scheduler.ActivityRoutine {
@@ -59,6 +95,7 @@ func NewDailyActivityReportRoutine() scheduler.ActivityRoutine {
 				"target", dailyActivityTarget,
 				"gap", gap,
 				"met", total >= dailyActivityTarget,
+				"incomplete_tasks", incompleteDailyTasks(panel, 20),
 			)
 			return nil
 		},
