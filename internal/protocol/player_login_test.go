@@ -200,3 +200,37 @@ func TestPlayerLogin_OfficialMicroClient104Bytes(t *testing.T) {
 	}
 }
 
+// TestParsePlayerLoginResult_ZeroStaminaPresence 验证体力/货币为 0 时仍标记字段存在。
+//
+// 背景: 服务端体力可以合法为 0；客户端用 >0 判定会把初值 (体力 201) 留在本地，
+// 导致推图反复发起必然返回 LESS_POWER 的请求。
+func TestParsePlayerLoginResult_ZeroStaminaPresence(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteString("测试")
+	w.WriteInt32(100)  // level
+	w.WriteInt32(0)    // ingot
+	w.WriteInt64(0)    // coins
+	w.WriteInt64(1000) // health
+	w.WriteInt64(1000) // max health
+	w.WriteInt32(0)    // stamina
+	w.WriteInt64(0)    // exp
+	w.WriteInt64(0)    // max exp
+	w.WriteInt32(0)    // town map
+	for len(w.Bytes()) < 120 {
+		w.WriteUint8(0)
+	}
+
+	res, err := protocol.ParsePlayerLoginResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParsePlayerLoginResult 失败: %v", err)
+	}
+	if !res.HasStamina || res.Stamina != 0 {
+		t.Fatalf("体力 0 应标记存在, got HasStamina=%v Stamina=%d", res.HasStamina, res.Stamina)
+	}
+	if !res.HasCoins || res.Coins != 0 {
+		t.Fatalf("铜钱 0 应标记存在, got HasCoins=%v Coins=%d", res.HasCoins, res.Coins)
+	}
+	if !res.HasIngots || res.Ingots != 0 {
+		t.Fatalf("元宝 0 应标记存在, got HasIngots=%v Ingots=%d", res.HasIngots, res.Ingots)
+	}
+}

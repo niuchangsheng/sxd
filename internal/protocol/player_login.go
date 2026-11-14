@@ -79,6 +79,14 @@ type PlayerLoginResult struct {
 	MaxStamina int32
 	// VIP 角色 VIP 等级
 	VIP int32
+
+	// HasCoins/HasIngots/HasStamina/HasExtraStamina 表示对应字段在回包中确实存在。
+	// 服务端体力/货币可以合法为 0，不能用 >0 作为“是否解析成功”的判据，
+	// 否则会保留客户端初值 (体力 201 / 铜钱 36 亿) 造成幽灵资源。
+	HasCoins        bool
+	HasIngots       bool
+	HasStamina      bool
+	HasExtraStamina bool
 }
 
 // BuildPlayerLoginPacket 构造角色主服登录请求二进制协议封包 (ActionID 0x00000000)。
@@ -219,6 +227,8 @@ func ParsePlayerLoginResult(payload []byte) (*PlayerLoginResult, error) {
 		}
 		res.Ingots = int32(binary.BigEndian.Uint32(body[pos+4 : pos+8]))
 		res.Coins = int64(binary.BigEndian.Uint64(body[pos+8 : pos+16]))
+		res.HasIngots = true
+		res.HasCoins = true
 	}
 
 	if pos+32 <= len(body) {
@@ -228,6 +238,7 @@ func ParsePlayerLoginResult(payload []byte) (*PlayerLoginResult, error) {
 
 	if pos+36 <= len(body) {
 		res.Stamina = int32(binary.BigEndian.Uint32(body[pos+32 : pos+36]))
+		res.HasStamina = true
 	}
 
 	if pos+52 <= len(body) {
@@ -248,6 +259,7 @@ func ParsePlayerLoginResult(payload []byte) (*PlayerLoginResult, error) {
 
 	if pos+109 <= len(body) {
 		res.ExtraStamina = int32(binary.BigEndian.Uint32(body[pos+105 : pos+109]))
+		res.HasExtraStamina = true
 	}
 
 	return res, nil

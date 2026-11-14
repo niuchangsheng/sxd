@@ -876,16 +876,16 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 				if infoRes.Level > 0 {
 					ps.Level = int(infoRes.Level)
 				}
-				if infoRes.Coins > 0 {
+				if infoRes.HasCoins {
 					ps.Coins = infoRes.Coins
 				}
-				if infoRes.Ingots > 0 {
+				if infoRes.HasIngots {
 					ps.Ingots = int64(infoRes.Ingots)
 				}
-				if infoRes.Stamina > 0 {
+				if infoRes.HasStamina {
 					ps.Stamina = int(infoRes.Stamina)
 				}
-				if infoRes.ExtraStamina > 0 {
+				if infoRes.HasExtraStamina {
 					ps.ExtraStamina = int(infoRes.ExtraStamina)
 				}
 				if infoRes.MaxStamina > 0 {
@@ -953,16 +953,16 @@ func (s *RoleSession) FetchLatestPlayerInfo(ctx context.Context) (*protocol.Play
 		if infoRes.Level > 0 {
 			ps.Level = int(infoRes.Level)
 		}
-		if infoRes.Coins > 0 {
+		if infoRes.HasCoins {
 			ps.Coins = infoRes.Coins
 		}
-		if infoRes.Ingots > 0 {
+		if infoRes.HasIngots {
 			ps.Ingots = int64(infoRes.Ingots)
 		}
-		if infoRes.Stamina > 0 {
+		if infoRes.HasStamina {
 			ps.Stamina = int(infoRes.Stamina)
 		}
-		if infoRes.ExtraStamina > 0 {
+		if infoRes.HasExtraStamina {
 			ps.ExtraStamina = int(infoRes.ExtraStamina)
 		}
 		if infoRes.MaxStamina > 0 {
