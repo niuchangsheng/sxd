@@ -1,20 +1,21 @@
 //go:build probe
 
-// 目标: 将角色从山海九界 (town_map_id=153) 复位到普通城镇，恢复 NPC 玩法可用性
+// 目标: 定位 enter_town (Module 1, Action 0) 的正确载荷形态。
 //
-// 背景: 角色残留在特殊地图时，服务端会静默丢弃部分模块的写请求；官方客户端
-// 通过 Mod_Town_Base.enter_town 回到普通城镇。本探针调用 EnterTown(4) 天剑宗，
-// 并打印进入前后的 town_id/town_map_id，再用该城镇的神秘商人 NPC 101 查询琳琅阁。
+// 任务推图前需要按官方 gotoTownAtId 复位城镇场景以清除魔王试炼残留的
+// 战场上下文；线上当前 8 字节（Int + PrevAct）载荷无回包。
+// 本探针依次尝试裸 4 字节与不同 PrevAct，随后再请求 get_sections(21) 对照。
 //
-// 运行命令: SXD_CONFIG=configs/s0.yaml SXD_PROBE_TOWN=4 go run -tags=probe test/probes/probe_enter_town_live.go
+// 运行: SXD_CONFIG=configs/niuchangsheng.yaml go run -tags=probe test/probes/probe_enter_town_live.go -role 1
 package main
 
 import (
 	"context"
+	"encoding/hex"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -25,24 +26,20 @@ import (
 
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
-	townID := int32(4)
-	if raw := os.Getenv("SXD_PROBE_TOWN"); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil {
-			townID = int32(v)
-		}
-	}
-
 	cfgPath := os.Getenv("SXD_CONFIG")
 	if cfgPath == "" {
-		cfgPath = "configs/s0.yaml"
+		cfgPath = "configs/niuchangsheng.yaml"
 	}
+	roleIdx := flag.Int("role", 1, "配置中的角色下标 (0=s0, 1=s1)")
+	flag.Parse()
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		slog.Error("加载配置失败", "path", cfgPath, "err", err)
+		slog.Error("加载配置失败", "err", err)
 		return
 	}
 	acc := cfg.Accounts[0]
-	role := acc.Roles[0]
+	role := acc.Roles[*roleIdx]
 
 	ticketCache := platform.NewTicketCache(90 * time.Minute)
 	xdAuth, err := platform.NewXindongAuthenticator()
@@ -53,15 +50,13 @@ func main() {
 	xdAuth.SetCookie(acc.Cookie)
 	ticketCache.RegisterAuthenticator(xdAuth)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-
 	ticket, err := ticketCache.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)
 	if err != nil {
 		slog.Error("换票失败", "err", err)
 		return
 	}
-
 	roleCfg := client.SessionConfig{
 		RoleID:               fmt.Sprintf("%s-%s", role.ServerID, role.RoleName),
 		RoleName:             role.RoleName,
@@ -73,10 +68,9 @@ func main() {
 		MaxReconnectAttempts: 3,
 	}
 	client.ApplyTicket(&roleCfg, ticket)
-
 	sess := client.NewRoleSession(roleCfg)
 	if err := sess.Start(ctx); err != nil {
-		slog.Error("启动主服会话失败", "err", err)
+		slog.Error("启动会话失败", "err", err)
 		return
 	}
 	defer sess.Close()
@@ -85,64 +79,47 @@ func main() {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if sess.State() != client.StateActive {
-		slog.Error("主服会话未激活", "state", sess.State())
+		slog.Error("会话未激活", "state", sess.State())
 		return
 	}
+	mapID := int32(sess.GetPlayerState().TownMapID)
+	townID := int32(sess.GetPlayerState().TownID)
+	slog.Info("城镇标识", "map_id", mapID, "town_id", townID)
 
-	before := sess.GetPlayerState()
-	slog.Info("进入城镇前", "town_id", before.TownID, "town_map_id", before.TownMapID)
-
-	// 先离开当前特殊地图，再进入普通城镇。
-	leaveW := protocol.NewWriter()
-	leaveW.WriteUint32(0)
-	leavePkt := protocol.NewPacket(0x00010001, leaveW.Bytes())
-	leavePkt.HasPrevAct = true
-	lCtx, lCancel := context.WithTimeout(ctx, 5*time.Second)
-	leaveResp, lErr := sess.Call(lCtx, leavePkt, 0x00010001)
-	lCancel()
-	if lErr != nil || leaveResp == nil {
-		slog.Warn("离开当前城镇无回包，继续尝试直接进入", "err", lErr)
-	} else {
-		slog.Info("离开当前城镇结果", "hex", fmt.Sprintf("%x", leaveResp.Payload))
-	}
-
-	result, err := sess.EnterTown(ctx, townID)
-	if err != nil {
-		slog.Error("进入城镇失败", "town_id", townID, "err", err)
-		return
-	}
-	slog.Info("进入城镇结果", "town_id", townID, "result", result)
-
-	time.Sleep(500 * time.Millisecond)
-	after := sess.GetPlayerState()
-	slog.Info("进入城镇后", "town_id", after.TownID, "town_map_id", after.TownMapID)
-
-	// 扫描常见城镇的神秘商人 NPC ID，确认当前地图接受哪一个。
-	for _, npcID := range []int32{101, 100, 102, 130, 131, 132, 38, 0} {
-		listW := protocol.NewWriter()
-		listW.WriteInt32(npcID)
-		listW.WriteUint32(0)
-		pkt := protocol.NewPacket(0x0002004C, listW.Bytes())
-		pkt.HasPrevAct = true
-		cCtx, cCancel := context.WithTimeout(ctx, 4*time.Second)
-		resp, cErr := sess.Call(cCtx, pkt, 0x0002004C)
+	call := func(payload []byte, act uint32, name string) bool {
+		cCtx, cCancel := context.WithTimeout(ctx, 6*time.Second)
+		resp, cErr := sess.Call(cCtx, protocol.NewPacket(act, payload), act)
 		cCancel()
 		if cErr != nil || resp == nil {
-			slog.Warn("查询琳琅阁失败", "npc_id", npcID, "err", cErr)
-			continue
+			slog.Warn("无回包", "call", name, "err", cErr)
+			return false
 		}
-		r := protocol.NewReader(resp.Payload)
-		n, _ := r.ReadUint16()
-		slog.Info("琳琅阁商品数量", "npc_id", npcID, "count", n)
-		for i := 0; i < int(n); i++ {
-			id, _ := r.ReadInt32()
-			price, _ := r.ReadInt32()
-			slog.Info("商品", "item_id", id, "coin_price", price)
+		limit := len(resp.Payload)
+		if limit > 40 {
+			limit = 40
 		}
-		hour, _ := r.ReadInt32()
-		sec, _ := r.ReadInt32()
-		ingot, _ := r.ReadInt32()
-		slog.Info("刷新信息", "hour", hour, "seconds", sec, "ingot", ingot)
-		return
+		slog.Info("有回包", "call", name, "len", len(resp.Payload),
+			"hex", hex.EncodeToString(resp.Payload[:limit]))
+		return true
 	}
+
+	variants := []struct {
+		name    string
+		payload []byte
+	}{
+		{"bare_map", protocol.NewWriter().WriteInt32(mapID).Bytes()},
+		{"bare_town", protocol.NewWriter().WriteInt32(townID).Bytes()},
+		{"prev_map", protocol.NewWriter().WriteInt32(mapID).WriteUint32(sess.LastActionID()).Bytes()},
+		{"prev_town_enter", protocol.NewWriter().WriteInt32(mapID).WriteUint32(protocol.ActionIDTownEnter).Bytes()},
+	}
+	for _, v := range variants {
+		time.Sleep(600 * time.Millisecond)
+		call(v.payload, protocol.ActionIDTownEnter, v.name)
+	}
+
+	// 复位后对照：get_sections(21) 是否恢复。
+	time.Sleep(600 * time.Millisecond)
+	call(protocol.BuildMissionGetSectionsPacket(21, sess.LastAckActionID()).Payload,
+		protocol.ActionIDMissionGetSections, "get_sections_21")
+	slog.Info("探针结束")
 }

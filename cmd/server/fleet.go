@@ -22,8 +22,6 @@ import (
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/routines"
 	"sxd-pie-ng/internal/routines/daily"
-	"sxd-pie-ng/internal/routines/dungeon"
-	"sxd-pie-ng/internal/routines/farming"
 	"sxd-pie-ng/internal/scheduler"
 	"sxd-pie-ng/internal/web"
 )
@@ -296,18 +294,16 @@ func startPlans(ctx context.Context, plans []*rolePlan) {
 			slog.Info("角色会话启动中",
 				"role_id", p.roleID, "server_id", p.role.ServerID, "server_addr", p.cfg.ServerAddr)
 			// 登录后置任务（调度器在 startPlans 之后才启动）：
-			//   1. 渡业台 852/16 要求“登录后第一个业务请求”，必须先执行；
-			//   2. 淬炼池 282 对上下文不敏感（裸载荷实测随时可用），随后执行；
-			//   3. 英雄副本 35/0 对上下文敏感，最后执行。
+			// 只保留渡业台 852/16 —— 它要求“登录后第一个业务请求”。
+			//
+			// 淬炼池 282 与英雄副本 35/0 不再在登录钩子中执行：
+			// 2026-11-14 线上探针确认，发送 35/0（即使全部有回包）后，
+			// 任务推图的 get_sections (4/0) 会被服务端静默丢弃；
+			// 反过来先 get_sections 再发 35/0 两者都正常。
+			// 因此由调度器按优先级执行：dungeon(200) 先完成一次任务推图，
+			// 之后的淬炼池与英雄副本由各自例程处理。
 			if p.enabled["rebirth_land"] {
 				daily.RunRebirthAltarOnLogin(ctx, p.sess)
-			}
-			if p.enabled["spirit_pool"] {
-				farming.RunSpiritPoolOnLogin(ctx, p.sess, p.factory.SpiritPoolConfig())
-			}
-			// 英雄副本 35/0 对上下文敏感：必须在其它例程查询活动面板之前执行。
-			if p.enabled["dungeon"] {
-				dungeon.RunHeroMissionSweepOnLogin(ctx, p.sess, p.dictRepo)
 			}
 		}()
 	}
