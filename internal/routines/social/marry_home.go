@@ -70,9 +70,16 @@ func NewMarryHomeRoutine() scheduler.ActivityRoutine {
 				slog.Warn("解析家园状态失败，跳过本轮", "role_id", session.RoleID(), "err", pErr)
 				return nil
 			}
+			slog.Info("家园状态查询结果", "role_id", session.RoleID(),
+				"player_id", session.PlayerID(),
+				"self_result", selfResult,
+				"payload_hex", fmt.Sprintf("%x", selfResp.Payload))
+			// 2026-11-14 实测：qq s0 已婚账号的 210/0 也返回 3，
+			// 该字节并非可靠的婚姻标志（疑似住宅状态而非 result_code）。
+			// 不再用它做硬门禁，直接尝试 210/19，由领取结果码（3=未结婚）判定。
 			if selfResult == protocol.MarryHomeResultNonMarry {
-				slog.Info("账号未处于婚姻状态，跳过家园奖励", "role_id", session.RoleID())
-				return scheduler.ErrAttemptsExhausted
+				slog.Info("住宅状态返回 3，继续尝试领取家园奖励（该码不代表未结婚）",
+					"role_id", session.RoleID())
 			}
 
 			// 2. 领取自家小蛋糕奖励 (免费)。

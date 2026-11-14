@@ -287,7 +287,7 @@ func TestMarryHomeRoutine_SkipsWhenFunctionClosed(t *testing.T) {
 
 // TestMarryHomeRoutine_SkipsWhenNotMarried 验证未结婚角色在发出会被静默丢弃的
 // get_cake 之前就由住宅状态查询拦截，避免固定 8s 空等。
-func TestMarryHomeRoutine_SkipsWhenNotMarried(t *testing.T) {
+func TestMarryHomeRoutine_SelfInfo3StillTriesCake(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	t.Cleanup(func() {
 		_ = serverConn.Close()
@@ -310,6 +310,9 @@ func TestMarryHomeRoutine_SkipsWhenNotMarried(t *testing.T) {
 					protocol.BuildMarryHomeSelfInfoResultPacket(protocol.MarryHomeResultNonMarry))
 			case protocol.ActionIDMarryHomeGetCake:
 				atomic.AddInt32(&cakeCalls, 1)
+				// 210/0 的 3 不代表未结婚；真正的未结婚由 210/19 结果码 3 返回。
+				_ = protocol.WritePacket(serverConn, protocol.BuildMarryHomeCakeResultPacket(
+					protocol.MarryHomeCakeResult{Result: protocol.MarryHomeResultNonMarryStatus}))
 			}
 		}
 	}()
@@ -333,10 +336,10 @@ func TestMarryHomeRoutine_SkipsWhenNotMarried(t *testing.T) {
 	}
 
 	if err := NewMarryHomeRoutine().Execute(context.Background(), session, nil); err != scheduler.ErrAttemptsExhausted {
-		t.Fatalf("未结婚应挂起至次日, 实际: %v", err)
+		t.Fatalf("领取结果码为未结婚时应挂起至次日, 实际: %v (cakeCalls=%d)", err, atomic.LoadInt32(&cakeCalls))
 	}
-	if got := atomic.LoadInt32(&cakeCalls); got != 0 {
-		t.Fatalf("未结婚时不应发送蛋糕领取请求, 实际 %d 次", got)
+	if got := atomic.LoadInt32(&cakeCalls); got != 1 {
+		t.Fatalf("210/0 返回 3 时仍应尝试一次领取, 实际 %d 次", got)
 	}
 }
 
