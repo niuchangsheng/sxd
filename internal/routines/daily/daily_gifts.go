@@ -133,9 +133,12 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 					case protocol.PlayerClientGiftBagFull:
 						return scheduler.ErrBagFull
 					default:
-						// 线上 qq 账号返回 111 (ERROR)，可能是活动/资格状态，稍后重试。
-						slog.Info("PC 微端礼包未领取，稍后重试", "role_id", session.RoleID(), "result", result)
-						return scheduler.NewCooldown(2*time.Hour, "PC微端礼包领取失败")
+						// 线上 qq/ncs 账号均返回 111 (ERROR)：非 PC 微端环境无法领取。
+						// 按会话退避 6 小时，避免每 2 小时重复被拒。
+						clientGiftBlocked.Store(session, time.Now().Add(6*time.Hour))
+						slog.Info("PC 微端礼包被服务端拒绝，暂停 6 小时",
+							"role_id", session.RoleID(), "result", result)
+						return nil
 					}
 				}
 			}

@@ -182,6 +182,21 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 				return fmt.Errorf("farming: 构造药园种子查询封包失败: %w", sErr)
 			}
 			seedsResp, scErr := callWithTimeout(seedsPkt, protocol.ActionIDFarmGetSeeds)
+			if seedsResp == nil {
+				// 单次无回包可能只是网关瞬断；用最后确认动作作为锚点重试一次。
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(500 * time.Millisecond):
+				}
+				retryPkt, rErr := protocol.BuildFarmSeedsPacket(protocol.FarmSeedsRequest{
+					PrevAct: session.LastAckActionID(),
+				})
+				if rErr == nil {
+					retryPkt.HasPrevAct = false
+					seedsResp, scErr = callWithTimeout(retryPkt, protocol.ActionIDFarmGetSeeds)
+				}
+			}
 			if abortOnDrop(seedsResp, scErr) {
 				return nil
 			}
