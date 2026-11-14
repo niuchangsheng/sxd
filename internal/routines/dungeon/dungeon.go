@@ -703,7 +703,19 @@ func executeEliteMissionSweep(
 		heroCfg.Sweep.GlobalElite = false
 		heroSwept, heroErr := executeEliteMissionSweep(ctx, session, dictRepo, heroCfg,
 			sweepHasStamina, totalCostStamina, totalGainExp, totalGainCoins)
+		// Module 25 的 auto_sale 只覆盖白绿蓝装；抓包中官方客户端没有额外出售请求，
+		// 但本服 auto_sale 可能漏掉部分掉落。这里在全局扫荡前后做背包差量，
+		// 把新增的可出售物品补卖掉，避免背包被扫荡物堆满。
+		var globalPackBase *packItemSnapshot
+		if cfg.Sweep.SellSweptItems {
+			globalPackBase = capturePackSnapshot(ctx, session)
+		}
 		globalSwept, globalErr := sweepEliteMissionsWithoutTown(ctx, session, dictRepo)
+		if globalPackBase != nil {
+			if sold := sellNewPackItems(ctx, session, dictRepo, globalPackBase); sold > 0 {
+				slog.Info("全局精英扫荡物出售完成", "role_id", session.RoleID(), "sold", sold)
+			}
+		}
 		if globalErr != nil {
 			return heroSwept, globalErr
 		}
