@@ -119,8 +119,17 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 			// 4. 活跃度任务 70 未完成时才领取挂机奖励，避免无意义请求。
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
+				// 单次无回包多为网关瞬断；短暂重试一次再进入较长冷却。
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(500 * time.Millisecond):
+				}
+				actResp = call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
+			}
+			if actResp == nil {
 				slog.Info("查询每日活跃度失败，稍后重试轮回净地", "role_id", session.RoleID())
-				return scheduler.NewCooldown(10*time.Minute, "轮回净地活跃度查询无回包")
+				return scheduler.NewCooldown(30*time.Minute, "轮回净地活跃度查询无回包")
 			}
 			panel, err := protocol.ParseGameAssistantInfo(actResp.Payload)
 			if err != nil {

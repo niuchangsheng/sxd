@@ -1091,8 +1091,10 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 
 			if shouldRunQuest {
 				replenishedStamina := 0
+				// 副本进入/战斗只消耗当前体力池；存储/额外体力 (ExtraStamina)
+				// 不适用于 enter_mission (2026-11-14 实测 201 存储体力仍返回 LESS_POWER)。
 				questEnsureStamina := func() bool {
-					if session.GetStamina() >= powerPerSweep {
+					if session.GetBaseStamina() >= powerPerSweep {
 						return true
 					}
 					// auto_replenish_stamina 只作用于推图！
@@ -1107,7 +1109,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							maxStamina = 200
 						}
 					}
-					for session.GetStamina() < powerPerSweep && replenishedStamina < maxStamina {
+					for session.GetBaseStamina() < powerPerSweep && replenishedStamina < maxStamina {
 						ok, itemName, addedPoints, err := TryReplenishStamina(ctx, session)
 						if err != nil {
 							slog.Warn("推图尝试自动补充体力异常", "role_id", session.RoleID(), "err", err)
@@ -1125,7 +1127,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							"max_replenish_stamina", maxStamina,
 						)
 					}
-					return session.GetStamina() >= powerPerSweep
+					return session.GetBaseStamina() >= powerPerSweep
 				}
 
 				// 推图前置检查体力自愈
@@ -2381,7 +2383,7 @@ func executeQuestCycle(
 			if failedMissions[mid] {
 				continue
 			}
-			if session.GetStamina() < powerPerSweep && !ensureStamina() {
+			if session.GetBaseStamina() < powerPerSweep && !ensureStamina() {
 				break
 			}
 
@@ -2940,8 +2942,8 @@ func executeAuthoritativeQuestCycle(
 			if failedMissions[mid] {
 				continue
 			}
-			if session.GetStamina() < powerPerSweep && !ensureStamina() {
-				slog.Info("推图体力耗尽且无可用补充道具，退出任务循环", "stamina", session.GetStamina())
+			if session.GetBaseStamina() < powerPerSweep && !ensureStamina() {
+				slog.Info("推图体力耗尽且无可用补充道具，退出任务循环", "stamina", session.GetBaseStamina())
 				return
 			}
 
@@ -3106,7 +3108,7 @@ func advanceQuestMission(
 		if ctx.Err() != nil || session.State() == client.StateClosed {
 			return clearedPrereq || lastCount > initialCount
 		}
-		if session.GetStamina() < 5 && !ensureStamina() {
+		if session.GetBaseStamina() < 5 && !ensureStamina() {
 			return clearedPrereq || lastCount > initialCount
 		}
 
