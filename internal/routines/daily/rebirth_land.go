@@ -215,7 +215,9 @@ func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
 		}
 		return resp
 	}
-	draws, cooldown := runAltarDraws(ctx, session, call, true)
+	// 登录钩子处于全新会话，无需 0/2 重同步；实测重同步会把动作链切到
+	// 其他上下文，紧随其后的 852/16 抽取被静默丢弃。
+	draws, cooldown := runAltarDraws(ctx, session, call, false)
 	if draws > 0 {
 		slog.Info("登录后渡业台抽取完成", "role_id", session.RoleID(), "draws", draws)
 	}
