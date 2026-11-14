@@ -6,12 +6,17 @@ package daily
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
 )
+
+// clientGiftBlocked 记录 PC 微端礼包探测被静默丢弃后的退避时间。
+// 服务端对非 PC 端会话可能直接丢弃该查询；每轮 cron 重试只会重复丢包。
+var clientGiftBlocked sync.Map // *client.RoleSession -> time.Time
 
 // NewDailyGiftsRoutine 构造每日免费礼包领取任务。
 //
@@ -90,8 +95,15 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 3. PC 微端礼包。
+			if until, ok := clientGiftBlocked.Load(session); ok {
+				if t, _ := until.(time.Time); time.Now().Before(t) {
+					slog.Debug("PC 微端礼包近期无回包，退避期间跳过", "role_id", session.RoleID())
+					return nil
+				}
+			}
 			if resp, err := call(protocol.BuildClientGiftInfoPacket(), protocol.ActionIDPlayerClientGiftInfo); err != nil || resp == nil {
-				slog.Info("查询 PC 微端礼包无回包", "role_id", session.RoleID(), "err", err)
+				clientGiftBlocked.Store(session, time.Now().Add(6*time.Hour))
+				slog.Info("查询 PC 微端礼包无回包，暂停探测 6 小时", "role_id", session.RoleID(), "err", err)
 			} else if info, pErr := protocol.ParseClientGiftInfoResult(resp.Payload); pErr != nil {
 				slog.Warn("解析 PC 微端礼包失败", "role_id", session.RoleID(), "err", pErr)
 			} else if info.Status == 0 {
