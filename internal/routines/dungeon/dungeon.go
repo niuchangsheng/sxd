@@ -3217,7 +3217,9 @@ func advanceQuestMission(
 				"mission_id", targetMission.ID,
 				"name", targetMission.Name,
 			)
-		} else if !targetKnownUncleared && targetInSections {
+		} else if !targetKnownUncleared && targetInSections && !clearedMissions[targetMission.ID] {
+			// 已通关关卡的 25/1 会被服务端静默丢弃（2026-11-14 任务 561 实测）；
+			// 若任务仍需重复击杀，改走剧情副本重复挑战。
 			practiced, _, pErr = practiceMission(ctx, session, int32(targetMission.ID), batchCount, ensureStamina, totalCostStamina, totalGainExp, totalGainCoins)
 			if pErr != nil {
 				if errors.Is(pErr, scheduler.ErrStaminaDepleted) || errors.Is(pErr, scheduler.ErrBagFull) {
@@ -3238,8 +3240,20 @@ func advanceQuestMission(
 		}
 
 		if !practiced {
-			// 若该关卡在服务端已通关但扫荡失败，不再尝试进入剧情挑战（剧情副本对已通关关卡无怪物）
+			// 关卡已通关但任务进度未完成 (如 1/30 的重复击杀任务)：
+			// 25/1 已被服务端丢弃，改为重复挑战剧情副本推进进度。
 			if clearedMissions[targetMission.ID] {
+				if maxCount > 0 && initialCount < maxCount {
+					slog.Info("关卡已通关但任务进度未完成，重复挑战剧情副本",
+						"role_id", session.RoleID(),
+						"mission_id", targetMission.ID,
+						"progress", fmt.Sprintf("%d/%d", initialCount, maxCount),
+					)
+					if challengeStoryMission(ctx, session, targetMission, ensureStamina,
+						totalCostStamina, totalGainExp, totalGainCoins, clearedMissions) {
+						return true
+					}
+				}
 				return clearedPrereq || lastCount > initialCount
 			}
 
