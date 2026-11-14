@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
@@ -111,5 +112,21 @@ func TestFairylandDispatchRoutine_PrevActFallback(t *testing.T) {
 	}
 	if dispatchCalls.Load() != 1 {
 		t.Fatalf("面板恢复后应进入游历派遣, dispatch calls = %d", dispatchCalls.Load())
+	}
+}
+
+func TestFairylandRetryDelay(t *testing.T) {
+	loc := time.Local
+	before := time.Date(2026, 11, 15, 7, 0, 0, 0, loc)
+	if got, want := fairylandRetryDelay(before), time.Hour; got != want {
+		t.Fatalf("08:00 前应等待 1h, got %v want %v", got, want)
+	}
+	inside := time.Date(2026, 11, 15, 10, 0, 0, 0, loc)
+	if got, want := fairylandRetryDelay(inside), 30*time.Minute; got != want {
+		t.Fatalf("开放窗口内应 30m 复查, got %v want %v", got, want)
+	}
+	after := time.Date(2026, 11, 15, 21, 0, 0, 0, loc)
+	if got, want := fairylandRetryDelay(after), 11*time.Hour; got != want {
+		t.Fatalf("20:00 后应等待次日 08:00 (11h), got %v want %v", got, want)
 	}
 }

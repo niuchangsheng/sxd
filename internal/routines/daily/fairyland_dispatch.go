@@ -68,9 +68,13 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 				return scheduler.NewCooldown(10*time.Minute, "宠物仙域主面板解析失败")
 			}
 			if code != protocol.FairylandSuccess {
-				slog.Info("宠物仙域未开放，稍后重试", "role_id", session.RoleID(),
-					"result", code, "result_text", protocol.FairylandResultText(code))
-				return scheduler.NewCooldown(2*time.Hour, "宠物仙域未开放")
+				// 用户实测开放时间 08:00~20:00；窗口内仍失败则 30 分钟后再试，
+				// 窗口外按下一次 08:00 唤醒，避免整点/整小时空轮询。
+				wait := fairylandRetryDelay(time.Now())
+				slog.Info("宠物仙域未开放，等待开放时间", "role_id", session.RoleID(),
+					"result", code, "result_text", protocol.FairylandResultText(code),
+					"retry_in", wait)
+				return scheduler.NewCooldown(wait, "宠物仙域未开放")
 			}
 
 			taskResp := call(protocol.BuildFairylandTaskPanelPacket(), protocol.ActionIDFairylandTaskPanel)
@@ -127,4 +131,19 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 			return nil
 		},
 	)
+}
+
+// fairylandRetryDelay 返回宠物仙域未开放时的重试间隔。
+//
+// 开放时间 08:00~20:00：窗口内失败按 30 分钟复查；窗口外精确等待次日 08:00。
+func fairylandRetryDelay(now time.Time) time.Duration {
+	start := time.Date(now.Year(), now.Month(), now.Day(), 8, 0, 0, 0, now.Location())
+	end := time.Date(now.Year(), now.Month(), now.Day(), 20, 0, 0, 0, now.Location())
+	if now.Before(start) {
+		return start.Sub(now)
+	}
+	if now.Before(end) {
+		return 30 * time.Minute
+	}
+	return start.AddDate(0, 0, 1).Sub(now)
 }

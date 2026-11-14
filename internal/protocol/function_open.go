@@ -85,6 +85,8 @@ const (
 	FunctionIDLunHuiJingDi int32 = 292
 	// FunctionIDStMine 仙界矿山功能编号 (FunctionTypeData: StMine，通关天庭女儿国(1)开启)
 	FunctionIDStMine int32 = 157
+	// FunctionIDDevilExpedition 魔界远征功能编号 (FunctionTypeData: DevilExpedition)
+	FunctionIDDevilExpedition int32 = 201
 )
 
 // BuildCheckFunctionOpenPacket 构造功能开放状态查询封包。

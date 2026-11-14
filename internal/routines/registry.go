@@ -53,6 +53,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "fate_hunt", Name: "免费猎命与命宫碎片", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "每日免费指定猎命师与铜钱兑换命宫碎片 (不消耗元宝)", DefaultOn: false},
 		{ID: "children_daily", Name: "孩子学习与任务", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "孩子上学与已完成任务奖励领取 (消耗培养金，不消耗元宝)", DefaultOn: false},
 		{ID: "rebirth_land", Name: "轮回净地挂机奖励", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "免费一键领取轮回净地挂机奖励 (不消耗元宝)", DefaultOn: false},
+		{ID: "era_rebirth_attr_gift", Name: "修真境界礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "使用修真境界时间道具 (851/4→851/5, 道具不足跳过)", DefaultOn: false},
 		{ID: "activity_report", Name: "每日活跃度汇总", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "只读汇总每日/周常活跃度并输出 1200 达标缺口", DefaultOn: false},
 		{ID: "tactics_water", Name: "兵法圣水购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "铜钱购买湛蓝圣水完成兵法活跃度 (不消耗元宝)", DefaultOn: false},
 		{ID: "partner_link_box", Name: "缘魂宝箱购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "道缘/铜钱购买缘魂宝箱完成活跃度 (不消耗元宝)", DefaultOn: false},
@@ -75,6 +76,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "fame_blessing", Name: "仙界尊像膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "仙界膜拜前三名霸主大神与声望祝福获取", DefaultOn: false},
 		{ID: "void_worship", Name: "仙界虚空膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "大神榜每日免费膜拜 (不消耗元宝)", DefaultOn: false},
 		{ID: "sa_world_tower", Name: "全网幻魔塔", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "开放时按塔编号免费挑战 (不买次数)", DefaultOn: false},
+		{ID: "devil_expedition", Name: "魔界远征", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "周五至周日单人远征：双生/魔神/隐仙，材料达上限不触发", DefaultOn: false},
 		{ID: "tower_room", Name: "全服伏魔塔房间", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "创建房间→解除封印→进入战斗 (不调用元宝动作)", DefaultOn: false},
 		{ID: "sa_union_worship", Name: "万古神墟膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "圣盟膜拜面板铜钱/免费档 (不使用元宝档)", DefaultOn: false},
 		{ID: "jieyuan_box", Name: "结缘宝箱开启", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "批量开启结缘宝箱 (除了传说，其他都开)", DefaultOn: false},
@@ -141,6 +143,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "cultivation_card", Name: "神仙卡牌收藏集", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "觅寻仙踪任务、铜钱卡包商城与叩寻仙踪开包 (不消耗元宝)", DefaultOn: false},
 		{ID: "era_treasure", Name: "纪元秘藏与轮回图录", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "领取纪元秘藏/轮回图录免费奖励 (不消耗元宝)", DefaultOn: false},
 		{ID: "mystic_hunt", Name: "仙幽猎境", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "仙幽猎境入口开放时免费进入一次 (按活动时段)", DefaultOn: false},
+		{ID: "soul_hunt", Name: "灵域猎妖", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "按当前关卡免费挑战，次数不足或战斗中即停止", DefaultOn: false},
 		{ID: "get_peach", Name: "摘仙桃", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "摘取已召唤仙桃并用免费/铜钱次数召唤 (不消耗元宝)", DefaultOn: false},
 		{ID: "pet_animal", Name: "叶公好龙普通培养", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "每日叶公好龙铜钱普通培养 (不使用元宝培养)", DefaultOn: false},
 	}
@@ -339,6 +342,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewChildrenDailyRoutine()
 	case "rebirth_land":
 		return daily.NewRebirthLandRoutine()
+	case "era_rebirth_attr_gift":
+		return daily.NewEraRebirthAttrGiftRoutine()
 	case "activity_report":
 		return daily.NewDailyActivityReportRoutine()
 	case "tactics_water":
@@ -377,6 +382,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewSaUnionWorshipRoutine()
 	case "sa_world_tower":
 		return social.NewSaWorldTowerRoutine()
+	case "devil_expedition":
+		return social.NewDevilExpeditionRoutine()
 	case "tower_room":
 		return social.NewTowerRoomRoutine()
 	case "void_worship":
@@ -511,6 +518,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewFortuneBoxRoutine()
 	case "era_treasure":
 		return minigame.NewEraTreasureRoutine()
+	case "soul_hunt":
+		return social.NewSoulHuntRoutine()
 	case "mystic_hunt":
 		return minigame.NewMysticHuntRoutine()
 	case "get_peach":
