@@ -13,7 +13,6 @@ package farming
 import (
 	"context"
 	"log/slog"
-	"sync"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -29,14 +28,9 @@ const (
 	// refineFurnacePacing 服务端对 586 连续请求敏感：面板后立刻发包会被静默丢弃，
 	// 2026-11-14 线上探针实测间隔 500ms 可稳定回包。
 	refineFurnacePacing = 500 * time.Millisecond
+	// refineFurnaceCoinPerBatch 每批消耗的铜钱数量（2026-11-09 实测 50 元气 = 20,000,000 铜钱）。
+	refineFurnaceCoinPerBatch int64 = 20_000_000
 )
-
-// refineFurnaceBatchHint 记录每个会话上一轮铜钱不足后的可负担批数。
-//
-// 服务端对连续的 start_refine 有明显限流：单轮 8 次开炉尝试后第 8 次被静默
-// 丢弃（2026-11-14 线上实测）。因此每轮最多尝试 2 次，并把减半后的批数带到
-// 下一轮，既避免连续丢包，又能在铜钱增长后逐步收敛到可负担的批数。
-var refineFurnaceBatchHint sync.Map
 
 // NewRefinePotRoutine 构造炼宝炉炼制任务。
 func NewRefinePotRoutine() scheduler.ActivityRoutine {
@@ -103,19 +97,41 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 			// 面板后立刻发包会被静默丢弃，先节流再继续。
 			time.Sleep(refineFurnacePacing)
 
-			// 2. 选择一种数量 >=500 的元气，按最大批数开炉。
+			// 2. 铜钱不足时不开炉：每批 20,000,000 铜钱。服务端对连续开炉有限流，
+			// 反复试探会被静默丢弃，因此直接按余额计算可负担批数。
+			coins := session.GetPlayerState().Coins
+			maxByCoin := coins / refineFurnaceCoinPerBatch
+			if maxByCoin < 1 {
+				slog.Info("炼宝炉铜钱不足，跳过开炉", "role_id", session.RoleID(),
+					"coins", coins, "coin_per_batch", refineFurnaceCoinPerBatch)
+				return scheduler.NewCooldown(30*time.Minute, "炼宝炉铜钱不足")
+			}
+
+			// 3. 选择一种数量 >=500 的元气，按可负担批数开炉。
 			// 官方流程先 select_type 再 select_air；实测 select_air(道具 ID)
 			// 会直接更新面板 selected 字段，因此这里按道具 ID 选择即可。
-			lessCoin := false
+			const maxStartAttempts = 2
+			starts := 0
 			for _, m := range panel.Materials {
 				if ctx.Err() != nil {
 					return nil
+				}
+				if starts >= maxStartAttempts {
+					break
 				}
 				if m.Count < minRefinePotMaterialCount {
 					slog.Info("炼宝炉材料不足 500，跳过", "role_id", session.RoleID(),
 						"item_id", m.ItemID, "count", m.Count)
 					continue
 				}
+				batches := m.Count / refineFurnaceBatchSize
+				if int64(batches) > maxByCoin {
+					batches = int32(maxByCoin)
+				}
+				if batches < 1 {
+					continue
+				}
+
 				selResp := call(protocol.BuildRefineFurnaceAirPacket(m.ItemID), protocol.ActionIDRefineFurnaceAir)
 				if selResp == nil {
 					// 该材料可能未解锁/请求被丢弃，继续尝试下一种材料。
@@ -133,75 +149,43 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 					continue
 				}
 
-				batches := m.Count / refineFurnaceBatchSize
-				if hint, ok := refineFurnaceBatchHint.Load(session); ok {
-					if h, _ := hint.(int32); h > 0 && h < batches {
-						batches = h
-					}
+				time.Sleep(refineFurnacePacing)
+				starts++
+				startResp := call(protocol.BuildRefineFurnaceStartPacket(batches), protocol.ActionIDRefineFurnaceStart)
+				if startResp == nil {
+					slog.Info("炼宝炉开炉无回包，稍后重试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(30*time.Minute, "炼宝炉开炉无回包")
 				}
-				if batches < 1 {
+				startCode, sErr := protocol.ParseFirstByteResult(startResp.Payload, "炼宝炉炼制")
+				if sErr != nil {
+					slog.Warn("解析炼宝炉炼制回包失败，稍后重试", "role_id", session.RoleID(), "err", sErr)
+					return scheduler.NewCooldown(30*time.Minute, "炼宝炉炼制回包解析失败")
+				}
+				switch startCode {
+				case protocol.RefineFurnaceSuccess:
+					slog.Info("炼宝炉炼制已开始", "role_id", session.RoleID(),
+						"item_id", m.ItemID, "count", m.Count, "batches", batches)
+					return nil
+				case protocol.RefineFurnaceLessCoin:
+					// 铜钱是全局资源，换材料也不会更便宜；连续重试会触发限流丢包，直接冷却。
+					slog.Info("炼宝炉铜钱不足，稍后重试", "role_id", session.RoleID(),
+						"item_id", m.ItemID, "batches", batches)
+					return scheduler.NewCooldown(30*time.Minute, "炼宝炉铜钱不足")
+				case protocol.RefineFurnaceLessAir:
+					slog.Info("炼宝炉元气不足，尝试下一种材料", "role_id", session.RoleID(),
+						"item_id", m.ItemID, "batches", batches)
 					continue
-				}
-				// 每批实测消耗 20,000,000 铜钱；铜钱不足时按半量回退，避免死循环。
-				// 每轮最多 2 次开炉尝试，避免触发服务端限流导致静默丢包。
-				stopStart := false
-				for attempt := 0; attempt < 2 && batches >= 1 && !stopStart; attempt++ {
-					time.Sleep(refineFurnacePacing)
-					startResp := call(protocol.BuildRefineFurnaceStartPacket(batches), protocol.ActionIDRefineFurnaceStart)
-					if startResp == nil {
-						slog.Info("炼宝炉开炉无回包，稍后重试", "role_id", session.RoleID())
-						return scheduler.NewCooldown(30*time.Minute, "炼宝炉开炉无回包")
-					}
-					startCode, sErr := protocol.ParseFirstByteResult(startResp.Payload, "炼宝炉炼制")
-					if sErr != nil {
-						slog.Warn("解析炼宝炉炼制回包失败，稍后重试", "role_id", session.RoleID(), "err", sErr)
-						return scheduler.NewCooldown(30*time.Minute, "炼宝炉炼制回包解析失败")
-					}
-					switch startCode {
-					case protocol.RefineFurnaceSuccess:
-						refineFurnaceBatchHint.Delete(session)
-						slog.Info("炼宝炉炼制已开始", "role_id", session.RoleID(),
-							"item_id", m.ItemID, "count", m.Count, "batches", batches)
-						return nil
-					case protocol.RefineFurnaceLessCoin:
-						lessCoin = true
-						slog.Info("炼宝炉铜钱不足，减半批数重试", "role_id", session.RoleID(),
-							"item_id", m.ItemID, "batches", batches)
-						batches /= 2
-						if batches < 1 {
-							// 保留 1 作为下一轮的最小探测值，铜钱增长后可自动恢复。
-							refineFurnaceBatchHint.Store(session, int32(1))
-						} else {
-							refineFurnaceBatchHint.Store(session, batches)
-						}
-					case protocol.RefineFurnaceLessAir:
-						slog.Info("炼宝炉元气不足，减半批数重试", "role_id", session.RoleID(),
-							"item_id", m.ItemID, "batches", batches)
-						batches /= 2
-						if batches >= 1 {
-							refineFurnaceBatchHint.Store(session, batches)
-						}
-					case protocol.RefineFurnaceNotGetAward, protocol.RefineFurnaceNotComplete:
-						slog.Info("炼宝炉仍有未收取产物，结束本轮", "role_id", session.RoleID(),
-							"result", startCode)
-						return nil
-					case protocol.RefineFurnacePackFull:
-						return scheduler.ErrBagFull
-					default:
-						slog.Info("炼宝炉炼制未成功", "role_id", session.RoleID(),
-							"item_id", m.ItemID, "result", startCode)
-						stopStart = true
-					}
-				}
-				if lessCoin {
-					// 铜钱是全局资源，换一种元气也不会更便宜，直接进入冷却。
-					break
+				case protocol.RefineFurnaceNotGetAward, protocol.RefineFurnaceNotComplete:
+					slog.Info("炼宝炉仍有未收取产物，结束本轮", "role_id", session.RoleID(),
+						"result", startCode)
+					return nil
+				case protocol.RefineFurnacePackFull:
+					return scheduler.ErrBagFull
+				default:
+					slog.Info("炼宝炉炼制未成功", "role_id", session.RoleID(),
+						"item_id", m.ItemID, "result", startCode)
 				}
 				time.Sleep(refineFurnacePacing)
-			}
-			if lessCoin {
-				slog.Info("炼宝炉铜钱不足，稍后重试", "role_id", session.RoleID())
-				return scheduler.NewCooldown(30*time.Minute, "炼宝炉铜钱不足")
 			}
 			slog.Info("炼宝炉本轮无可炼制材料", "role_id", session.RoleID())
 			return nil
