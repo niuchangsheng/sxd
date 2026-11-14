@@ -197,12 +197,6 @@ func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
 	if _, loaded := altarAttempted.LoadOrStore(session, true); loaded {
 		return
 	}
-	// 会话激活后服务端场景/动作链仍需短暂稳定；过早发包会被静默丢弃。
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(time.Second):
-	}
 	const callTimeout = 8 * time.Second
 	call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 		cCtx, cancel := context.WithTimeout(ctx, callTimeout)
