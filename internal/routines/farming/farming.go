@@ -680,6 +680,11 @@ const pilgrimageRobLevelGap int16 = 10
 // pilgrimageRobMaxLosses 单轮连续失败上限，达到后延长退避时间。
 const pilgrimageRobMaxLosses = 2
 
+// pilgrimageRobLossStreak 记录跨轮累计的连续打劫失败次数。
+// 同等级目标仍可能战败 (2026-11-14 s1 95 级 vs 93 级战败)；每 10 分钟服务端
+// 冷却结束后立刻再打只会反复失败，累计 3 次后延长退避到 30 分钟。
+var pilgrimageRobLossStreak sync.Map // *client.RoleSession -> int
+
 type PilgrimageConfig struct {
 	// AutoRob 是否在启程护送后自动打劫取经路上其他玩家队伍。
 	AutoRob bool
@@ -1228,6 +1233,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 			if won {
 				robbed++
 				losses = 0
+				pilgrimageRobLossStreak.Store(session, 0)
 				totalCoin += int64(result.RobCoin)
 				totalFame += int64(result.RobFame)
 				totalStExp += int64(result.RobStExp)
@@ -1256,6 +1262,19 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 					"war_report_id", result.WarReportID,
 				)
 				losses++
+				streak := 1
+				if prev, ok := pilgrimageRobLossStreak.Load(session); ok {
+					if n, _ := prev.(int); n > 0 {
+						streak = n + 1
+					}
+				}
+				pilgrimageRobLossStreak.Store(session, streak)
+				if streak >= 3 && retryAfter < 30*time.Minute {
+					slog.Info("跨服取经累计打劫失败，延长退避 30 分钟",
+						"role_id", session.RoleID(), "loss_streak", streak)
+					// 立即返回，避免随后查询服务端 10 分钟冷却时把退避覆盖回 10 分钟。
+					return 30 * time.Minute
+				}
 				if losses >= pilgrimageRobMaxLosses {
 					slog.Info("跨服取经连续打劫失败，延长退避",
 						"role_id", session.RoleID(), "losses", losses)
