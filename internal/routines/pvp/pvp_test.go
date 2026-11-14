@@ -704,9 +704,9 @@ func TestCelestialArenaRoutine_FuncEndCooldown(t *testing.T) {
 	}
 }
 
-// TestCelestialArenaRoutine_NoChallengeTimesSuspends 验证挑战次数不足时
-// 返回 ErrAttemptsExhausted 挂起至次日，避免无意义轮询。
-func TestCelestialArenaRoutine_NoChallengeTimesSuspends(t *testing.T) {
+// TestCelestialArenaRoutine_NoChallengeTimesBacksOff 验证挑战结果码「次数不足」时
+// 停止挑战并按 1 小时退避重新探测，避免无意义高频轮询。
+func TestCelestialArenaRoutine_NoChallengeTimesBacksOff(t *testing.T) {
 	session, challengeCalls := startStArenaMock(t, stArenaMockConfig{
 		initialTimes:    5,
 		challengeResult: protocol.StArenaResultNotEnoughChallengeTimes,
@@ -715,17 +715,22 @@ func TestCelestialArenaRoutine_NoChallengeTimesSuspends(t *testing.T) {
 
 	execCtx, execCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer execCancel()
-	if err := NewCelestialArenaRoutine().Execute(execCtx, session, nil); !errors.Is(err, scheduler.ErrAttemptsExhausted) {
-		t.Fatalf("次数不足应返回 ErrAttemptsExhausted, 实际: %v", err)
+	err := NewCelestialArenaRoutine().Execute(execCtx, session, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("次数不足应返回 CooldownError, 实际: %v", err)
+	}
+	if wait := time.Until(cd.Until); wait < 55*time.Minute || wait > 65*time.Minute {
+		t.Fatalf("退避时长应在 1 小时附近, 实际 %v", wait)
 	}
 	if got := challengeCalls.Load(); got != 1 {
 		t.Errorf("次数不足后应停止挑战, 实际发起 %d 次", got)
 	}
 }
 
-// TestCelestialArenaRoutine_ZeroTimesFromPanelSuspends 验证面板直接返回 0 次挑战时
-// 不发起挑战并挂起至次日。
-func TestCelestialArenaRoutine_ZeroTimesFromPanelSuspends(t *testing.T) {
+// TestCelestialArenaRoutine_ZeroTimesFromPanelBacksOff 验证面板直接返回 0 次挑战时
+// 不发起挑战，并按 1 小时退避重新探测（可能只是当前不在积分赛阶段）。
+func TestCelestialArenaRoutine_ZeroTimesFromPanelBacksOff(t *testing.T) {
 	session, challengeCalls := startStArenaMock(t, stArenaMockConfig{
 		initialTimes:    0,
 		challengeResult: protocol.StArenaResultSuccess,
@@ -734,8 +739,13 @@ func TestCelestialArenaRoutine_ZeroTimesFromPanelSuspends(t *testing.T) {
 
 	execCtx, execCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer execCancel()
-	if err := NewCelestialArenaRoutine().Execute(execCtx, session, nil); !errors.Is(err, scheduler.ErrAttemptsExhausted) {
-		t.Fatalf("面板次数为 0 应返回 ErrAttemptsExhausted, 实际: %v", err)
+	err := NewCelestialArenaRoutine().Execute(execCtx, session, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("面板次数为 0 应返回 CooldownError, 实际: %v", err)
+	}
+	if wait := time.Until(cd.Until); wait < 55*time.Minute || wait > 65*time.Minute {
+		t.Fatalf("退避时长应在 1 小时附近, 实际 %v", wait)
 	}
 	if got := challengeCalls.Load(); got != 0 {
 		t.Errorf("次数为 0 时不应发起挑战, 实际 %d 次", got)

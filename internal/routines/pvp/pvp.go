@@ -470,9 +470,10 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 	)
 
 	if panel.ReduceChallengeCount <= 0 {
-		// 面板显示今日挑战次数为 0，挂起至次日避免每轮重复打开跨服面板。
-		slog.Info("仙界竞技场今日挑战次数已用尽", "role_id", session.RoleID())
-		return scheduler.ErrAttemptsExhausted
+		// 面板次数为 0：可能是今日已用尽，也可能是当前不在积分赛阶段 (此时服务端
+		// 不下发次数)。按 1 小时退避重新探测，避免全天挂起错过活动开启。
+		slog.Info("仙界竞技场面板挑战次数为 0，1 小时后再查", "role_id", session.RoleID())
+		return scheduler.NewCooldown(time.Hour, "仙界竞技场面板次数为 0")
 	}
 
 	// 3. 对手列表为空且仍有刷新次数时，主动刷新一次。
@@ -594,9 +595,9 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 						"role_id", session.RoleID(), "result", result.Result)
 					return scheduler.NewCooldown(30*time.Minute, "仙界竞技场非积分赛阶段")
 				case protocol.StArenaResultNotEnoughChallengeTimes:
-					// 当日挑战次数已耗尽，挂起至次日重置，避免每个调度周期重复打开面板。
-					slog.Info("仙界竞技场挑战次数不足，今日不再挑战", "role_id", session.RoleID())
-					return scheduler.ErrAttemptsExhausted
+					// 服务端判定次数不足；按 1 小时退避重新探测（次数可能按活动时段补充）。
+					slog.Info("仙界竞技场挑战次数不足，1 小时后再试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(time.Hour, "仙界竞技场挑战次数不足")
 				default:
 					slog.Info("仙界竞技场挑战被服务端拒绝，结束本轮挑战",
 						"role_id", session.RoleID(),
