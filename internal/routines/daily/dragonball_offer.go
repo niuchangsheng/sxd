@@ -162,14 +162,29 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 			// 0. 先拾取祭坛临时格中的龙珠，并做一次合成，再进入上供循环。
 			_, remainNormal, collectErr := collectTmp()
 			if collectErr != nil {
-				slog.Info("神龙祭坛临时格查询失败", "role_id", session.RoleID(), "err", collectErr)
+				// 次数必须探测成功后再上供：猜 20 次会在次数已尽时被服务端拒绝，
+				// 既浪费请求也可能触发静默丢包。先短暂重试一次。
+				slog.Info("神龙祭坛临时格/次数查询失败，重试一次", "role_id", session.RoleID(), "err", collectErr)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(500 * time.Millisecond):
+				}
+				_, remainNormal, collectErr = collectTmp()
+			}
+			if collectErr != nil {
+				slog.Info("神龙上供次数探测失败，稍后重试", "role_id", session.RoleID(), "err", collectErr)
+				return scheduler.NewCooldown(30*time.Minute, "神龙上供次数探测失败")
+			}
+			if remainNormal < 0 {
+				slog.Info("神龙上供次数未知，稍后重试", "role_id", session.RoleID(), "remain_normal_count", remainNormal)
+				return scheduler.NewCooldown(30*time.Minute, "神龙上供次数未知")
 			}
 			mergeAll()
 
-			// 以面板的 remain_normal_count 作为本轮上限；该字段缺失 (-1/0)
-			// 时退回游戏每日上限 20，最终仍由服务端 TIMES_USE_UP 兜底。
+			// 以面板的 remain_normal_count 严格限制本轮上供次数。
 			limit := maxDragonballOffers
-			if remainNormal > 0 && int(remainNormal) < limit {
+			if int(remainNormal) < limit {
 				limit = int(remainNormal)
 			}
 			slog.Info("神龙普通上供次数", "role_id", session.RoleID(),

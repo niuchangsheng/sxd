@@ -514,6 +514,23 @@ func sweepEliteMissionsWithoutTown(
 	slog.Info("开始全局精英副本扫荡", "role_id", session.RoleID(), "dungeons", len(ids),
 		"last_action", fmt.Sprintf("0x%08X", session.LastActionID()))
 
+	// 角色剧情进度到达的最高地图：精英副本若位于更后面的地图，服务端会
+	// 静默丢弃 25/1（2026-11-14：任务全在 map 21，map 22 的副本 168 必丢）。
+	maxQuestMap := 0
+	for qid := range session.GetQuests() {
+		q, qErr := dictRepo.GetQuest(int(qid))
+		if qErr != nil || q == nil {
+			continue
+		}
+		m, mErr := dictRepo.GetMission(q.MissionID)
+		if mErr != nil || m == nil {
+			continue
+		}
+		if m.MapID > maxQuestMap {
+			maxQuestMap = m.MapID
+		}
+	}
+
 	swept := 0
 	failStreak := 0
 	startDropStreak := 0
@@ -588,6 +605,20 @@ func sweepEliteMissionsWithoutTown(
 			if m.Level > best.Level || (m.Level == best.Level && m.MissionID > best.MissionID) {
 				best = m
 			}
+		}
+		// 目标关卡必须在字典中存在，且地图不超过角色剧情进度；否则 25/1 必被丢弃。
+		bestMission, bmErr := dictRepo.GetMission(int(best.MissionID))
+		if bmErr != nil || bestMission == nil {
+			slog.Debug("精英副本目标关卡不在字典中，跳过",
+				"role_id", session.RoleID(), "dungeon_id", dungeonID, "mission_id", best.MissionID)
+			continue
+		}
+		if maxQuestMap > 0 && bestMission.MapID > maxQuestMap {
+			slog.Debug("精英副本目标地图未解锁，跳过",
+				"role_id", session.RoleID(), "dungeon_id", dungeonID,
+				"mission_id", best.MissionID, "map_id", bestMission.MapID,
+				"max_quest_map", maxQuestMap)
+			continue
 		}
 
 		// 25/1 仅接受裸 7 字节业务字段；带 PrevAct 会被静默丢弃（2026-11-14 实测）。

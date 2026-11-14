@@ -2518,7 +2518,10 @@ func TestDungeonSweep_GlobalElite(t *testing.T) {
 	}
 	sess.SetStamina(100)
 
-	repo := &mockQuestDungeonRepo{eliteIDs: []int{166}}
+	repo := &mockQuestDungeonRepo{
+		eliteIDs: []int{166},
+		missions: map[int]*dictionary.Mission{448: {ID: 448, MapID: 13}},
+	}
 	cfg := dungeon.DefaultSweepConfig()
 	cfg.Sweep.Enabled = true
 	cfg.Sweep.GlobalElite = true

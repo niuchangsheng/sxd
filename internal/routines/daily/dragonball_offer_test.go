@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
@@ -206,5 +207,31 @@ func TestDragonballOfferRoutine_FunctionNoOpenCooldown(t *testing.T) {
 	var cd *scheduler.CooldownError
 	if !errors.As(err, &cd) {
 		t.Fatalf("功能未开放应返回 CooldownError, 实际: %v", err)
+	}
+}
+
+// TestDragonballOfferRoutine_CountProbeFailureCooldown 验证次数探测失败时不盲目
+// 上供（此前会退回默认 20 次），而是重试一次后进入冷却。
+func TestDragonballOfferRoutine_CountProbeFailureCooldown(t *testing.T) {
+	var sacrificeCalls atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDDragonballTmpInfo:
+			// 模拟次数面板静默丢包，不回包。
+		case protocol.ActionIDDragonballSacrifice:
+			sacrificeCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := NewDragonballOfferRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("次数探测失败应返回 CooldownError, 实际: %v", err)
+	}
+	if got := sacrificeCalls.Load(); got != 0 {
+		t.Fatalf("次数未知时不得上供, 实际 %d 次", got)
 	}
 }
