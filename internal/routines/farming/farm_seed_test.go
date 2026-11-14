@@ -2,7 +2,10 @@ package farming
 
 import (
 	"context"
+	"errors"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,6 +52,20 @@ func TestFarmPurchaseCandidates_CheapestCoinSeedFirst(t *testing.T) {
 	}
 	if rank[176] != 0 || rank[169] != 1 || rank[171] != 2 || rank[174] != 3 || rank[175] != 4 {
 		t.Fatalf("candidates order = %v, want %v", got, want)
+	}
+}
+
+// TestFarmCoinCandidateSummary 验证诊断日志只汇总铜钱计价且仍有次数的种子。
+func TestFarmCoinCandidateSummary(t *testing.T) {
+	seeds := []protocol.FarmSeedItem{
+		{SeedID: 176, BuyNeedCoin: 1_500_000, RemainTimes: 3},
+		{SeedID: 169, BuyNeedIngot: 30, RemainTimes: 3},
+		{SeedID: 171, BuyNeedCoin: 0, RemainTimes: 3},
+		{SeedID: 175, BuyNeedCoin: 200_000, RemainTimes: 0},
+		{SeedID: 180, BuyNeedCoin: 300_000, RemainTimes: 1},
+	}
+	if got := farmCoinCandidateSummary(seeds); got != "176:1500000:3,180:300000:1" {
+		t.Fatalf("summary = %q", got)
 	}
 }
 
@@ -195,5 +212,146 @@ func TestFarmLegacyPlantBackoffPerRole(t *testing.T) {
 	}
 	if got := farmLegacyPlantBlockedUntil("role-legacy-s0"); got != 0 {
 		t.Fatalf("s0 backoff = %d, want 0", got)
+	}
+}
+
+// TestHerbGardenRoutine_RetriesAnotherSeedAfterDrop 验证首个种子购买被服务端
+// 静默丢弃后会换用下一种铜钱种子；只有连续两个种子都无回包才进入 6 小时退避。
+func TestHerbGardenRoutine_RetriesAnotherSeedAfterDrop(t *testing.T) {
+	oldTimeout := farmCallTimeout
+	farmCallTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { farmCallTimeout = oldTimeout })
+
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	var buyCalls atomic.Int32
+	var buyMu sync.Mutex
+	bought := make([]int32, 0, 2)
+	var serverWg sync.WaitGroup
+	serverWg.Add(1)
+	go func() {
+		defer serverWg.Done()
+		for {
+			pkt, err := protocol.ReadPacket(c2)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDPlayerLogin:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerLogin, []byte{
+					0x00, 0x00, 0x00, 0x00, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x00, 0x10, 0x85, 0x01,
+				}))
+			case protocol.ActionIDPlayerInitStep1:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep1,
+					[]byte{0x00, 0x00, 0x13, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x13, 0x0f, 0x00, 0x00, 0x13, 0x12}))
+			case protocol.ActionIDPlayerInitStep2:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00}))
+			case protocol.ActionIDPlayerInitStep3:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerInitStep3, make([]byte, 8)))
+			case protocol.ActionIDPlayerGetInfo:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDPlayerGetInfo, []byte{
+					0x00, 0x09, 0xe6, 0xa2, 0xa6, 0xe4, 0xb8, 0x80, 0xe5, 0x9c, 0xba,
+					0x00, 0x00, 0x01, 0x2c,
+					0x00, 0x00, 0x9a, 0x37,
+					0x00, 0x00, 0x00, 0x08, 0x6f, 0x93, 0xac, 0xf8,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0a, 0xd1,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x0f, 0x99,
+					0x00, 0x00, 0x01, 0x2c,
+				}))
+			case protocol.ActionHeartbeat:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+			case protocol.ActionIDSaintAreaStatus:
+				w := protocol.NewWriter()
+				w.WriteUint8(protocol.SaintAreaStatusClose)
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDSaintAreaStatus, w.Bytes()))
+			case protocol.ActionIDFarmGetInfo:
+				resp, _ := protocol.BuildFarmGetInfoResultPacket(protocol.FarmGetInfoResult{Fields: []protocol.FarmField{
+					{LandID: 10, State: 1},
+				}})
+				_ = protocol.WritePacket(c2, resp)
+			case protocol.ActionIDFarmGetPlantState:
+				w := protocol.NewWriter()
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetPlantState, w.Bytes()))
+			case protocol.ActionIDFarmGetSeeds:
+				w := protocol.NewWriter()
+				w.WriteUint16(2)
+				// 176: 首选种子，本测模拟服务端对该种子静默丢弃。
+				w.WriteInt32(176)
+				w.WriteInt32(0)
+				w.WriteInt32(3)
+				w.WriteInt32(100)
+				w.WriteInt32(0)
+				// 169: 备选种子，可正常购买。
+				w.WriteInt32(169)
+				w.WriteInt32(0)
+				w.WriteInt32(3)
+				w.WriteInt32(50)
+				w.WriteInt32(0)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmGetSeeds, w.Bytes()))
+			case protocol.ActionIDFarmBuySeed:
+				buyCalls.Add(1)
+				r := protocol.NewReader(pkt.Payload)
+				seedID, _ := r.ReadInt32()
+				buyMu.Lock()
+				bought = append(bought, seedID)
+				buyMu.Unlock()
+				if seedID == 169 {
+					_ = protocol.WritePacket(c2, protocol.NewPacket(protocol.ActionIDFarmBuySeed,
+						[]byte{protocol.FarmStatusSuccess}))
+				}
+			case protocol.ActionIDFarmPlant:
+				req, _ := protocol.ParseFarmPlantRequest(pkt.Payload)
+				resp, _ := protocol.BuildFarmPlantResultPacket(protocol.FarmPlantResult{
+					Success: true, LandID: req.LandID, Cooldown: 28800,
+				})
+				_ = protocol.WritePacket(c2, resp)
+			case protocol.ActionIDFarmHarvest:
+				resp, _ := protocol.BuildFarmHarvestResultPacket(protocol.FarmHarvestResult{Success: false})
+				_ = protocol.WritePacket(c2, resp)
+			}
+		}
+	}()
+
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role-farmer-retry", RoleName: "换种重试", Username: "farmer_retry",
+		Hash: "dummy", ServerAddr: "farm-retry-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) { return c1, nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("session.Start 失败: %v", err)
+	}
+	t.Cleanup(sess.Close)
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sess.State() != client.StateActive {
+		t.Fatalf("会话未进入激活态: %s", sess.State())
+	}
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer execCancel()
+	if err := NewHerbGardenRoutine().Execute(execCtx, sess, nil); err != nil &&
+		!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("药园 Routine 执行失败: %v", err)
+	}
+
+	if got := buyCalls.Load(); got != 2 {
+		t.Fatalf("应尝试 2 种种子购买, 实际 %d 次", got)
+	}
+	buyMu.Lock()
+	got := append([]int32(nil), bought...)
+	buyMu.Unlock()
+	if len(got) != 2 || got[0] != 176 || got[1] != 169 {
+		t.Fatalf("购买顺序 = %v, 期望 [176 169]", got)
+	}
+	// 成功购买后不应进入退避。
+	if until := farmSeedBuyBlockedUntil("role-farmer-retry"); until != 0 {
+		t.Fatalf("成功补仓后不应退避, blocked_until=%d", until)
 	}
 }

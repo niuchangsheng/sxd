@@ -10,11 +10,12 @@
 // 背景: 线上发现药园自动补仓可能消耗元宝。本探针只读，不下发任何购买请求，
 // 用于确认每种种子的 priceType (3=铜钱) 与实际单价。
 //
-// 运行命令: SXD_CONFIG=configs/niuchangsheng.yaml go run -tags=probe test/probes/probe_farm_seeds_live.go
+// 运行命令: SXD_CONFIG=configs/niuchangsheng.yaml go run -tags=probe test/probes/probe_farm_seeds_live.go -role 1
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -37,8 +38,10 @@ func main() {
 		slog.Error("加载配置失败", "err", err)
 		return
 	}
+	roleIdx := flag.Int("role", 0, "配置中的角色下标 (0=s0, 1=s1)")
+	flag.Parse()
 	acc := cfg.Accounts[0]
-	role := acc.Roles[0]
+	role := acc.Roles[*roleIdx]
 
 	tc := platform.NewTicketCache(90 * time.Minute)
 	xd, err := platform.NewXindongAuthenticator()

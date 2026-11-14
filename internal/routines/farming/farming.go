@@ -30,6 +30,13 @@ var (
 	farmSeedBuyBlockedByRole = make(map[string]int64)
 )
 
+// farmCallTimeout 药园单次协议等待上限；测试可缩短以模拟静默丢弃。
+var farmCallTimeout = 8 * time.Second
+
+// maxSeedBuyDropProbes 单轮补仓最多尝试的种子数量。
+// 第一种静默丢包后换一种种子确认是否仅该种子受限；连续两种都失败才 6 小时退避。
+const maxSeedBuyDropProbes = 2
+
 func farmSeedBuyBlockedUntil(roleID string) int64 {
 	farmSeedBuyBlockMu.Lock()
 	defer farmSeedBuyBlockMu.Unlock()
@@ -91,7 +98,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 			slog.Info("正在执行资源任务: 药园土地巡检、成熟采摘与播种", "role_id", session.RoleID())
 
 			callWithTimeout := func(pkt *protocol.Packet, expectedAct uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+				cCtx, cancel := context.WithTimeout(ctx, farmCallTimeout)
 				defer cancel()
 				resp, err := session.Call(cCtx, pkt, expectedAct)
 				if err != nil {
@@ -216,6 +223,7 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 					"seed_176_owned", seedOwned[176],
 					"seed_169_owned", seedOwned[169],
 					"seed_kinds", len(seedsRes.Seeds),
+					"coin_candidates", farmCoinCandidateSummary(seedsRes.Seeds),
 				)
 
 				// 无空闲/待采摘土地时服务端会静默丢弃 buy_seed 请求；
@@ -233,11 +241,12 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 
 				// 确保有可种植的种子：优先主力种子 (176/169)，但绝不因主力种子
 				// 含元宝计价就让土地长期空闲——任何铜钱计价种子都可补仓。
-				// 购买请求一旦无回包立即终止本轮，避免 PrevAct 链被污染后
+				// 购买请求连续无回包后终止本轮并退避，避免 PrevAct 链被污染后
 				// 后续播种/采摘全部连续超时。
 				boughtSeed := false
 				ingotOnlySeeds := 0
 				lowBalanceSeeds := 0
+				buyDrops := 0
 			seedBuy:
 				for _, targetSeedID := range farmPurchaseCandidates(seedsRes.Seeds) {
 					if blockedUntil := farmSeedBuyBlockedUntil(session.RoleID()); blockedUntil > time.Now().Unix() {
@@ -312,14 +321,21 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 					}
 					buyResp, bCallErr := callWithTimeout(buyPkt, protocol.ActionIDFarmBuySeed)
 					if abortOnDrop(buyResp, bCallErr) {
-						// 裸 [Int] 载荷在 s0 实测可购买；部分区服/账号仍会被
-						// 服务端静默丢弃。退避 6 小时并继续巡检土地，
-						// 避免每次 15 分钟都空等 8 秒。
-						until := time.Now().Add(6 * time.Hour).Unix()
-						blockFarmSeedBuy(session.RoleID(), until)
-						slog.Info("药园种子购买被静默丢弃，暂停补仓 6 小时并继续巡检土地",
-							"role_id", session.RoleID(), "seed_id", targetSeedID,
-							"blocked_until", time.Unix(until, 0), "err", bCallErr)
+						// 裸 [Int] 载荷在 s0 实测可购买；部分区服/账号会按种子
+						// 静默丢弃。先换下一种铜钱种子确认是否仅该种子受限，
+						// 连续两种都无回包才退避 6 小时，避免每 15 分钟空等。
+						buyDrops++
+						if buyDrops < maxSeedBuyDropProbes {
+							slog.Info("药园种子购买无回包，尝试下一种铜钱种子",
+								"role_id", session.RoleID(), "seed_id", targetSeedID,
+								"drops", buyDrops, "err", bCallErr)
+							select {
+							case <-ctx.Done():
+								return nil
+							case <-time.After(time.Second):
+							}
+							continue seedBuy
+						}
 						break seedBuy
 					}
 					buyRes, bParseErr := protocol.ParseFarmBuySeedResult(buyResp.Payload)
@@ -356,6 +372,15 @@ func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.Activity
 					slog.Info("药园铜钱余额不足，跳过种子补仓（优先使用库存种子）",
 						"role_id", session.RoleID(), "low_balance_seeds", lowBalanceSeeds,
 						"coins", session.GetPlayerState().Coins)
+				}
+				if !boughtSeed && buyDrops > 0 {
+					// 连续多个种子购买均无回包，判定该区服/账号暂不支持 13/23，
+					// 退避 6 小时；空出的土地继续交给旧版摇钱树与库存种子。
+					until := time.Now().Add(6 * time.Hour).Unix()
+					blockFarmSeedBuy(session.RoleID(), until)
+					slog.Info("药园种子购买连续无回包，暂停补仓 6 小时并继续巡检土地",
+						"role_id", session.RoleID(), "drops", buyDrops,
+						"blocked_until", time.Unix(until, 0))
 				}
 			}
 
@@ -2078,6 +2103,19 @@ func farmCanAffordSeed(coins int64, price int32) bool {
 
 // farmSeedPreference 药园主力种子优先顺序 (经验丹果树/仙玲珑经验草等)。
 var farmSeedPreference = []int32{176, 169, 171, 174, 173, 172, 170}
+
+// farmCoinCandidateSummary 汇总铜钱计价且有剩余购买次数的种子，便于线上诊断
+// 「补仓为何选不到种子」。格式: id:price:remain 逗号分隔。
+func farmCoinCandidateSummary(seeds []protocol.FarmSeedItem) string {
+	parts := make([]string, 0, len(seeds))
+	for _, s := range seeds {
+		if s.BuyNeedIngot > 0 || s.BuyNeedCoin <= 0 || s.RemainTimes <= 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%d:%d:%d", s.SeedID, s.BuyNeedCoin, s.RemainTimes))
+	}
+	return strings.Join(parts, ",")
+}
 
 // farmPurchaseCandidates 返回可参与补仓判定的种子编号，主力种子优先，
 // 其余种子按铜钱价格升序（同价按编号）排列，优先选择最便宜的铜钱档，

@@ -983,20 +983,23 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 			}
 			if status.Status != protocol.ImperialExamActivityStart {
 				now := time.Now().Unix()
-				slog.Info("金榜题名当前非进行中阶段，等待活动开启",
-					"role_id", session.RoleID(),
-					"status", status.Status,
-					"start_time", status.StartTime,
-					"end_time", status.EndTime,
-				)
 				if int64(status.StartTime) > now {
+					slog.Info("金榜题名活动未开始，等待开启",
+						"role_id", session.RoleID(), "status", status.Status,
+						"start_time", status.StartTime)
 					return scheduler.NewCooldownUntil(
 						time.Unix(int64(status.StartTime), 0).Add(2*time.Second),
 						"金榜题名活动未开始")
 				}
 				if status.EndTime > 0 && now > int64(status.EndTime) {
+					slog.Info("金榜题名活动时间已结束，今日不再检测",
+						"role_id", session.RoleID(), "status", status.Status,
+						"end_time", status.EndTime)
 					return scheduler.ErrAttemptsExhausted
 				}
+				slog.Info("金榜题名当前非进行中阶段，稍后再查",
+					"role_id", session.RoleID(), "status", status.Status,
+					"start_time", status.StartTime, "end_time", status.EndTime)
 				return scheduler.NewCooldown(30*time.Minute, "金榜题名非进行中")
 			}
 
