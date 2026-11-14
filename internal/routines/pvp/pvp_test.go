@@ -879,6 +879,7 @@ func TestGodsAndDemonsRoutine_SignUp(t *testing.T) {
 
 // TestCrossServerLadderRoutine_Join 覆盖跨服PK开放期自动参赛路径。
 func TestCrossServerLadderRoutine_Join(t *testing.T) {
+	shortenWorldPkWaits(t)
 	session := client.NewRoleSession(client.SessionConfig{
 		RoleID: "role_test_ladder", RoleName: "测试跨服PK角色", ServerAddr: "mock",
 	})

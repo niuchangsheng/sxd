@@ -1243,11 +1243,19 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 				slog.Info("跨服PK跳过战斗已开启", "role_id", session.RoleID())
 			}
 
-			const maxWorldPkJoins = 30
-			for i := 0; i < maxWorldPkJoins; i++ {
-				if ctx.Err() != nil {
-					return nil
+			// 30 次只是“跳过战斗”的次数上限；超过后仍可自动匹配，只是需要正常
+			// 打完战斗。因此按时间预算持续 join，直到服务端返回次数上限/活动关闭。
+			deadline := time.Now().Add(worldPkRunBudget)
+			attempts := 0
+			for {
+				attempts++
+				if ctx.Err() != nil || time.Now().After(deadline) {
+					break
 				}
+				if worldPkTestMaxJoins > 0 && attempts > worldPkTestMaxJoins {
+					break
+				}
+				i := attempts - 1
 				jCtx, jCancel := context.WithTimeout(ctx, callTimeout)
 				joinResp, jErr := session.Call(jCtx, protocol.BuildWorldPkJoinPacket(), protocol.ActionIDWorldPkJoin)
 				jCancel()
@@ -1285,7 +1293,7 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 					return nil
 				}
 			}
-			slog.Info("跨服PK本轮匹配循环完成", "role_id", session.RoleID(), "joins", maxWorldPkJoins)
+			slog.Info("跨服PK本轮匹配循环完成", "role_id", session.RoleID(), "joins", attempts-1, "budget", worldPkRunBudget)
 			return nil
 		},
 	)
@@ -1295,6 +1303,10 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 var (
 	worldPkBattleWait = 10 * time.Second
 	worldPkCDWait     = 1200 * time.Millisecond
+	// worldPkRunBudget 单次例程的匹配时长预算（活动窗口内可持续匹配）。
+	worldPkRunBudget = 20 * time.Minute
+	// worldPkTestMaxJoins 仅供单测限制循环次数（>0 生效）。
+	worldPkTestMaxJoins = 0
 )
 
 // call3 以固定超时发送请求并等待回包。

@@ -24,9 +24,11 @@ func ladderTaskPanelPayload(taskID int32) []byte {
 
 func shortenWorldPkWaits(t *testing.T) {
 	t.Helper()
-	oldBattle, oldCD := worldPkBattleWait, worldPkCDWait
-	worldPkBattleWait, worldPkCDWait = 0, 0
-	t.Cleanup(func() { worldPkBattleWait, worldPkCDWait = oldBattle, oldCD })
+	oldBattle, oldCD, oldMax := worldPkBattleWait, worldPkCDWait, worldPkTestMaxJoins
+	worldPkBattleWait, worldPkCDWait, worldPkTestMaxJoins = 0, 0, 1
+	t.Cleanup(func() {
+		worldPkBattleWait, worldPkCDWait, worldPkTestMaxJoins = oldBattle, oldCD, oldMax
+	})
 }
 
 func TestCrossServerLadderRoutine_ClaimsRewards(t *testing.T) {
