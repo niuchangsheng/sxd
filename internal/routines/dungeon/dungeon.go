@@ -512,6 +512,7 @@ func sweepEliteMissionsWithoutTown(
 
 	swept := 0
 	failStreak := 0
+	startDropStreak := 0
 	for _, dungeonID := range ids {
 		if ctx.Err() != nil {
 			break
@@ -592,10 +593,17 @@ func sweepEliteMissionsWithoutTown(
 		startResp, stErr := session.Call(pCtx, startPkt, protocol.ActionIDPracticeStart)
 		pCancel()
 		if stErr != nil || startResp == nil {
-			slog.Info("精英副本扫荡无回包，继续下一副本",
-				"role_id", session.RoleID(), "dungeon_id", dungeonID, "mission_id", best.MissionID)
+			startDropStreak++
+			slog.Info("精英副本扫荡开始无回包，跳过该副本",
+				"role_id", session.RoleID(), "dungeon_id", dungeonID,
+				"mission_id", best.MissionID, "streak", startDropStreak, "err", stErr)
+			if startDropStreak >= 5 {
+				slog.Info("精英副本扫荡连续开始失败，进入冷却", "role_id", session.RoleID(), "swept", swept)
+				return swept, scheduler.NewCooldown(15*time.Minute, "精英副本扫荡连续无回包")
+			}
 			continue
 		}
+		startDropStreak = 0
 		res, rErr := protocol.ParseStartPracticeResult(startResp.Payload)
 		if rErr != nil || res == nil {
 			continue
@@ -1133,6 +1141,12 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 
 			sweepSuccessRounds := 0
 			if shouldRunSweep {
+				// 任务推图可能停留在剧情副本场景；扫荡前复位城镇，避免 25/1 被静默丢弃。
+				if townMapID := session.GetPlayerState().TownMapID; townMapID > 0 {
+					if _, tErr := session.EnterTown(ctx, int32(townMapID)); tErr == nil {
+						time.Sleep(200 * time.Millisecond)
+					}
+				}
 				// 扫荡仅消耗自然体力，不补充体力药
 				sweepHasStamina := func() bool {
 					return session.GetStamina() >= powerPerSweep
@@ -3064,6 +3078,19 @@ func advanceQuestMission(
 			}
 		}
 
+		// 每关挑战前复位城镇场景：上一个剧情副本结束后服务端仍保留副本/战场上下文，
+		// 直接请求 get_sections 会被静默丢弃（2026-11-14 线上：任务 560 通关后，
+		// 任务 561/564 的 get_sections 连续无回包）。
+		if townMapID := session.GetPlayerState().TownMapID; townMapID > 0 {
+			if _, tErr := session.EnterTown(ctx, int32(townMapID)); tErr == nil {
+				select {
+				case <-ctx.Done():
+					return clearedPrereq || lastCount > initialCount
+				case <-time.After(200 * time.Millisecond):
+				}
+			}
+		}
+
 		// 0. 激活章节关卡列表上下文 (Mod 4, Act 0: get_sections)，对齐官方前置调用链
 		mapID := int32(targetMission.MapID)
 		if mapID <= 0 {
@@ -3484,7 +3511,8 @@ func challengeStoryMission(
 	}
 
 	// 0. 激活章节关卡列表上下文 (Mod 4, Act 0: get_sections)，对齐官方前置调用链
-	if session.LastAckActionID() != protocol.ActionIDMissionGetSections {
+	// 精英关卡不在 get_sections 章节列表中，跳过该前置请求，直接进入。
+	if m.Type != 1 && session.LastAckActionID() != protocol.ActionIDMissionGetSections {
 		mapID := int32(m.MapID)
 		if mapID <= 0 {
 			mapID = int32(m.SectionID)
