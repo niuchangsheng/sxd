@@ -84,3 +84,36 @@ func TestWuxingRoutine_FightDroppedExits(t *testing.T) {
 		t.Fatalf("一键挑战无回包后不得重试, 实际 %d 次", fightCalls.Load())
 	}
 }
+
+// TestWuxingRoutine_PreExistingFailureSkipsFight 验证挑战前已有失败关卡时
+// 不再提交一键挑战。
+func TestWuxingRoutine_PreExistingFailureSkipsFight(t *testing.T) {
+	panelRaw, _ := hex.DecodeString(wuxingRoutinePanelHex)
+	failedPanel := append([]byte(nil), panelRaw...)
+	failedPanel[8] = wuxingStateFailed
+
+	var panelCalls, fightCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDWuxingPanel10:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDWuxingPanel:
+			panelCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, failedPanel))
+		case protocol.ActionIDWuxingFight:
+			fightCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewWuxingTiangongRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("wuxing routine: %v", err)
+	}
+	if fightCalls.Load() != 0 {
+		t.Fatalf("挑战前已有失败关卡时不得提交一键挑战, 实际 %d 次", fightCalls.Load())
+	}
+	if panelCalls.Load() != 1 {
+		t.Fatalf("只应读取一次面板, 实际 %d 次", panelCalls.Load())
+	}
+}

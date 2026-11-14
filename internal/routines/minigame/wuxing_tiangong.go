@@ -74,6 +74,15 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 			slog.Info("五行天宫面板状态",
 				"role_id", session.RoleID(), "phase", "挑战前", "entries", entries)
 
+			// 2.5 挑战前已有失败关卡：不再提交一键挑战，直接结束本轮。
+			for _, e := range entries {
+				if e.State == wuxingStateFailed {
+					slog.Info("五行天宫检测到失败关卡，跳过一键挑战",
+						"role_id", session.RoleID(), "element", e.Element, "stage", e.Stage)
+					return nil
+				}
+			}
+
 			// 3. 一键挑战；无回包直接退出（不做单独重试）。
 			fightResp := call(protocol.BuildWuxingFightPacket(protocol.WuxingFightModeAll, session.LastActionID()),
 				protocol.ActionIDWuxingFight, 30*time.Second)
