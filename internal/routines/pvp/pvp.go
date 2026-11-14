@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -950,9 +951,14 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 // 每 5 分钟巡检一次 Boss 列表，仅在 state=1 (开战中) 时发起一次免费战斗；
 // 战斗回包携带完整战报，只解析首个结果码。永不调用
 // clear_death_cd / reset_death_cd / strengthen_combat 等消耗元宝的接口。
+// worldBossFightBlocked 世界 Boss 战斗请求超时后的退避。
+// 低等级角色挑战高等级 Boss 时服务端可能长时间不结算/直接丢弃，
+// 5 分钟巡检会反复超时；按会话退避 30 分钟。
+var worldBossFightBlocked sync.Map // *client.RoleSession -> time.Time
+
 func NewWorldBossRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 5 * time.Second
-	const fightTimeout = 15 * time.Second
+	const fightTimeout = 30 * time.Second
 	return scheduler.NewBaseRoutine(
 		"world_boss",
 		"pvp",
@@ -1001,11 +1007,20 @@ func NewWorldBossRoutine() scheduler.ActivityRoutine {
 				"boss_level", open.Level,
 				"map_id", open.MapID,
 			)
+			if until, ok := worldBossFightBlocked.Load(session); ok {
+				if t, _ := until.(time.Time); time.Now().Before(t) {
+					slog.Debug("世界Boss战斗近期超时，退避期间跳过", "role_id", session.RoleID())
+					return nil
+				}
+			}
 			fCtx, fCancel := context.WithTimeout(ctx, fightTimeout)
 			fightResp, err := session.Call(fCtx, protocol.BuildWorldBossFightPacket(open.BossID), protocol.ActionIDWorldBossFight)
 			fCancel()
 			if err != nil {
-				return fmt.Errorf("世界Boss战斗请求失败: %w", err)
+				worldBossFightBlocked.Store(session, time.Now().Add(30*time.Minute))
+				slog.Info("世界Boss战斗请求超时，暂停参战 30 分钟",
+					"role_id", session.RoleID(), "boss_id", open.BossID, "err", err)
+				return nil
 			}
 			result, err := protocol.ParseWorldBossFightResult(fightResp.Payload)
 			if err != nil {
