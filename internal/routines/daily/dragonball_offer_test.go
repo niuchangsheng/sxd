@@ -217,7 +217,8 @@ func TestDragonballOfferRoutine_CountProbeFailureCooldown(t *testing.T) {
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDDragonballTmpInfo:
-			// 模拟次数面板静默丢包，不回包。
+			// 模拟次数面板返回无法解析的载荷（等价于次数探测失败）。
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0x00}))
 		case protocol.ActionIDDragonballSacrifice:
 			sacrificeCalls.Add(1)
 		}
