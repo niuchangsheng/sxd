@@ -102,35 +102,37 @@ func main() {
 	slog.Info("候选参数", "map", m.MapID, "map_key", m.MapKey, "section", m.SectionID,
 		"current_town", sess.GetPlayerState().TownID)
 
+	if _, sErr := sess.SyncQuests(ctx); sErr != nil {
+		slog.Warn("同步任务列表失败", "err", sErr)
+	}
+	slog.Info("同步后锚点", "last_action", fmt.Sprintf("0x%08X", sess.LastActionID()),
+		"last_ack", fmt.Sprintf("0x%08X", sess.LastAckActionID()))
+
+	// 依次用不同 PrevAct 发送 get_sections(21)，定位任务链路丢包原因。
 	candidates := []struct {
 		name string
-		id   int32
+		prev uint32
 	}{
-		{"missions.map", int32(m.MapID)},
-		{"section_id", int32(m.SectionID)},
-		{"map_key", int32(m.MapKey)},
-		{"current_town", int32(sess.GetPlayerState().TownID)},
+		{"last_ack", sess.LastAckActionID()},
+		{"last_action", sess.LastActionID()},
+		{"town_enter", protocol.ActionIDTownEnter},
+		{"login_anchor", 0x00000002},
 	}
-	seen := map[int32]bool{}
 	for _, cand := range candidates {
-		if cand.id <= 0 || seen[cand.id] {
-			continue
-		}
-		seen[cand.id] = true
 		time.Sleep(600 * time.Millisecond)
 		cCtx, cCancel := context.WithTimeout(ctx, 6*time.Second)
-		resp, cErr := sess.Call(cCtx, protocol.BuildMissionGetSectionsPacket(cand.id, sess.LastActionID()),
+		resp, cErr := sess.Call(cCtx, protocol.BuildMissionGetSectionsPacket(21, cand.prev),
 			protocol.ActionIDMissionGetSections)
 		cCancel()
 		if cErr != nil || resp == nil {
-			slog.Warn("无回包", "name", cand.name, "id", cand.id, "err", cErr)
+			slog.Warn("无回包", "prev", cand.name, "prev_act", fmt.Sprintf("0x%08X", cand.prev), "err", cErr)
 			continue
 		}
 		limit := len(resp.Payload)
-		if limit > 80 {
-			limit = 80
+		if limit > 60 {
+			limit = 60
 		}
-		slog.Info("有回包", "name", cand.name, "id", cand.id,
+		slog.Info("有回包", "prev", cand.name, "prev_act", fmt.Sprintf("0x%08X", cand.prev),
 			"len", len(resp.Payload), "hex", hex.EncodeToString(resp.Payload[:limit]))
 		if secs, pErr := protocol.ParseMissionGetSectionsResponse(resp.Payload); pErr == nil {
 			found := false
