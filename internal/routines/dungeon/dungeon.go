@@ -599,25 +599,28 @@ func sweepEliteMissionsWithoutTown(
 			slog.Debug("精英副本状态不可用", "dungeon_id", dungeonID, "err", parseErr, "len", len(statusResp.Payload))
 			continue
 		}
-		// 优先扫荡等级最高的子关卡；同等级取最大关卡 ID。
-		best := status.Missions[0]
-		for _, m := range status.Missions[1:] {
-			if m.Level > best.Level || (m.Level == best.Level && m.MissionID > best.MissionID) {
-				best = m
+		// 只在「字典中存在且地图不超过角色剧情进度」的子关卡中挑选：
+		// 等级最高优先，同等级取最大关卡 ID。这样同一副本有低阶可扫关卡时
+		// 仍能扫荡（如副本 168 的 614 在 map 22 不可扫，451 在 map 13 可扫）。
+		var best *protocol.PracticeStatusMissionItem
+		for i := range status.Missions {
+			cand := status.Missions[i]
+			mi, mErr := dictRepo.GetMission(int(cand.MissionID))
+			if mErr != nil || mi == nil {
+				continue
+			}
+			if maxQuestMap > 0 && mi.MapID > maxQuestMap {
+				continue
+			}
+			if best == nil || cand.Level > best.Level ||
+				(cand.Level == best.Level && cand.MissionID > best.MissionID) {
+				best = &cand
 			}
 		}
-		// 目标关卡必须在字典中存在，且地图不超过角色剧情进度；否则 25/1 必被丢弃。
-		bestMission, bmErr := dictRepo.GetMission(int(best.MissionID))
-		if bmErr != nil || bestMission == nil {
-			slog.Debug("精英副本目标关卡不在字典中，跳过",
-				"role_id", session.RoleID(), "dungeon_id", dungeonID, "mission_id", best.MissionID)
-			continue
-		}
-		if maxQuestMap > 0 && bestMission.MapID > maxQuestMap {
-			slog.Debug("精英副本目标地图未解锁，跳过",
+		if best == nil {
+			slog.Debug("精英副本无可扫荡子关卡（关卡缺失或地图未解锁），跳过",
 				"role_id", session.RoleID(), "dungeon_id", dungeonID,
-				"mission_id", best.MissionID, "map_id", bestMission.MapID,
-				"max_quest_map", maxQuestMap)
+				"missions", status.Missions, "max_quest_map", maxQuestMap)
 			continue
 		}
 
