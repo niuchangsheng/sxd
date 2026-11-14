@@ -33,6 +33,10 @@ var (
 	questContextBad sync.Map // *client.RoleSession -> bool
 )
 
+// eliteSweepBlocked 记录连续/反复开始失败的精英副本，避免每轮固定丢包。
+// key = roleID:dungeonID，value = 解禁时间。
+var eliteSweepBlocked sync.Map
+
 // QuestCycleFeatureConfig 剧情推图任务闭环配置
 type QuestCycleFeatureConfig struct {
 	Enabled              bool `json:"enabled"`
@@ -517,6 +521,12 @@ func sweepEliteMissionsWithoutTown(
 		if ctx.Err() != nil {
 			break
 		}
+		blockKey := fmt.Sprintf("%s:%d", session.RoleID(), dungeonID)
+		if until, ok := eliteSweepBlocked.Load(blockKey); ok {
+			if t, _ := until.(time.Time); time.Now().Before(t) {
+				continue
+			}
+		}
 		// 网关偶发 EOF 重连；等待会话恢复，并用重连后的新动作号刷新锚点。
 		if session.State() != client.StateActive {
 			for i := 0; i < 30 && session.State() != client.StateActive; i++ {
@@ -594,7 +604,8 @@ func sweepEliteMissionsWithoutTown(
 		pCancel()
 		if stErr != nil || startResp == nil {
 			startDropStreak++
-			slog.Info("精英副本扫荡开始无回包，跳过该副本",
+			eliteSweepBlocked.Store(blockKey, time.Now().Add(6*time.Hour))
+			slog.Info("精英副本扫荡开始无回包，暂停该副本 6 小时",
 				"role_id", session.RoleID(), "dungeon_id", dungeonID,
 				"mission_id", best.MissionID, "streak", startDropStreak, "err", stErr)
 			if startDropStreak >= 5 {
@@ -3577,7 +3588,7 @@ func challengeStoryMission(
 		_, _ = session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
 		pickCancel()
 
-		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), protocol.ActionIDMissionGetSections)
+		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), questPrevAct(session))
 		enterCtxR, enterCancelR := context.WithTimeout(ctx, 8*time.Second)
 		enterResp, enterErr = session.Call(enterCtxR, enterPkt, protocol.ActionIDMissionPlotEnter)
 		enterCancelR()
@@ -3593,7 +3604,7 @@ func challengeStoryMission(
 		if !ensureStamina() {
 			return false
 		}
-		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), protocol.ActionIDMissionGetSections)
+		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), questPrevAct(session))
 		enterCtx2, enterCancel2 := context.WithTimeout(ctx, 8*time.Second)
 		enterResp, enterErr = session.Call(enterCtx2, enterPkt, protocol.ActionIDMissionPlotEnter)
 		enterCancel2()
