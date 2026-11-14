@@ -47,6 +47,20 @@ func TestRepository_Queries(t *testing.T) {
 		}
 	})
 
+	t.Run("GetTownNPCIDByNPCID", func(t *testing.T) {
+		// 静态编号 107 是阴阳王，其城镇 NPC 行号为 275；行号 107 是另一名 NPC。
+		got, err := repo.GetTownNPCIDByNPCID(107)
+		if err != nil {
+			t.Fatalf("解析城镇 NPC 行号失败: %v", err)
+		}
+		if got != 275 {
+			t.Errorf("静态 NPC 107 的城镇行号 = %d, want 275", got)
+		}
+		if _, err := repo.GetTownNPCIDByNPCID(99999999); !errors.Is(err, dictionary.ErrNotFound) {
+			t.Errorf("不存在的 NPC 应返回 ErrNotFound, 实际: %v", err)
+		}
+	})
+
 	t.Run("GetRoleType", func(t *testing.T) {
 		role, err := repo.GetRoleType(1)
 		if err != nil {

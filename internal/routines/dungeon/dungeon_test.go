@@ -402,10 +402,18 @@ func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
 }
 
 type mockQuestDungeonRepo struct {
-	quests   map[int]*dictionary.Quest
-	missions map[int]*dictionary.Mission
-	townNPCs map[int][]int
-	eliteIDs []int
+	quests     map[int]*dictionary.Quest
+	missions   map[int]*dictionary.Mission
+	townNPCs   map[int][]int
+	eliteIDs   []int
+	townNPCIDs map[int]int // 静态 npcid -> NPCposition 行号
+}
+
+func (m *mockQuestDungeonRepo) GetTownNPCIDByNPCID(npcID int) (int, error) {
+	if id, ok := m.townNPCIDs[npcID]; ok {
+		return id, nil
+	}
+	return 0, dictionary.ErrNotFound
 }
 
 func (m *mockQuestDungeonRepo) GetItem(id int) (*dictionary.Item, error) {
@@ -1957,14 +1965,14 @@ func TestDungeonSweep_EliteSweep_AllTowns(t *testing.T) {
 	}
 }
 
-// TestDungeonSweep_QuestAcceptFallsBackToNPCDialog 验证接取任务时优先直接发送
-// accept_quest；仅当直接接取无回包且服务端任务列表仍未生效时，才补发
-// npc_info_by_npcid 建立官方 NPC 对话前置链并重试。
+// TestDungeonSweep_QuestAcceptOpensTownNPCDialogFirst 验证接取任务走官方
+// NPCDialogView 流程：先用 NPCposition 行号打开 npc_info_by_npcid，
+// 再发送 accept_quest。
 //
-// 背景（2026-11-06 实机）：任务 NPC 位于仙界时，主世界会话的
-// npc_info_by_npcid 会被服务端静默丢弃；若仍坚持对话优先，
-// 会连续超时并阻塞整轮任务循环。
-func TestDungeonSweep_QuestAcceptFallsBackToNPCDialog(t *testing.T) {
+// 背景（2026-11-14 实机，s1 任务 478「神通」）：直接 accept_quest 被静默丢弃；
+// 静态 NPC 编号 107 与城镇行号 275 取值空间重叠，传静态编号同样无回包；
+// 以行号 275 打开对话后 accept 立即返回 5 (SUCCEED)。
+func TestDungeonSweep_QuestAcceptOpensTownNPCDialogFirst(t *testing.T) {
 	sess, srvConn := createTestSession(t, 100)
 	defer sess.Close()
 	defer srvConn.Close()
@@ -1980,11 +1988,12 @@ func TestDungeonSweep_QuestAcceptFallsBackToNPCDialog(t *testing.T) {
 				Type:       1,
 				Level:      1,
 				Title:      "蚕丝",
-				BeginNPCID: 48,
-				EndNPCID:   48,
+				BeginNPCID: 107, // 静态 npc 编号
+				EndNPCID:   107,
 				MissionID:  9999, // 字典中不存在，接取后即可结束循环
 			},
 		},
+		townNPCIDs: map[int]int{107: 275}, // NPCposition 行号
 	}
 
 	var events []string
@@ -1994,9 +2003,8 @@ func TestDungeonSweep_QuestAcceptFallsBackToNPCDialog(t *testing.T) {
 		defer eventsMu.Unlock()
 		events = append(events, evt)
 	}
-
 	var accepted atomic.Bool
-	var acceptCalls atomic.Int32
+	var npcInfoPayload atomic.Value
 
 	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
 		switch pkt.ActionID {
@@ -2018,23 +2026,20 @@ func TestDungeonSweep_QuestAcceptFallsBackToNPCDialog(t *testing.T) {
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
 			return true
 
-		case protocol.ActionIDQuestAccept:
-			recordEvent("accept_quest")
-			// 第一次无回包且不置为已接取，逼迫走 NPC 对话兜底路径。
-			if acceptCalls.Add(1) == 1 {
-				return true
-			}
-			accepted.Store(true)
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x05}))
-			return true
-
 		case protocol.ActionIDQuestGetNPCQuests:
 			recordEvent("get_npc_quests")
+			npcInfoPayload.Store(append([]byte(nil), pkt.Payload...))
 			w := protocol.NewWriter()
 			w.WriteUint16(1)
 			w.WriteInt32(145)
 			w.WriteUint8(0) // 可接取
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestGetNPCQuests, w.Bytes()))
+			return true
+
+		case protocol.ActionIDQuestAccept:
+			recordEvent("accept_quest")
+			accepted.Store(true)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x05}))
 			return true
 		}
 		return false
@@ -2045,25 +2050,93 @@ func TestDungeonSweep_QuestAcceptFallsBackToNPCDialog(t *testing.T) {
 	})
 	if err := routine.Execute(context.Background(), sess, nil); err != nil &&
 		!errors.Is(err, scheduler.ErrStaminaDepleted) {
-		t.Fatalf("任务接取兜底流程执行失败: %v", err)
+		t.Fatalf("任务接取流程执行失败: %v", err)
 	}
 
 	eventsMu.Lock()
-	defer eventsMu.Unlock()
 	joined := strings.Join(events, ",")
-	firstAccept := strings.Index(joined, "accept_quest")
+	eventsMu.Unlock()
 	dialog := strings.Index(joined, "get_npc_quests")
-	secondAccept := -1
-	if firstAccept >= 0 && dialog > firstAccept {
-		if rel := strings.Index(joined[dialog:], "accept_quest"); rel >= 0 {
-			secondAccept = dialog + rel
-		}
-	}
-	if firstAccept < 0 || dialog < 0 || secondAccept < 0 || !(firstAccept < dialog && dialog < secondAccept) {
-		t.Fatalf("期望顺序 accept_quest -> get_npc_quests -> accept_quest, 实际 events=%v", events)
+	accept := strings.Index(joined, "accept_quest")
+	if dialog < 0 || accept < 0 || dialog > accept {
+		t.Fatalf("期望先 get_npc_quests 再 accept_quest, 实际 events=%v", events)
 	}
 	if !accepted.Load() {
-		t.Fatalf("兜底重试后服务端仍未收到 accept_quest, events=%v", events)
+		t.Fatalf("服务端未收到 accept_quest, events=%v", events)
+	}
+	payload, _ := npcInfoPayload.Load().([]byte)
+	if len(payload) < 4 {
+		t.Fatalf("npc_info 载荷过短: % X", payload)
+	}
+	if got := int32(binary.BigEndian.Uint32(payload[:4])); got != 275 {
+		t.Fatalf("npc_info 参数 = %d, want 275 (城镇 NPC 行号)", got)
+	}
+}
+
+// TestDungeonSweep_QuestAcceptDialogDropStillAccepts 验证 NPC 对话超时时
+// 仍会直接发送 accept_quest，避免因对话不可达阻塞任务接取。
+func TestDungeonSweep_QuestAcceptDialogDropStillAccepts(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	sess.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.Level = 80
+	})
+
+	repo := &mockQuestDungeonRepo{
+		quests: map[int]*dictionary.Quest{
+			145: {
+				ID:         145,
+				Type:       1,
+				Level:      1,
+				Title:      "蚕丝",
+				BeginNPCID: 107,
+				EndNPCID:   107,
+				MissionID:  9999,
+			},
+		},
+		townNPCIDs: map[int]int{107: 275},
+	}
+
+	var accepted atomic.Bool
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDQuestList:
+			w := protocol.NewWriter()
+			w.WriteUint16(1)
+			w.WriteInt32(145)
+			if accepted.Load() {
+				w.WriteInt32(1)
+			} else {
+				w.WriteInt32(0)
+			}
+			w.WriteUint8(0)
+			w.WriteUint16(1)
+			w.WriteInt32(1)
+			w.WriteInt32(0)
+			w.WriteInt32(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestList, w.Bytes()))
+			return true
+		case protocol.ActionIDQuestGetNPCQuests:
+			return true // 模拟对话静默丢包
+		case protocol.ActionIDQuestAccept:
+			accepted.Store(true)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x05}))
+			return true
+		}
+		return false
+	})
+
+	routine := dungeon.NewDungeonSweepRoutine(repo, dungeon.SweepConfig{
+		Pipeline: []string{"quest_cycle"},
+	})
+	if err := routine.Execute(context.Background(), sess, nil); err != nil &&
+		!errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("任务接取流程执行失败: %v", err)
+	}
+	if !accepted.Load() {
+		t.Fatalf("NPC 对话超时后仍应直接接取任务")
 	}
 }
 

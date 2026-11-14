@@ -1114,3 +1114,22 @@ Int left_day, Int mount_count, Int title_count, Int cur_level
 - 连续开炉请求存在限流：单轮 8 次 start 尝试后开始静默丢弃。自动化每轮最多 2 次尝试，
   并把减半后的批数带到下一轮。
 - 每批消耗 50 元气与 20,000,000 铜钱；铜钱不足时减半批数，避免一次失败后长时间停摆。
+
+### 4.25 Module 3 (0x0003): 任务系统 (`Mod_Quest_Base`)
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | `0x00030001` | `npc_info_by_npcid` | `Int town_npc_id, Uint32 prev_act` | `[Int quest_id, UByte state]` 列表 |
+| 3 | `0x00030003` | `accept_quest` | `Int quest_id, Uint32 prev_act` | `UByte result`（5=SUCCEED） |
+| 9 | `0x00030009` | `town_quest_show` | `Uint32 prev_act` | 玩家全量任务列表 |
+
+> **线上结论（2026-11-14，s1 任务 478「神通」）**：
+>
+> - `npc_info_by_npcid` 的参数是 `NPCposition.id`（城镇 NPC 行号），**不是**
+>   `Quests.BeginNPCId` 里的静态 `npcid`。两者取值空间重叠：行号 107 是李香怡，
+>   静态编号 107 是阴阳王（行号 275）。
+> - 官方 NPCDialogView 流程为先 `npc_info_by_npcid(行号)`、再 `accept_quest`；
+>   直接 `accept_quest` 会被服务端静默丢弃。以行号 275 打开对话后，
+>   `accept_quest(478)` 立即返回 `5 SUCCEED`（即使对话回包的任务列表为空）。
+> - 自动化通过 `dictionary.Repository.GetTownNPCIDByNPCID` 解析行号；
+>   解析失败时退回直接接取。

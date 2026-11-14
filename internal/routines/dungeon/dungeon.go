@@ -2168,7 +2168,12 @@ func executeQuestCycle(
 		}
 
 		for _, npcID := range candidateNPCs {
-			npcPkt, _ := protocol.BuildGetNPCQuestsPacket(protocol.GetNPCQuestsRequest{NPCID: int32(npcID)})
+			// 字典返回的是静态 npcid；npc_info_by_npcid 需要 NPCposition 行号。
+			requestNPCID := int32(npcID)
+			if resolved := resolveTownNPCID(dictRepo, requestNPCID); resolved > 0 {
+				requestNPCID = resolved
+			}
+			npcPkt, _ := protocol.BuildGetNPCQuestsPacket(protocol.GetNPCQuestsRequest{NPCID: requestNPCID})
 			npcCtx, npcCancel := context.WithTimeout(ctx, 8*time.Second)
 			npcResp, npcErr := session.Call(npcCtx, npcPkt, protocol.ActionIDQuestGetNPCQuests)
 			npcCancel()
@@ -2378,6 +2383,22 @@ func questBeginNPCID(q *dictionary.Quest) int32 {
 	return int32(q.BeginNPCID)
 }
 
+// resolveTownNPCID 将任务字典中的静态 NPC 编号解析为 NPCposition 行号。
+//
+// 官方 npc_info_by_npcid 的入参是城镇 NPC 行号，而行号与静态编号取值空间重叠
+// (2026-11-14: 行号 107 = 李香怡, 静态编号 107 = 阴阳王/行号 275)。
+// 解析失败返回 0，调用方退回不带对话上下文的直接请求。
+func resolveTownNPCID(dictRepo dictionary.Repository, npcID int32) int32 {
+	if dictRepo == nil || npcID <= 0 {
+		return 0
+	}
+	townID, err := dictRepo.GetTownNPCIDByNPCID(int(npcID))
+	if err != nil {
+		return 0
+	}
+	return int32(townID)
+}
+
 func questEndNPCID(q *dictionary.Quest) int32 {
 	if q == nil {
 		return 0
@@ -2455,16 +2476,34 @@ func questAcceptedOnServer(ctx context.Context, session *client.RoleSession, que
 
 // acceptQuestWithRecovery 接取任务。
 //
-// 优先直接发送 accept_quest：服务端接受该请求时并不强制要求先打开 NPC 对话。
-// 任务 NPC 不在角色当前城镇时（例如任务起始 NPC 位于仙界），
-// npc_info_by_npcid 会被服务端静默丢弃；此时若仍以该动作为前置链接取，
-// 会连续超时并阻塞整轮任务循环（实机 2026-11-06：任务 355 螳螂妖魔）。
+// 官方 NPCDialogView 流程：先用 npc_info_by_npcid 打开城镇 NPC 对话，
+// 再在该对话上下文内发送 accept_quest。
 //
-// 因此 NPC 对话改为兜底路径：仅当直接接取无回包且服务端任务列表仍未生效时，
-// 才按官方 NPCDialogView 流程补发 npc_info_by_npcid 建立前置链并重试。
+// 2026-11-14 实测任务 478「神通」(s1)：直接 accept_quest 被静默丢弃；
+// 以 NPCposition 行号 275 打开对话后再 accept 立即返回 5 (SUCCEED)。
+// 注意 NPCposition 行号与静态 npcid 取值空间重叠（行号 107 是李香怡，
+// 静态编号 107 是阴阳王），必须传行号，传静态编号会无回包。
 // 返回 (是否接取成功, 服务端结果码, 最后一次通信错误)。
-func acceptQuestWithRecovery(ctx context.Context, session *client.RoleSession, questID, beginNPCID int32) (bool, uint8, error) {
+func acceptQuestWithRecovery(ctx context.Context, session *client.RoleSession, questID, townNPCID int32) (bool, uint8, error) {
 	var lastErr error
+
+	dialogOpened := false
+	if townNPCID > 0 {
+		// 对话回包只需确认服务端已受理该 NPC 上下文；任务状态以 accept_quest
+		// 的结果码与玩家任务列表为准（npc 列表的状态编码存在歧义，不参与判定）。
+		_, npcErr := queryNPCQuestState(ctx, session, townNPCID, questID)
+		if npcErr != nil {
+			if errSessionTerminated(ctx, npcErr) {
+				return false, 0, npcErr
+			}
+			slog.Info("NPC 对话打开失败，仍尝试直接接取",
+				"role_id", session.RoleID(), "quest_id", questID,
+				"town_npc_id", townNPCID, "err", npcErr)
+		} else {
+			dialogOpened = true
+		}
+	}
+
 	for attempt := 1; attempt <= 2; attempt++ {
 		accepted, resCode, accErr := tryAcceptQuest(ctx, session, questID)
 		if accepted {
@@ -2483,33 +2522,17 @@ func acceptQuestWithRecovery(ctx context.Context, session *client.RoleSession, q
 			return true, 0, nil
 		}
 
-		// 兜底：按官方 NPCDialogView 流程打开 NPC 对话，再重试接取。
-		if attempt == 1 && beginNPCID > 0 {
-			npcState, npcErr := queryNPCQuestState(ctx, session, beginNPCID, questID)
-			if npcErr != nil {
+		// 对话尚未建立（没有可解析的城镇 NPC 行号）时，重试前补开一次对话。
+		if attempt == 1 && !dialogOpened && townNPCID > 0 {
+			if _, npcErr := queryNPCQuestState(ctx, session, townNPCID, questID); npcErr != nil {
 				if errSessionTerminated(ctx, npcErr) {
 					return false, 0, npcErr
 				}
 				slog.Info("兜底 NPC 对话打开失败，任务接取无回包",
-					"role_id", session.RoleID(), "quest_id", questID, "npc_id", beginNPCID, "err", npcErr)
-			} else if npcState != nil && (*npcState == 1 || *npcState == 2) {
-				// QuestType.Accepted(1) / Completed(2): 服务端已受理，幂等返回成功。
-				slog.Info("NPC 对话已确认任务处于已接取状态，跳过重复接取",
 					"role_id", session.RoleID(), "quest_id", questID,
-					"npc_id", beginNPCID, "state", *npcState)
-				return true, 0, nil
-			} else if accepted, resCode, accErr = tryAcceptQuest(ctx, session, questID); accepted {
-				return true, 0, nil
-			} else if resCode != 0 {
-				return false, resCode, nil
+					"town_npc_id", townNPCID, "err", npcErr)
 			} else {
-				lastErr = accErr
-				if errSessionTerminated(ctx, accErr) {
-					return false, 0, lastErr
-				}
-				if questAcceptedOnServer(ctx, session, questID) {
-					return true, 0, nil
-				}
+				dialogOpened = true
 			}
 		}
 
@@ -2612,7 +2635,7 @@ func executeAuthoritativeQuestCycle(
 			}
 			slog.Info("正在交付已达成任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 
-			ok, packFull := submitCompleteQuest(ctx, session, it.QuestID, questEndNPCID(q))
+			ok, packFull := submitCompleteQuest(ctx, session, it.QuestID, resolveTownNPCID(dictRepo, questEndNPCID(q)))
 			if packFull {
 				slog.Warn("背包已满，无法交付任务领取奖励，退出推图循环", "role_id", session.RoleID(), "quest_id", it.QuestID)
 				return
@@ -2679,9 +2702,17 @@ func executeAuthoritativeQuestCycle(
 			}
 			slog.Info("发现可接取任务，正在接受", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 
-			// 按官方 NPCDialogView 流程，接取前需先以 BeginNPCId 打开 NPC 对话，
+			// 按官方 NPCDialogView 流程，接取前需以城镇 NPC 行号打开对话，
 			// 建立服务端 PrevAct 原子链所需的 npc_info_by_npcid 前置动作。
-			accepted, resCode, accErr := acceptQuestWithRecovery(ctx, session, it.QuestID, questBeginNPCID(q))
+			// NPCposition 行号与静态 npcid 取值空间重叠，必须经字典解析成行号。
+			beginNPCID := questBeginNPCID(q)
+			townNPCID := resolveTownNPCID(dictRepo, beginNPCID)
+			if townNPCID == 0 && beginNPCID > 0 {
+				slog.Info("未能解析任务城镇 NPC 行号，改为直接接取",
+					"role_id", session.RoleID(), "quest_id", it.QuestID,
+					"begin_npc_id", beginNPCID)
+			}
+			accepted, resCode, accErr := acceptQuestWithRecovery(ctx, session, it.QuestID, townNPCID)
 			if accepted {
 				slog.Info("成功接受任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 				acceptedAny = true
@@ -2715,7 +2746,7 @@ func executeAuthoritativeQuestCycle(
 					if q != nil && q.Title != "" {
 						title = q.Title
 					}
-					if ok, _ := submitCompleteQuest(ctx, session, it.QuestID, questEndNPCID(q)); ok {
+					if ok, _ := submitCompleteQuest(ctx, session, it.QuestID, resolveTownNPCID(dictRepo, questEndNPCID(q))); ok {
 						session.RemoveQuest(uint32(it.QuestID))
 						if q != nil {
 							session.AddRewards(q.AwardExp, q.AwardCoins)
@@ -2780,7 +2811,7 @@ func executeAuthoritativeQuestCycle(
 				_, _ = session.Call(finCtx, finPkt, protocol.ActionIDQuestFinish)
 				finCancel()
 
-				ok, packFull := submitCompleteQuest(ctx, session, it.QuestID, questEndNPCID(q))
+				ok, packFull := submitCompleteQuest(ctx, session, it.QuestID, resolveTownNPCID(dictRepo, questEndNPCID(q)))
 				if packFull {
 					slog.Warn("背包已满，无法交付对话任务", "role_id", session.RoleID(), "quest_id", q.ID)
 					return
@@ -3155,7 +3186,7 @@ func advanceQuestMission(
 				}
 			}
 			if questState == 2 {
-				ok, _ := submitCompleteQuest(ctx, session, int32(q.ID), questEndNPCID(q))
+				ok, _ := submitCompleteQuest(ctx, session, int32(q.ID), resolveTownNPCID(dictRepo, questEndNPCID(q)))
 				if ok {
 					session.RemoveQuest(uint32(q.ID))
 					session.AddRewards(q.AwardExp, q.AwardCoins)

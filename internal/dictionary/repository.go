@@ -25,6 +25,9 @@ var (
 type Repository interface {
 	GetItem(id int) (*Item, error)
 	GetNPC(id int) (*NPC, error)
+	// GetTownNPCIDByNPCID 按静态 NPC 编号 (NPCposition.npcid) 解析城镇 NPC 行号
+	// (NPCposition.id)，即客户端 npc_info_by_npcid 请求所需的 townNPCId。
+	GetTownNPCIDByNPCID(npcID int) (int, error)
 	GetRoleType(id int) (*RoleType, error)
 	GetMission(id int) (*Mission, error)
 	GetHighestMission(sweepElite bool) (*Mission, error)
@@ -160,6 +163,26 @@ func (r *sqliteRepository) GetNPC(id int) (*NPC, error) {
 	}
 	n.Name = strings.TrimSpace(name.String)
 	return &n, nil
+}
+
+// GetTownNPCIDByNPCID 按静态 NPC 编号解析城镇 NPC 行号。
+//
+// NPCposition 同时含行号 id 与静态编号 npcid，二者取值空间重叠（例如行号 107
+// 是李香怡、静态编号 107 是阴阳王）。客户端 npc_info_by_npcid 传的是行号，
+// 因此不能用 GetNPC 的 `id OR npcid` 模糊查询。
+func (r *sqliteRepository) GetTownNPCIDByNPCID(npcID int) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var townNPCID int
+	err := r.db.QueryRow(`SELECT id FROM NPCposition WHERE npcid = ? ORDER BY id ASC LIMIT 1`, npcID).Scan(&townNPCID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("dictionary: 查询城镇 NPC 失败: %w", err)
+	}
+	return townNPCID, nil
 }
 
 func (r *sqliteRepository) GetRoleType(id int) (*RoleType, error) {
