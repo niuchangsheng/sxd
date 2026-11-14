@@ -80,3 +80,36 @@ func TestFairylandDispatchRoutine_OrderCompletedStops(t *testing.T) {
 		t.Fatalf("订单完成后应停止, dispatch calls = %d", dispatchCalls.Load())
 	}
 }
+
+// TestFairylandDispatchRoutine_PrevActFallback 验证裸载荷被网关静默丢弃后，
+// 使用服务端最后受理动作号作为显式锚点重试一次。
+func TestFairylandDispatchRoutine_PrevActFallback(t *testing.T) {
+	var prevActCalls, dispatchCalls atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFairylandMainPanel:
+			if len(pkt.Payload) == 0 {
+				return // 模拟网关静默丢弃裸载荷
+			}
+			prevActCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.FairylandSuccess, 0}))
+		case protocol.ActionIDFairylandTaskPanel:
+			w := protocol.NewWriter().WriteUint8(protocol.FairylandSuccess).WriteUint16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDFairylandDispatch:
+			dispatchCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.FairylandOrderCompleted}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewFairylandDispatchRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("fairyland: %v", err)
+	}
+	if prevActCalls.Load() != 1 {
+		t.Fatalf("裸载荷丢弃后应使用 PrevAct 重试一次, 实际 %d", prevActCalls.Load())
+	}
+	if dispatchCalls.Load() != 1 {
+		t.Fatalf("面板恢复后应进入游历派遣, dispatch calls = %d", dispatchCalls.Load())
+	}
+}

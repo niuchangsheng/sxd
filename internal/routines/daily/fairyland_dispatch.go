@@ -6,6 +6,7 @@ package daily
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -45,10 +46,20 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 			}
 
 			panelResp := call(protocol.BuildFairylandMainPanelPacket(), protocol.ActionIDFairylandMainPanel)
+			variant := "bare"
+			if panelResp == nil {
+				// 裸载荷被静默丢弃时，改用服务端最后受理的动作号作为显式锚点重试一次。
+				anchor := session.LastAckActionID()
+				variant = fmt.Sprintf("prev_act:0x%08X", anchor)
+				panelResp = call(protocol.BuildFairylandMainPanelWithPrevActPacket(anchor),
+					protocol.ActionIDFairylandMainPanel)
+			}
 			if panelResp == nil {
 				slog.Info("宠物仙域主面板无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "宠物仙域主面板无回包")
 			}
+			slog.Info("宠物仙域主面板已响应", "role_id", session.RoleID(),
+				"variant", variant, "payload_len", len(panelResp.Payload))
 			code, err := protocol.ParseActionFirstByte(panelResp.Payload, "宠物仙域主面板")
 			if err != nil {
 				slog.Warn("宠物仙域主面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)

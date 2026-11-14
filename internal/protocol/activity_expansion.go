@@ -954,6 +954,16 @@ func BuildFairylandMainPanelPacket() *Packet {
 	return NewPacket(ActionIDFairylandMainPanel, nil)
 }
 
+// BuildFairylandMainPanelWithPrevActPacket 构造携带显式 PrevAct 锚点的主面板查询封包。
+//
+// 线上实测裸载荷 714/1 被网关静默丢弃；部分模块要求尾部携带服务端最后受理的动作号。
+// 这里写入显式锚点并保持 HasPrevAct=false，避免会话发送层用被丢弃的 lastActionID 覆盖。
+func BuildFairylandMainPanelWithPrevActPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDFairylandMainPanel, w.Bytes())
+}
+
 // BuildFairylandTaskPanelPacket 构造宠物仙域任务面板查询封包。
 func BuildFairylandTaskPanelPacket() *Packet {
 	return NewPacket(ActionIDFairylandTaskPanel, nil)
