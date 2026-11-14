@@ -537,8 +537,9 @@ func TestCrossPilgrimageRob_PrefersLowestLevelTarget(t *testing.T) {
 
 	crossPilgrimageRob(context.Background(), session, session.PlayerID(), crossCall, func(m uint8) uint8 { return m }, DefaultPilgrimageConfig())
 
-	if len(robOrder) != 2 || robOrder[0] != 1002 || robOrder[1] != 1001 {
-		t.Fatalf("expected softest target first (1002 then 1001), got %v", robOrder)
+	// 等级 180 的目标超过自身 70+10，直接跳过；只打等级 55 的软柿子。
+	if len(robOrder) != 1 || robOrder[0] != 1002 {
+		t.Fatalf("expected only soft target 1002 (1001 too high level), got %v", robOrder)
 	}
 }
 
@@ -563,7 +564,7 @@ func TestCrossPilgrimageRob_LossDoesNotCreditOrConsume(t *testing.T) {
 				PlayerID:         1001,
 				NickName:         "强敌",
 				SequenceID:       1,
-				Level:            180,
+				Level:            75, // 自身 70 + 10 以内，允许发起并战败
 				TotalCanRobTimes: 3,
 				RobCoin:          500000,
 				RobFame:          120,

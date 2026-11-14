@@ -657,6 +657,14 @@ const (
 )
 
 // PilgrimageConfig 西天取经护送与打劫自动化策略配置。
+// pilgrimageRobLevelGap 打劫目标的等级上限 = 自身等级 + 该值。
+// 跨服对手等级高太多时战斗必败：失败虽不扣每日次数，但会触发 10 分钟冷却，
+// 并让例程反复空转（2026-11-14 s1：95 级反复挑战 188/214 级目标）。
+const pilgrimageRobLevelGap int16 = 10
+
+// pilgrimageRobMaxLosses 单轮连续失败上限，达到后延长退避时间。
+const pilgrimageRobMaxLosses = 2
+
 type PilgrimageConfig struct {
 	// AutoRob 是否在启程护送后自动打劫取经路上其他玩家队伍。
 	AutoRob bool
@@ -1064,6 +1072,12 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 		if info.RobCoin <= 0 && info.RobFame <= 0 && info.RobStExp <= 0 {
 			continue
 		}
+		if level > 0 && info.Level > level+pilgrimageRobLevelGap {
+			slog.Debug("跨服取经目标等级过高，跳过",
+				"role_id", session.RoleID(), "player_id", team.PlayerID,
+				"target_level", info.Level, "self_level", level)
+			continue
+		}
 		score := int64(info.RobCoin)*1000 + int64(info.RobFame)*10 + int64(info.RobStExp)
 		targets = append(targets, robTarget{team: team, info: *info, score: score})
 	}
@@ -1109,6 +1123,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 
 	var (
 		robbed     int
+		losses     int
 		totalCoin  int64
 		totalFame  int64
 		totalStExp int64
@@ -1197,6 +1212,7 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 			}
 			if won {
 				robbed++
+				losses = 0
 				totalCoin += int64(result.RobCoin)
 				totalFame += int64(result.RobFame)
 				totalStExp += int64(result.RobStExp)
@@ -1224,6 +1240,15 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 					"war_parsed", result.WarParsed,
 					"war_report_id", result.WarReportID,
 				)
+				losses++
+				if losses >= pilgrimageRobMaxLosses {
+					slog.Info("跨服取经连续打劫失败，延长退避",
+						"role_id", session.RoleID(), "losses", losses)
+					if retryAfter < 30*time.Minute {
+						retryAfter = 30 * time.Minute
+					}
+					return retryAfter
+				}
 			}
 		default:
 			slog.Info("跨服取经打劫未成功",
