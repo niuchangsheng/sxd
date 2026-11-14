@@ -2891,6 +2891,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				"wish_list", mainInfo.WishList)
 
 			// 2. 领取今日免费钥匙 (Mod 594, Act 8)
+			freeKeyNoItem := false
 			if mainInfo.LeftCanGetFree > 0 {
 				freeResp := call(protocol.BuildTreasureHouseGetFreeItemPacket(prevAct),
 					protocol.ActionIDTreasureHouseGetFreeItem, 8*time.Second)
@@ -2901,6 +2902,7 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 						slog.Warn("解析领取免费钥匙回包失败", "err", cErr)
 					case code == protocol.TreasureHouseResultNoItem:
 						// 今日已无免费钥匙可领，属于正常业务状态。
+						freeKeyNoItem = true
 						slog.Info("领取免费钥匙: 无可用道具",
 							"result", code,
 							"meaning", protocol.TreasureHouseResultName(code))
@@ -2918,6 +2920,14 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 						}
 					}
 				}
+			}
+
+			// 无免费钥匙且面板免费抽奖次数为 0 时，后续 Act 4 必然无免费次数，
+			// 直接跳过，避免已知上下文丢包（2026-11-14 ncs 实测）。
+			if freeKeyNoItem && mainInfo.FreeItemNum == 0 {
+				slog.Info("天帝宝库无免费钥匙且无免费抽奖次数，跳过设置与抽奖",
+					"role_id", session.RoleID())
+				return nil
 			}
 
 			// 2.1 设置优先使用免费次数 (Mod 594, Act 4) 必须紧跟在主面板/领钥匙之后、
