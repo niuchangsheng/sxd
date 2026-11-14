@@ -6,6 +6,7 @@ package daily
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"time"
@@ -59,7 +60,8 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 				return scheduler.NewCooldown(30*time.Minute, "宠物仙域主面板无回包")
 			}
 			slog.Info("宠物仙域主面板已响应", "role_id", session.RoleID(),
-				"variant", variant, "payload_len", len(panelResp.Payload))
+				"variant", variant, "payload_len", len(panelResp.Payload),
+				"payload_hex", hex.EncodeToString(panelResp.Payload))
 			code, err := protocol.ParseActionFirstByte(panelResp.Payload, "宠物仙域主面板")
 			if err != nil {
 				slog.Warn("宠物仙域主面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
