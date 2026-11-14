@@ -32,12 +32,19 @@ type refineFurnaceGateway struct {
 
 	mu           sync.Mutex
 	startPayload []byte
+	airPayload   []byte
 }
 
 func (g *refineFurnaceGateway) lastStartPayload() []byte {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return append([]byte(nil), g.startPayload...)
+}
+
+func (g *refineFurnaceGateway) lastAirPayload() []byte {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]byte(nil), g.airPayload...)
 }
 
 func buildRefineFurnacePanel(materials []protocol.RefineFurnaceMaterial) []byte {
@@ -97,8 +104,11 @@ func startRefineFurnaceSession(t *testing.T, gw *refineFurnaceGateway) (*client.
 				_ = protocol.WritePacket(c2, protocol.NewPacket(pkt.ActionID, buildRefineFurnacePanel(gw.materials)))
 			case protocol.ActionIDRefineFurnaceAward:
 				_ = protocol.WritePacket(c2, protocol.NewPacket(pkt.ActionID, []byte{gw.awardCode}))
-			case protocol.ActionIDRefineFurnaceType:
+			case protocol.ActionIDRefineFurnaceAir:
 				gw.selectCalls.Add(1)
+				gw.mu.Lock()
+				gw.airPayload = append([]byte(nil), pkt.Payload...)
+				gw.mu.Unlock()
 				_ = protocol.WritePacket(c2, protocol.NewPacket(pkt.ActionID, []byte{gw.selectCode}))
 			case protocol.ActionIDRefineFurnaceStart:
 				n := gw.startCalls.Add(1)
@@ -175,6 +185,14 @@ func TestRefinePotRoutine_RefinesMaxBatches(t *testing.T) {
 	if gw.selectCalls.Load() != 1 {
 		t.Fatalf("select calls = %d, want 1 (7926<500 应跳过)", gw.selectCalls.Load())
 	}
+	airPayload := gw.lastAirPayload()
+	if len(airPayload) != 4 {
+		t.Fatalf("select_air payload len = %d, want 4", len(airPayload))
+	}
+	airID := int32(airPayload[0])<<24 | int32(airPayload[1])<<16 | int32(airPayload[2])<<8 | int32(airPayload[3])
+	if airID != 7923 {
+		t.Fatalf("select_air 参数 = %d, want 7923 (道具 ID)", airID)
+	}
 }
 
 func TestRefinePotRoutine_LessCoinHalvesBatches(t *testing.T) {
@@ -188,6 +206,11 @@ func TestRefinePotRoutine_LessCoinHalvesBatches(t *testing.T) {
 	session, cleanup := startRefineFurnaceSession(t, gw)
 	defer cleanup()
 
+	// 每轮最多 2 次开炉尝试：首轮 20→10，次轮 10→5，第三次调用才成功。
+	var cd *scheduler.CooldownError
+	if err := farming.NewRefinePotRoutine().Execute(context.Background(), session, nil); !errors.As(err, &cd) {
+		t.Fatalf("首轮铜钱不足应进入冷却, 实际: %v", err)
+	}
 	if err := farming.NewRefinePotRoutine().Execute(context.Background(), session, nil); err != nil {
 		t.Fatalf("refine furnace: %v", err)
 	}
@@ -212,6 +235,10 @@ func TestRefinePotRoutine_LessAirHalvesBatches(t *testing.T) {
 	session, cleanup := startRefineFurnaceSession(t, gw)
 	defer cleanup()
 
+	// 每轮最多 2 次开炉尝试：首轮 20→10，次轮 10→5，第三次调用才成功。
+	if err := farming.NewRefinePotRoutine().Execute(context.Background(), session, nil); err != nil {
+		t.Fatalf("首轮元气不足不应报错: %v", err)
+	}
 	if err := farming.NewRefinePotRoutine().Execute(context.Background(), session, nil); err != nil {
 		t.Fatalf("refine furnace: %v", err)
 	}
@@ -222,6 +249,27 @@ func TestRefinePotRoutine_LessAirHalvesBatches(t *testing.T) {
 	batches := int32(payload[0])<<24 | int32(payload[1])<<16 | int32(payload[2])<<8 | int32(payload[3])
 	if batches != 5 {
 		t.Fatalf("最终批数 = %d, want 5 (20→10→5)", batches)
+	}
+}
+
+func TestRefinePotRoutine_LessCoinExhaustedCooldown(t *testing.T) {
+	gw := &refineFurnaceGateway{
+		awardCode:     protocol.RefineFurnaceSuccess,
+		selectCode:    protocol.RefineFurnaceSuccess,
+		startCode:     protocol.RefineFurnaceSuccess,
+		lessCoinTimes: 100,
+		materials:     []protocol.RefineFurnaceMaterial{{ItemID: 7923, Count: 1000}},
+	}
+	session, cleanup := startRefineFurnaceSession(t, gw)
+	defer cleanup()
+
+	err := farming.NewRefinePotRoutine().Execute(context.Background(), session, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("铜钱持续不足应返回 CooldownError, 实际: %v", err)
+	}
+	if gw.startCalls.Load() == 0 {
+		t.Fatalf("应至少尝试一次开炉")
 	}
 }
 

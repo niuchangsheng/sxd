@@ -1090,3 +1090,27 @@ Int left_day, Int mount_count, Int title_count, Int cur_level
 
 - 自动化先按 `start_time/end_time` 判断活动是否开始/结束，再逐日领取；
   `ALREADY_GET=3` 跳过，`NO_GRID=2` 返回 `ErrBagFull`。
+
+### 4.24 Module 586 (0x024A): 灵霄宝殿炼宝炉 (`Mod_RefineFurnace_Base`)
+
+| Action | ActionID | 方法 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | `0x024A0001` | `open_panel` | 空 | `UByte result, Int exp, Int type, Int selected, [Int item,Int count], [Int,Int,Int], [[Int,Int],Int,Int,Int], Byte, Int, Int` |
+| 2 | `0x024A0002` | `select_type` | `Int type` | `UByte result` |
+| 3 | `0x024A0003` | `select_air` | `Int air_id` | `UByte result` |
+| 4 | `0x024A0004` | `start_refine` | `Int batches`（裸 4 字节） | `UByte result` |
+| 5 | `0x024A0005` | `stop_refine` | 空 | `UByte result, [Int,Int]` |
+| 6 | `0x024A0006` | `get_award` | 空 | `UByte result` |
+
+结果码：`0 SUCCESS / 1 FAILED / 2 NOT_COMPLETE / 3 LESS_AIR / 4 LESS_COIN / 5 NOT_GET_AWARD / 6 ITEM_PACK_FULL / 7 LESS_MONEY / 8 BUY_LIMIT / 9 TOP_LEVEL`。
+
+2026-11-14 ncs s0 线上探针结论（`test/probes/probe_furnace_air_live.go`、`probe_furnace_routine_live.go`）：
+
+- 面板第 3 个 `Int` 是当前选中的元气**类型**（不是等级），第 4 个 `Int` 是选中元气**道具 ID**。
+- `select_air` 的参数是元气**道具 ID**（7923/7924/7925），成功后重开面板 `selected` 同步更新；
+  `select_air(1)` 之类的小整数返回 `FAILED`。
+- `start_refine` 必须发送**裸 4 字节** `[Int batches]`；追加 4 字节 PrevAct 的 8 字节载荷
+  会被服务端静默丢弃。裸载荷在铜钱不足时稳定返回 `4 LESS_COIN`。
+- 连续开炉请求存在限流：单轮 8 次 start 尝试后开始静默丢弃。自动化每轮最多 2 次尝试，
+  并把减半后的批数带到下一轮。
+- 每批消耗 50 元气与 20,000,000 铜钱；铜钱不足时减半批数，避免一次失败后长时间停摆。

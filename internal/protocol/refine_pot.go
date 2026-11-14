@@ -154,7 +154,21 @@ func BuildRefineFurnaceTypePacket(typeID int32) *Packet {
 	return NewPacket(ActionIDRefineFurnaceType, w.Bytes())
 }
 
+// BuildRefineFurnaceAirPacket 构造选择元气道具封包 (586/3)。
+//
+// 参数是元气道具 ID (7923/7924/7925)，不是类型下标：2026-11-14 线上探针
+// 实测 select_air(道具 ID) 返回 SUCCESS，且重开面板后 selected 字段更新为该 ID；
+// 而 select_air(1) 返回 FAILED。
+func BuildRefineFurnaceAirPacket(airID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(airID)
+	return NewPacket(ActionIDRefineFurnaceAir, w.Bytes())
+}
+
 // BuildRefineFurnaceStartPacket 构造炼制封包 (batches 为批数，每批 50 元气)。
+//
+// 2026-11-14 线上探针实测：裸 4 字节载荷返回业务结果码 (结果码 4 = 铜钱不足)；
+// 追加 4 字节 PrevAct 的 8 字节载荷会被服务端静默丢弃。因此保持裸载荷。
 func BuildRefineFurnaceStartPacket(batches int32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(batches)
