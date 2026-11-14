@@ -18,6 +18,17 @@ import (
 // 服务端对非 PC 端会话可能直接丢弃该查询；每轮 cron 重试只会重复丢包。
 var clientGiftBlocked sync.Map // *client.RoleSession -> time.Time
 
+// giftStatus 返回 PC 微端礼包的有效状态。
+//
+// 官方 PlayerData.pc_client_gift_info：首字节是礼包类型，2=月度礼包，
+// 此时真实状态在第三个字段 (month_status)；否则首字节就是状态。
+func giftStatus(info *protocol.ClientGiftInfo) uint8 {
+	if info.Status == 2 {
+		return info.MonthStatus
+	}
+	return info.Status
+}
+
 // NewDailyGiftsRoutine 构造每日免费礼包领取任务。
 //
 // 对齐原版助手「自动领取每日礼包」中的三项独立免费产出：
@@ -106,8 +117,9 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 				slog.Info("查询 PC 微端礼包无回包，暂停探测 6 小时", "role_id", session.RoleID(), "err", err)
 			} else if info, pErr := protocol.ParseClientGiftInfoResult(resp.Payload); pErr != nil {
 				slog.Warn("解析 PC 微端礼包失败", "role_id", session.RoleID(), "err", pErr)
-			} else if info.Status == 0 {
-				slog.Info("PC 微端礼包未就绪", "role_id", session.RoleID(), "month_status", info.MonthStatus)
+			} else if giftStatus(info) == 0 {
+				slog.Info("PC 微端礼包未就绪", "role_id", session.RoleID(),
+					"type", info.Status, "month_status", info.MonthStatus)
 			} else {
 				rResp, rErr := call(protocol.BuildClientGiftReceivePacket(), protocol.ActionIDPlayerReceiveClientGift)
 				if rErr != nil || rResp == nil {

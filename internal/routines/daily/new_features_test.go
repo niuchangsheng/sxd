@@ -146,3 +146,30 @@ func TestDestinySwordRoutine_TemperFailureStops(t *testing.T) {
 		t.Fatalf("expected stop after first failure, got %d", temperCalls.Load())
 	}
 }
+
+// TestDailyGiftsRoutine_MonthlyClientGiftNotReady 验证月度礼包类型 (首字节 2)
+// 以 month_status 为准；month_status=0 时不得发起领取。
+func TestDailyGiftsRoutine_MonthlyClientGiftNotReady(t *testing.T) {
+	var receiveCalls atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPlayerCampSalary:
+			_ = protocol.WritePacket(conn, protocol.BuildCampSalaryResultPacket(protocol.PlayerCampSalarySuccess, 1000))
+		case protocol.ActionIDSealSoulDayStone:
+			_ = protocol.WritePacket(conn, protocol.BuildSealSoulDayStoneResultPacket(protocol.SealSoulDayStoneSuccess, 2))
+		case protocol.ActionIDPlayerClientGiftInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildClientGiftInfoResultPacket(
+				protocol.ClientGiftInfo{Status: 2, MonthStatus: 0}))
+		case protocol.ActionIDPlayerReceiveClientGift:
+			receiveCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+
+	if err := NewDailyGiftsRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("daily gifts: %v", err)
+	}
+	if got := receiveCalls.Load(); got != 0 {
+		t.Fatalf("月度礼包未就绪时不应领取, 实际 %d 次", got)
+	}
+}
