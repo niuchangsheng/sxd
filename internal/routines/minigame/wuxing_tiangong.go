@@ -84,10 +84,12 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 			fightResp := call(protocol.BuildWuxingFightPacket(protocol.WuxingFightModeAll, session.LastActionID()),
 				protocol.ActionIDWuxingFight, 30*time.Second)
 			if fightResp == nil {
-				slog.Info("五行天宫一键挑战无回包，稍后重试", "role_id", session.RoleID())
-				return scheduler.NewCooldown(30*time.Minute, "五行天宫一键挑战无回包")
+				// 一键挑战在“已有失败关卡待单独重试”的状态下会被服务端静默丢弃；
+				// 不熔断，继续走失败关卡的特殊阵容重试流程。
+				slog.Info("五行天宫一键挑战无回包，改为逐关重试", "role_id", session.RoleID())
+			} else {
+				slog.Info("五行天宫一键挑战已执行", "role_id", session.RoleID(), "report_len", len(fightResp.Payload))
 			}
-			slog.Info("五行天宫一键挑战已执行", "role_id", session.RoleID(), "report_len", len(fightResp.Payload))
 
 			// 4. 刷新面板，定位失败关卡。
 			afterResp := call(protocol.BuildWuxingPanelPacket(session.LastActionID()),
