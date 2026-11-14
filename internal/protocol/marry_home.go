@@ -128,9 +128,17 @@ type MarryHomeFurnitureEffect struct {
 
 // BuildMarryHomeBatchFurnitureEffectPacket 构造批量家具效果领取封包。
 //
-// 官方 request=[]，只读领取，不消耗元宝。
-func BuildMarryHomeBatchFurnitureEffectPacket() *Packet {
-	return NewPacket(ActionIDMarryHomeBatchFurnitureEffect, nil)
+// 2026-11-14 抓包 (/tmp/jiayuan.pcapng)：该动作实际在 8219 跨服节点上发送，
+// 请求载荷为 4 字节 PrevAct（抓包中为 0x01FB0000）。只读领取，不消耗元宝。
+func BuildMarryHomeBatchFurnitureEffectPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = ActionIDMarryHomeBatchFurnitureEffect
+	}
+	w.WriteUint32(prevAct)
+	pkt := NewPacket(ActionIDMarryHomeBatchFurnitureEffect, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }
 
 // ParseMarryHomeBatchFurnitureEffectResult 解析批量家具效果回包。

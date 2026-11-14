@@ -997,7 +997,7 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 			}
 
 			bCtx, bCancel := context.WithTimeout(ctx, callTimeout)
-			effectResp, bErr := session.Call(bCtx, protocol.BuildMarryHomeBatchFurnitureEffectPacket(), protocol.ActionIDMarryHomeBatchFurnitureEffect)
+			effectResp, bErr := session.Call(bCtx, protocol.BuildMarryHomeBatchFurnitureEffectPacket(session.LastActionID()), protocol.ActionIDMarryHomeBatchFurnitureEffect)
 			bCancel()
 			if bErr != nil || effectResp == nil {
 				slog.Info("住宅家具效果领取无回包，稍后重试", "role_id", session.RoleID(), "err", bErr)

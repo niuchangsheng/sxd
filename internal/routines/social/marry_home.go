@@ -51,6 +51,35 @@ func NewMarryHomeRoutine() scheduler.ActivityRoutine {
 				return scheduler.ErrAttemptsExhausted
 			}
 
+			// 0.5 跨服家园批量家具效果 (210/18)。抓包 (/tmp/jiayuan.pcapng) 显示
+			// 官方客户端在 8219 跨服节点上发送该动作，回包直接给出奖励条目；
+			// 该奖励与 210/19 蛋糕的活动时段无关，因此先独立领取。
+			if session.PlayerID() <= 0 {
+				// 测试/未完成登录的会话没有玩家身份，跨服凭据必然失败。
+			} else if cross, cErr := session.OpenCrossServerSession(ctx); cErr == nil {
+				if cross != session {
+					defer cross.Close()
+				}
+				cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
+				effResp, effErr := cross.Call(cCtx,
+					protocol.BuildMarryHomeBatchFurnitureEffectPacket(cross.LastActionID()),
+					protocol.ActionIDMarryHomeBatchFurnitureEffect)
+				cCancel()
+				if effErr != nil || effResp == nil {
+					slog.Info("跨服家园家具效果无回包", "role_id", session.RoleID(), "err", effErr)
+				} else if len(effResp.Payload) > 0 {
+					effects, pErr := protocol.ParseMarryHomeBatchFurnitureEffectResult(effResp.Payload)
+					if pErr != nil {
+						slog.Warn("解析跨服家园家具效果失败", "role_id", session.RoleID(), "err", pErr)
+					} else {
+						slog.Info("跨服家园家具效果领取完成",
+							"role_id", session.RoleID(), "effects", len(effects), "detail", effects)
+					}
+				}
+			} else {
+				slog.Info("跨服会话建立失败，跳过家具效果领取", "role_id", session.RoleID(), "err", cErr)
+			}
+
 			// 1. 先查询自身住宅状态 (210/0 get_self_home_info)。
 			//
 			// 线上实测 (s0-tongchen): 未结婚角色的 get_cake 请求会被服务端静默丢弃，
