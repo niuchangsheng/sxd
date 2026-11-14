@@ -1104,9 +1104,10 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							&totalCostStamina, &totalGainExp, &totalGainCoins,
 							clearedMissions,
 						)
-						if _, polluted := questContextBad.Load(session); !polluted {
-							questCycleDone.Store(session, true)
-						}
+						// 剧情副本战斗后服务端会残留在副本上下文，后续 get_sections
+						// 无法恢复（2026-11-14 实测）；每个会话只做一轮任务推图，
+						// 下一轮由服务器重启/重连后的新会话继续。
+						questCycleDone.Store(session, true)
 					}
 				}
 			}
@@ -2907,9 +2908,16 @@ func executeAuthoritativeQuestCycle(
 				clearedMissions, failedMissions,
 			) {
 				progressMade = true
-				// 任一任务完成或取得实质推进后立即跳出重排，确保新解锁的主线任务优先接取并执行
-				break
-			} else if ctx.Err() != nil || session.State() == client.StateClosed {
+				// 剧情副本战斗后服务端上下文已变化，后续 get_sections/enter_mission
+				// 必然被静默丢弃；本会话只推进这一关，剩余关卡留待新会话。
+				slog.Info("本会话任务推图已完成一关，结束任务循环", "role_id", session.RoleID())
+				return
+			}
+			if _, bad := questContextBad.Load(session); bad {
+				slog.Info("任务上下文已不可用，结束本会话任务推图", "role_id", session.RoleID())
+				return
+			}
+			if ctx.Err() != nil || session.State() == client.StateClosed {
 				slog.Info("会话已关闭，终止任务推进循环", "role_id", session.RoleID(), "mission_id", mid)
 				return
 			} else {

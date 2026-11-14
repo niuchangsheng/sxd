@@ -993,10 +993,9 @@ func (s *RoleSession) FetchLatestPlayerInfo(ctx context.Context) (*protocol.Play
 //
 // 返回服务端结果码 (0=成功)。
 func (s *RoleSession) EnterTown(ctx context.Context, townID int32) (uint8, error) {
-	// 使用最后确认动作作为 PrevAct：被静默丢弃的请求也会推进 LastActionID，
-	// 直接交给会话层覆盖会导致 enter_town 本身被丢弃。
-	pkt := protocol.BuildEnterTownPacket(townID, s.LastAckActionID())
-	pkt.HasPrevAct = false
+	// 2026-11-14 线上对照：沿用会话层按最后发送动作覆盖 PrevAct 的路径
+	// （与登录后首次复位成功的行为一致）；LastAck 版本在登录钩子之后会丢包。
+	pkt := protocol.BuildEnterTownPacket(townID, s.LastActionID())
 	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
