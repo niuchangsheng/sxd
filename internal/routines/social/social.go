@@ -486,6 +486,45 @@ const maxLuckyWheelSpins = 100
 // factionLuckyWheelOpenTimeout 转盘面板 (69/1) 的等待时长；单测可缩短。
 var factionLuckyWheelOpenTimeout = 8 * time.Second
 
+// factionProbeResult 帮派上下文探测结果。
+type factionProbeResult int
+
+const (
+	factionProbeAvailable factionProbeResult = iota
+	factionProbeUnavailable
+	factionProbeUnknown
+)
+
+// probeFactionMembership 用免费白檀香 (10/23) 探测帮派上下文。
+//
+// 未加入帮派的角色上多数帮派只读请求会被静默丢弃，但 incense 始终回包：
+// 22 MEMBER_NOT_EXIST / 18 FACTION_NOT_EXIST 表示无帮派，
+// 32 SUCCESS / 34 COUNT_USED 表示帮派上下文正常。结果会写入会话标记。
+func probeFactionMembership(ctx context.Context, session *client.RoleSession) (factionProbeResult, uint8, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	resp, err := session.Call(probeCtx,
+		protocol.BuildFactionIncensePacket(protocol.FactionOfferingWhiteSandalwood),
+		protocol.ActionIDFactionIncense)
+	if err != nil || resp == nil {
+		return factionProbeUnknown, 0, err
+	}
+	code, pErr := protocol.ParseFactionIncenseResult(resp.Payload)
+	if pErr != nil {
+		return factionProbeUnknown, 0, pErr
+	}
+	switch code {
+	case protocol.FactionIncenseResultMemberNotExist, protocol.FactionIncenseResultFactionNotExist:
+		session.MarkFactionFeatureUnavailable()
+		return factionProbeUnavailable, code, nil
+	case protocol.FactionIncenseResultSuccess, protocol.FactionIncenseResultCountUsed:
+		session.MarkFactionFeatureAvailable()
+		return factionProbeAvailable, code, nil
+	default:
+		return factionProbeUnknown, code, nil
+	}
+}
+
 // NewFactionLuckyWheelRoutine 构造帮派转盘自动抽奖任务。
 //
 // 协议对齐 2026 客户端 Mod_LuckyWheel_Base:
@@ -508,6 +547,23 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 			if session.IsFactionFeatureUnavailable() {
 				slog.Info("帮派模块对当前角色不可用，跳过帮派转盘", "role_id", session.RoleID())
 				return nil
+			}
+			// 未确认帮派上下文时先探测，避免 69/1 在无帮派角色上被静默丢弃。
+			if !session.IsFactionFeatureAvailable() {
+				result, code, pErr := probeFactionMembership(ctx, session)
+				switch result {
+				case factionProbeUnavailable:
+					slog.Info("帮派转盘：免费白檀香返回无帮派，跳过", "role_id", session.RoleID(), "result_code", code)
+					return nil
+				case factionProbeUnknown:
+					if pErr != nil {
+						slog.Info("帮派转盘：帮派归属探测无回包，稍后重试", "role_id", session.RoleID(), "err", pErr)
+					} else {
+						slog.Info("帮派转盘：帮派归属探测返回未知结果码，稍后重试",
+							"role_id", session.RoleID(), "result_code", code)
+					}
+					return scheduler.NewCooldown(30*time.Minute, "帮派转盘帮派归属探测失败")
+				}
 			}
 			slog.Info("正在执行社交任务: 帮派转盘", "role_id", session.RoleID())
 

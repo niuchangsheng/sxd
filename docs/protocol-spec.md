@@ -768,6 +768,9 @@ Action 6 只下发**当前角色已开放**的功能条目（客户端 `Function
 >   次数为 0 直接结束，不再请求会被丢弃的 `faction_roll_cake_info (10,45)`；
 > - 确认无帮派后通过 `client.RoleSession.MarkFactionFeatureUnavailable`
 >   置位会话级标记，同一会话内其余帮派玩法直接跳过，不再重复空等 3 秒。
+> - 帮派转盘在会话内尚未确认帮派上下文时，先用免费白檀香探测一次再发 69/1：
+>   无帮派直接跳过（2026-11-14：s0 探测返回 22，仅首次会话跳过，不再每 30 分钟丢包）；
+>   有帮派则标记 `MarkFactionFeatureAvailable`，后续会话内不再重复探测。
 
 ### 4.14 Module 117 (0x0075): 仙界练功房 (`Mod_StPracticeRoom_Base`)
 

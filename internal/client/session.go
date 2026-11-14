@@ -157,6 +157,9 @@ type RoleSession struct {
 	// 服务端对未加入帮派角色的帮派类请求会静默丢弃（无任何回包），
 	// 由首个超时的帮派任务置位，供其余帮派玩法直接跳过，避免重复空等。
 	factionUnavailable atomic.Bool
+	// factionAvailable 标记本次会话内已确认帮派上下文正常（如白檀香上香
+	// 返回 SUCCESS/COUNT_USED 或帮派面板正常回包），用于避免重复探测。
+	factionAvailable atomic.Bool
 
 	// functionMu 保护已开放功能列表缓存 (Mod_Player_Base.get_player_function)。
 	functionMu   sync.RWMutex
@@ -1839,6 +1842,16 @@ func (s *RoleSession) MarkFactionFeatureUnavailable() {
 // IsFactionFeatureUnavailable 返回本次会话内是否已确认帮派模块不可用。
 func (s *RoleSession) IsFactionFeatureUnavailable() bool {
 	return s.factionUnavailable.Load()
+}
+
+// MarkFactionFeatureAvailable 标记本次会话内已确认帮派上下文正常。
+func (s *RoleSession) MarkFactionFeatureAvailable() {
+	s.factionAvailable.Store(true)
+}
+
+// IsFactionFeatureAvailable 返回本次会话内是否已确认帮派上下文正常。
+func (s *RoleSession) IsFactionFeatureAvailable() bool {
+	return s.factionAvailable.Load()
 }
 
 // LastActionID 获取最后一次向对端发送的协议 ActionID。
