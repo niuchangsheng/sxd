@@ -3232,6 +3232,8 @@ func advanceQuestMission(
 			reason := "关卡尚未首通"
 			if !targetInSections {
 				reason = "关卡不在已开放章节列表中 (未解锁或列表拉取失败)"
+			} else if clearedMissions[targetMission.ID] {
+				reason = "关卡已通关但任务需重复击杀 (25/1 会被丢弃)"
 			}
 			slog.Info("跳过 Module 25 扫荡直接进入剧情副本",
 				"role_id", session.RoleID(),
