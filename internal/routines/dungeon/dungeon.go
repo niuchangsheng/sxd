@@ -2201,8 +2201,8 @@ func executeQuestCycle(
 			slog.Info("会话已关闭，终止任务闭环驱动", "role_id", session.RoleID())
 			return
 		}
-		if session.GetStamina() < powerPerSweep && !ensureStamina() {
-			slog.Info("推图体力耗尽且无可用补充道具，退出任务循环", "stamina", session.GetStamina())
+		if session.GetBaseStamina() < powerPerSweep && !ensureStamina() {
+			slog.Info("推图体力耗尽且无可用补充道具，退出任务循环", "stamina", session.GetBaseStamina())
 			break
 		}
 
@@ -3112,14 +3112,15 @@ func advanceQuestMission(
 			return clearedPrereq || lastCount > initialCount
 		}
 
-		// 计算本批次需要扫荡的次数 (单批最多 5 次以保持平稳)
+		// 计算本批次需要扫荡的次数 (单批最多 5 次以保持平稳)。
+		// 任务关卡只扣基础体力，额外体力池不参与，因此按基础体力估算批次。
 		batchCount := uint16(1)
 		if targetMax > lastCount {
 			needed := targetMax - lastCount
-			avail := int32(session.GetStamina() / 5)
+			avail := int32(session.GetBaseStamina() / 5)
 			if avail < needed && ensureStamina != nil {
 				if ensureStamina() {
-					avail = int32(session.GetStamina() / 5)
+					avail = int32(session.GetBaseStamina() / 5)
 				}
 			}
 			if needed > 0 && avail > 0 {
@@ -3383,13 +3384,13 @@ func practiceMission(
 	if session == nil {
 		return false, 0, client.ErrNotConnected
 	}
-	if session.GetStamina() < 5 && !ensureStamina() {
+	if session.GetBaseStamina() < 5 && !ensureStamina() {
 		return false, 0, scheduler.ErrStaminaDepleted
 	}
 	if count <= 0 {
 		count = 1
 	}
-	maxAvail := uint16(session.GetStamina() / 5)
+	maxAvail := uint16(session.GetBaseStamina() / 5)
 	if count > maxAvail {
 		count = maxAvail
 	}
@@ -3577,7 +3578,7 @@ func challengeStoryMission(
 		return false
 	}
 
-	if session.GetStamina() < 5 && !ensureStamina() {
+	if session.GetBaseStamina() < 5 && !ensureStamina() {
 		return false
 	}
 
@@ -3604,7 +3605,8 @@ func challengeStoryMission(
 		"mission_lock", m.MissionLock,
 		"required_level", requiredLevel,
 		"player_level", playerLevel,
-		"stamina", session.GetStamina(),
+		"stamina", session.GetBaseStamina(),
+		"stamina_total", session.GetStamina(),
 		"prev_act", fmt.Sprintf("0x%08X", prevAct),
 		"payload_hex", hex.EncodeToString(enterPkt.Payload),
 	)
