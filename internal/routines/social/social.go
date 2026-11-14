@@ -963,22 +963,10 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 			if pErr != nil {
 				return scheduler.NewCooldown(10*time.Minute, "住宅状态解析失败")
 			}
-			switch selfResult {
-			case protocol.MarryHomeResultSuccess:
-				// 正常，继续。
-			case protocol.MarryHomeResultNonMarry:
-				slog.Info("账号未处于婚姻状态，跳过住宅家具效果", "role_id", session.RoleID())
-				return scheduler.ErrAttemptsExhausted
-			case protocol.MarryHomeResultNonActivityTime:
-				slog.Info("家园活动未开放，稍后重试", "role_id", session.RoleID())
-				return scheduler.NewCooldown(2*time.Hour, "家园活动未开放")
-			case protocol.MarryHomeResultFunctionNoOpen:
-				slog.Info("家园功能未开放，跳过", "role_id", session.RoleID())
-				return scheduler.ErrAttemptsExhausted
-			default:
-				slog.Info("住宅状态不可用，稍后重试", "role_id", session.RoleID(), "result", selfResult)
-				return scheduler.NewCooldown(30*time.Minute, "住宅状态不可用")
-			}
+			// 2026-11-14 实测（qq s0 已婚）：210/0 的返回值 3 并非可靠的婚姻标志，
+			// 更像住宅状态。此处只记录，不做硬门禁；由领取结果码决定后续。
+			slog.Info("住宅状态", "role_id", session.RoleID(), "self_result", selfResult,
+				"payload_hex", hex.EncodeToString(selfResp.Payload))
 
 			// 210/18 需要家园场景上下文：先按官方客户端调用 get_player_home_info。
 			// 缺少该前置时 210/18 会被服务端静默丢弃（2026-11-14 s1 实测）。

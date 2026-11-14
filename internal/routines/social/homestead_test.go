@@ -2,7 +2,6 @@ package social
 
 import (
 	"context"
-	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -10,7 +9,6 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
-	"sxd-pie-ng/internal/scheduler"
 )
 
 // newHomesteadTestSession 构造只响应住宅状态与家具效果领取的测试会话。
@@ -71,17 +69,24 @@ func newHomesteadTestSession(t *testing.T, selfResult uint8, effects []protocol.
 	return s, &actions
 }
 
-func TestHomesteadRoutine_NonMarrySkipsFurnitureEffect(t *testing.T) {
-	s, actions := newHomesteadTestSession(t, protocol.MarryHomeResultNonMarry, nil)
+// TestHomesteadRoutine_SelfInfo3StillAttempts 验证 210/0 返回 3 时不再直接判定
+// “未结婚”（qq s0 已婚账号同样返回 3），仍按 210/2 -> 210/18 顺序尝试。
+func TestHomesteadRoutine_SelfInfo3StillAttempts(t *testing.T) {
+	want := []protocol.MarryHomeFurnitureEffect{{ItemID: 1001, Effect: 5}}
+	s, actions := newHomesteadTestSession(t, protocol.MarryHomeResultNonMarry, want)
 
-	if err := NewHomesteadRoutine().Execute(context.Background(), s, nil); err != nil && !errors.Is(err, scheduler.ErrAttemptsExhausted) {
+	if err := NewHomesteadRoutine().Execute(context.Background(), s, nil); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
+	called := false
 	for _, act := range *actions {
 		if act == protocol.ActionIDMarryHomeBatchFurnitureEffect {
-			t.Fatal("未结婚角色不应发送 210/18 家具效果请求")
+			called = true
 		}
+	}
+	if !called {
+		t.Fatal("210/0 返回 3 时仍应尝试 210/18（该码不代表未结婚）")
 	}
 }
 
