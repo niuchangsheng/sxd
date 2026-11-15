@@ -34,8 +34,10 @@ func TestEraLunHuiAlbumRoutine_ClaimsUnclaimed(t *testing.T) {
 				result = 3 // 第二项条件不满足，应继续后续任务
 			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{result}))
-		case protocol.ActionIDEraLunHuiKarmaCycleAward:
-			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 5}))
+		case protocol.ActionIDEraLunHuiRedDotStatus:
+			w := protocol.NewWriter().WriteUint8(0).WriteUint16(1)
+			w.WriteInt32(1).WriteInt32(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		}
 	})
 	defer sess.Close()
@@ -65,5 +67,32 @@ func TestEraLunHuiAlbumRoutine_PanelFailedSkips(t *testing.T) {
 	}
 	if claimCalls.Load() != 0 {
 		t.Fatalf("面板失败时不得领取, calls = %d", claimCalls.Load())
+	}
+}
+
+func TestEraLunHuiAlbumRoutine_NoRedDotSkips(t *testing.T) {
+	var taskInfoCalls, claimCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDEraLunHuiPanel:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDEraLunHuiRedDotStatus:
+			w := protocol.NewWriter().WriteUint8(0).WriteUint16(1)
+			w.WriteInt32(1).WriteInt32(0) // 无可领取
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDEraLunHuiTaskInfo:
+			taskInfoCalls.Add(1)
+		case protocol.ActionIDEraLunHuiGetTask:
+			claimCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+
+	if err := NewEraLunHuiAlbumRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("era lunhui album: %v", err)
+	}
+	if taskInfoCalls.Load() != 0 || claimCalls.Load() != 0 {
+		t.Fatalf("无可领取礼包时不得请求任务/领取, task_info=%d claim=%d",
+			taskInfoCalls.Load(), claimCalls.Load())
 	}
 }

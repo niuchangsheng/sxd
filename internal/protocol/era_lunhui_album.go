@@ -20,8 +20,8 @@ const (
 	ActionIDEraLunHuiGetTask uint32 = 0x03720002
 	// ActionIDEraLunHuiGetKarmaAward 领取轮回奖励 (882/3)
 	ActionIDEraLunHuiGetKarmaAward uint32 = 0x03720003
-	// ActionIDEraLunHuiKarmaCycleAward 轮回周期奖励 (882/5)
-	ActionIDEraLunHuiKarmaCycleAward uint32 = 0x03720005
+	// ActionIDEraLunHuiRedDotStatus 页签红点/可领取状态 (882/5)
+	ActionIDEraLunHuiRedDotStatus uint32 = 0x03720005
 )
 
 // EraLunHuiTask 表示轮回图录任务列表中的一项。
@@ -66,9 +66,35 @@ func BuildEraLunHuiGetKarmaAwardPacket(id int32) *Packet {
 	return eraLunHuiPrevPacket(ActionIDEraLunHuiGetKarmaAward, w.Bytes())
 }
 
-// BuildEraLunHuiKarmaCycleAwardPacket 构造轮回周期奖励/状态 (882/5)。
-func BuildEraLunHuiKarmaCycleAwardPacket() *Packet {
-	return eraLunHuiPrevPacket(ActionIDEraLunHuiKarmaCycleAward, nil)
+// BuildEraLunHuiRedDotStatusPacket 构造页签红点/可领取状态查询 (882/5)。
+func BuildEraLunHuiRedDotStatusPacket() *Packet {
+	return eraLunHuiPrevPacket(ActionIDEraLunHuiRedDotStatus, nil)
+}
+
+// ParseEraLunHuiRedDotStatus 解析 882/5：[UByte result, Short count, count×[Int tab, Int flag]]。
+func ParseEraLunHuiRedDotStatus(payload []byte) (map[int32]bool, error) {
+	p := DecompressPayloadIfNeeded(payload)
+	r := NewReader(p)
+	if _, err := r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: era lunhui red dot result: %v", ErrInvalidPayload, err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: era lunhui red dot count: %v", ErrInvalidPayload, err)
+	}
+	out := make(map[int32]bool, count)
+	for i := 0; i < int(count); i++ {
+		tab, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: era lunhui red dot[%d].tab: %v", ErrInvalidPayload, i, err)
+		}
+		flag, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: era lunhui red dot[%d].flag: %v", ErrInvalidPayload, i, err)
+		}
+		out[tab] = flag == 1
+	}
+	return out, nil
 }
 
 // ParseEraLunHuiResult 解析单字节结果码（0=成功）。

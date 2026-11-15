@@ -29,3 +29,20 @@ func TestParseEraLunHuiTasks(t *testing.T) {
 		t.Fatalf("任务[1] 不符: %+v", tasks[1])
 	}
 }
+
+// /tmp/lunhuitulu.pcapng 882/5 红点状态：[tab, flag] × 5。
+const eraLunHuiRedDotHex = "00000500000004000000010000000300000001000000020000000100000005000000000000000100000001"
+
+func TestParseEraLunHuiRedDotStatus(t *testing.T) {
+	raw, err := hex.DecodeString(eraLunHuiRedDotHex)
+	if err != nil {
+		t.Fatalf("hex: %v", err)
+	}
+	dots, err := protocol.ParseEraLunHuiRedDotStatus(raw)
+	if err != nil {
+		t.Fatalf("ParseEraLunHuiRedDotStatus: %v", err)
+	}
+	if !dots[4] || !dots[3] || !dots[2] || dots[5] || !dots[1] {
+		t.Fatalf("红点状态不符: %v", dots)
+	}
+}

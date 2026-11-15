@@ -67,8 +67,35 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			// 先探测页签红点/可领取状态；没有可领取礼包时不发任何领取请求。
+			redResp := call(protocol.BuildEraLunHuiRedDotStatusPacket(),
+				protocol.ActionIDEraLunHuiRedDotStatus)
+			if redResp == nil {
+				slog.Info("轮回图录可领取状态无回包，本轮跳过", "role_id", session.RoleID())
+				return scheduler.NewCooldown(30*time.Minute, "轮回图录可领取状态无回包")
+			}
+			redDots, rErr := protocol.ParseEraLunHuiRedDotStatus(redResp.Payload)
+			if rErr != nil {
+				slog.Warn("解析轮回图录可领取状态失败，本轮跳过", "role_id", session.RoleID(), "err", rErr)
+				return nil
+			}
+			anyClaimable := false
+			for _, v := range redDots {
+				if v {
+					anyClaimable = true
+					break
+				}
+			}
+			if !anyClaimable {
+				slog.Info("轮回图录暂无可领取礼包", "role_id", session.RoleID(), "red_dots", redDots)
+				return nil
+			}
+
 			claimed := 0
 			for tab := int32(1); tab <= eraLunHuiTabs; tab++ {
+				if !redDots[tab] {
+					continue
+				}
 				if claimed >= maxEraLunHuiClaims || ctx.Err() != nil {
 					break
 				}
@@ -114,9 +141,6 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 					"tab", tab, "tasks", len(tasks), "pending", pending)
 			}
 
-			// 刷新轮回周期状态（只读查询）。
-			_ = call(protocol.BuildEraLunHuiKarmaCycleAwardPacket(),
-				protocol.ActionIDEraLunHuiKarmaCycleAward)
 			slog.Info("轮回图录奖励巡检完成", "role_id", session.RoleID(), "claimed", claimed)
 			return nil
 		},
