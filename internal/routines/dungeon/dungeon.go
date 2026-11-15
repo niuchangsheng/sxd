@@ -31,7 +31,22 @@ import (
 // 避免每轮固定丢包。
 var (
 	questContextBad sync.Map // *client.RoleSession -> bool
+	// questReconnectAt 记录每个会话上次因任务上下文不可用而主动重连的时间，
+	// 限制为 15 分钟一次，避免重连风暴。
+	questReconnectAt sync.Map // *client.RoleSession -> time.Time
 )
+
+// allowQuestReconnect 判断当前是否允许为恢复任务上下文主动重连。
+func allowQuestReconnect(session *client.RoleSession) bool {
+	now := time.Now()
+	if v, ok := questReconnectAt.Load(session); ok {
+		if t, _ := v.(time.Time); now.Sub(t) < 15*time.Minute {
+			return false
+		}
+	}
+	questReconnectAt.Store(session, now)
+	return true
+}
 
 // eliteSweepBlocked 记录连续/反复开始失败的精英副本，避免每轮固定丢包。
 // key = roleID:dungeonID，value = 解禁时间。
@@ -1154,7 +1169,18 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 					}
 
 					if _, bad := questContextBad.Load(session); bad {
-						slog.Info("本会话任务上下文已不可用，跳过任务推图", "role_id", session.RoleID())
+						if allowQuestReconnect(session) {
+							// 服务端上下文被污染后同一连接内无法恢复：主动重连获取
+							// 全新会话（登录钩子已停用，重连后会话保持干净）。
+							questContextBad.Delete(session)
+							questSectionsAnchorCache.Delete(session)
+							questTownKnownGood.Delete(session)
+							session.ReconnectNow()
+							slog.Info("任务上下文不可用，主动重连以获取新会话上下文",
+								"role_id", session.RoleID())
+						} else {
+							slog.Info("本会话任务上下文已不可用，跳过任务推图", "role_id", session.RoleID())
+						}
 					} else {
 						clearedMissions := make(map[int]bool)
 						executeQuestCycle(

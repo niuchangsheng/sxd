@@ -2092,6 +2092,19 @@ func (s *RoleSession) closeCurrentConn() {
 	}
 }
 
+// ReconnectNow 主动断开当前连接，触发状态机按原配置重新登录。
+//
+// 用途：服务端会话上下文被污染后（例如 852/16 被丢弃），后续 Mod 4 请求会
+// 持续被静默丢弃，客户端无法在同一连接内恢复；重连可获取全新的会话上下文。
+// 重连由 runLoop 自行完成（含凭据自愈），调用方只需等待会话重新激活。
+func (s *RoleSession) ReconnectNow() {
+	if s.State() == StateClosed {
+		return
+	}
+	slog.Info("主动断开连接以重建服务端会话上下文", "role_id", s.cfg.RoleID)
+	s.closeCurrentConn()
+}
+
 func (s *RoleSession) runLoop() {
 	defer s.wg.Done()
 
