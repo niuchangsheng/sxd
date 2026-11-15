@@ -18,6 +18,9 @@ func TestPartnerPracticeRoutine_StartsPractice(t *testing.T) {
 		case protocol.ActionIDPartnerPracticeInfo:
 			w := protocol.NewWriter().WriteInt32(1216785)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDPartnerPracticeEnterFight:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.PartnerPracticeLimit}))
 		case protocol.ActionIDPartnerPracticeStart:
 			startCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
@@ -55,8 +58,11 @@ func TestPartnerPracticeRoutine_FinishedThenFight(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewPartnerPracticeRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("partner practice: %v", err)
+	err := NewPartnerPracticeRoutine().Execute(context.Background(), sess, nil)
+	// 战斗后再次 start_practice 仍返回 FINISHED（阶段推进），进入短冷却等待下一轮。
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("阶段推进时应返回 CooldownError, got %v", err)
 	}
 	if fightCalls.Load() != 1 {
 		t.Fatalf("FINISHED 后应进入镜像战斗，fight calls = %d", fightCalls.Load())

@@ -25,6 +25,8 @@ const (
 	ActionIDStUnionTaskInfo uint32 = 0x01510000
 	// ActionIDStUnionTaskFight 仙盟魔神挑战 (337/1)
 	ActionIDStUnionTaskFight uint32 = 0x01510001
+	// ActionIDStUnionTaskBuyTicket 购买挑战券 (337/3)
+	ActionIDStUnionTaskBuyTicket uint32 = 0x01510003
 )
 
 // 179 上香结果码（节选）。
@@ -88,6 +90,11 @@ func BuildStUnionTaskInfoPacket() *Packet {
 // BuildStUnionTaskFightPacket 构造魔神挑战请求 (337/1)。
 func BuildStUnionTaskFightPacket() *Packet {
 	return stUnionPrevPacket(ActionIDStUnionTaskFight, nil)
+}
+
+// BuildStUnionTaskBuyTicketPacket 构造购买挑战券请求 (337/3)。
+func BuildStUnionTaskBuyTicketPacket() *Packet {
+	return stUnionPrevPacket(ActionIDStUnionTaskBuyTicket, nil)
 }
 
 // StUnionIncenseResult 表示上香回包。

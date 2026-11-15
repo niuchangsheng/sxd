@@ -70,6 +70,7 @@ const (
 	ActionIDPartnerPracticeEnterFight uint32 = 0x01320005
 	ActionIDPartnerPracticeCallMirror uint32 = 0x01320006
 	ActionIDPartnerPracticeFight      uint32 = 0x01320009
+	ActionIDPartnerPracticeRoleAttr   uint32 = 0x0132000A
 )
 
 // 幻境修炼结果码 (Module 306)。
@@ -237,6 +238,13 @@ func BuildPartnerPracticeCallMirrorPacket() *Packet {
 // BuildPartnerPracticeFightPacket 构造修炼战斗封包 (306/9)。
 func BuildPartnerPracticeFightPacket() *Packet {
 	return NewPacket(ActionIDPartnerPracticeFight, nil)
+}
+
+// BuildPartnerPracticeRoleWarAttrPacket 构造伙伴战斗属性查询 (306/10)。
+func BuildPartnerPracticeRoleWarAttrPacket(roleID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(roleID)
+	return NewPacket(ActionIDPartnerPracticeRoleAttr, w.Bytes())
 }
 
 // BuildPartnerPracticeSelectPacket 构造选择修炼伙伴封包。

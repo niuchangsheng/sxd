@@ -13,6 +13,7 @@ package social
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -25,6 +26,12 @@ const stUnionIncenseOfferID int32 = 1
 
 // maxStUnionGodFights 单轮最多魔神挑战次数（每周 3 次）。
 const maxStUnionGodFights = 3
+
+// maxStUnionTicketBuys 单轮最多购买挑战券次数（用户确认首次用道源购买）。
+const maxStUnionTicketBuys = 2
+
+// stUnionTicketBuyDisabled 一旦检测到购买消耗元宝，本进程内不再自动购买。
+var stUnionTicketBuyDisabled atomic.Bool
 
 // openStUnionSession 建立仙界跨服会话；单测可替换为复用 mock 会话。
 var openStUnionSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
@@ -92,6 +99,7 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			fights := 0
+			buys := 0
 			for fights < maxStUnionGodFights && ctx.Err() == nil {
 				fightResp := call(protocol.BuildStUnionTaskFightPacket(),
 					protocol.ActionIDStUnionTaskFight, fightTimeout)
@@ -101,6 +109,37 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 				code, fErr := protocol.ParseStUnionResult(fightResp.Payload)
 				if fErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "仙盟魔神挑战回包解析失败")
+				}
+				if code == protocol.StUnionTaskNoTicket && buys < maxStUnionTicketBuys &&
+					!stUnionTicketBuyDisabled.Load() {
+					// 用户确认：挑战券首次用道源购买。仍做元宝差值保护：
+					// 若观察到元宝减少，本进程内永久停止自动购买。
+					before := cross.GetPlayerState().Ingots
+					buyResp := call(protocol.BuildStUnionTaskBuyTicketPacket(),
+						protocol.ActionIDStUnionTaskBuyTicket, callTimeout)
+					after := cross.GetPlayerState().Ingots
+					if buyResp == nil {
+						slog.Info("仙盟购买挑战券无回包", "role_id", session.RoleID())
+						return nil
+					}
+					buyCode, bErr := protocol.ParseStUnionResult(buyResp.Payload)
+					if bErr != nil {
+						return nil
+					}
+					slog.Info("仙盟购买挑战券", "role_id", session.RoleID(),
+						"result", buyCode, "result_text", protocol.StUnionTaskResultText(buyCode),
+						"ingots_before", before, "ingots_after", after)
+					if buyCode != protocol.StUnionTaskSuccess {
+						return nil
+					}
+					if before > 0 && after > 0 && after < before {
+						stUnionTicketBuyDisabled.Store(true)
+						slog.Error("仙盟挑战券购买消耗了元宝，已停止自动购买",
+							"role_id", session.RoleID(), "ingots_before", before, "ingots_after", after)
+						return nil
+					}
+					buys++
+					continue
 				}
 				if code != protocol.StUnionTaskSuccess {
 					slog.Info("仙盟魔神挑战结束", "role_id", session.RoleID(),

@@ -65,6 +65,66 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("幻境修炼当前伙伴", "role_id", session.RoleID(), "partner_role_id", info.PartnerRoleID)
 
+			// 用户实测（/tmp/xiulian.pcapng）：当前阶段修炼已满时，客户端直接发送
+			// enter_fight(306/5) 进入下一阶段，然后 306/10 取伙伴属性 → 306/9 挑战幻想；
+			// 被幻想击败后服务端进入 CD，需要 CD 结束后重试直到击败幻想。
+			enterResp := call(protocol.BuildPartnerPracticeEnterFightPacket(), protocol.ActionIDPartnerPracticeEnterFight)
+			if enterResp != nil {
+				enterCode, eErr := protocol.ParsePartnerPracticeResult(enterResp.Payload)
+				if eErr == nil {
+					switch enterCode {
+					case protocol.PartnerPracticeSuccess:
+						_ = call(protocol.BuildPartnerPracticeRoleWarAttrPacket(info.PartnerRoleID),
+							protocol.ActionIDPartnerPracticeRoleAttr)
+						fCtx, fCancel := context.WithTimeout(ctx, 60*time.Second)
+						fightResp, fCallErr := session.Call(fCtx,
+							protocol.BuildPartnerPracticeFightPacket(), protocol.ActionIDPartnerPracticeFight)
+						fCancel()
+						if fCallErr != nil {
+							fightResp = nil
+						}
+						if fightResp == nil {
+							return scheduler.NewCooldown(10*time.Minute, "幻境修炼挑战幻想无回包")
+						}
+						fightCode, fErr := protocol.ParsePartnerPracticeResult(fightResp.Payload)
+						if fErr == nil {
+							slog.Info("幻境修炼挑战幻想完成", "role_id", session.RoleID(),
+								"result", fightCode, "result_text", protocol.PartnerPracticeResultText(fightCode),
+								"battle_bytes", len(fightResp.Payload))
+						}
+						// 战斗后恢复修炼：胜利可继续修炼；失败/冷却由服务端返回 CD。
+						again := call(protocol.BuildPartnerPracticeStartPacket(), protocol.ActionIDPartnerPracticeStart)
+						if again == nil {
+							return scheduler.NewCooldown(10*time.Minute, "幻境修炼恢复开始无回包")
+						}
+						againCode, aErr := protocol.ParsePartnerPracticeResult(again.Payload)
+						if aErr != nil {
+							return scheduler.NewCooldown(10*time.Minute, "幻境修炼恢复开始解析失败")
+						}
+						switch againCode {
+						case protocol.PartnerPracticeSuccess, protocol.PartnerPracticeSame:
+							slog.Info("幻境修炼已恢复", "role_id", session.RoleID(), "result", againCode)
+							return nil
+						case protocol.PartnerPracticeCDTime, protocol.PartnerPracticeTimeLimit:
+							slog.Info("幻境修炼挑战幻想失败进入 CD，稍后重试", "role_id", session.RoleID(),
+								"result", againCode, "result_text", protocol.PartnerPracticeResultText(againCode))
+							return scheduler.NewCooldown(10*time.Minute, "幻境修炼幻想 CD")
+						case protocol.PartnerPracticeFinished:
+							slog.Info("幻境修炼阶段已推进，下一轮继续", "role_id", session.RoleID())
+							return scheduler.NewCooldown(10*time.Minute, "幻境修炼阶段推进")
+						default:
+							slog.Info("幻境修炼恢复未成功，稍后重试", "role_id", session.RoleID(),
+								"result", againCode, "result_text", protocol.PartnerPracticeResultText(againCode))
+							return scheduler.NewCooldown(10*time.Minute, "幻境修炼恢复未成功")
+						}
+					case protocol.PartnerPracticeCDTime, protocol.PartnerPracticeTimeLimit:
+						slog.Info("幻境修炼挑战幻想 CD 中，稍后重试", "role_id", session.RoleID(),
+							"result", enterCode, "result_text", protocol.PartnerPracticeResultText(enterCode))
+						return scheduler.NewCooldown(10*time.Minute, "幻境修炼幻想 CD")
+					}
+				}
+			}
+
 			startResp := call(protocol.BuildPartnerPracticeStartPacket(), protocol.ActionIDPartnerPracticeStart)
 			if startResp == nil {
 				slog.Info("幻境修炼开始无回包，稍后重试", "role_id", session.RoleID())

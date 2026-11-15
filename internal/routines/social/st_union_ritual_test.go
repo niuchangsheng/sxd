@@ -59,19 +59,29 @@ func TestStUnionRitualRoutine_IncenseAndFights(t *testing.T) {
 	}
 }
 
-func TestStUnionRitualRoutine_NoTicketStops(t *testing.T) {
-	var fightCalls atomic.Int32
+func TestStUnionRitualRoutine_BuysTicketThenFights(t *testing.T) {
+	var fightCalls, buyCalls atomic.Int32
+	stUnionTicketBuyDisabled.Store(false)
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
-		case protocol.ActionIDStUnionGodInfo, protocol.ActionIDStUnionTaskInfo:
+		case protocol.ActionIDStUnionTreeInfo, protocol.ActionIDStUnionGodInfo, protocol.ActionIDStUnionTaskInfo:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDStUnionGodIncense:
 			_ = protocol.WritePacket(conn, protocol.BuildStUnionIncenseResultPacket(
 				protocol.StUnionIncenseNoCoin, 0, 0, 0))
 		case protocol.ActionIDStUnionTaskFight:
-			fightCalls.Add(1)
+			if fightCalls.Add(1) == 1 {
+				// 第一次无券，购买后第二次成功。
+				_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+					[]byte{protocol.StUnionTaskNoTicket, 0, 0, 0, 0, 0}))
+				return
+			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
-				[]byte{protocol.StUnionTaskNoTicket, 0, 0, 0, 0, 0}))
+				[]byte{protocol.StUnionTaskSuccess, 0, 0, 0, 0, 0}))
+		case protocol.ActionIDStUnionTaskBuyTicket:
+			buyCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.StUnionTaskSuccess}))
 		}
 	})
 	restore := SetStUnionSessionOpenerForTest(func(_ context.Context, s *client.RoleSession) (*client.RoleSession, error) {
@@ -83,8 +93,11 @@ func TestStUnionRitualRoutine_NoTicketStops(t *testing.T) {
 	if err := NewStUnionRitualRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("st union ritual: %v", err)
 	}
-	if fightCalls.Load() != 1 {
-		t.Fatalf("挑战券不足后应停止, calls = %d", fightCalls.Load())
+	if buyCalls.Load() != 1 {
+		t.Fatalf("无券时应购买 1 次挑战券, buys = %d", buyCalls.Load())
+	}
+	if fightCalls.Load() < 2 {
+		t.Fatalf("购买后应再次挑战, fight calls = %d", fightCalls.Load())
 	}
 }
 
