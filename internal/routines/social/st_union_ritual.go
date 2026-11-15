@@ -65,9 +65,7 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 				defer cross.Close()
 			}
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cCancel := context.WithTimeout(ctx, timeout)
-				defer cCancel()
-				resp, err := cross.Call(cCtx, pkt, act)
+				resp, err := cross.CallWithPrevActResync(ctx, timeout, pkt, act)
 				if err != nil {
 					slog.Info("仙盟协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)

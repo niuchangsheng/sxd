@@ -40,9 +40,7 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cCancel := context.WithTimeout(ctx, timeout)
-				defer cCancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
 				if err != nil {
 					slog.Info("灵域猎妖协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)

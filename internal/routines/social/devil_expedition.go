@@ -129,9 +129,7 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 			}
 
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cCancel := context.WithTimeout(ctx, timeout)
-				defer cCancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
 				if err != nil {
 					slog.Info("魔界远征协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -200,7 +198,8 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDDevilStartExpeditionSingle, callTimeout)
 				if startResp == nil {
 					slog.Info("魔界远征开始无回包，结束本轮", "role_id", session.RoleID(), "mission", name)
-					return scheduler.NewCooldown(10*time.Minute, "魔界远征开始无回包")
+					// 实测该阶段对上下文极敏感，10 分钟重试会持续丢包；改为 1 小时低频探测。
+					return scheduler.NewCooldown(time.Hour, "魔界远征开始无回包")
 				}
 				code, pErr := protocol.ParseDevilResult(startResp.Payload)
 				if pErr != nil {

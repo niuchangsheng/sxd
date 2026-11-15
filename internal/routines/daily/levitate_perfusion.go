@@ -39,9 +39,7 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
-				defer cCancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := session.CallWithPrevActResync(ctx, callTimeout, pkt, act)
 				if err != nil {
 					slog.Info("飞升灌注协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)

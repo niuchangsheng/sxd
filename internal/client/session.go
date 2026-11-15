@@ -605,6 +605,32 @@ func (s *RoleSession) SetPacketObserver(fn func(*protocol.Packet)) {
 // 最后一道防线，避免一次漏设超时拖垮全部玩法。
 var defaultCallTimeout = 30 * time.Second
 
+// CallWithPrevActResync 发送需要 PrevAct 链的请求；若因链污染被服务端静默
+// 丢弃（表现为超时），用「最后一次收到回包的业务动作」(LastAckActionID)
+// 作为显式锚点重试一次。显式锚点不置 HasPrevAct，避免被会话层用已被丢弃的
+// lastActionID 覆盖。两次尝试各自使用独立的 timeout 上下文。
+func (s *RoleSession) CallWithPrevActResync(parent context.Context, timeout time.Duration, req *protocol.Packet, respActionID uint32) (*protocol.Packet, error) {
+	c1, cancel1 := context.WithTimeout(parent, timeout)
+	resp, err := s.Call(c1, req, respActionID)
+	cancel1()
+	if err == nil {
+		return resp, nil
+	}
+	if req == nil || !req.HasPrevAct || len(req.Payload) < 4 {
+		return nil, err
+	}
+	anchor := s.LastAckActionID()
+	if anchor == 0 {
+		return nil, err
+	}
+	body := append([]byte(nil), req.Payload[:len(req.Payload)-4]...)
+	body = append(body, byte(anchor>>24), byte(anchor>>16), byte(anchor>>8), byte(anchor))
+	retry := &protocol.Packet{ActionID: req.ActionID, Payload: body}
+	c2, cancel2 := context.WithTimeout(parent, timeout)
+	defer cancel2()
+	return s.Call(c2, retry, respActionID)
+}
+
 // Call 发送指定请求封包并同步等待特定 ActionID 的对端回包。
 func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respActionID uint32) (*protocol.Packet, error) {
 	// 兜底超时: 调用方漏设 deadline 时也要能返回，绝不无限等待。
@@ -993,9 +1019,9 @@ func (s *RoleSession) FetchLatestPlayerInfo(ctx context.Context) (*protocol.Play
 //
 // 返回服务端结果码 (0=成功)。
 func (s *RoleSession) EnterTown(ctx context.Context, townID int32) (uint8, error) {
-	// 2026-11-14 线上对照：沿用会话层按最后发送动作覆盖 PrevAct 的路径
-	// （与登录后首次复位成功的行为一致）；LastAck 版本在登录钩子之后会丢包。
-	pkt := protocol.BuildEnterTownPacket(townID, s.LastActionID())
+	// 2026-11-15 线上探针：enter_town 裸 4 字节稳定有回包；
+	// 追加 PrevAct 的 8 字节载荷会被静默丢弃，故这里不再携带 PrevAct。
+	pkt := protocol.BuildEnterTownPacket(townID)
 	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond

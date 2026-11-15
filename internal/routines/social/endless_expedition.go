@@ -41,9 +41,7 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cCancel := context.WithTimeout(ctx, timeout)
-				defer cCancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
 				if err != nil {
 					slog.Info("无尽洞天协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -93,17 +91,17 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 				// 因此无回包不阻断挑战。
 				_ = call(protocol.BuildEndlessBanListPacket(layer),
 					protocol.ActionIDEndlessBanList, callTimeout)
-				infoResp := call(protocol.BuildEndlessMonsterTeamInfoPacket(layer),
-					protocol.ActionIDEndlessMonsterTeamInfo, callTimeout)
-				if infoResp == nil {
-					return scheduler.NewCooldown(10*time.Minute, "无尽洞天怪物队伍无回包")
-				}
-				if code, iErr := protocol.ParseEndlessResult(infoResp.Payload); iErr != nil {
-					return scheduler.NewCooldown(10*time.Minute, "无尽洞天怪物队伍解析失败")
-				} else if code != protocol.EndlessSuccess {
-					slog.Info("无尽洞天当前层不可挑战，结束本轮", "role_id", session.RoleID(),
-						"layer", layer, "result", code, "result_text", protocol.EndlessResultText(code))
-					return nil
+				// 怪物队伍信息同样用于客户端展示，部分时段会被静默丢弃；
+				// 无回包时仍尝试直接挑战，由 797/23 的结果决定。
+				if infoResp := call(protocol.BuildEndlessMonsterTeamInfoPacket(layer),
+					protocol.ActionIDEndlessMonsterTeamInfo, callTimeout); infoResp != nil {
+					if code, iErr := protocol.ParseEndlessResult(infoResp.Payload); iErr != nil {
+						slog.Warn("无尽洞天怪物队伍解析失败", "role_id", session.RoleID(), "err", iErr)
+					} else if code != protocol.EndlessSuccess {
+						slog.Info("无尽洞天当前层不可挑战，结束本轮", "role_id", session.RoleID(),
+							"layer", layer, "result", code, "result_text", protocol.EndlessResultText(code))
+						return nil
+					}
 				}
 
 				fightResp := call(protocol.BuildEndlessChallengePacket(layer),
