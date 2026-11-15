@@ -115,18 +115,21 @@ func TestFairylandDispatchRoutine_PrevActFallback(t *testing.T) {
 	}
 }
 
-func TestFairylandRetryDelay(t *testing.T) {
+func TestNextFairylandWeeklyReset(t *testing.T) {
 	loc := time.Local
-	before := time.Date(2026, 11, 15, 7, 0, 0, 0, loc)
-	if got, want := fairylandRetryDelay(before), time.Hour; got != want {
-		t.Fatalf("08:00 前应等待 1h, got %v want %v", got, want)
+	// 2026-11-15 是周日，下一次周重置为 2026-11-16（周一）00:05。
+	sun := time.Date(2026, 11, 15, 10, 0, 0, 0, loc)
+	if got, want := nextFairylandWeeklyReset(sun), time.Date(2026, 11, 16, 0, 5, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("周日应等到周一 00:05, got %v want %v", got, want)
 	}
-	inside := time.Date(2026, 11, 15, 10, 0, 0, 0, loc)
-	if got, want := fairylandRetryDelay(inside), 30*time.Minute; got != want {
-		t.Fatalf("开放窗口内应 30m 复查, got %v want %v", got, want)
+	// 周一 00:00 早于重置点，仍是当天 00:05。
+	monEarly := time.Date(2026, 11, 16, 0, 0, 0, 0, loc)
+	if got, want := nextFairylandWeeklyReset(monEarly), time.Date(2026, 11, 16, 0, 5, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("周一 00:00 应等到 00:05, got %v want %v", got, want)
 	}
-	after := time.Date(2026, 11, 15, 21, 0, 0, 0, loc)
-	if got, want := fairylandRetryDelay(after), 11*time.Hour; got != want {
-		t.Fatalf("20:00 后应等待次日 08:00 (11h), got %v want %v", got, want)
+	// 周一 00:05 之后应等下一周。
+	monAfter := time.Date(2026, 11, 16, 1, 0, 0, 0, loc)
+	if got, want := nextFairylandWeeklyReset(monAfter), time.Date(2026, 11, 23, 0, 5, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("周一 00:05 后应等下一周, got %v want %v", got, want)
 	}
 }
