@@ -239,10 +239,48 @@ func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
 	}
 	if cooldown != nil {
 		slog.Info("登录后渡业台抽取未完成", "role_id", session.RoleID())
+		// 抽取被静默丢弃时服务端 PrevAct 锚点停在上一个动作（通常是 0/2），
+		// 而本地 lastActionID 已推进到 852/16；不重新对齐会让随后的
+		// enter_town/get_sections 连续丢包（2026-11-15 实测）。
+		if resyncPrevActChain(session, call) {
+			slog.Info("登录后渡业台丢弃后已重新对齐 PrevAct 链", "role_id", session.RoleID())
+		}
 		// 会话重连导致登录钩子未完成时撤销标记，让后续定时任务重新尝试，
 		// 否则本进程内渡业台将永久跳过。
 		altarAttempted.Delete(session)
 	}
+}
+
+// resyncPrevActChain 用 0/2 全量角色资产重建 PrevAct 链。
+//
+// 依次尝试候选锚点，直到 0/2 真正被服务端处理（LastAck 变为 0/2）。
+func resyncPrevActChain(
+	session *client.RoleSession,
+	call func(*protocol.Packet, uint32) *protocol.Packet,
+) bool {
+	candidates := []uint32{
+		session.LastAckActionID(),
+		session.LastActionID(),
+		protocol.ActionIDPlayerGetInfo,
+		protocol.ActionIDPlayerHeartbeat,
+		0x00A50000, // Mod 165 扩展模块初始化
+		0x00000063, // Mod 0 Act 99 场景进阶
+		0x00000048, // Mod 0 Act 72 城镇初始化
+	}
+	seen := make(map[uint32]bool, len(candidates))
+	for _, cand := range candidates {
+		if cand == 0 || seen[cand] {
+			continue
+		}
+		seen[cand] = true
+		if call(protocol.BuildPlayerGetInfoPacket(int32(cand)), protocol.ActionIDPlayerGetInfo) != nil &&
+			session.LastAckActionID() == protocol.ActionIDPlayerGetInfo {
+			slog.Debug("PrevAct 链重建成功", "role_id", session.RoleID(),
+				"anchor", fmt.Sprintf("0x%08X", cand))
+			return true
+		}
+	}
+	return false
 }
 
 // runAltarDraws 查询渡业仙池面板并循环执行 852/16 抽取。
@@ -256,33 +294,8 @@ func runAltarDraws(
 ) (int, error) {
 	// 先用 0/2 全量角色资产重建 PrevAct 链：长会话中大量无 PrevAct 的请求会让
 	// 服务端的链锚点与本地 lastActionID 脱节，导致 852/16 被静默丢弃。
-	// 依次尝试候选锚点，直到 0/2 真正被服务端处理（LastAck 变为 0/2）。
 	if doResync {
-		candidates := []uint32{
-			session.LastAckActionID(),
-			session.LastActionID(),
-			protocol.ActionIDPlayerGetInfo,
-			protocol.ActionIDPlayerHeartbeat,
-			0x00A50000, // Mod 165 扩展模块初始化
-			0x00000063, // Mod 0 Act 99 场景进阶
-			0x00000048, // Mod 0 Act 72 城镇初始化
-		}
-		seen := make(map[uint32]bool, len(candidates))
-		synced := false
-		for _, cand := range candidates {
-			if cand == 0 || seen[cand] {
-				continue
-			}
-			seen[cand] = true
-			if call(protocol.BuildPlayerGetInfoPacket(int32(cand)), protocol.ActionIDPlayerGetInfo) != nil &&
-				session.LastAckActionID() == protocol.ActionIDPlayerGetInfo {
-				synced = true
-				slog.Debug("轮回净地 PrevAct 链重建成功", "role_id", session.RoleID(),
-					"anchor", fmt.Sprintf("0x%08X", cand))
-				break
-			}
-		}
-		if !synced {
+		if !resyncPrevActChain(session, call) {
 			slog.Info("轮回净地 PrevAct 链重建未成功，稍后重试", "role_id", session.RoleID())
 		}
 	}
