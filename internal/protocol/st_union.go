@@ -69,17 +69,25 @@ func BuildStUnionTreeInfoPacket() *Packet {
 }
 
 // BuildStUnionGodInfoPacket 构造仙盟神像面板 (179/10)。
+//
+// 显式固定 PrevAct=179/0 且不置 HasPrevAct：与结缘宝箱 232/34 同样的教训，
+// 若期间插入心跳/推送，会话层用「最后收包」覆盖会破坏上下文令牌，导致后续
+// 179/11 上香被静默丢弃。
 func BuildStUnionGodInfoPacket() *Packet {
-	return stUnionPrevPacket(ActionIDStUnionGodInfo, nil)
+	w := NewWriter()
+	w.WriteUint32(ActionIDStUnionTreeInfo)
+	return NewPacket(ActionIDStUnionGodInfo, w.Bytes())
 }
 
 // BuildStUnionIncensePacket 构造上香请求 (179/11)。
 //
 // offerID：抓包中为 1（铜钱档）。自动化只使用该档，禁止调用元宝档。
+// PrevAct 显式固定为紧邻的 179/10（同上，避免被心跳/推送覆盖）。
 func BuildStUnionIncensePacket(offerID int32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(offerID)
-	return stUnionPrevPacket(ActionIDStUnionGodIncense, w.Bytes())
+	w.WriteUint32(ActionIDStUnionGodInfo)
+	return NewPacket(ActionIDStUnionGodIncense, w.Bytes())
 }
 
 // BuildStUnionTaskInfoPacket 构造魔神挑战面板 (337/0)。

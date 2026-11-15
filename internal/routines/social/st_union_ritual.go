@@ -119,32 +119,12 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 1. 仙盟上香（仅铜钱档）。抓包顺序：179/0 许愿树 → 179/10 神像 → 179/11 上香。
-			// 179/11 是仙盟场景写操作：优先在仙盟城镇会话执行；跨服会话上 179/0、
-			// 179/10 能回包，但 179/11 会被服务端静默丢弃（2026-11-15 多次实测）。
-			incenseSession := cross
-			if sect, sErr := openStUnionSectSession(ctx, session); sErr == nil && sect != nil {
-				if sect != session {
-					defer sect.Close()
-				}
-				incenseSession = sect
-				slog.Info("仙盟上香改用仙盟城镇会话", "role_id", session.RoleID())
-			} else if sErr != nil {
-				slog.Info("仙盟城镇会话建立失败，回退仙界跨服会话上香",
-					"role_id", session.RoleID(), "err", sErr)
-			}
-			incenseCall := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				resp, cErr := incenseSession.CallWithPrevActResync(ctx, callTimeout, pkt, act)
-				if cErr != nil {
-					slog.Info("仙盟上香协议无回包", "role_id", session.RoleID(),
-						"action", act, "err", cErr)
-					return nil
-				}
-				return resp
-			}
-			_ = incenseCall(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo)
-			_ = incenseCall(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo)
-			incenseResp := incenseCall(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
-				protocol.ActionIDStUnionGodIncense)
+			// 179/10、179/11 显式携带 PrevAct（179/0、179/10），避免心跳/推送插队
+			// 覆盖链路（与结缘宝箱 232/34 同一根因，2026-11-15 实测）。
+			_ = call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo, callTimeout)
+			_ = call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo, callTimeout)
+			incenseResp := call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
+				protocol.ActionIDStUnionGodIncense, callTimeout)
 			if incenseResp == nil {
 				// 上香（179/11）在当天已完成后会被服务端静默丢弃，但魔神挑战（337/1）
 				// 仍可正常进行：2026-11-15 15:48/16:13/16:24/16:36 实测在上香无回包后
