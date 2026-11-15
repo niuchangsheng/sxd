@@ -3,11 +3,14 @@ package minigame
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 const wuxingRoutinePanelHex = "000000001800050404000024a80000001f000016be0000000100000000000003260304000024a900000038000016be0000000100000000000002500204000024aa00000027000016be00000001000000000000025e0504000024ab00000019000016be0000000100000000000002c50104000024ac0000000e000016be00000001000000000000027b006400000101"
@@ -62,7 +65,8 @@ func TestWuxingRoutine_OneKeyThenExitOnFailure(t *testing.T) {
 	}
 }
 
-// TestWuxingRoutine_FightDroppedExits 验证一键挑战被静默丢弃时直接结束、不重试。
+// TestWuxingRoutine_FightDroppedExits 验证一键挑战被静默丢弃时直接结束、不重试，
+// 并返回 1 小时冷却，避免每 10 分钟重复空等。
 func TestWuxingRoutine_FightDroppedExits(t *testing.T) {
 	panelRaw, _ := hex.DecodeString(wuxingRoutinePanelHex)
 	var fightCalls atomic.Int32
@@ -77,8 +81,13 @@ func TestWuxingRoutine_FightDroppedExits(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewWuxingTiangongRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("wuxing routine: %v", err)
+	err := NewWuxingTiangongRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("一键挑战无回包应返回 CooldownError, 实际 %v", err)
+	}
+	if wait := time.Until(cd.Until); wait < 55*time.Minute || wait > 65*time.Minute {
+		t.Fatalf("退避时长应在 1 小时附近, 实际 %v", wait)
 	}
 	if fightCalls.Load() != 1 {
 		t.Fatalf("一键挑战无回包后不得重试, 实际 %d 次", fightCalls.Load())
