@@ -112,8 +112,11 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 				}
 				fightResp := call(protocol.BuildEraCreationFightPacket(eventID), protocol.ActionIDEraCreationFight)
 				if fightResp == nil {
-					return scheduler.NewCooldown(time.Hour, "造化秘境挑战无回包")
+					// 当日次数结束后服务端会静默丢弃挑战：连续 3 次挂起（最长 6 小时）。
+					return scheduler.HandleSilentDrop(session, "era_creation", 3,
+						time.Hour, "造化秘境挑战无回包")
 				}
+				scheduler.ResetSilentDrops(session, "era_creation")
 				fights++
 				code, fErr := protocol.ParseActionFirstByte(fightResp.Payload, "造化秘境挑战")
 				if fErr != nil {
