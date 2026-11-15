@@ -149,10 +149,13 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 			// 3. 觅寻仙踪任务奖励。
 			awarded := 0
 			attempts := 0
-			for group := int32(1); group <= 4 && attempts < maxCultivationTaskAward; group++ {
+			taskDrops := 0
+			const taskGroups = 4
+			for group := int32(1); group <= taskGroups && attempts < maxCultivationTaskAward; group++ {
 				taskResp := call(protocol.BuildCultivationCardTaskInfoPacket(group), protocol.ActionIDCultivationTaskInfo)
 				if taskResp == nil {
 					// 实测 group=2 会被静默丢弃；跳过该组继续检查其余分组。
+					taskDrops++
 					continue
 				}
 				_, tasks, tErr := protocol.ParseCultivationCardTasks(taskResp.Payload)
@@ -197,6 +200,11 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 							"result_text", protocol.CultivationCardResultText(code))
 					}
 				}
+			}
+			if taskDrops >= taskGroups {
+				// 四组任务面板全部被静默丢弃（2026-11-15 20:05 实测整点批量唤醒时
+				// 859/3、859/5 连续无回包）：本轮已无收益，1 小时后再试。
+				return scheduler.NewCooldown(time.Hour, "神仙卡牌任务面板全部无回包")
 			}
 		done:
 			slog.Info("神仙卡牌巡检完成", "role_id", session.RoleID(),
