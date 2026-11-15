@@ -1168,19 +1168,33 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						}
 					}
 
+					questBad := false
 					if _, bad := questContextBad.Load(session); bad {
 						if allowQuestReconnect(session) {
 							// 服务端上下文被污染后同一连接内无法恢复：主动重连获取
-							// 全新会话（登录钩子已停用，重连后会话保持干净）。
+							// 全新会话（登录钩子已停用，重连后会话保持干净），
+							// 并**在当前调度内**等待会话恢复后继续推图，避免新一轮
+							// 30 分钟内又被其他玩法污染。
 							questContextBad.Delete(session)
 							questSectionsAnchorCache.Delete(session)
 							questTownKnownGood.Delete(session)
 							session.ReconnectNow()
-							slog.Info("任务上下文不可用，主动重连以获取新会话上下文",
+							slog.Info("任务上下文不可用，主动重连后继续本轮推图",
 								"role_id", session.RoleID())
+							deadline := time.Now().Add(60 * time.Second)
+							for session.State() != client.StateActive && time.Now().Before(deadline) && ctx.Err() == nil {
+								time.Sleep(300 * time.Millisecond)
+							}
+							if session.State() != client.StateActive {
+								slog.Info("主动重连未在超时内恢复，跳过本轮任务推图", "role_id", session.RoleID())
+								questBad = true
+							}
 						} else {
-							slog.Info("本会话任务上下文已不可用，跳过任务推图", "role_id", session.RoleID())
+							questBad = true
 						}
+					}
+					if questBad {
+						slog.Info("本会话任务上下文已不可用，跳过任务推图", "role_id", session.RoleID())
 					} else {
 						clearedMissions := make(map[int]bool)
 						executeQuestCycle(
@@ -1190,7 +1204,8 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						)
 						// 每轮调度推进一关；跨轮继续由 enter_town 的 Mod 3/4 锚点复位
 						// 恢复任务上下文（2026-11-15 实测）。若上下文再次不可用，
-						// fetchMissionSections 连续失败会置位 questContextBad 熔断本会话。
+						// fetchMissionSections 连续失败会置位 questContextBad 熔断本会话，
+						// 下一轮调度将主动重连后继续。
 					}
 				}
 			}
