@@ -1084,9 +1084,11 @@ func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSess
 			tasks = parsed
 		}
 	}
+	// 回包条目为 [task_id, progress, claimed]；claimed=1 表示已领取。
+	// 未领取的任务都尝试一次，未完成时服务端返回 NOT_COMPLETED(22) 并继续。
 	claimable := make([]protocol.WorldPkTask, 0)
 	for _, t := range tasks {
-		if t.State == 1 {
+		if t.State == 0 {
 			claimable = append(claimable, t)
 		}
 	}
@@ -1302,10 +1304,10 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 }
 
 // 跨服PK匹配等待时间（单测可缩短）。
-// worldPkOpenHour 阶位赛每日开放时刻（用户观察约 20:00）。
-const worldPkOpenHour = 20
+// worldPkOpenHour 阶位赛每日开放时刻（2026-11-15 12:07 实测已开放）。
+const worldPkOpenHour = 12
 
-// nextWorldPkOpenAt 返回下一次阶位赛开放时刻：当天 20:00，已过则次日 20:00。
+// nextWorldPkOpenAt 返回下一次阶位赛开放时刻：当天 12:00，已过则次日 12:00。
 func nextWorldPkOpenAt(now time.Time) time.Time {
 	open := time.Date(now.Year(), now.Month(), now.Day(), worldPkOpenHour, 0, 0, 0, now.Location())
 	if !now.Before(open) {
