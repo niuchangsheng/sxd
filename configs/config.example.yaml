@@ -77,6 +77,7 @@ scheduler:
     children_daily: false         # 孩子功能: 按用户要求关闭
     rebirth_land: true             # 轮回净地免费挂机奖励 (不消耗元宝)
     era_rebirth_attr_gift: true    # 修真境界礼包时间道具 (851/4→851/5)
+    levitate_perfusion: true       # 飞升页面伙伴灌注经验 (357/1, 不耗元宝)
     activity_report: true         # 每日活跃度汇总 (只读)
     tactics_water: true           # 兵法圣水购买 (铜钱，不消耗元宝)
     partner_link_box: true        # 缘魂宝箱购买 (道缘/铜钱，不消耗元宝)
@@ -155,6 +156,7 @@ scheduler:
     bailian: true                 # 百炼乾坤一/二一键挑战 (免费)
     era_creation: true            # 纪元造化秘境探索+挑战 (免费)
     endless_expedition: true      # 无尽洞天按层挑战 (不买通行证/奖励)
+    era_lunhui_album: true        # 纪元秘藏·轮回图录任务奖励领取
     cultivation_card: true        # 神仙卡牌收藏集 (仅铜钱商城, 不消耗元宝)
     faxiang_trial: true           # 法相试炼(造物佛手/守护魔兽) 免费领奖+挑战
     fortune_box: true             # 奇缘宝藏 (免费开箱)

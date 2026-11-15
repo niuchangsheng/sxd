@@ -54,6 +54,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "children_daily", Name: "孩子学习与任务", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "孩子上学与已完成任务奖励领取 (消耗培养金，不消耗元宝)", DefaultOn: false},
 		{ID: "rebirth_land", Name: "轮回净地挂机奖励", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "免费一键领取轮回净地挂机奖励 (不消耗元宝)", DefaultOn: false},
 		{ID: "era_rebirth_attr_gift", Name: "修真境界礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "使用修真境界时间道具 (851/4→851/5, 道具不足跳过)", DefaultOn: false},
+		{ID: "levitate_perfusion", Name: "飞升伙伴灌注经验", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "飞升页面伙伴灌注经验 (357/1, 已灌注完即停止)", DefaultOn: false},
 		{ID: "activity_report", Name: "每日活跃度汇总", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "只读汇总每日/周常活跃度并输出 1200 达标缺口", DefaultOn: false},
 		{ID: "tactics_water", Name: "兵法圣水购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "铜钱购买湛蓝圣水完成兵法活跃度 (不消耗元宝)", DefaultOn: false},
 		{ID: "partner_link_box", Name: "缘魂宝箱购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "道缘/铜钱购买缘魂宝箱完成活跃度 (不消耗元宝)", DefaultOn: false},
@@ -138,6 +139,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "bailian", Name: "百炼乾坤一/二", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "百炼乾坤一 (272) 与二 (320) 一键挑战 (不消耗元宝)", DefaultOn: false},
 		{ID: "era_creation", Name: "纪元造化秘境", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "先探索再挑战事件并领取战斗奖励 (不消耗元宝)", DefaultOn: false},
 		{ID: "endless_expedition", Name: "无尽洞天", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "按当前层挑战，层数推进后继续；不买通行证/奖励", DefaultOn: false},
+		{ID: "era_lunhui_album", Name: "轮回图录奖励", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "纪元秘藏轮回图录 5 个页签的未领取任务奖励", DefaultOn: false},
 		{ID: "fortune_box", Name: "奇缘宝藏", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "开放时免费开启宝箱 (不买每日礼包)", DefaultOn: false},
 		{ID: "faxiang_trial", Name: "法相试炼(造物佛手/守护魔兽)", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "领奖并免费挑战法相试炼 (不修改魔兽、不买次数)", DefaultOn: false},
 		{ID: "wuxing_tiangong", Name: "五行天宫", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "一键挑战五行天宫，失败关卡按特殊阵容单独重试 (不消耗元宝)", DefaultOn: false},
@@ -345,6 +347,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewRebirthLandRoutine()
 	case "era_rebirth_attr_gift":
 		return daily.NewEraRebirthAttrGiftRoutine()
+	case "levitate_perfusion":
+		return daily.NewLevitatePerfusionRoutine()
 	case "activity_report":
 		return daily.NewDailyActivityReportRoutine()
 	case "tactics_water":
@@ -509,6 +513,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return minigame.NewBaiLianRoutine()
 	case "endless_expedition":
 		return social.NewEndlessExpeditionRoutine()
+	case "era_lunhui_album":
+		return social.NewEraLunHuiAlbumRoutine()
 	case "era_creation":
 		return minigame.NewEraCreationRoutine()
 	case "cultivation_card":
