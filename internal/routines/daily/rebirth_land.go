@@ -341,7 +341,17 @@ func runAltarDraws(
 		slog.Info("轮回净地渡业台抽取请求", "role_id", session.RoleID(), "draws", draws,
 			"prev_act", fmt.Sprintf("0x%08X", session.LastActionID()),
 			"payload", fmt.Sprintf("% X", drawPkt.Payload))
-		resp := call(drawPkt, protocol.ActionIDEraRebirthLandDraw)
+		// 抽取请求对 PrevAct 链敏感；首次无回包时按「最后收到的包」重同步重试一次。
+		// 852/16 被静默丢弃会污染整个会话的 Mod 4 上下文（2026-11-15 实测：
+		// 登录钩子抽取超时后，任务推图的 enter_town/get_sections 连续丢包）。
+		dCtx, dCancel := context.WithTimeout(ctx, 8*time.Second)
+		resp, rErr := session.CallWithPrevActResync(dCtx, 8*time.Second, drawPkt,
+			protocol.ActionIDEraRebirthLandDraw)
+		dCancel()
+		if rErr != nil {
+			slog.Info("轮回净地渡业台抽取无回包", "role_id", session.RoleID(), "err", rErr)
+			resp = nil
+		}
 		if resp == nil {
 			// 抽取无回包不应阻断仙池领取与挂机奖励：先完成其余步骤，最后再冷却。
 			drawCooldown = scheduler.NewCooldown(30*time.Minute, "渡业台抽取无回包")
