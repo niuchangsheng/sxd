@@ -33,6 +33,10 @@ const maxStUnionTicketBuys = 2
 // stUnionTicketBuyDisabled 一旦检测到购买消耗元宝，本进程内不再自动购买。
 var stUnionTicketBuyDisabled atomic.Bool
 
+// stUnionTicketIneffectiveDay 记录「买了挑战券仍然提示次数已用完」的日期
+// (yyyy-mm-dd)。当天不再用道源购买，避免每天浪费道源。
+var stUnionTicketIneffectiveDay atomic.Value // string
+
 // openStUnionSession 建立仙界跨服会话；单测可替换为复用 mock 会话。
 var openStUnionSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
 	return s.OpenCrossServerSession(ctx)
@@ -101,9 +105,18 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			if infoResp := call(protocol.BuildStUnionTaskInfoPacket(),
 				protocol.ActionIDStUnionTaskInfo, callTimeout); infoResp == nil {
 				return nil
+			} else if info, iErr := protocol.ParseStUnionTaskInfo(infoResp.Payload); iErr == nil {
+				slog.Info("仙盟魔神挑战面板", "role_id", session.RoleID(),
+					"a", info.A, "b", info.B, "c", info.C, "d", info.D)
 			}
 			fights := 0
 			buys := 0
+			boughtThisRun := false
+			today := time.Now().Format("2006-01-02")
+			buyIneffectiveToday := func() bool {
+				v, _ := stUnionTicketIneffectiveDay.Load().(string)
+				return v == today
+			}
 			for fights < maxStUnionGodFights && ctx.Err() == nil {
 				fightResp := call(protocol.BuildStUnionTaskFightPacket(),
 					protocol.ActionIDStUnionTaskFight, fightTimeout)
@@ -115,7 +128,7 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 					return scheduler.NewCooldown(10*time.Minute, "仙盟魔神挑战回包解析失败")
 				}
 				if code == protocol.StUnionTaskNoTicket && buys < maxStUnionTicketBuys &&
-					!stUnionTicketBuyDisabled.Load() {
+					!stUnionTicketBuyDisabled.Load() && !buyIneffectiveToday() {
 					// 用户确认：挑战券首次用道源购买。仍做元宝差值保护：
 					// 若观察到元宝减少，本进程内永久停止自动购买。
 					before := cross.GetPlayerState().Ingots
@@ -143,12 +156,19 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 						return nil
 					}
 					buys++
+					boughtThisRun = true
 					continue
 				}
 				if code != protocol.StUnionTaskSuccess {
 					slog.Info("仙盟魔神挑战结束", "role_id", session.RoleID(),
 						"fights", fights, "result", code,
 						"result_text", protocol.StUnionTaskResultText(code))
+					if boughtThisRun && code == protocol.StUnionTaskTimesUsed {
+						// 刚用道源买了挑战券仍然次数已用完：当天不再购买。
+						stUnionTicketIneffectiveDay.Store(today)
+						slog.Info("购买挑战券后仍次数已用完，今日不再自动购买",
+							"role_id", session.RoleID())
+					}
 					return nil
 				}
 				fights++

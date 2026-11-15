@@ -126,6 +126,29 @@ func ParseStUnionIncenseResult(payload []byte) (*StUnionIncenseResult, error) {
 	return out, nil
 }
 
+// StUnionTaskInfo 表示 337/0 魔神挑战面板的前 4 个整型字段。
+//
+// 官方 schema 为 [Int,Int,Int,Int,[Int×4],Int,Short,[Int,Int],Int]；
+// 具体语义待实机对照（预计包含剩余次数/挑战券数量），先原样打印便于判断。
+type StUnionTaskInfo struct {
+	A, B, C, D int32
+}
+
+// ParseStUnionTaskInfo 解析 337/0 面板的前 4 个 Int。
+func ParseStUnionTaskInfo(payload []byte) (*StUnionTaskInfo, error) {
+	p := DecompressPayloadIfNeeded(payload)
+	r := NewReader(p)
+	out := &StUnionTaskInfo{}
+	for i, dst := range []*int32{&out.A, &out.B, &out.C, &out.D} {
+		v, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: st union task info[%d]: %v", ErrInvalidPayload, i, err)
+		}
+		*dst = v
+	}
+	return out, nil
+}
+
 // ParseStUnionResult 解析单字节结果码。
 func ParseStUnionResult(payload []byte) (uint8, error) {
 	if len(payload) == 0 {
