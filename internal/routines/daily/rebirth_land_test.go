@@ -130,6 +130,9 @@ func TestRebirthLandRoutine_NoGiftStops(t *testing.T) {
 
 // 登录后置钩子：面板 + 一次成功抽取，随后渡业符不足自动停止；元宝不变。
 func TestRunRebirthAltarOnLogin_DrawsUntilInsufficient(t *testing.T) {
+	if !altarDrawEnabled {
+		t.Skip("渡业台自动抽取已默认停用，登录钩子不再发抽取")
+	}
 	var drawCalls atomic.Int32
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
