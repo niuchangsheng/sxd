@@ -295,10 +295,15 @@ func sellNewPackItems(ctx context.Context, session *client.RoleSession, dictRepo
 	}
 	pack, err := fetchPackItemList(ctx, session)
 	if err != nil || pack == nil {
+		// 背包列表请求同样可能被服务端静默丢弃；显式记录，避免「没卖扫荡物」
+		// 看起来像逻辑问题而无从定位。
+		slog.Warn("背包列表拉取失败，本轮跳过扫荡物出售",
+			"role_id", session.RoleID(), "err", err)
 		return 0
 	}
 
 	sold := 0
+	newSlots, grownSlots, skipNotSweepType, skipNotSellable := 0, 0, 0, 0
 	var pending []protocol.ItemRecord
 	for _, it := range pack.PackItems {
 		qty := packItemQuantity(it)
@@ -306,12 +311,19 @@ func sellNewPackItems(ctx context.Context, session *client.RoleSession, dictRepo
 		if existed && qty <= prevQty {
 			continue
 		}
+		if existed {
+			grownSlots++
+		} else {
+			newSlots++
+		}
 		// 新格位必然是扫荡掉落；已有格位数量增加时，仅对精英副本主要掉落类型
 		// (1002=制作卷) 整格出售，避免把玩家原有消耗品/体力道具整组卖掉。
 		if existed && !isEliteSweepStackType(dictRepo, it) {
+			skipNotSweepType++
 			continue
 		}
 		if !isPackItemSellable(dictRepo, it) {
+			skipNotSellable++
 			continue
 		}
 		ok, retryable := sellPackItem(ctx, session, it)
@@ -334,6 +346,14 @@ func sellNewPackItems(ctx context.Context, session *client.RoleSession, dictRepo
 				unresolved = append(unresolved, it)
 			}
 		}
+	}
+
+	if newSlots > 0 || grownSlots > 0 || sold > 0 || len(unresolved) > 0 {
+		slog.Info("扫荡物出售明细", "role_id", session.RoleID(),
+			"pack_items", len(pack.PackItems), "base_items", len(base.byPlayerItem),
+			"new_slots", newSlots, "grown_slots", grownSlots,
+			"skip_not_sweep_type", skipNotSweepType, "skip_not_sellable", skipNotSellable,
+			"sold", sold, "unresolved", len(unresolved))
 	}
 
 	// 以本轮结束时的背包为下一轮基线；未能售出的物品保留原始基线，
@@ -366,6 +386,38 @@ func isPackItemSellable(dictRepo dictionary.Repository, it protocol.ItemRecord) 
 
 // eliteSweepStackItemTypeID 精英副本可堆叠掉落的主要道具类型 (制作卷)。
 const eliteSweepStackItemTypeID = 1002
+
+// sellAgedSweepStacks 在背包已满、且差量出售没能腾出空间时，直接出售背包里
+// 已有的制作卷 (TypeID=1002) 堆叠。这些就是精英副本扫荡掉落；如果只卖「本轮新增」，
+// 背包里沉积的旧扫荡物永远不会被出售，扫荡会一直卡在「背包已满」。
+// 每次最多出售 maxStacks 叠，交由调用方重试扫荡。
+func sellAgedSweepStacks(ctx context.Context, session *client.RoleSession, dictRepo dictionary.Repository, maxStacks int) int {
+	if dictRepo == nil || maxStacks <= 0 {
+		return 0
+	}
+	pack, err := fetchPackItemList(ctx, session)
+	if err != nil || pack == nil {
+		slog.Warn("背包列表拉取失败，无法出售沉积扫荡物", "role_id", session.RoleID(), "err", err)
+		return 0
+	}
+	sold := 0
+	for _, it := range pack.PackItems {
+		if sold >= maxStacks || ctx.Err() != nil {
+			break
+		}
+		if !isEliteSweepStackType(dictRepo, it) || !isPackItemSellable(dictRepo, it) {
+			continue
+		}
+		if ok, _ := sellPackItem(ctx, session, it); ok {
+			sold++
+		}
+	}
+	if sold > 0 {
+		slog.Info("背包已满，出售沉积的制作卷", "role_id", session.RoleID(),
+			"sold", sold, "max_stacks", maxStacks)
+	}
+	return sold
+}
 
 // isEliteSweepStackType 判断数量增加的已有格位是否属于可安全整格出售的精英掉落类型。
 // 消耗品 (包子/粽子/茶叶蛋等) 即使数量增加也不整格出售，避免误卖玩家原有库存。
@@ -873,6 +925,10 @@ func executeEliteMissionSweep(
 				sold := 0
 				if cfg.Sweep.SellSweptItems {
 					sold = sellNewPackItems(ctx, session, dictRepo, packBase)
+					if sold == 0 {
+						// 只卖新增无法腾出空间时，出售背包里沉积的制作卷（扫荡掉落）。
+						sold = sellAgedSweepStacks(ctx, session, dictRepo, 3)
+					}
 				}
 				if sold > 0 && attempt < maxTownAttempts-1 && sweepHasStamina() {
 					slog.Info("背包已满，已卖出扫荡物并重试当前城镇",
