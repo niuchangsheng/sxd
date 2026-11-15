@@ -89,7 +89,7 @@ func NewPartnerLinkRoutine() scheduler.ActivityRoutine {
 				if aErr != nil || aResp == nil {
 					slog.Info("激活灵结无回包，稍后重试",
 						"role_id", session.RoleID(), "link_type_id", link.LinkTypeID, "err", aErr)
-					return scheduler.NewCooldown(10*time.Minute, "灵结激活无回包")
+					return scheduler.NewCooldown(time.Hour, "灵结激活无回包")
 				}
 				got, pErr := protocol.ParsePartnerLinkActivateResult(aResp.Payload)
 				if pErr != nil {

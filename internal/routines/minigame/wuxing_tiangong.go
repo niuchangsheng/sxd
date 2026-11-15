@@ -87,8 +87,9 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 			fightResp := call(protocol.BuildWuxingFightPacket(protocol.WuxingFightModeAll, session.LastActionID()),
 				protocol.ActionIDWuxingFight, 30*time.Second)
 			if fightResp == nil {
-				slog.Info("五行天宫一键挑战无回包，结束本轮", "role_id", session.RoleID())
-				return nil
+				// 一键挑战被静默丢弃时 10 分钟重试只会持续空等 30 秒；改为 1 小时低频探测。
+				slog.Info("五行天宫一键挑战无回包，1 小时后再试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(time.Hour, "五行天宫一键挑战无回包")
 			}
 			slog.Info("五行天宫一键挑战已执行", "role_id", session.RoleID(), "report_len", len(fightResp.Payload))
 
