@@ -2943,9 +2943,10 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			flagResp := call(protocol.BuildTreasureHouseUseFreeFlagPacket(1, prevAct),
 				protocol.ActionIDTreasureHouseSetUseFreeFlag, 8*time.Second)
 			if flagResp == nil {
-				slog.Info("设置免费次数优先无回包，跳过抽奖以免误消耗元宝",
+				// 该请求对上下文极敏感，10 分钟一轮会持续丢包；改为 1 小时低频探测。
+				slog.Info("设置免费次数优先无回包，1 小时后再试（不消耗元宝）",
 					"role_id", session.RoleID())
-				return nil
+				return scheduler.NewCooldown(time.Hour, "天帝宝库设置免费次数优先无回包")
 			}
 			flagCode, fErr := protocol.ParseTreasureHouseResultCode(flagResp.Payload)
 			if fErr != nil {
