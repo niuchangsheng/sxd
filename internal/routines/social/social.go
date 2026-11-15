@@ -532,6 +532,9 @@ func probeFactionMembership(ctx context.Context, session *client.RoleSession) (f
 	}
 }
 
+// factionWheelStartTimeout 帮派转盘单次抽奖等待上限；测试可缩短以模拟静默丢弃。
+var factionWheelStartTimeout = 8 * time.Second
+
 // FactionLuckyWheelConfig 帮派转盘自动化配置。
 type FactionLuckyWheelConfig struct {
 	// SellLowPillScrolls 抽到 1-5 品丹药制作卷时自动卖出 (默认开启)。
@@ -686,18 +689,19 @@ func NewFactionLuckyWheelRoutine(cfgs ...FactionLuckyWheelConfig) scheduler.Acti
 				}
 
 				startPkt := protocol.BuildLuckyWheelStartPacket(prevAct)
-				startCtx, startCancel := context.WithTimeout(ctx, 8*time.Second)
+				startCtx, startCancel := context.WithTimeout(ctx, factionWheelStartTimeout)
 				startResp, err := session.Call(startCtx, startPkt, protocol.ActionIDLuckyWheelStart)
 				startCancel()
 				if err != nil || startResp == nil {
 					slog.Info("帮派转盘抽奖未收到回包", "role_id", session.RoleID(), "err", err)
-					return nil
+					// 已抽到的低阶卷轴仍要卖出；结束抽奖后走出售流程。
+					break
 				}
 
 				result, err := protocol.ParseLuckyWheelRunResult(startResp.Payload)
 				if err != nil {
 					slog.Warn("解析帮派转盘抽奖回包失败", "role_id", session.RoleID(), "err", err)
-					return nil
+					break
 				}
 				if result.RunState != protocol.LuckyWheelResultSuccess {
 					slog.Warn("帮派转盘抽奖被服务端拒绝",
