@@ -107,7 +107,7 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 				fightResp := call(protocol.BuildEndlessChallengePacket(layer),
 					protocol.ActionIDEndlessChallenge, fightTimeout)
 				if fightResp == nil {
-					return scheduler.NewCooldown(10*time.Minute, "无尽洞天挑战无回包")
+					return scheduler.NewCooldown(time.Hour, "无尽洞天挑战无回包")
 				}
 				code, fErr := protocol.ParseEndlessResult(fightResp.Payload)
 				if fErr != nil {

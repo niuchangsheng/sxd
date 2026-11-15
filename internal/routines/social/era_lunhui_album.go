@@ -100,7 +100,7 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 				infoResp := call(protocol.BuildEraLunHuiTaskInfoPacket(tab),
 					protocol.ActionIDEraLunHuiTaskInfo)
 				if infoResp == nil {
-					return scheduler.NewCooldown(10*time.Minute, "轮回图录任务列表无回包")
+					return scheduler.NewCooldown(time.Hour, "轮回图录任务列表无回包")
 				}
 				tasks, err := protocol.ParseEraLunHuiTasks(infoResp.Payload)
 				if err != nil {

@@ -54,7 +54,7 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildEraCreationPanelPacket(), protocol.ActionIDEraCreationPanel)
 			if panelResp == nil {
-				return nil
+				return scheduler.NewCooldown(time.Hour, "造化秘境面板无回包")
 			}
 			panelCode, err := protocol.ParseActionFirstByte(panelResp.Payload, "造化秘境面板")
 			if err != nil {
@@ -70,7 +70,7 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 			// 1. 先探索，获得可挑战事件。
 			exploreResp := call(protocol.BuildEraCreationExplorePacket(), protocol.ActionIDEraCreationExplore)
 			if exploreResp == nil {
-				return nil
+				return scheduler.NewCooldown(time.Hour, "造化秘境探索无回包")
 			}
 			explore, err := protocol.ParseEraCreationExplore(exploreResp.Payload)
 			if err != nil {
@@ -90,7 +90,7 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 			// 2. 查询可挑战事件。
 			eventResp := call(protocol.BuildEraCreationFightEventPacket(), protocol.ActionIDEraCreationFightEvent)
 			if eventResp == nil {
-				return nil
+				return scheduler.NewCooldown(time.Hour, "造化秘境事件无回包")
 			}
 			events, err := protocol.ParseEraCreationFightEvent(eventResp.Payload)
 			if err != nil {
@@ -112,7 +112,7 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 				}
 				fightResp := call(protocol.BuildEraCreationFightPacket(eventID), protocol.ActionIDEraCreationFight)
 				if fightResp == nil {
-					break
+					return scheduler.NewCooldown(time.Hour, "造化秘境挑战无回包")
 				}
 				fights++
 				code, fErr := protocol.ParseActionFirstByte(fightResp.Payload, "造化秘境挑战")

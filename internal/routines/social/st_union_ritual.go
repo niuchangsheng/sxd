@@ -80,7 +80,9 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			incenseResp := call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
 				protocol.ActionIDStUnionGodIncense, callTimeout)
 			if incenseResp == nil {
-				slog.Info("仙盟上香无回包", "role_id", session.RoleID())
+				// 上香被静默丢弃时后续魔神挑战同样会连续超时；1 小时后再试。
+				slog.Info("仙盟上香无回包，1 小时后再试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(time.Hour, "仙盟上香无回包")
 			} else if res, pErr := protocol.ParseStUnionIncenseResult(incenseResp.Payload); pErr != nil {
 				slog.Warn("仙盟上香回包解析失败", "role_id", session.RoleID(), "err", pErr)
 			} else if res.Result == protocol.StUnionIncenseSuccess {
@@ -102,7 +104,7 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 				fightResp := call(protocol.BuildStUnionTaskFightPacket(),
 					protocol.ActionIDStUnionTaskFight, fightTimeout)
 				if fightResp == nil {
-					return scheduler.NewCooldown(10*time.Minute, "仙盟魔神挑战无回包")
+					return scheduler.NewCooldown(time.Hour, "仙盟魔神挑战无回包")
 				}
 				code, fErr := protocol.ParseStUnionResult(fightResp.Payload)
 				if fErr != nil {
