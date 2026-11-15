@@ -1193,6 +1193,50 @@ func worldBossResultName(result uint8) string {
 //
 // 先查询活动状态，仅在 ON 时加入 PK；OFF/超级城镇关闭时跳过。
 // 不购买挑战次数、不清除冷却。
+// ladderWarStats 统计跨服PK战斗结算推送 (349/5) 的数量与首字节结果分布。
+// 目前协议只确认首字节为结果码，具体含义待抓包对照，但对局胜负数量可直接
+// 用「战报条数」衡量（每场匹配成功应收到一条）。
+type ladderWarStats struct {
+	mu       sync.Mutex
+	total    int
+	byResult map[uint8]int
+}
+
+var ladderWarStatsMap sync.Map // *client.RoleSession -> *ladderWarStats
+
+// ladderWarStatsFor 返回会话对应的战报统计；首次创建时注册 349/5 处理器。
+func ladderWarStatsFor(session *client.RoleSession) *ladderWarStats {
+	if v, ok := ladderWarStatsMap.Load(session); ok {
+		return v.(*ladderWarStats)
+	}
+	st := &ladderWarStats{byResult: map[uint8]int{}}
+	actual, loaded := ladderWarStatsMap.LoadOrStore(session, st)
+	if loaded {
+		return actual.(*ladderWarStats)
+	}
+	session.RegisterHandler(protocol.ActionIDWorldPkWarReport, func(pkt *protocol.Packet) {
+		if len(pkt.Payload) == 0 {
+			return
+		}
+		st.mu.Lock()
+		st.total++
+		st.byResult[pkt.Payload[0]]++
+		st.mu.Unlock()
+	})
+	return st
+}
+
+// snapshot 返回累计战报数与结果码分布副本。
+func (s *ladderWarStats) snapshot() (int, map[uint8]int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[uint8]int, len(s.byResult))
+	for k, v := range s.byResult {
+		out[k] = v
+	}
+	return s.total, out
+}
+
 func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 3 * time.Second
 	return scheduler.NewBaseRoutine(
@@ -1259,6 +1303,8 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 
 			// 30 次只是“跳过战斗”的次数上限；超过后仍可自动匹配，只是需要正常
 			// 打完战斗。因此按时间预算持续 join，直到服务端返回次数上限/活动关闭。
+			warStats := ladderWarStatsFor(session)
+			warBefore, _ := warStats.snapshot()
 			deadline := time.Now().Add(worldPkRunBudget)
 			attempts := 0
 			for {
@@ -1310,7 +1356,10 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 					return nil
 				}
 			}
-			slog.Info("跨服PK本轮匹配循环完成", "role_id", session.RoleID(), "joins", attempts-1, "budget", worldPkRunBudget)
+			warAfter, warDist := warStats.snapshot()
+			slog.Info("跨服PK本轮匹配循环完成", "role_id", session.RoleID(),
+				"joins", attempts-1, "budget", worldPkRunBudget,
+				"war_reports", warAfter-warBefore, "war_result_dist", warDist)
 			return nil
 		},
 	)

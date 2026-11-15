@@ -12,6 +12,8 @@ const (
 	ActionIDWorldPkStatus uint32 = 0x015D0000
 	// ActionIDWorldPkJoin 加入跨服 PK (Module 349, Action 3 -> 0x015D0003)
 	ActionIDWorldPkJoin uint32 = 0x015D0003
+	// ActionIDWorldPkWarReport 战斗结算推送 (Module 349, Action 5 -> 0x015D0005)
+	ActionIDWorldPkWarReport uint32 = 0x015D0005
 )
 
 // Mod_WorldPkRanking_Base 状态/结果码。
@@ -101,10 +103,10 @@ const (
 	ActionIDWorldPkReceiveSpecial uint32 = 0x015D000E
 	ActionIDWorldPkSetAutoMatch   uint32 = 0x015D0010
 	// ActionIDWorldPkSetSkipWar 设置跳过战斗（自动结算）开关 (349/17)
-	ActionIDWorldPkSetSkipWar uint32 = 0x015D0011
-	ActionIDWorldPkAwardPanel     uint32 = 0x015D0019
-	ActionIDWorldPkOpenTaskPanel  uint32 = 0x015D001A
-	ActionIDWorldPkTaskAward      uint32 = 0x015D001B
+	ActionIDWorldPkSetSkipWar    uint32 = 0x015D0011
+	ActionIDWorldPkAwardPanel    uint32 = 0x015D0019
+	ActionIDWorldPkOpenTaskPanel uint32 = 0x015D001A
+	ActionIDWorldPkTaskAward     uint32 = 0x015D001B
 )
 
 // 跨服 PK 奖励结果码。
