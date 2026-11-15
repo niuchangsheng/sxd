@@ -3246,9 +3246,20 @@ func advanceQuestMission(
 					// 精英副本本就不在 get_sections 列表中，继续走 Module 4 首通状态机。
 					slog.Debug("精英副本跳过章节列表查询", "role_id", session.RoleID(), "map_id", mapID, "err", secErr)
 				} else {
-					// 非精英关卡：get_sections 失败说明章节/地图上下文不可用，
-					// 继续盲发 enter_mission 会被服务端静默丢弃，直接跳过本轮该关卡。
+					// 非精英关卡：get_sections 失败说明章节/地图上下文不可用。
+					// 若任务仍是「已通关需重复击杀」的进度型任务，直接尝试一次
+					// 剧情副本重复挑战，避免整轮任务被放弃。
 					slog.Warn("激活章节关卡列表上下文失败，跳过该关卡", "role_id", session.RoleID(), "map_id", mapID, "err", secErr)
+					if maxCount > 0 && initialCount < maxCount {
+						slog.Info("章节上下文不可用，直接尝试重复挑战剧情副本",
+							"role_id", session.RoleID(),
+							"mission_id", targetMission.ID,
+							"progress", fmt.Sprintf("%d/%d", initialCount, maxCount))
+						if challengeStoryMission(ctx, session, targetMission, ensureStamina,
+							totalCostStamina, totalGainExp, totalGainCoins, clearedMissions) {
+							return true
+						}
+					}
 					return clearedPrereq || lastCount > initialCount
 				}
 			} else if secResp != nil {
