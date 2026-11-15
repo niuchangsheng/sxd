@@ -75,6 +75,13 @@ var openStUnionSession = func(ctx context.Context, s *client.RoleSession) (*clie
 	return s.OpenCrossServerSession(ctx)
 }
 
+// openStUnionSectSession 建立仙盟城镇会话；179/11 上香是仙盟场景写操作，
+// 客户端从仙盟城镇进入，仙界跨服会话上会被服务端静默丢弃（179/0、179/10
+// 只读面板在跨服会话可用，容易误判链路正常）。单测可替换。
+var openStUnionSectSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+	return s.OpenSectTownSession(ctx)
+}
+
 // NewStUnionRitualRoutine 构造仙盟上香 + 魔神挑战任务。
 func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 10 * time.Second
@@ -112,10 +119,32 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 1. 仙盟上香（仅铜钱档）。抓包顺序：179/0 许愿树 → 179/10 神像 → 179/11 上香。
-			_ = call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo, callTimeout)
-			_ = call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo, callTimeout)
-			incenseResp := call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
-				protocol.ActionIDStUnionGodIncense, callTimeout)
+			// 179/11 是仙盟场景写操作：优先在仙盟城镇会话执行；跨服会话上 179/0、
+			// 179/10 能回包，但 179/11 会被服务端静默丢弃（2026-11-15 多次实测）。
+			incenseSession := cross
+			if sect, sErr := openStUnionSectSession(ctx, session); sErr == nil && sect != nil {
+				if sect != session {
+					defer sect.Close()
+				}
+				incenseSession = sect
+				slog.Info("仙盟上香改用仙盟城镇会话", "role_id", session.RoleID())
+			} else if sErr != nil {
+				slog.Info("仙盟城镇会话建立失败，回退仙界跨服会话上香",
+					"role_id", session.RoleID(), "err", sErr)
+			}
+			incenseCall := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
+				resp, cErr := incenseSession.CallWithPrevActResync(ctx, callTimeout, pkt, act)
+				if cErr != nil {
+					slog.Info("仙盟上香协议无回包", "role_id", session.RoleID(),
+						"action", act, "err", cErr)
+					return nil
+				}
+				return resp
+			}
+			_ = incenseCall(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo)
+			_ = incenseCall(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo)
+			incenseResp := incenseCall(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
+				protocol.ActionIDStUnionGodIncense)
 			if incenseResp == nil {
 				// 上香（179/11）在当天已完成后会被服务端静默丢弃，但魔神挑战（337/1）
 				// 仍可正常进行：2026-11-15 15:48/16:13/16:24/16:36 实测在上香无回包后

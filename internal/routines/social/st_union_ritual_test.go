@@ -43,6 +43,10 @@ func TestStUnionRitualRoutine_IncenseAndFights(t *testing.T) {
 		return s, nil
 	})
 	defer restore()
+	restoreSect := SetStUnionSectSessionOpenerForTest(func(_ context.Context, _ *client.RoleSession) (*client.RoleSession, error) {
+		return nil, errors.New("skip sect session in test")
+	})
+	defer restoreSect()
 	defer sess.Close()
 
 	if err := NewStUnionRitualRoutine().Execute(context.Background(), sess, nil); err != nil {
@@ -88,6 +92,10 @@ func TestStUnionRitualRoutine_BuysTicketThenFights(t *testing.T) {
 		return s, nil
 	})
 	defer restore()
+	restoreSect := SetStUnionSectSessionOpenerForTest(func(_ context.Context, _ *client.RoleSession) (*client.RoleSession, error) {
+		return nil, errors.New("skip sect session in test")
+	})
+	defer restoreSect()
 	defer sess.Close()
 
 	if err := NewStUnionRitualRoutine().Execute(context.Background(), sess, nil); err != nil {
@@ -107,6 +115,10 @@ func TestStUnionRitualRoutine_CrossSessionFailed(t *testing.T) {
 		return nil, errors.New("cross unavailable")
 	})
 	defer restore()
+	restoreSect := SetStUnionSectSessionOpenerForTest(func(_ context.Context, _ *client.RoleSession) (*client.RoleSession, error) {
+		return nil, errors.New("skip sect session in test")
+	})
+	defer restoreSect()
 	defer sess.Close()
 
 	err := NewStUnionRitualRoutine().Execute(context.Background(), sess, nil)
