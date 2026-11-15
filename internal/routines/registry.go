@@ -141,6 +141,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "era_lunhui_album", Name: "轮回图录奖励", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "纪元秘藏轮回图录 5 个页签的未领取任务奖励", DefaultOn: false},
 		{ID: "st_union_ritual", Name: "仙盟上香与魔神挑战", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "跨服仙盟上香(铜钱档) + 魔神挑战(不买券)", DefaultOn: false},
 		{ID: "land_contract", Name: "灵契之地挑战", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "每日 5 次挑战，不购买次数", DefaultOn: false},
+		{ID: "wuliang_jiehai", Name: "无量劫海（归墟）", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "按 now_level 逐关挑战归墟 1/2/3/极境，不消耗元宝", DefaultOn: false},
 		{ID: "fortune_box", Name: "奇缘宝藏", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "开放时免费开启宝箱 (不买每日礼包)", DefaultOn: false},
 		{ID: "faxiang_trial", Name: "法相试炼(造物佛手/守护魔兽)", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "领奖并免费挑战法相试炼 (不修改魔兽、不买次数)", DefaultOn: false},
 		{ID: "wuxing_tiangong", Name: "五行天宫", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "一键挑战五行天宫，失败关卡按特殊阵容单独重试 (不消耗元宝)", DefaultOn: false},
@@ -525,6 +526,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewStUnionRitualRoutine()
 	case "land_contract":
 		return social.NewLandContractRoutine()
+	case "wuliang_jiehai":
+		return social.NewWuliangJieHaiRoutine()
 	case "era_creation":
 		return minigame.NewEraCreationRoutine()
 	case "cultivation_card":

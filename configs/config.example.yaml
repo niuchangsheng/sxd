@@ -158,6 +158,7 @@ scheduler:
     era_lunhui_album: true        # 纪元秘藏·轮回图录任务奖励领取
     st_union_ritual: true         # 仙盟上香(铜钱档)+魔神挑战(不买券)
     land_contract: true           # 灵契之地每日 5 次挑战 (不买次数)
+    wuliang_jiehai: true          # 无量劫海(归墟)逐关挑战 (不消耗元宝)
     cultivation_card: true        # 神仙卡牌收藏集 (仅铜钱商城, 不消耗元宝)
     faxiang_trial: true           # 法相试炼(造物佛手/守护魔兽) 免费领奖+挑战
     fortune_box: true             # 奇缘宝藏 (免费开箱)
