@@ -70,7 +70,7 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 			pkgResp := call(protocol.BuildEraRebirthAttrResourcePackagePacket(),
 				protocol.ActionIDEraRebirthAttrResourcePackage)
 			if pkgResp == nil {
-				return scheduler.NewCooldown(30*time.Minute, "修真境界礼包无回包")
+				return scheduler.NewCooldown(time.Hour, "修真境界礼包无回包")
 			}
 			items, autoLevel, err := protocol.ParseEraRebirthAttrTimeItems(pkgResp.Payload)
 			if err != nil {
