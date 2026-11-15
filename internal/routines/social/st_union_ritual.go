@@ -12,7 +12,10 @@ package social
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -33,9 +36,39 @@ const maxStUnionTicketBuys = 2
 // stUnionTicketBuyDisabled 一旦检测到购买消耗元宝，本进程内不再自动购买。
 var stUnionTicketBuyDisabled atomic.Bool
 
-// stUnionTicketIneffectiveDay 记录「买了挑战券仍然提示次数已用完」的日期
-// (yyyy-mm-dd)。当天不再用道源购买，避免每天浪费道源。
+// stUnionTicketStatePath 记录「买了挑战券仍然提示次数已用完」的日期，
+// 跨进程持久化（与 server_chat_room_state.json 同样的做法），避免每次
+// 重启后又白买一张券。
+const stUnionTicketStatePath = "data/runtime/st_union_ticket_state.json"
+
+// stUnionTicketIneffectiveDay 内存缓存，文件不可用时的兜底。
 var stUnionTicketIneffectiveDay atomic.Value // string
+
+func stUnionTicketIneffective(today string) bool {
+	if v, _ := stUnionTicketIneffectiveDay.Load().(string); v == today {
+		return true
+	}
+	b, err := os.ReadFile(stUnionTicketStatePath)
+	if err != nil {
+		return false
+	}
+	var st struct {
+		IneffectiveDate string `json:"ineffective_date"`
+	}
+	if json.Unmarshal(b, &st) != nil {
+		return false
+	}
+	return st.IneffectiveDate == today
+}
+
+func markStUnionTicketIneffective(today string) {
+	stUnionTicketIneffectiveDay.Store(today)
+	_ = os.MkdirAll(filepath.Dir(stUnionTicketStatePath), 0o755)
+	b, _ := json.Marshal(map[string]string{"ineffective_date": today})
+	if err := os.WriteFile(stUnionTicketStatePath, b, 0o644); err != nil {
+		slog.Info("写入仙盟挑战券状态失败", "path", stUnionTicketStatePath, "err", err)
+	}
+}
 
 // openStUnionSession 建立仙界跨服会话；单测可替换为复用 mock 会话。
 var openStUnionSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
@@ -115,10 +148,7 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			buys := 0
 			boughtThisRun := false
 			today := time.Now().Format("2006-01-02")
-			buyIneffectiveToday := func() bool {
-				v, _ := stUnionTicketIneffectiveDay.Load().(string)
-				return v == today
-			}
+			buyIneffectiveToday := func() bool { return stUnionTicketIneffective(today) }
 			for fights < maxStUnionGodFights && ctx.Err() == nil {
 				fightResp := call(protocol.BuildStUnionTaskFightPacket(),
 					protocol.ActionIDStUnionTaskFight, fightTimeout)
@@ -169,7 +199,7 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 						"result_text", protocol.StUnionTaskResultText(code))
 					if boughtThisRun && code == protocol.StUnionTaskTimesUsed {
 						// 刚用道源买了挑战券仍然次数已用完：当天不再购买。
-						stUnionTicketIneffectiveDay.Store(today)
+						markStUnionTicketIneffective(today)
 						slog.Info("购买挑战券后仍次数已用完，今日不再自动购买",
 							"role_id", session.RoleID())
 					}
