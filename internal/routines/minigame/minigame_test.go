@@ -1151,3 +1151,30 @@ func TestSelectWuFaItemDraw(t *testing.T) {
 		t.Fatal("expected no item draw")
 	}
 }
+
+// TestSelectWuFaDrawSkipsBlockedFields 验证未开放秘馆会被跳过，改用其它秘馆。
+func TestSelectWuFaDrawSkipsBlockedFields(t *testing.T) {
+	panel := &protocol.WuFaPanel{
+		Fields: []protocol.WuFaFieldState{
+			{FieldType: 3, LeftFreeTenCount: 5},
+			{FieldType: 1, LeftFreeTenCount: 2},
+		},
+		Items: []protocol.WuFaItemState{
+			{ItemID: 8641, ItemNum: 1}, // 冥想书卷 -> field 3
+			{ItemID: 8358, ItemNum: 2}, // 冥想竹简 -> field 1
+		},
+	}
+	blocked := map[int32]bool{3: true}
+	fieldType, _, ok := selectWuFaFreeDraw(panel, blocked)
+	if !ok || fieldType != 1 {
+		t.Fatalf("免费抽应跳过 field3 选 field1, got field=%d ok=%v", fieldType, ok)
+	}
+	fieldType, _, ok = selectWuFaItemDraw(panel, blocked)
+	if !ok || fieldType != 1 {
+		t.Fatalf("道具抽应跳过 field3 选 field1, got field=%d ok=%v", fieldType, ok)
+	}
+	blocked[1] = true
+	if _, _, ok := selectWuFaFreeDraw(panel, blocked); ok {
+		t.Fatalf("全部秘馆被屏蔽后不应再选中")
+	}
+}

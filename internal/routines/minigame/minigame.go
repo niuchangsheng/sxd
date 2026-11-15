@@ -1440,17 +1440,19 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 			// 3. 逐次感悟：优先免费次数，其次使用已持有的冥想道具。
 			//    线上实测道具映射：field 3 <- 冥想书卷 8641，field 1 <- 冥想竹简 8358，
 			//    field 7 <- 冥想玄简 8700。全部为非元宝道具，绝不触发元宝档。
+			blockedFields := make(map[int32]bool)
 			for draw := 0; draw < remain; draw++ {
 				if ctx.Err() != nil {
 					return nil
 				}
-				fieldType, drawType, ok := selectWuFaFreeDraw(panel)
+				fieldType, drawType, ok := selectWuFaFreeDraw(panel, blockedFields)
 				if !ok {
-					fieldType, drawType, ok = selectWuFaItemDraw(panel)
+					fieldType, drawType, ok = selectWuFaItemDraw(panel, blockedFields)
 					if !ok {
-						slog.Info("悟法领域无免费次数且无冥想道具，停止抽卡",
+						slog.Info("悟法领域无可用秘馆/免费次数/冥想道具，停止抽卡",
 							"role_id", session.RoleID(),
 							"rest_times", panel.RestTimes,
+							"blocked_fields", len(blockedFields),
 						)
 						return nil
 					}
@@ -1481,6 +1483,14 @@ func NewWuFaRoutine() scheduler.ActivityRoutine {
 				}
 
 				if result.Result != protocol.WuFaResultSuccess {
+					if result.Result == protocol.WuFaResultFunctionNotOpen && !blockedFields[fieldType] {
+						// 该秘馆对当前角色未开放；换其它秘馆继续，避免整轮放弃。
+						blockedFields[fieldType] = true
+						slog.Info("悟法领域秘馆未开放，换下一个秘馆",
+							"role_id", session.RoleID(), "field_type", fieldType,
+							"blocked_fields", len(blockedFields))
+						continue
+					}
 					err = classifyWuFaDrawResult(result.Result)
 					if err == nil {
 						slog.Info("悟法领域感悟抽卡无需执行",
@@ -1574,8 +1584,15 @@ var wuFaItemFields = []struct {
 }
 
 // selectWuFaItemDraw 选择可用冥想道具对应的秘馆，优先书卷→竹简→玄简。
-func selectWuFaItemDraw(panel *protocol.WuFaPanel) (int32, uint8, bool) {
+func selectWuFaItemDraw(panel *protocol.WuFaPanel, blocked ...map[int32]bool) (int32, uint8, bool) {
+	skip := map[int32]bool(nil)
+	if len(blocked) > 0 {
+		skip = blocked[0]
+	}
 	for _, m := range wuFaItemFields {
+		if skip[m.fieldType] {
+			continue
+		}
 		if hasWuFaItem(panel, m.itemID) {
 			return m.fieldType, protocol.WuFaDrawOne, true
 		}
@@ -1600,14 +1617,21 @@ func hasWuFaItem(panel *protocol.WuFaPanel, itemID int32) bool {
 //
 // 优先使用免费十连，其次免费单抽；同等次数下选择更高 field_type 的秘馆。
 // 无任何免费次数时返回 ok=false，由调用方跳过抽卡，避免消耗元宝或感悟道具。
-func selectWuFaFreeDraw(panel *protocol.WuFaPanel) (fieldType int32, drawType uint8, ok bool) {
+func selectWuFaFreeDraw(panel *protocol.WuFaPanel, blocked ...map[int32]bool) (fieldType int32, drawType uint8, ok bool) {
 	if panel == nil {
 		return 0, 0, false
+	}
+	skip := map[int32]bool(nil)
+	if len(blocked) > 0 {
+		skip = blocked[0]
 	}
 
 	bestTenField, bestTenCount := int32(0), int32(0)
 	bestOneField, bestOneCount := int32(0), int32(0)
 	for _, field := range panel.Fields {
+		if skip[field.FieldType] {
+			continue
+		}
 		if field.LeftFreeTenCount > 0 &&
 			(field.LeftFreeTenCount > bestTenCount || (field.LeftFreeTenCount == bestTenCount && field.FieldType > bestTenField)) {
 			bestTenField, bestTenCount = field.FieldType, field.LeftFreeTenCount
