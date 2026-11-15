@@ -115,6 +115,17 @@ func newRegistryFactory(
 		fwCfg.SellLowPillScrolls = *sc.FactionWheel.SellLowPillScrolls
 	}
 	factory.SetFactionLuckyWheelConfig(fwCfg)
+	// 3.2 全网聊天室每日表情发言配置 (默认 1 号表情包第 16 个表情)
+	crCfg := social.DefaultServerChatRoomConfig()
+	if sc.ServerChatRoom.EipNum != "" {
+		crCfg.EipNum = sc.ServerChatRoom.EipNum
+	}
+	if sc.ServerChatRoom.EipIndex != "" {
+		crCfg.EipIndex = sc.ServerChatRoom.EipIndex
+	}
+	crCfg.Message = sc.ServerChatRoom.Message
+	crCfg.RoomID = sc.ServerChatRoom.RoomID
+	factory.SetServerChatRoomConfig(crCfg)
 
 	// 4. 天帝宝库自选三档大奖配置
 	thCfg := minigame.TreasureHouseConfig{

@@ -86,6 +86,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "npc_friendship", Name: "NPC结交", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "结交 NPC、领取任务奖励并赠送铜钱伴手礼 (不消耗元宝)", DefaultOn: false},
 		{ID: "marry_home", Name: "家园奖励", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "领取自家小蛋糕家园奖励 (免费, 非活动时间自动跳过)", DefaultOn: false},
 		{ID: "sect_monster", Name: "宗门灵兽喂养", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "经仙盟城镇会话免费喂养宗门灵兽 (type=0, 不消耗元宝)", DefaultOn: false},
+		{ID: "server_chat_room", Name: "全网聊天室发言", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "每天在独立聊天服发一次免费表情 (不消耗元宝)", DefaultOn: false},
 
 		// 4. Dungeon 领域 (8)
 		{ID: "dungeon", Name: "副本推图与扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/支线任务闭环推图与关卡扫荡", DefaultOn: true},
@@ -166,6 +167,7 @@ type RegistryFactory struct {
 	jieyuanCfg        social.JieYuanBoxConfig
 	blessingCfg       social.FactionBlessingConfig
 	factionWheelCfg   social.FactionLuckyWheelConfig
+	chatRoomCfg       social.ServerChatRoomConfig
 	treasureCfg       minigame.TreasureHouseConfig
 	luckyCfg          minigame.LuckyStarConfig
 	masterPracticeCfg minigame.MasterPracticeConfig
@@ -188,6 +190,7 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 		jieyuanCfg:        social.DefaultJieYuanBoxConfig(),
 		blessingCfg:       social.DefaultFactionBlessingConfig(),
 		factionWheelCfg:   social.DefaultFactionLuckyWheelConfig(),
+		chatRoomCfg:       social.DefaultServerChatRoomConfig(),
 		treasureCfg:       minigame.DefaultTreasureHouseConfig(),
 		luckyCfg:          minigame.DefaultLuckyStarConfig(),
 		masterPracticeCfg: minigame.DefaultMasterPracticeConfig(),
@@ -230,6 +233,11 @@ func (f *RegistryFactory) SetFactionBlessingConfig(cfg social.FactionBlessingCon
 // SetFactionLuckyWheelConfig 设置帮派转盘策略配置。
 func (f *RegistryFactory) SetFactionLuckyWheelConfig(cfg social.FactionLuckyWheelConfig) {
 	f.factionWheelCfg = cfg
+}
+
+// SetServerChatRoomConfig 设置全网聊天室发言配置。
+func (f *RegistryFactory) SetServerChatRoomConfig(cfg social.ServerChatRoomConfig) {
+	f.chatRoomCfg = cfg
 }
 
 // SetTreasureHouseConfig 设置天帝宝库自选大奖与抽奖策略配置。
@@ -417,6 +425,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewMarryHomeRoutine()
 	case "sect_monster":
 		return social.NewSectMonsterRoutine()
+	case "server_chat_room":
+		return social.NewServerChatRoomRoutine(f.chatRoomCfg)
 
 	// 4. Dungeon
 	case "dungeon", "dungeon_sweep":

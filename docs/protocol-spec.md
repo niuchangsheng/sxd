@@ -1190,3 +1190,28 @@ Int left_day, Int mount_count, Int title_count, Int cur_level
 > `day_list` 每项第一个 Int 是**日期**而非礼包 id；只有 `can_receive=1` 时
 > 才能调用 `get_award(day)`，否则服务端会静默丢弃。此前的实现对所有日期逐一
 > 请求，导致 `637/1` 出现无回包。
+
+### 4.29 Module 336 (0x0150): 全网聊天室 (独立聊天服)
+
+| Action | ActionID | 方法 | 连接 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 336/0 | `0x01500000` | `get_recent_room_list` | 主服 | 空 | `UByte result, [Byte room_id]`（Uint16 长度前缀） |
+| 336/1 | `0x01500001` | `get_chat_room_status` | 主服 | 空 | `UByte result, [Byte room_id, Int player_count, UByte status]`（status=11 FREE） |
+| 336/11 | `0x0150000B` | `get_chat_room_logincode` | 主服 | `Byte room_id` | `UByte flag, String node, String server_name, String stage_name, Int timestamp, String login_code, String host, Int port` |
+| 336/12 | `0x0150000C` | `login_chat_room` | 聊天服 | `String node, Int player_id, String server_name, String stage_name, Int timestamp, String login_code` | `UByte result, Int player_id`（result=9 SUCCESS） |
+| 336/20 | `0x01500014` | `chat_with_players` | 聊天服 | `String message, String eip_num, String eip_index` | `Int time_diff, UByte result`（result=9 SUCCESS） |
+| 336/21 | `0x01500015` | `notify_chat_message` | 聊天服 | 推送 | 见客户端 `Mod_ServerChatRoom_Base` |
+
+> **实测结论（2026-11-15，探针 `test/probes/probe_server_chat_room_live.go`）**：
+>
+> - 336/0 回包示例 `09 0003 01 02 08`：result=9，房间 `[1,2,8]`；数组长度是
+>   **Uint16**（不是 Uint8）。
+> - 336/11 回包的字段顺序为
+>   `[flag, node("s0@9x050.sxdweb.xd.com"), server_name, stage_name, timestamp,
+>   login_code, host, port]`；flag 实测为 1，客户端不据此判定成功。
+> - 聊天服是独立 TCP 节点，建立连接后先发 336/12 登录；`login_code` 一次性有效。
+> - 发表情时 `message` 可为空，`eip_num`/`eip_index` 为字符串编号
+>   （客户端按 `eip_index` 渲染 `eip<index>` 资源，默认 `1`/`16`），
+>   `336/20` 返回 `[Int time_diff, UByte result]`，result=9 即成功。
+> - 自动化每天只发一次，记账文件 `data/runtime/server_chat_room_state.json`
+>   （已加入 `.gitignore`）。

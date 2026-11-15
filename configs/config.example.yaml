@@ -104,6 +104,7 @@ scheduler:
     npc_friendship: true          # NPC结交与铜钱伴手礼
     marry_home: true              # 家园小蛋糕奖励 (免费, 非活动时间跳过)
     sect_monster: true            # 宗门灵兽免费喂养 (仙盟城镇会话)
+    server_chat_room: true        # 全网聊天室每天发一次表情 (独立聊天服, 免费)
 
     # 【副本 dungeon】推图、扫荡、爬塔、练功房、试炼
     dungeon: true                 # 剧情推图 + 精英副本扫荡
@@ -227,6 +228,14 @@ scheduler:
   # 帮派转盘 (青龙令)
   faction_lucky_wheel:
     sell_low_pill_scrolls: true      # 抽到 1-5 品丹药制作卷自动卖出 (false=保留)
+
+  # 全网聊天室每日发言 (独立聊天服, 免费表情; 每天成功一次)
+  server_chat_room:
+    eip_num: "1"                    # 表情包编号
+    eip_index: "16"                 # 表情编号 (客户端渲染 eip<index>)
+    message: ""                     # 随表情附带的文本
+    room_id: 0                      # 0=列表首个房间; 可指定房间编号
+
 
   # ── 小游戏 / 福利策略 ───────────────────────────────────────
   # 宗师修行：每日最多 3 次挑战；当前职业满星后按 practice_order 切换职业。

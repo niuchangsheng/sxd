@@ -101,6 +101,8 @@ venv/
 # 逆向与大型解包资产隔离 (Reverse Engineering Artifacts)
 # ==============================================================================
 data/decompiled/
+# 运行期状态 (如全网聊天室每日发送记账)
+data/runtime/
 *.swf
 *.abc
 test/probes/.env.local

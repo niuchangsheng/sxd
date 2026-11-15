@@ -121,6 +121,7 @@ type SchedulerConfig struct {
 	JieYuanBox      JieYuanBoxConfig       `yaml:"jieyuan_box"`
 	FactionBlessing FactionBlessingConfig  `yaml:"faction_blessing"`
 	FactionWheel    FactionWheelConfig     `yaml:"faction_lucky_wheel"`
+	ServerChatRoom  ServerChatRoomConfig   `yaml:"server_chat_room"`
 	TreasureHouse   TreasureHouseConfig    `yaml:"treasure_house"`
 	LuckyStar       LuckyStarConfig        `yaml:"lucky_star"`
 	OnlineGift      OnlineGiftConfig       `yaml:"online_gift"`
@@ -267,6 +268,18 @@ type FactionWheelConfig struct {
 	// SellLowPillScrolls 抽到 1-5 品丹药制作卷时自动卖出。
 	// 使用指针以区分“未配置”(沿用默认开启) 与显式 false。
 	SellLowPillScrolls *bool `yaml:"sell_low_pill_scrolls"`
+}
+
+// ServerChatRoomConfig 全网聊天室每日发言配置。
+type ServerChatRoomConfig struct {
+	// EipNum 表情包编号 (默认 "1")。
+	EipNum string `yaml:"eip_num"`
+	// EipIndex 表情编号 (默认 "16")。
+	EipIndex string `yaml:"eip_index"`
+	// Message 随表情附带的文本 (默认空)。
+	Message string `yaml:"message"`
+	// RoomID 指定聊天室房间编号；0 表示使用列表首个房间。
+	RoomID int8 `yaml:"room_id"`
 }
 
 // LuckyStarConfig 个人吉星高照自动化策略配置
