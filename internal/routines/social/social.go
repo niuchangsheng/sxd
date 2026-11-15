@@ -93,8 +93,18 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 2. 严格遵循规则: 除了传说 (3942)，其他都开
+			// 2. 严格遵循规则: 除了传说 (3942)，其他都开；当天已被标记不可开启的箱型跳过。
 			openable := protocol.FilterOpenableJieYuanBoxes(boxes)
+			filtered := openable[:0]
+			for _, b := range openable {
+				if jiYuanBoxSkippedToday(b.ItemID) {
+					slog.Info("结缘宝箱箱型今日不可开启，跳过", "role_id", session.RoleID(),
+						"item_id", b.ItemID, "count", b.Count)
+					continue
+				}
+				filtered = append(filtered, b)
+			}
+			openable = filtered
 			if len(openable) == 0 {
 				slog.Info("无待开启的非传说结缘宝箱", "total_kinds", len(boxes))
 				return nil
@@ -151,15 +161,18 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					oCancel()
 
 					if oErr != nil || openResp == nil {
-						slog.Info("结缘宝箱开箱 232/34 无回包，稍后重试",
-							"role_id", session.RoleID(),
+						// 该箱型可能本身需要元宝/其他条件（例如高级结缘宝箱），服务端直接
+						// 静默丢弃。标记当天跳过该箱型，继续开启其余箱型，避免 2 小时
+						// 冷却把当天所有箱子都拖住。
+						slog.Info("结缘宝箱该箱型开箱无回包，今日跳过", "role_id", session.RoleID(),
 							"item_id", box.ItemID,
 							"remaining", remaining,
 							"recent_rx", fmt.Sprintf("%X", session.RecentRxActions()),
 							"last_sent", fmt.Sprintf("0x%08X", session.LastActionID()),
 							"err", oErr,
 						)
-						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱开箱无回包")
+						markJiYuanBoxSkipped(box.ItemID)
+						break
 					}
 
 					openCode, openParseErr := protocol.ParseJieYuanBoxOpenResult(openResp.Payload)
