@@ -2230,11 +2230,18 @@ func executeQuestCycle(
 
 	// 魔王试炼/竞技场等战斗玩法结束后，服务端可能仍保留战场上下文；
 	// 此时 get_sections 会被静默丢弃。按官方客户端 gotoTownAtId 复位城镇场景。
-	if mapID, ok := enterQuestTownScene(ctx, session); ok {
-		slog.Info("任务推图前已复位城镇场景", "role_id", session.RoleID(), "map_id", mapID)
+	//
+	// 注意：没有 Mod 3/4 锚点时只能发裸 4 字节 enter_town，实测会把会话切出
+	// 任务上下文（随后 4/0 必丢）；因此首轮跳过复位，等 3/9 同步后再按锚点复位。
+	if questSectionsAnchor(session) != 0 {
+		if mapID, ok := enterQuestTownScene(ctx, session); ok {
+			slog.Info("任务推图前已复位城镇场景", "role_id", session.RoleID(), "map_id", mapID)
+		} else {
+			slog.Info("任务推图前复位城镇场景失败", "role_id", session.RoleID(),
+				"town_map_id", session.GetPlayerState().TownMapID)
+		}
 	} else {
-		slog.Info("任务推图前复位城镇场景失败", "role_id", session.RoleID(),
-			"town_map_id", session.GetPlayerState().TownMapID)
+		slog.Info("任务推图前跳过城镇复位（尚无任务链锚点）", "role_id", session.RoleID())
 	}
 
 	// 0. 主动向服务端全量同步当前任务列表 (Module 3, Action 9: town_quest_show)
@@ -3557,6 +3564,39 @@ func missionLevelLocked(missionLock, playerLevel int) bool {
 //
 // 2026-11-14 线上：同一会话中 get_sections(21) 偶发超时（随后重放同载荷即可成功），
 // 属于网关瞬时丢包而非参数错误。超时缩短为 3 秒并重试一次，避免整轮任务被跳过。
+// resyncDungeonChain 用 0/2 全量角色资产重建 PrevAct 链。
+//
+// 用户回包被丢弃后服务端锚点会停在旧动作，后续 enter_town/get_sections 全部超时；
+// 依次尝试候选锚点，直到 0/2 被服务端处理（LastAck 变为 0/2）。
+func resyncDungeonChain(ctx context.Context, session *client.RoleSession) bool {
+	candidates := []uint32{
+		session.LastAckActionID(),
+		session.LastActionID(),
+		protocol.ActionIDPlayerGetInfo,
+		protocol.ActionIDPlayerHeartbeat,
+		0x00A50000, // Mod 165 扩展模块初始化
+		0x00000063, // Mod 0 Act 99 场景进阶
+		0x00000048, // Mod 0 Act 72 城镇初始化
+	}
+	seen := make(map[uint32]bool, len(candidates))
+	for _, cand := range candidates {
+		if cand == 0 || seen[cand] {
+			continue
+		}
+		seen[cand] = true
+		cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		resp, err := session.Call(cCtx,
+			protocol.BuildPlayerGetInfoPacket(int32(cand)), protocol.ActionIDPlayerGetInfo)
+		cancel()
+		if err == nil && resp != nil && session.LastAckActionID() == protocol.ActionIDPlayerGetInfo {
+			slog.Info("任务推图 PrevAct 链重建成功", "role_id", session.RoleID(),
+				"anchor", fmt.Sprintf("0x%08X", cand))
+			return true
+		}
+	}
+	return false
+}
+
 func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapID int32) (*protocol.Packet, error) {
 	// 3/9 任务列表回包后立刻发 4/0 会被网关丢弃（2026-11-14 线上：间隔 0ms 丢包，
 	// 间隔 600ms 稳定回包），因此首发前统一留出 500ms 间隔。
@@ -3568,11 +3608,18 @@ func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapI
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
-			// 2026-11-15 线上：4/0 超时后直接重放仍会丢包；先按客户端再次
-			// enter_town（裸 4 字节）复位场景，再用新的回包锚点重试即可恢复。
+			// 2026-11-15 线上：4/0 超时后直接重放仍会丢包。先按客户端再次
+			// enter_town 复位场景并用新的回包锚点重试；仍失败时再用 0/2
+			// 重建 PrevAct 链，恢复被裸 enter_town/登录钩子打断的会话链。
 			if townID, ok := enterQuestTownScene(ctx, session); ok {
 				slog.Info("章节列表重试前再次复位城镇场景",
 					"role_id", session.RoleID(), "map_id", townID, "target_map", mapID)
+			} else if resyncDungeonChain(ctx, session) {
+				slog.Info("章节列表重试前已重建 PrevAct 链", "role_id", session.RoleID())
+				if townID, ok := enterQuestTownScene(ctx, session); ok {
+					slog.Info("章节列表重试前再次复位城镇场景",
+						"role_id", session.RoleID(), "map_id", townID, "target_map", mapID)
+				}
 			}
 			select {
 			case <-ctx.Done():
