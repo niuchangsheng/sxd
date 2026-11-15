@@ -54,8 +54,9 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 	if pOpen.ActionID != protocol.ActionIDJieYuanBoxOpen {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDJieYuanBoxOpen, pOpen.ActionID)
 	}
-	if !pOpen.HasPrevAct || len(pOpen.Payload) != 12 {
-		t.Errorf("开箱载荷应为 12 字节并标记 PrevAct, 实际 len=%d prev=%v", len(pOpen.Payload), pOpen.HasPrevAct)
+	if pOpen.HasPrevAct || len(pOpen.Payload) != 12 {
+		t.Errorf("开箱载荷应为 12 字节且显式固定 PrevAct（不置 HasPrevAct）, 实际 len=%d prev=%v",
+			len(pOpen.Payload), pOpen.HasPrevAct)
 	}
 	pList := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDTownEnter)
 	if !pList.HasPrevAct {
@@ -445,16 +446,17 @@ func TestTreasureHouse_BuildersUseDynamicPrevAct(t *testing.T) {
 }
 
 func TestFeaturePackets_JieYuanContextAndOpenResult(t *testing.T) {
-	// 528/1 set_setting 抓包为 [Byte 7][Byte 4][PrevAct]；会话层用最后收包覆盖尾部。
+	// 528/1 set_setting 抓包为 [Byte 7][Byte 4][PrevAct=232/30]，PrevAct 必须显式
+	// 固定（不置 HasPrevAct），避免心跳/推送插队破坏 232/34 的上下文令牌。
 	pCtx := protocol.BuildJieYuanBoxOpenContextPacket()
 	if pCtx.ActionID != protocol.ActionIDJieYuanBoxOpenContext {
 		t.Fatalf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDJieYuanBoxOpenContext, pCtx.ActionID)
 	}
-	if !pCtx.HasPrevAct || len(pCtx.Payload) != 6 {
-		t.Fatalf("528/1 应为 6 字节带 PrevAct 载荷, got len=%d prev=%v", len(pCtx.Payload), pCtx.HasPrevAct)
+	if pCtx.HasPrevAct || len(pCtx.Payload) != 6 {
+		t.Fatalf("528/1 应为 6 字节显式 PrevAct 载荷, got len=%d prev=%v", len(pCtx.Payload), pCtx.HasPrevAct)
 	}
-	if got, want := hex.EncodeToString(pCtx.Payload[:2]), "0704"; got != want {
-		t.Fatalf("528/1 设置值不匹配: got %s want %s", got, want)
+	if got, want := hex.EncodeToString(pCtx.Payload), "070400e8001e"; got != want {
+		t.Fatalf("528/1 载荷不匹配: got %s want %s", got, want)
 	}
 	// 兜底裸 2 字节版本（带 PrevAct 版本被丢弃时使用）。
 	pBare := protocol.BuildJieYuanBoxOpenContextBarePacket()
