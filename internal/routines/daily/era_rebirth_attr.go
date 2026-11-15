@@ -11,7 +11,9 @@ package daily
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -21,6 +23,19 @@ import (
 
 // maxEraRebirthAttrItems 单轮最多使用的时间道具数量。
 const maxEraRebirthAttrItems = 20
+
+// eraRebirthItemDetail 将时间道具列表格式化为 "item_id:num" 便于排查
+// 「面板正常但 851/5 被静默丢弃」时道具 id/数量是否解析正确。
+func eraRebirthItemDetail(items []protocol.EraRebirthTimeItem) string {
+	var b strings.Builder
+	for i, it := range items {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, "%d:%d", it.ItemID, it.Num)
+	}
+	return b.String()
+}
 
 // NewEraRebirthAttrGiftRoutine 构造修真境界礼包使用任务。
 func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
@@ -63,7 +78,7 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			slog.Info("修真境界礼包", "role_id", session.RoleID(),
-				"items", len(items), "auto_level", autoLevel)
+				"items", len(items), "auto_level", autoLevel, "detail", eraRebirthItemDetail(items))
 			if len(items) == 0 {
 				slog.Info("修真境界暂无可使用的时间道具", "role_id", session.RoleID())
 				return nil
@@ -80,8 +95,12 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 				resp := call(protocol.BuildEraRebirthAttrUseTimeItemPacket(it.ItemID, it.Num),
 					protocol.ActionIDEraRebirthAttrUseTimeItem)
 				if resp == nil {
-					return scheduler.NewCooldown(30*time.Minute, "修真境界道具使用无回包")
+					// 道具不可用/当日状态结束后服务端会静默丢弃 851/5；
+					// 连续 3 次挂起到次日重置，避免每 30 分钟空等。
+					return scheduler.HandleSilentDrop(session, "era_rebirth_attr_gift", 3,
+						30*time.Minute, "修真境界道具使用无回包")
 				}
+				scheduler.ResetSilentDrops(session, "era_rebirth_attr_gift")
 				code, pErr := protocol.ParseEraRebirthAttrUseResult(resp.Payload)
 				if pErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "修真境界道具回包解析失败")

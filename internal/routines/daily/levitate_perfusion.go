@@ -51,16 +51,22 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 			infoResp := call(protocol.BuildLevitateInfoPacket(protocol.LevitateTypeRole),
 				protocol.ActionIDLevitateInfo)
 			if infoResp == nil {
-				return scheduler.NewCooldown(30*time.Minute, "飞升信息无回包")
+				// 伙伴灌注达到当日/阶段上限后服务端会静默丢弃 357/0；
+				// 连续 3 次挂起到次日重置，避免每 30 分钟空等。
+				return scheduler.HandleSilentDrop(session, "levitate_perfusion", 3,
+					30*time.Minute, "飞升信息无回包")
 			}
+			scheduler.ResetSilentDrops(session, "levitate_perfusion")
 
 			perfused := 0
 			for perfused < maxLevitatePerfusions && ctx.Err() == nil {
 				resp := call(protocol.BuildLevitatePerfusionPacket(protocol.LevitateTypeRole),
 					protocol.ActionIDLevitatePerfusion)
 				if resp == nil {
-					return scheduler.NewCooldown(30*time.Minute, "飞升灌注无回包")
+					return scheduler.HandleSilentDrop(session, "levitate_perfusion", 3,
+						30*time.Minute, "飞升灌注无回包")
 				}
+				scheduler.ResetSilentDrops(session, "levitate_perfusion")
 				res, err := protocol.ParseLevitatePerfusionResult(resp.Payload)
 				if err != nil {
 					return scheduler.NewCooldown(10*time.Minute, "飞升灌注回包解析失败")

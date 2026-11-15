@@ -80,3 +80,80 @@ func TestCallWithPrevActResync(t *testing.T) {
 		t.Fatalf("retry anchor = 0x%08X, want 0x%08X", got, wantAnchor)
 	}
 }
+
+// TestSendUsesLastReceivedPushAsPrevAct 验证 PrevAct 链取「最后收到的包」而不是
+// 「最后发出的包」：服务端在两次请求之间推送通知后，下一次请求的尾部必须携带
+// 该推送的 ActionID。抓包 /tmp/wuliangjiehai.pcapng 中 853/2 的 PrevAct 就是
+// 前一轮收到的 52/0 回包/推送；带参数请求若链不一致会被静默丢弃。
+func TestSendUsesLastReceivedPushAsPrevAct(t *testing.T) {
+	const (
+		firstAct uint32 = 0x03530004
+		pushAct  uint32 = 0x000D0019
+		nextAct  uint32 = 0x03530005
+	)
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	var nextPayload []byte
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(c2)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case firstAct:
+				_ = protocol.WritePacket(c2, protocol.NewPacket(firstAct, []byte{0}))
+			case nextAct:
+				nextPayload = append([]byte(nil), pkt.Payload...)
+				_ = protocol.WritePacket(c2, protocol.NewPacket(nextAct, []byte{0}))
+			}
+		}
+	}()
+
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role-prevact-rx", RoleName: "PrevAct 收包链测试", ServerAddr: "prevact-rx-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return c1, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sess.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := sess.Call(ctx, protocol.NewPacket(firstAct, []byte{0, 0, 0, 0}), firstAct); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	// 服务端主动推送：客户端应收下并把它作为后续 PrevAct 锚点。
+	_ = protocol.WritePacket(c2, protocol.NewPacket(pushAct, []byte{0}))
+	waitDeadline := time.Now().Add(time.Second)
+	for sess.LastRxActionID() != pushAct && time.Now().Before(waitDeadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := sess.LastRxActionID(); got != pushAct {
+		t.Fatalf("最后收包 = 0x%08X, want 0x%08X", got, pushAct)
+	}
+
+	req := &protocol.Packet{ActionID: nextAct, Payload: []byte{0, 0, 0, 1, 0, 0, 0, 0}, HasPrevAct: true}
+	if _, err := sess.Call(ctx, req, nextAct); err != nil {
+		t.Fatalf("next call: %v", err)
+	}
+	if len(nextPayload) != 8 {
+		t.Fatalf("next payload len = %d, want 8", len(nextPayload))
+	}
+	got := uint32(nextPayload[4])<<24 | uint32(nextPayload[5])<<16 |
+		uint32(nextPayload[6])<<8 | uint32(nextPayload[7])
+	if got != pushAct {
+		t.Fatalf("PrevAct = 0x%08X, want 推送动作 0x%08X", got, pushAct)
+	}
+}

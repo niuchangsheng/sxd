@@ -69,7 +69,8 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			step := panel.CurrentStep()
-			slog.Info("灵域猎妖主面板", "role_id", session.RoleID(), "step", step)
+			slog.Info("灵域猎妖主面板", "role_id", session.RoleID(), "step", step,
+				"values", panel.Values)
 			if step <= 0 {
 				slog.Info("灵域猎妖当前无可挑战关卡", "role_id", session.RoleID())
 				return nil
@@ -80,8 +81,12 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 				challengeResp := call(protocol.BuildSoulHuntChallengePanelPacket(step),
 					protocol.ActionIDSoulHuntChallengePanel, callTimeout)
 				if challengeResp == nil {
-					return scheduler.NewCooldown(10*time.Minute, "灵域猎妖关卡面板无回包")
+					// 当日挑战次数耗尽后服务端会静默丢弃关卡面板；连续 3 次即挂起
+					// 到次日重置，避免每 10 分钟反复空等。
+					return scheduler.HandleSilentDrop(session, "soul_hunt", 3,
+						10*time.Minute, "灵域猎妖关卡面板无回包")
 				}
+				scheduler.ResetSilentDrops(session, "soul_hunt")
 				if code, pErr := protocol.ParseSoulHuntResult(challengeResp.Payload); pErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "灵域猎妖关卡面板解析失败")
 				} else if code != protocol.SoulHuntSuccess {
@@ -93,8 +98,10 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 				fightResp := call(protocol.BuildSoulHuntStartChallengePacket(step),
 					protocol.ActionIDSoulHuntStartChallenge, fightTimeout)
 				if fightResp == nil {
-					return scheduler.NewCooldown(10*time.Minute, "灵域猎妖挑战无回包")
+					return scheduler.HandleSilentDrop(session, "soul_hunt", 3,
+						10*time.Minute, "灵域猎妖挑战无回包")
 				}
+				scheduler.ResetSilentDrops(session, "soul_hunt")
 				code, pErr := protocol.ParseSoulHuntResult(fightResp.Payload)
 				if pErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "灵域猎妖挑战回包解析失败")

@@ -2,17 +2,21 @@ package social
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func devilPanel(weekStone, weekStone2 int32, souls []protocol.DevilSoul) protocol.DevilMatchPanel {
 	return protocol.DevilMatchPanel{
-		Result:        protocol.DevilResultSuccess,
-		LevelSection:  6,
+		Result:       protocol.DevilResultSuccess,
+		LevelSection: 6,
+		// 默认给足屠魔令，避免“屠魔令为 0 直接跳过”的卫语句掩盖各用例的分支。
+		TumoLingNum:   3,
 		Souls:         souls,
 		WeekStone:     weekStone,
 		WeekStoneMax:  20,
@@ -85,6 +89,39 @@ func TestDevilExpeditionRoutine_NotEnoughTumoling(t *testing.T) {
 	}
 	if enterCalls.Load() != 0 {
 		t.Fatalf("屠魔令不足时不得进入关卡, enter calls = %d", enterCalls.Load())
+	}
+}
+
+// TestDevilExpeditionRoutine_ZeroTumolingSkipsWithoutRequest 验证面板显示
+// 屠魔令为 0 时直接进入冷却，不再发送必然被服务端静默丢弃的 start 请求
+// （2026-11-15 线上实测：tumoling=0 时 429/63 无任何回包）。
+func TestDevilExpeditionRoutine_ZeroTumolingSkipsWithoutRequest(t *testing.T) {
+	var startCalls atomic.Int32
+	panel := devilPanel(0, 0, []protocol.DevilSoul{{RoleID: 486, WeekMaxSoul: 20}})
+	panel.TumoLingNum = 0
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetFunctions:
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(
+				[]int32{protocol.FunctionIDDevilExpedition}))
+		case protocol.ActionIDDevilActivityStatus:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DevilActivityOpen}))
+		case protocol.ActionIDDevilMatchPanel:
+			_ = protocol.WritePacket(conn, protocol.BuildDevilMatchPanelResultPacket(panel))
+		case protocol.ActionIDDevilStartExpeditionSingle:
+			startCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DevilResultSuccess}))
+		}
+	})
+	defer sess.Close()
+
+	err := NewDevilExpeditionRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("屠魔令为 0 应返回 CooldownError, 实际: %v", err)
+	}
+	if startCalls.Load() != 0 {
+		t.Fatalf("屠魔令为 0 时不得发送 start 请求, start calls = %d", startCalls.Load())
 	}
 }
 

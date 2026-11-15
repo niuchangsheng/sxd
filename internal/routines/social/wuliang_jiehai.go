@@ -49,20 +49,40 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
+			// probeChapter 用较短超时探测章节面板：章节不可用时服务端会静默丢弃，
+			// 这里不做 PrevAct 重试以免每个无效章节空等两份超时。
+			probeChapter := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
+				cctx, ccancel := context.WithTimeout(ctx, 4*time.Second)
+				defer ccancel()
+				resp, err := session.Call(cctx, pkt, act)
+				if err != nil {
+					return nil
+				}
+				return resp
+			}
+
 			_ = call(protocol.BuildEraInfiniteSeasonPacket(), protocol.ActionIDEraInfiniteSeason, callTimeout)
 			_ = call(protocol.BuildEraInfinitePanelPacket(), protocol.ActionIDEraInfinitePanel, callTimeout)
 
 			fights := 0
-			// 归墟 1/2/3 境与极境(4)，每境按 now_level 逐关挑战；
-			// 已通关(3)/未解锁(2)时进入下一境，极境解锁后自动尝试。
-			for chapterID := int32(1); chapterID <= 4 && fights < maxWuliangFights; chapterID++ {
+			// 章节 id 来自客户端静态表（抓包中实测为 1,3,4,5,6…，2 不存在），
+			// 且服务端对当前不可用的章节会静默丢弃 853/2。因此扫描 1..8：
+			// 无回包视为该章节不可用并继续下一章，全部无回包才按静默丢包退避。
+			const lastChapterID = 8
+			probed, dropped := int32(0), 0
+			for chapterID := int32(1); chapterID <= lastChapterID && fights < maxWuliangFights; chapterID++ {
+				probed++
 				lastLevel := int32(-1)
 				for fights < maxWuliangFights && ctx.Err() == nil {
-					chapterResp := call(protocol.BuildEraInfiniteChapterPacket(chapterID),
-						protocol.ActionIDEraInfiniteChapter, callTimeout)
+					chapterResp := probeChapter(protocol.BuildEraInfiniteChapterPacket(chapterID),
+						protocol.ActionIDEraInfiniteChapter)
 					if chapterResp == nil {
-						return scheduler.NewCooldown(30*time.Minute, "无量劫海章节面板无回包")
+						dropped++
+						slog.Info("无量劫海章节面板无回包，跳过该章节", "role_id", session.RoleID(),
+							"chapter_id", chapterID)
+						break
 					}
+					scheduler.ResetSilentDrops(session, "wuliang_jiehai")
 					chapter, cErr := protocol.ParseEraInfiniteChapter(chapterResp.Payload)
 					if cErr != nil {
 						slog.Warn("解析无量劫海章节面板失败，本轮跳过", "role_id", session.RoleID(), "err", cErr)
@@ -112,6 +132,12 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 					slog.Info("无量劫海挑战成功", "role_id", session.RoleID(),
 						"chapter_id", chapterID, "now_level", level, "fights", fights)
 				}
+			}
+			if dropped == int(probed) {
+				// 所有章节面板都被服务端静默丢弃：视为当日/当前赛季状态已结束，
+				// 连续 3 次挂起到次日重置，避免每 30 分钟空等。
+				return scheduler.HandleSilentDrop(session, "wuliang_jiehai", 3,
+					30*time.Minute, "无量劫海章节面板全部无回包")
 			}
 			slog.Info("无量劫海本轮完成", "role_id", session.RoleID(), "fights", fights)
 			return nil

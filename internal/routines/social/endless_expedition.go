@@ -107,8 +107,12 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 				fightResp := call(protocol.BuildEndlessChallengePacket(layer),
 					protocol.ActionIDEndlessChallenge, fightTimeout)
 				if fightResp == nil {
-					return scheduler.NewCooldown(time.Hour, "无尽洞天挑战无回包")
+					// 服务端在当日次数/状态耗尽后会静默丢弃挑战请求：连续 3 次无回包
+					// 即挂起到次日重置，避免整晚每小时空等。
+					return scheduler.HandleSilentDrop(session, "endless_expedition", 3,
+						time.Hour, "无尽洞天挑战无回包")
 				}
+				scheduler.ResetSilentDrops(session, "endless_expedition")
 				code, fErr := protocol.ParseEndlessResult(fightResp.Payload)
 				if fErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "无尽洞天挑战回包解析失败")

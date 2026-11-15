@@ -153,6 +153,13 @@ type RoleSession struct {
 	lastAckActionID atomic.Uint32
 	lastSendTime    atomic.Int64
 
+	// lastRxActionID 记录最后一次收到的网关包 ActionID（含推送、回包、心跳回包）。
+	// 官方客户端的 PrevAct 链取「最后收到的包」而非「最后发出的包」：
+	// 抓包 /tmp/wuliangjiehai.pcapng 中 853/0 的 PrevAct 为登录推送 855/1，
+	// 853/2 的 PrevAct 为其前一轮收到的 52/0 回包。带参数的业务请求若 PrevAct
+	// 与服务端链不一致会被静默丢弃（无回包），空参数请求则不受影响。
+	lastRxActionID atomic.Uint32
+
 	// recentRx 记录最近收到的 32 个包 ActionID（环形），仅用于静默丢包诊断：
 	// 请求超时时若服务端其实回了别的 ActionID，可据此判断是回包被分发到别处。
 	recentRxMu sync.Mutex
@@ -611,10 +618,11 @@ func (s *RoleSession) SetPacketObserver(fn func(*protocol.Packet)) {
 // 最后一道防线，避免一次漏设超时拖垮全部玩法。
 var defaultCallTimeout = 30 * time.Second
 
-// CallWithPrevActResync 发送需要 PrevAct 链的请求；若因链污染被服务端静默
-// 丢弃（表现为超时），用「最后一次收到回包的业务动作」(LastAckActionID)
-// 作为显式锚点重试一次。显式锚点不置 HasPrevAct，避免被会话层用已被丢弃的
-// lastActionID 覆盖。两次尝试各自使用独立的 timeout 上下文。
+// CallWithPrevActResync 发送需要 PrevAct 链的请求；若被服务端静默丢弃
+// （表现为超时），用「重试时刻最后一次收到的包」(lastRxActionID) 作为显式
+// 锚点重试一次。官方客户端的 PrevAct 链就是最后收到的包，因此锚点必须随
+// 期间新到达的推送/回包刷新，而不是沿用超时前的旧值。显式锚点不置
+// HasPrevAct，避免被会话层再次改写。两次尝试各自使用独立的 timeout 上下文。
 func (s *RoleSession) CallWithPrevActResync(parent context.Context, timeout time.Duration, req *protocol.Packet, respActionID uint32) (*protocol.Packet, error) {
 	c1, cancel1 := context.WithTimeout(parent, timeout)
 	resp, err := s.Call(c1, req, respActionID)
@@ -625,7 +633,10 @@ func (s *RoleSession) CallWithPrevActResync(parent context.Context, timeout time
 	if req == nil || !req.HasPrevAct || len(req.Payload) < 4 {
 		return nil, err
 	}
-	anchor := s.LastAckActionID()
+	anchor := s.lastRxActionID.Load()
+	if anchor == 0 {
+		anchor = s.LastAckActionID()
+	}
 	if anchor == 0 {
 		return nil, err
 	}
@@ -1945,6 +1956,12 @@ func (s *RoleSession) SetLastActionID(actionID uint32) {
 	s.lastActionID.Store(actionID)
 }
 
+// LastRxActionID 获取最后一次收到的网关包 ActionID（含推送与心跳回包），
+// 即官方客户端 PrevAct 链的当前值。
+func (s *RoleSession) LastRxActionID() uint32 {
+	return s.lastRxActionID.Load()
+}
+
 // LastAckActionID 获取最后一次收到服务端回包的业务 ActionID。
 // 用于需要与服务端 PrevAct 链严格对齐的协议锚点。
 func (s *RoleSession) LastAckActionID() uint32 {
@@ -1978,7 +1995,13 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 
 	if p != nil {
 		mod := p.ActionID >> 16
-		if prev := s.lastActionID.Load(); prev != 0 {
+		// PrevAct 链以「最后收到的包」为锚点（与服务端一致）；会话尚未收到任何
+		// 包时退回最后发送动作，保证登录早期请求也有合法前序。
+		prev := s.lastRxActionID.Load()
+		if prev == 0 {
+			prev = s.lastActionID.Load()
+		}
+		if prev != 0 {
 			if p.ActionID == protocol.ActionIDItemGetPackList && len(p.Payload) == 0 {
 				cloned := make([]byte, len(p.Payload)+4)
 				copy(cloned, p.Payload)
@@ -2102,6 +2125,8 @@ func (s *RoleSession) runLoop() {
 		s.writeMu.Lock()
 		s.conn = conn
 		s.lastActionID.Store(0)
+		// 新连接的 PrevAct 链在服务端从零开始，必须清掉上一条连接的收包锚点。
+		s.lastRxActionID.Store(0)
 		s.writeMu.Unlock()
 
 		// 2. 启动读循环通道
@@ -2257,6 +2282,7 @@ func (s *RoleSession) readLoop(conn net.Conn, errCh chan<- error) {
 		}
 
 		s.recordRx(pkt.ActionID)
+		s.lastRxActionID.Store(pkt.ActionID)
 		hexDump := hex.EncodeToString(pkt.Payload)
 		if len(hexDump) > 64 {
 			hexDump = hexDump[:64] + "..."
