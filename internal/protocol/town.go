@@ -36,7 +36,7 @@ func BuildEnterTownWithPrevActPacket(townID int32, anchor uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(townID)
 	w.WriteUint32(anchor)
-	pkt := NewPacket(ActionIDTownEnter, w.Bytes())
-	pkt.HasPrevAct = true
-	return pkt
+	// HasPrevAct=false：必须保留调用方给出的显式锚点，不能被会话层的
+	// lastRxActionID 覆盖（实测恢复 Mod 4 依赖「失败 4/0」这个锚点）。
+	return NewPacket(ActionIDTownEnter, w.Bytes())
 }

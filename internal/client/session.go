@@ -1079,10 +1079,12 @@ func (s *RoleSession) EnterTown(ctx context.Context, townID int32) (uint8, error
 	return s.enterTownWithPacket(ctx, townID, protocol.BuildEnterTownPacket(townID))
 }
 
-// EnterTownWithAnchor 保留旧调用签名；当前统一使用官方裸 4 字节形态，
-// anchor 不再参与发包（PrevAct 由会话层按最后收到的包填充）。
-func (s *RoleSession) EnterTownWithAnchor(ctx context.Context, townID int32, _ uint32) (uint8, error) {
-	return s.EnterTown(ctx, townID)
+// EnterTownWithAnchor 使用显式 PrevAct 锚点复位城镇。
+//
+// 2026-11-15 实测：裸 enter_town 会导致随后的 4/0 被丢弃；以「失败 4/0」
+// (0x00040000) 或 3/9 为锚点的 8 字节 enter_town 可恢复 Mod 4 上下文。
+func (s *RoleSession) EnterTownWithAnchor(ctx context.Context, townID int32, anchor uint32) (uint8, error) {
+	return s.enterTownWithPacket(ctx, townID, protocol.BuildEnterTownWithPrevActPacket(townID, anchor))
 }
 
 func (s *RoleSession) enterTownWithPacket(ctx context.Context, townID int32, pkt *protocol.Packet) (uint8, error) {

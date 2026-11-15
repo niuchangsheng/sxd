@@ -2158,11 +2158,17 @@ var questSectionsAnchorCache sync.Map // *client.RoleSession -> uint32
 // 2026-11-15 实测：以任务列表 3/9 或章节列表 4/0 为锚点的 8 字节 enter_town
 // 能保持任务上下文，复位后的 4/0 稳定回包；裸载荷会切出任务上下文。
 func questSectionsAnchor(session *client.RoleSession) uint32 {
+	// 优先使用最近一次「失败的 4/0」作为锚点：实测该形态能恢复被裸
+	// enter_town 打断的 Mod 4 上下文（probe_sections_after_quest_sync_live 步骤 11）。
+	if a := session.LastActionID(); a>>16 == 4 {
+		questSectionsAnchorCache.Store(session, a)
+		return a
+	}
 	if a := session.LastAckActionID(); a>>16 == 3 || a>>16 == 4 {
 		questSectionsAnchorCache.Store(session, a)
 		return a
 	}
-	if a := session.LastActionID(); a>>16 == 3 || a>>16 == 4 {
+	if a := session.LastActionID(); a>>16 == 3 {
 		questSectionsAnchorCache.Store(session, a)
 		return a
 	}
@@ -2230,13 +2236,18 @@ func executeQuestCycle(
 
 	// 魔王试炼/竞技场等战斗玩法结束后，服务端可能仍保留战场上下文；
 	// 此时 get_sections 会被静默丢弃。按官方客户端 gotoTownAtId 复位城镇场景。
-	// enter_town 始终携带 PrevAct 链（会话层以最后收到的包填充），
-	// 不再有裸载荷切出任务上下文的问题。
-	if mapID, ok := enterQuestTownScene(ctx, session); ok {
-		slog.Info("任务推图前已复位城镇场景", "role_id", session.RoleID(), "map_id", mapID)
+	//
+	// 没有 Mod 3/4 锚点时只能发裸 4 字节 enter_town，实测会把会话切出任务上下文
+	// （随后 4/0 必丢）；因此首轮跳过复位，等 3/9 同步后再按锚点复位。
+	if questSectionsAnchor(session) != 0 {
+		if mapID, ok := enterQuestTownScene(ctx, session); ok {
+			slog.Info("任务推图前已复位城镇场景", "role_id", session.RoleID(), "map_id", mapID)
+		} else {
+			slog.Info("任务推图前复位城镇场景失败", "role_id", session.RoleID(),
+				"town_map_id", session.GetPlayerState().TownMapID)
+		}
 	} else {
-		slog.Info("任务推图前复位城镇场景失败", "role_id", session.RoleID(),
-			"town_map_id", session.GetPlayerState().TownMapID)
+		slog.Info("任务推图前跳过城镇复位（尚无任务链锚点）", "role_id", session.RoleID())
 	}
 
 	// 0. 主动向服务端全量同步当前任务列表 (Module 3, Action 9: town_quest_show)

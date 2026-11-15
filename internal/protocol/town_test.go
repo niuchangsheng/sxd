@@ -36,8 +36,8 @@ func TestBuildEnterTownWithPrevActPacket(t *testing.T) {
 	if len(pkt.Payload) != 8 {
 		t.Fatalf("payload len = %d, want 8 (% X)", len(pkt.Payload), pkt.Payload)
 	}
-	if !pkt.HasPrevAct {
-		t.Fatalf("enter_town 应标记 HasPrevAct 以便会话层写入真实 PrevAct")
+	if pkt.HasPrevAct {
+		t.Fatalf("带显式锚点的 enter_town 不应标记 HasPrevAct（避免被会话层覆盖）")
 	}
 	anchor := uint32(pkt.Payload[4])<<24 | uint32(pkt.Payload[5])<<16 |
 		uint32(pkt.Payload[6])<<8 | uint32(pkt.Payload[7])
@@ -45,8 +45,8 @@ func TestBuildEnterTownWithPrevActPacket(t *testing.T) {
 		t.Fatalf("anchor = 0x%08X", anchor)
 	}
 	placeholder := protocol.BuildEnterTownWithPrevActPacket(21, 0)
-	if len(placeholder.Payload) != 8 || !placeholder.HasPrevAct {
-		t.Fatalf("anchor=0 应写占位锚点并标记 HasPrevAct, len=%d prev=%v",
+	if len(placeholder.Payload) != 8 || placeholder.HasPrevAct {
+		t.Fatalf("anchor=0 应写占位锚点且不标记 HasPrevAct, len=%d prev=%v",
 			len(placeholder.Payload), placeholder.HasPrevAct)
 	}
 }
