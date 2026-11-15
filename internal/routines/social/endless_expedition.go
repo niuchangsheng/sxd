@@ -89,11 +89,10 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 
 			challenges := 0
 			for challenges < maxEndlessChallenges && ctx.Err() == nil {
-				// 禁选列表与怪物队伍信息为客户端展示所需，同时用于确认层可挑战。
-				if banResp := call(protocol.BuildEndlessBanListPacket(layer),
-					protocol.ActionIDEndlessBanList, callTimeout); banResp == nil {
-					return scheduler.NewCooldown(10*time.Minute, "无尽洞天禁选列表无回包")
-				}
+				// 禁选列表仅为客户端展示所需，部分账号/层会被服务端静默丢弃，
+				// 因此无回包不阻断挑战。
+				_ = call(protocol.BuildEndlessBanListPacket(layer),
+					protocol.ActionIDEndlessBanList, callTimeout)
 				infoResp := call(protocol.BuildEndlessMonsterTeamInfoPacket(layer),
 					protocol.ActionIDEndlessMonsterTeamInfo, callTimeout)
 				if infoResp == nil {
