@@ -2219,35 +2219,6 @@ func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
 
 // runMockGameServer 为离线调试、沙箱环境与单元测试提供轻量级虚拟游戏协议服务端。
 // writeFindImmortalAwardMock 写入一份随品阶增长的龙鱼奖励 mock 数据。
-// buildMockOnlineRewardPanel 构造在线奖励面板 mock 回包：
-// 活动进行中，今日在线 400 秒，前两档 (300/900 秒) 中第一档可领。
-func buildMockOnlineRewardPanel() []byte {
-	w := protocol.NewWriter()
-	now := time.Now().Unix()
-	w.WriteInt32(int32(now - 100))
-	w.WriteInt32(int32(now + 3600))
-	w.WriteUint8(1)
-	w.WriteUint16(2)
-	// 档位 1: 元宝 x100, 已解锁未领取
-	w.WriteInt32(1)
-	w.WriteUint16(1)
-	w.WriteInt32(3345)
-	w.WriteInt64(100)
-	w.WriteUint8(1)
-	w.WriteUint8(0)
-	w.WriteInt32(300)
-	// 档位 2: 铜钱 x200000, 未解锁
-	w.WriteInt32(2)
-	w.WriteUint16(1)
-	w.WriteInt32(1747)
-	w.WriteInt64(200000)
-	w.WriteUint8(0)
-	w.WriteUint8(0)
-	w.WriteInt32(900)
-	w.WriteInt32(400)
-	return w.Bytes()
-}
-
 func writeFindImmortalAwardMock(w *protocol.Writer, state int8) {
 	w.WriteInt16(int16(100 + int(state)*20))  // fame
 	w.WriteInt32(int32(500 + int(state)*100)) // skill
@@ -2603,17 +2574,6 @@ func runMockGameServer(conn net.Conn) {
 
 		case protocol.ActionIDVIPSendGift:
 			_ = protocol.WritePacket(conn, protocol.BuildVIPGiftResultPacket(protocol.VIPResultSuccess))
-
-		case protocol.ActionIDOnlineRewardPanel:
-			// 响应在线奖励面板: 活动进行中, 在线 400 秒, 档位 1/2 可领
-			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDOnlineRewardPanel, buildMockOnlineRewardPanel()))
-
-		case protocol.ActionIDOnlineRewardOneKey:
-			w := protocol.NewWriter()
-			w.WriteUint8(protocol.OnlineRewardResultSuccess)
-			w.WriteUint16(1)
-			w.WriteInt32(1)
-			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDOnlineRewardOneKey, w.Bytes()))
 
 		case protocol.ActionIDWorldBossList:
 			// 响应世界 Boss 列表: 1 个 Boss 处于开战中

@@ -54,7 +54,6 @@ scheduler:
     online_gift: true             # 在线礼包 + 功能终结礼包
     vip_welfare: true             # VIP每日免费礼包与官职俸禄
     god_bless: true               # 跨服天神赐福
-    online_reward: true           # 在线时长奖励一键领取
     courtyard_pet: true           # 宠物灵符召唤 (仅 call(NORMAL), 不消耗元宝)
     weekend_event: true           # 周末狂欢礼 + 水果机 (仅免费次数, 不消耗元宝)
     daoyuan_vip_shop: true        # 精品杂货 VIP5/VIP8 购买 (仅低价档, 不消耗元宝)

@@ -51,13 +51,6 @@ func TestDailyRoutines_Execute(t *testing.T) {
 		}
 	})
 
-	t.Run("在线奖励一键领取", func(t *testing.T) {
-		r := NewOnlineRewardRoutine()
-		if err := r.Execute(context.Background(), session, nil); err != nil {
-			t.Fatalf("在线奖励任务执行失败: %v", err)
-		}
-	})
-
 	t.Run("日常小助手", func(t *testing.T) {
 		r2 := NewDailyQuestRoutine()
 		if err := r2.Execute(context.Background(), session, nil); err != nil {
