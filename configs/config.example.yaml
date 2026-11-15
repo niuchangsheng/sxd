@@ -163,6 +163,7 @@ scheduler:
     endless_box: true             # 无尽宝箱 (仅宝箱狂欢周触发, 不买箱子)
     cultivation_card: true        # 神仙卡牌收藏集 (仅铜钱商城, 不消耗元宝)
     faxiang_trial: true           # 法相试炼(造物佛手/守护魔兽) 免费领奖+挑战
+    wuxing_tiangong: true         # 五行天宫 一键挑战，失败即结束本轮
     fortune_box: true             # 奇缘宝藏 (免费开箱)
     era_yanjie: true               # 纪元湮劫每日一关战斗 (免费)
     era_treasure: true            # 纪元秘藏/轮回图录奖励 (免费)
@@ -170,7 +171,6 @@ scheduler:
     soul_hunt: true                # 灵域猎妖: 按当前关卡免费挑战
     get_peach: true                # 摘仙桃: 摘取已召唤仙桃 + 铜钱/免费次数召唤 (不消耗元宝)
     pet_animal: true               # 叶公好龙普通培养: 仅铜钱培养 (不消耗元宝)
-    lucky_shop: false             # 琳琅阁: 按用户要求禁用 (无实现, 保留开关)
 
   # ── 副本 / 挑战策略 ─────────────────────────────────────────
   dungeon:
@@ -193,6 +193,11 @@ scheduler:
     auto_sell_blue: true              # 自动出售蓝色灵件
     auto_sell_purple: true            # 自动出售紫色灵件 (false=保留)
     max_floor_retries: 3              # 每层最大重试次数
+
+  # 仙界练功房 (免费席位优先；抢席默认关闭)
+  training_room:
+    allow_rob_seat: false             # 是否允许战斗抢夺已满员的高星席位
+    max_rob_attempts: 1               # 单轮最多抢席次数
 
   # 魔王试炼自动化策略
   beelzebub_trials:
