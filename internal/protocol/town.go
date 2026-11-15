@@ -20,16 +20,23 @@ func BuildEnterTownPacket(townID int32) *Packet {
 	return NewPacket(ActionIDTownEnter, w.Bytes())
 }
 
-// BuildEnterTownWithPrevActPacket 构造带显式 PrevAct 的 enter_town 请求。
+// BuildEnterTownWithPrevActPacket 构造带 PrevAct 链的 enter_town 请求。
 //
-// anchor 应为最近一次 Mod 3 (任务) 或 Mod 4 (章节) 动作号；实测以 3/9 或 4/0
-// 作为锚点时，复位后的 get_sections 稳定回包。anchor=0 时退化为裸 4 字节。
+// 官方客户端发出的 enter_town request 只有 [Int townID]，但 DataBase.netCall
+// 会在尾部追加当前 PrevAct（最后收到的包）。2026-11-15 抓包确认 PrevAct 链
+// 以「最后收到的包」为锚点；这里写入占位值并置 HasPrevAct=true，由会话层
+// 在发包时用真实 lastRxActionID 覆盖。
+//
+// 裸 4 字节虽然能回包，但会把会话切出任务上下文，导致随后的 4/0 被丢弃，
+// 因此不再提供裸载荷路径。
 func BuildEnterTownWithPrevActPacket(townID int32, anchor uint32) *Packet {
 	if anchor == 0 {
-		return BuildEnterTownPacket(townID)
+		anchor = ActionIDPlayerGetInfo
 	}
 	w := NewWriter()
 	w.WriteInt32(townID)
 	w.WriteUint32(anchor)
-	return NewPacket(ActionIDTownEnter, w.Bytes())
+	pkt := NewPacket(ActionIDTownEnter, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
 }

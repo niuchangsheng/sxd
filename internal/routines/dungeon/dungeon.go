@@ -2230,18 +2230,13 @@ func executeQuestCycle(
 
 	// 魔王试炼/竞技场等战斗玩法结束后，服务端可能仍保留战场上下文；
 	// 此时 get_sections 会被静默丢弃。按官方客户端 gotoTownAtId 复位城镇场景。
-	//
-	// 注意：没有 Mod 3/4 锚点时只能发裸 4 字节 enter_town，实测会把会话切出
-	// 任务上下文（随后 4/0 必丢）；因此首轮跳过复位，等 3/9 同步后再按锚点复位。
-	if questSectionsAnchor(session) != 0 {
-		if mapID, ok := enterQuestTownScene(ctx, session); ok {
-			slog.Info("任务推图前已复位城镇场景", "role_id", session.RoleID(), "map_id", mapID)
-		} else {
-			slog.Info("任务推图前复位城镇场景失败", "role_id", session.RoleID(),
-				"town_map_id", session.GetPlayerState().TownMapID)
-		}
+	// enter_town 始终携带 PrevAct 链（会话层以最后收到的包填充），
+	// 不再有裸载荷切出任务上下文的问题。
+	if mapID, ok := enterQuestTownScene(ctx, session); ok {
+		slog.Info("任务推图前已复位城镇场景", "role_id", session.RoleID(), "map_id", mapID)
 	} else {
-		slog.Info("任务推图前跳过城镇复位（尚无任务链锚点）", "role_id", session.RoleID())
+		slog.Info("任务推图前复位城镇场景失败", "role_id", session.RoleID(),
+			"town_map_id", session.GetPlayerState().TownMapID)
 	}
 
 	// 0. 主动向服务端全量同步当前任务列表 (Module 3, Action 9: town_quest_show)

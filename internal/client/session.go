@@ -1070,19 +1070,19 @@ func (s *RoleSession) FetchLatestPlayerInfo(ctx context.Context) (*protocol.Play
 // 特殊地图状态，后续部分模块的写操作会被静默丢弃。
 //
 // 返回服务端结果码 (0=成功)。
+//
+// 官方 Mod_Town_Base.enter_town 请求仅有 [Int townID]（HasPrevAct=false）。
+// 2026-11-15 探针确认裸 4 字节稳定回包；带任意 PrevAct 的 8 字节形态在部分
+// 会话状态下会被丢弃。get_sections 等 Mod 3/4 请求的 PrevAct 由会话层按
+// 「最后收到的包」统一填充，不再依赖 enter_town 的锚点。
 func (s *RoleSession) EnterTown(ctx context.Context, townID int32) (uint8, error) {
-	// 2026-11-15 线上探针：enter_town 裸 4 字节稳定有回包；
-	// 追加 PrevAct 的 8 字节载荷会被静默丢弃，故这里不再携带 PrevAct。
 	return s.enterTownWithPacket(ctx, townID, protocol.BuildEnterTownPacket(townID))
 }
 
-// EnterTownWithAnchor 使用显式 PrevAct 锚点复位城镇场景。
-//
-// 2026-11-15 实测：裸 enter_town 会把会话切出任务上下文，随后 4/0 get_sections
-// 被静默丢弃；以最近的 Mod 3/4 动作 (3/9 任务列表或 4/0 章节列表) 作为锚点的
-// 8 字节 enter_town 可同时复位城镇并保持任务上下文。anchor=0 等价裸载荷。
-func (s *RoleSession) EnterTownWithAnchor(ctx context.Context, townID int32, anchor uint32) (uint8, error) {
-	return s.enterTownWithPacket(ctx, townID, protocol.BuildEnterTownWithPrevActPacket(townID, anchor))
+// EnterTownWithAnchor 保留旧调用签名；当前统一使用官方裸 4 字节形态，
+// anchor 不再参与发包（PrevAct 由会话层按最后收到的包填充）。
+func (s *RoleSession) EnterTownWithAnchor(ctx context.Context, townID int32, _ uint32) (uint8, error) {
+	return s.EnterTown(ctx, townID)
 }
 
 func (s *RoleSession) enterTownWithPacket(ctx context.Context, townID int32, pkt *protocol.Packet) (uint8, error) {

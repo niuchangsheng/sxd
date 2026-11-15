@@ -27,22 +27,26 @@ func TestBuildEnterTownPacket_BarePayload(t *testing.T) {
 	}
 }
 
-// TestBuildEnterTownWithPrevActPacket 验证带任务链锚点的 8 字节形态。
+// TestBuildEnterTownWithPrevActPacket 验证 enter_town 始终携带 8 字节 PrevAct 链。
 //
-// 2026-11-15 探针：锚点取 3/9 或 4/0 时，复位后 get_sections 稳定回包；
-// anchor=0 退化为裸 4 字节。
+// 2026-11-15 抓包：官方客户端 PrevAct 取「最后收到的包」，由会话层在发包时
+// 覆盖尾部 4 字节；anchor=0 时写入占位值，但仍必须标记 HasPrevAct。
 func TestBuildEnterTownWithPrevActPacket(t *testing.T) {
 	pkt := protocol.BuildEnterTownWithPrevActPacket(21, protocol.ActionIDMissionGetSections)
 	if len(pkt.Payload) != 8 {
 		t.Fatalf("payload len = %d, want 8 (% X)", len(pkt.Payload), pkt.Payload)
+	}
+	if !pkt.HasPrevAct {
+		t.Fatalf("enter_town 应标记 HasPrevAct 以便会话层写入真实 PrevAct")
 	}
 	anchor := uint32(pkt.Payload[4])<<24 | uint32(pkt.Payload[5])<<16 |
 		uint32(pkt.Payload[6])<<8 | uint32(pkt.Payload[7])
 	if anchor != protocol.ActionIDMissionGetSections {
 		t.Fatalf("anchor = 0x%08X", anchor)
 	}
-	bare := protocol.BuildEnterTownWithPrevActPacket(21, 0)
-	if len(bare.Payload) != 4 {
-		t.Fatalf("anchor=0 应退化为裸 4 字节, got %d", len(bare.Payload))
+	placeholder := protocol.BuildEnterTownWithPrevActPacket(21, 0)
+	if len(placeholder.Payload) != 8 || !placeholder.HasPrevAct {
+		t.Fatalf("anchor=0 应写占位锚点并标记 HasPrevAct, len=%d prev=%v",
+			len(placeholder.Payload), placeholder.HasPrevAct)
 	}
 }
