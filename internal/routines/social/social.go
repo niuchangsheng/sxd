@@ -120,7 +120,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			filtered := openable[:0]
 			for _, b := range openable {
 				if jiYuanBoxSkippedToday(b.ItemID) {
-					slog.Info("结缘宝箱箱型今日不可开启，跳过", "role_id", session.RoleID(),
+					slog.Info("结缘宝箱箱型暂不可开启，跳过", "role_id", session.RoleID(),
 						"item_id", b.ItemID, "count", b.Count)
 					continue
 				}
@@ -199,7 +199,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 						}
 						// 库存不变：该箱型可能本身需要元宝/其他条件（如高级/至尊箱），
 						// 服务端静默丢弃。按错误记录并标记当天跳过，继续开启其余箱型。
-						slog.Warn("结缘宝箱开箱无回包且库存数量未变化，今日跳过该箱型",
+						slog.Warn("结缘宝箱开箱无回包且库存数量未变化，6 小时内跳过该箱型",
 							"role_id", session.RoleID(),
 							"item_id", box.ItemID,
 							"before", remaining, "after", afterCount,

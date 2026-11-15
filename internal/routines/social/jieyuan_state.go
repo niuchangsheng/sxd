@@ -1,62 +1,69 @@
-// 本文件持久化结缘宝箱「当天无法开启」的箱型，避免对需要元宝/条件的箱型
-// 反复发送必被静默丢弃的 232/34。与 st_union_ticket_state.json 同样跨进程。
+// 本文件持久化结缘宝箱「暂不可开启」的箱型，避免对需要元宝/条件或已到
+// 开启上限的箱型反复发送必被静默丢弃的 232/34。与 st_union_ticket_state.json
+// 同样跨进程持久化；采用有效期（默认 6 小时）而非整日，便于游戏侧 05:00
+// 等非 00:00 重置后自动重试。
 package social
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
 
-const jieyuanSkipStatePath = "data/runtime/jieyuan_skip_state.json"
+const (
+	jieyuanSkipStatePath = "data/runtime/jieyuan_skip_state.json"
+	// jieyuanSkipTTL 单个箱型标记的有效期。
+	jieyuanSkipTTL = 6 * time.Hour
+)
 
 var jieyuanSkipMu sync.Mutex
 
 type jieyuanSkipState struct {
-	Date  string  `json:"date"`
-	Items []int32 `json:"items"`
+	// ExpireAt 箱型 ID -> 过期时间(unix 秒)。
+	ExpireAt map[string]int64 `json:"expire_at"`
 }
 
 func loadJieyuanSkipLocked() jieyuanSkipState {
-	var st jieyuanSkipState
+	st := jieyuanSkipState{}
 	b, err := os.ReadFile(jieyuanSkipStatePath)
 	if err != nil {
 		return st
 	}
 	_ = json.Unmarshal(b, &st)
-	if st.Date != time.Now().Format("2006-01-02") {
-		return jieyuanSkipState{}
+	if st.ExpireAt == nil {
+		st.ExpireAt = map[string]int64{}
 	}
 	return st
 }
 
-// jiYuanBoxSkippedToday 判断箱型今天是否已被标记为不可开启。
+// jiYuanBoxSkippedToday 判断箱型是否仍在跳过有效期内。
 func jiYuanBoxSkippedToday(itemID int32) bool {
 	jieyuanSkipMu.Lock()
 	defer jieyuanSkipMu.Unlock()
 	st := loadJieyuanSkipLocked()
-	for _, id := range st.Items {
-		if id == itemID {
-			return true
-		}
-	}
-	return false
+	exp, ok := st.ExpireAt[strconv.FormatInt(int64(itemID), 10)]
+	return ok && time.Now().Unix() < exp
 }
 
-// markJiYuanBoxSkipped 记录箱型今天不可开启（跨进程持久化）。
+// markJiYuanBoxSkipped 记录箱型在 TTL 内不可开启（跨进程持久化）。
 func markJiYuanBoxSkipped(itemID int32) {
 	jieyuanSkipMu.Lock()
 	defer jieyuanSkipMu.Unlock()
 	st := loadJieyuanSkipLocked()
-	st.Date = time.Now().Format("2006-01-02")
-	for _, id := range st.Items {
-		if id == itemID {
-			return
+	if st.ExpireAt == nil {
+		st.ExpireAt = map[string]int64{}
+	}
+	now := time.Now()
+	// 顺带清理已过期项，避免文件无限增长。
+	for k, exp := range st.ExpireAt {
+		if now.Unix() >= exp {
+			delete(st.ExpireAt, k)
 		}
 	}
-	st.Items = append(st.Items, itemID)
+	st.ExpireAt[strconv.FormatInt(int64(itemID), 10)] = now.Add(jieyuanSkipTTL).Unix()
 	_ = os.MkdirAll(filepath.Dir(jieyuanSkipStatePath), 0o755)
 	b, _ := json.Marshal(st)
 	_ = os.WriteFile(jieyuanSkipStatePath, b, 0o644)
