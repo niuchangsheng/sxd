@@ -25,7 +25,8 @@ const maxWuliangFights = 20
 // NewWuliangJieHaiRoutine 构造无量劫海挑战任务。
 func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 10 * time.Second
-	const fightTimeout = 35 * time.Second
+	// 战斗回包通常在数秒内返回；静默丢弃时 35 秒超时会让单轮阻塞过久，降到 20 秒。
+	const fightTimeout = 20 * time.Second
 	return scheduler.NewBaseRoutine(
 		"wuliang_jiehai",
 		"social",

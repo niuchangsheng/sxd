@@ -26,7 +26,9 @@ const maxEndlessChallenges = 6
 // NewEndlessExpeditionRoutine 构造无尽洞天挑战任务。
 func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 10 * time.Second
-	const fightTimeout = 35 * time.Second
+	// 实测成功挑战的回包在 1 秒内返回（01:05 多次），35 秒超时只会让
+	// 「服务端静默丢弃挑战」的单轮阻塞 70 秒（含 PrevAct 重试）。降到 15 秒。
+	const fightTimeout = 15 * time.Second
 	return scheduler.NewBaseRoutine(
 		"endless_expedition",
 		"social",

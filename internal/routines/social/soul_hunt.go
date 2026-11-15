@@ -25,7 +25,9 @@ const maxSoulHuntBattles = 8
 // NewSoulHuntRoutine 构造灵域猎妖挑战任务。
 func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 10 * time.Second
-	const fightTimeout = 30 * time.Second
+	// 实测成功挑战的回包在 1 秒内返回（00:43 连续三场），30 秒超时只会放大
+	// 「服务端静默丢弃」时的空等；降到 15 秒。
+	const fightTimeout = 15 * time.Second
 	return scheduler.NewBaseRoutine(
 		"soul_hunt",
 		"social",
