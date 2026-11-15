@@ -14,6 +14,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/dictionary"
+	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -72,15 +73,23 @@ func NewBagCleanupRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 			if need <= 0 {
 				return nil
 			}
-			slog.Info("背包清理：空格不足，开始出售装备制作卷", "role_id", session.RoleID(),
-				"empty_grids", pack.PackEmptyGrids, "items", len(pack.PackItems), "need", need)
-			sold := 0
+			var candidates []protocol.ItemRecord
 			for _, it := range pack.PackItems {
+				if isEquipmentCraftScroll(dictRepo, it.ItemID) {
+					candidates = append(candidates, it)
+				}
+			}
+			if len(candidates) == 0 {
+				// 没有装备制作卷可卖，保持安静，避免每 10 分钟刷日志。
+				return nil
+			}
+			slog.Info("背包清理：空格不足，开始出售装备制作卷", "role_id", session.RoleID(),
+				"empty_grids", pack.PackEmptyGrids, "items", len(pack.PackItems),
+				"scrolls", len(candidates), "need", need)
+			sold := 0
+			for _, it := range candidates {
 				if sold >= need || ctx.Err() != nil {
 					break
-				}
-				if !isEquipmentCraftScroll(dictRepo, it.ItemID) {
-					continue
 				}
 				if ok, _ := sellPackItem(ctx, session, it); ok {
 					sold++
