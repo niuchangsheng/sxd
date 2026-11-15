@@ -100,8 +100,11 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 				infoResp := call(protocol.BuildEraLunHuiTaskInfoPacket(tab),
 					protocol.ActionIDEraLunHuiTaskInfo)
 				if infoResp == nil {
-					return scheduler.NewCooldown(time.Hour, "轮回图录任务列表无回包")
+					// 按日状态结束后 882/1 会被静默丢弃：连续 3 次挂起（最长 6 小时）。
+					return scheduler.HandleSilentDrop(session, "era_lunhui_album", 3,
+						time.Hour, "轮回图录任务列表无回包")
 				}
+				scheduler.ResetSilentDrops(session, "era_lunhui_album")
 				tasks, err := protocol.ParseEraLunHuiTasks(infoResp.Payload)
 				if err != nil {
 					slog.Warn("解析轮回图录任务列表失败", "role_id", session.RoleID(),
