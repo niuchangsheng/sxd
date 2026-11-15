@@ -125,6 +125,50 @@ server:
 	}
 }
 
+// TestConfig_FactionWheelSellSwitch 验证帮派转盘低阶丹药卷轴出售开关的
+// “未配置 = 沿用默认开启 / 显式 false = 关闭”语义 (指针字段)。
+func TestConfig_FactionWheelSellSwitch(t *testing.T) {
+	cases := []struct {
+		name    string
+		block   string
+		wantNil bool
+		want    bool
+	}{
+		{name: "未配置", block: "", wantNil: true},
+		{name: "显式开启", block: "  faction_lucky_wheel:\n    sell_low_pill_scrolls: true\n", want: true},
+		{name: "显式关闭", block: "  faction_lucky_wheel:\n    sell_low_pill_scrolls: false\n", want: false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			yaml := "server:\n  port: 9090\n"
+			if c.block != "" {
+				yaml += "scheduler:\n" + c.block
+			}
+			path := filepath.Join(t.TempDir(), "cfg.yaml")
+			if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			got := cfg.Scheduler.FactionWheel.SellLowPillScrolls
+			if c.wantNil {
+				if got != nil {
+					t.Fatalf("未配置时指针应为 nil, 实际 %v", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("显式配置后指针不应为 nil")
+			}
+			if *got != c.want {
+				t.Fatalf("sell_low_pill_scrolls = %v, want %v", *got, c.want)
+			}
+		})
+	}
+}
+
 func TestConfig_LoadConfigYamlIfExists(t *testing.T) {
 	configPath := filepath.Join("..", "..", "configs", "config.yaml")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {

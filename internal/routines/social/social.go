@@ -532,12 +532,39 @@ func probeFactionMembership(ctx context.Context, session *client.RoleSession) (f
 	}
 }
 
+// FactionLuckyWheelConfig 帮派转盘自动化配置。
+type FactionLuckyWheelConfig struct {
+	// SellLowPillScrolls 抽到 1-5 品丹药制作卷时自动卖出 (默认开启)。
+	// 低阶制作卷长期占背包且无使用价值，卖出仅回收铜钱，不消耗元宝。
+	SellLowPillScrolls bool
+}
+
+// DefaultFactionLuckyWheelConfig 返回默认帮派转盘配置 (开启低阶丹药卷轴自动卖出)。
+func DefaultFactionLuckyWheelConfig() FactionLuckyWheelConfig {
+	return FactionLuckyWheelConfig{SellLowPillScrolls: true}
+}
+
+// lowPillScrollItemIDs 1-5 品武力/绝技/法术丹制作卷的道具编号。
+// 数据来源 data/Pieb.db item 表 (sxdname 以“一~五品...丹制作卷”命名)。
+var lowPillScrollItemIDs = map[int32]struct{}{
+	382: {}, 383: {}, 385: {}, 386: {}, 387: {}, // 武力丹 1-5 品
+	395: {}, 397: {}, 399: {}, 401: {}, 403: {}, // 绝技丹 1-5 品
+	411: {}, 413: {}, 415: {}, 417: {}, 420: {}, // 法术丹 1-5 品
+}
+
 // NewFactionLuckyWheelRoutine 构造帮派转盘自动抽奖任务。
 //
 // 协议对齐 2026 客户端 Mod_LuckyWheel_Base:
 //   - Action 1 open_lucky_wheel 查询转盘状态与剩余青龙令
 //   - Action 2 start_lucky_wheel 转动一次转盘
-func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
+//
+// 配置开启 SellLowPillScrolls 时，抽到 1-5 品丹药制作卷会在本轮结束后
+// 查询背包并主动卖出。
+func NewFactionLuckyWheelRoutine(cfgs ...FactionLuckyWheelConfig) scheduler.ActivityRoutine {
+	cfg := DefaultFactionLuckyWheelConfig()
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
 	return scheduler.NewBaseRoutine(
 		"faction_lucky_wheel",
 		"social",
@@ -648,6 +675,7 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 			// 2. 循环转动直至青龙令耗尽 (Mod 69, Act 2)
 			prevAct := protocol.ActionIDLuckyWheelOpen
 			spins := 0
+			lowPillScrolls := make(map[int32]struct{})
 			for remain > 0 && spins < maxLuckyWheelSpins {
 				if err := ctx.Err(); err != nil {
 					slog.Info("帮派转盘已取消，提前退出", "role_id", session.RoleID(), "err", err)
@@ -688,6 +716,13 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 					"item_id", result.ItemID,
 					"remain_rosefinch", result.RosefinchNumber,
 				)
+				if cfg.SellLowPillScrolls {
+					if _, ok := lowPillScrollItemIDs[result.ItemID]; ok {
+						lowPillScrolls[result.ItemID] = struct{}{}
+						slog.Info("帮派转盘抽到 1-5 品丹药制作卷，稍后自动卖出",
+							"role_id", session.RoleID(), "item_id", result.ItemID)
+					}
+				}
 
 				// 熔断保护: 服务端未扣减青龙令时立即退出，避免死循环。
 				if result.RosefinchNumber >= remain {
@@ -704,9 +739,70 @@ func NewFactionLuckyWheelRoutine() scheduler.ActivityRoutine {
 			}
 
 			slog.Info("帮派转盘抽奖完成", "role_id", session.RoleID(), "spins", spins, "remain_rosefinch", remain)
+			if cfg.SellLowPillScrolls && len(lowPillScrolls) > 0 {
+				sellLowPillScrolls(ctx, session, lowPillScrolls)
+			}
 			return nil
 		},
 	)
+}
+
+// sellLowPillScrolls 查询主背包并卖出本轮转盘抽到的 1-5 品丹药制作卷。
+//
+// 出售仅回收铜钱，不消耗元宝；网络/解析失败只记录日志，不影响转盘结果。
+func sellLowPillScrolls(ctx context.Context, session *client.RoleSession, itemIDs map[int32]struct{}) {
+	packCtx, packCancel := context.WithTimeout(ctx, 8*time.Second)
+	packResp, packErr := session.Call(packCtx, protocol.BuildGetPackItemListPacket(), protocol.ActionIDItemGetPackList)
+	packCancel()
+	if packErr != nil || packResp == nil {
+		slog.Info("帮派转盘低阶丹药卷轴出售：查询背包无回包，稍后重试",
+			"role_id", session.RoleID(), "err", packErr)
+		return
+	}
+	pack, pErr := protocol.ParsePackItemListResponse(packResp.Payload)
+	if pErr != nil {
+		slog.Warn("帮派转盘低阶丹药卷轴出售：解析背包失败",
+			"role_id", session.RoleID(), "err", pErr)
+		return
+	}
+
+	sold := 0
+	for _, it := range pack.PackItems {
+		if _, ok := itemIDs[it.ItemID]; !ok {
+			continue
+		}
+		if it.GridID <= 0 || it.GridID > 32767 {
+			continue
+		}
+		sellPkt, bErr := protocol.BuildSellItemPacket(int16(it.GridID))
+		if bErr != nil {
+			continue
+		}
+		sellCtx, sellCancel := context.WithTimeout(ctx, 8*time.Second)
+		sellResp, sellErr := session.Call(sellCtx, sellPkt, protocol.ActionIDItemSell)
+		sellCancel()
+		if sellErr != nil || sellResp == nil {
+			slog.Info("帮派转盘低阶丹药卷轴出售无回包，中止本轮出售",
+				"role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID, "err", sellErr)
+			break
+		}
+		ok, code, rErr := protocol.ParseSellItemResponse(sellResp.Payload)
+		if rErr != nil {
+			slog.Warn("帮派转盘低阶丹药卷轴出售回包解析失败",
+				"role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID, "err", rErr)
+			continue
+		}
+		if !ok {
+			slog.Warn("帮派转盘低阶丹药卷轴出售被服务端拒绝",
+				"role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID, "result_code", code)
+			continue
+		}
+		sold++
+		slog.Info("帮派转盘低阶丹药卷轴已卖出",
+			"role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID)
+	}
+	slog.Info("帮派转盘低阶丹药卷轴出售完成",
+		"role_id", session.RoleID(), "sold", sold, "item_kinds", len(itemIDs))
 }
 
 // luckyWheelResultText 返回帮派转盘结果码的中文说明。

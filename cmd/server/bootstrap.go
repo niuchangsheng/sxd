@@ -109,6 +109,13 @@ func newRegistryFactory(
 	fbCfg.AllowCover = sc.FactionBlessing.AllowCover
 	factory.SetFactionBlessingConfig(fbCfg)
 
+	// 3.1 帮派转盘配置 (默认抽到 1-5 品丹药制作卷自动卖出)
+	fwCfg := social.DefaultFactionLuckyWheelConfig()
+	if sc.FactionWheel.SellLowPillScrolls != nil {
+		fwCfg.SellLowPillScrolls = *sc.FactionWheel.SellLowPillScrolls
+	}
+	factory.SetFactionLuckyWheelConfig(fwCfg)
+
 	// 4. 天帝宝库自选三档大奖配置
 	thCfg := minigame.TreasureHouseConfig{
 		DictRepo:      dictRepo,

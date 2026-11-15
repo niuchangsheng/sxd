@@ -120,6 +120,7 @@ type SchedulerConfig struct {
 	TrainingRoom    TrainingRoomConfig     `yaml:"training_room"`
 	JieYuanBox      JieYuanBoxConfig       `yaml:"jieyuan_box"`
 	FactionBlessing FactionBlessingConfig  `yaml:"faction_blessing"`
+	FactionWheel    FactionWheelConfig     `yaml:"faction_lucky_wheel"`
 	TreasureHouse   TreasureHouseConfig    `yaml:"treasure_house"`
 	LuckyStar       LuckyStarConfig        `yaml:"lucky_star"`
 	OnlineGift      OnlineGiftConfig       `yaml:"online_gift"`
@@ -259,6 +260,13 @@ type FactionBlessingConfig struct {
 	OfferingID int32 `yaml:"offering_id"`
 	// AllowCover 剩余祝福次数高于本次上香收益时是否仍允许覆盖
 	AllowCover bool `yaml:"allow_cover"`
+}
+
+// FactionWheelConfig 帮派转盘自动化配置
+type FactionWheelConfig struct {
+	// SellLowPillScrolls 抽到 1-5 品丹药制作卷时自动卖出。
+	// 使用指针以区分“未配置”(沿用默认开启) 与显式 false。
+	SellLowPillScrolls *bool `yaml:"sell_low_pill_scrolls"`
 }
 
 // LuckyStarConfig 个人吉星高照自动化策略配置

@@ -163,6 +163,7 @@ type RegistryFactory struct {
 	trainingCfg       dungeon.TrainingRoomConfig
 	jieyuanCfg        social.JieYuanBoxConfig
 	blessingCfg       social.FactionBlessingConfig
+	factionWheelCfg   social.FactionLuckyWheelConfig
 	treasureCfg       minigame.TreasureHouseConfig
 	luckyCfg          minigame.LuckyStarConfig
 	masterPracticeCfg minigame.MasterPracticeConfig
@@ -184,6 +185,7 @@ func NewRegistryFactory(qaEngine qa.Engine, dictRepo dictionary.Repository) *Reg
 		trainingCfg:       dungeon.DefaultTrainingRoomConfig(),
 		jieyuanCfg:        social.DefaultJieYuanBoxConfig(),
 		blessingCfg:       social.DefaultFactionBlessingConfig(),
+		factionWheelCfg:   social.DefaultFactionLuckyWheelConfig(),
 		treasureCfg:       minigame.DefaultTreasureHouseConfig(),
 		luckyCfg:          minigame.DefaultLuckyStarConfig(),
 		masterPracticeCfg: minigame.DefaultMasterPracticeConfig(),
@@ -221,6 +223,11 @@ func (f *RegistryFactory) SetJieYuanBoxConfig(cfg social.JieYuanBoxConfig) {
 // SetFactionBlessingConfig 设置帮派祭神上香策略配置。
 func (f *RegistryFactory) SetFactionBlessingConfig(cfg social.FactionBlessingConfig) {
 	f.blessingCfg = cfg
+}
+
+// SetFactionLuckyWheelConfig 设置帮派转盘策略配置。
+func (f *RegistryFactory) SetFactionLuckyWheelConfig(cfg social.FactionLuckyWheelConfig) {
+	f.factionWheelCfg = cfg
 }
 
 // SetTreasureHouseConfig 设置天帝宝库自选大奖与抽奖策略配置。
@@ -399,7 +406,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	case "faction_blessing":
 		return social.NewFactionBlessingRoutine(f.blessingCfg)
 	case "faction_lucky_wheel":
-		return social.NewFactionLuckyWheelRoutine()
+		return social.NewFactionLuckyWheelRoutine(f.factionWheelCfg)
 	case "collection_booklets":
 		return social.NewCollectionBookletsRoutine()
 	case "npc_friendship":

@@ -222,6 +222,10 @@ scheduler:
     offering_id: 1                    # 1=白檀香免费 / 2=苏合香30元宝 / 3=天木香90元宝
     allow_cover: false                # 剩余祝福更高时是否仍覆盖 (默认 false)
 
+  # 帮派转盘 (青龙令)
+  faction_lucky_wheel:
+    sell_low_pill_scrolls: true      # 抽到 1-5 品丹药制作卷自动卖出 (false=保留)
+
   # ── 小游戏 / 福利策略 ───────────────────────────────────────
   # 宗师修行：每日最多 3 次挑战；当前职业满星后按 practice_order 切换职业。
   master_practice:
