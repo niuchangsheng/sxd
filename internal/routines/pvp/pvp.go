@@ -1213,8 +1213,20 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 			statusResp, err := session.Call(sCtx, protocol.BuildWorldPkStatusPacket(), protocol.ActionIDWorldPkStatus)
 			sCancel()
 			if err != nil {
-				slog.Info("跨服PK功能不可用，稍后重试", "role_id", session.RoleID(), "err", err)
-				return scheduler.NewCooldown(30*time.Minute, "跨服PK状态查询无回包")
+				// 阶位赛只在 12:00 开放；窗口外服务端会把状态查询也静默丢弃
+				// （2026-11-15 19:41 实测）。窗口外直接等下一次 12:00，窗口内
+				// 才按 10 分钟重试，避免整晚每 30 分钟空等。
+				now := time.Now()
+				open := time.Date(now.Year(), now.Month(), now.Day(), worldPkOpenHour, 0, 0, 0, now.Location())
+				windowEnd := open.Add(90 * time.Minute)
+				if now.Before(open) || now.After(windowEnd) {
+					wake := nextWorldPkOpenAt(now)
+					slog.Info("跨服PK状态查询无回包，等待下次开放",
+						"role_id", session.RoleID(), "wake_at", wake, "err", err)
+					return scheduler.NewCooldown(time.Until(wake), "跨服PK状态查询无回包")
+				}
+				slog.Info("跨服PK状态查询无回包，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "跨服PK状态查询无回包")
 			}
 			status, err := protocol.ParseWorldPkStatusResult(statusResp.Payload)
 			if err != nil {
