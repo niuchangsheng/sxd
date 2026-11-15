@@ -155,6 +155,8 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 							"role_id", session.RoleID(),
 							"item_id", box.ItemID,
 							"remaining", remaining,
+							"recent_rx", fmt.Sprintf("%X", session.RecentRxActions()),
+							"last_sent", fmt.Sprintf("0x%08X", session.LastActionID()),
 							"err", oErr,
 						)
 						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱开箱无回包")
