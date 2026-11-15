@@ -84,27 +84,29 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			incenseResp := call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
 				protocol.ActionIDStUnionGodIncense, callTimeout)
 			if incenseResp == nil {
-				// 上香被静默丢弃时后续魔神挑战同样会连续超时；连续 3 次挂起到
-				// 次日重置，未达阈值时 1 小时后再试。
-				slog.Info("仙盟上香无回包，稍后再试", "role_id", session.RoleID())
-				return scheduler.HandleSilentDrop(session, "st_union_ritual", 3,
-					time.Hour, "仙盟上香无回包")
-			}
-			scheduler.ResetSilentDrops(session, "st_union_ritual")
-			if res, pErr := protocol.ParseStUnionIncenseResult(incenseResp.Payload); pErr != nil {
-				slog.Warn("仙盟上香回包解析失败", "role_id", session.RoleID(), "err", pErr)
-			} else if res.Result == protocol.StUnionIncenseSuccess {
-				slog.Info("仙盟上香成功", "role_id", session.RoleID(),
-					"offer_id", stUnionIncenseOfferID, "a", res.A, "b", res.B, "c", res.C)
+				// 上香（179/11）在当天已完成后会被服务端静默丢弃，但魔神挑战（337/1）
+				// 仍可正常进行：2026-11-15 15:48/16:13/16:24/16:36 实测在上香无回包后
+				// 挑战均成功。不能因为上香失败就放弃当天剩余挑战次数。
+				slog.Info("仙盟上香无回包，继续尝试魔神挑战", "role_id", session.RoleID())
 			} else {
-				slog.Info("仙盟上香未成功", "role_id", session.RoleID(),
-					"result", res.Result, "result_text", protocol.StUnionIncenseResultText(res.Result))
+				scheduler.ResetSilentDrops(session, "st_union_ritual")
+				if res, pErr := protocol.ParseStUnionIncenseResult(incenseResp.Payload); pErr != nil {
+					slog.Warn("仙盟上香回包解析失败", "role_id", session.RoleID(), "err", pErr)
+				} else if res.Result == protocol.StUnionIncenseSuccess {
+					slog.Info("仙盟上香成功", "role_id", session.RoleID(),
+						"offer_id", stUnionIncenseOfferID, "a", res.A, "b", res.B, "c", res.C)
+				} else {
+					slog.Info("仙盟上香未成功", "role_id", session.RoleID(),
+						"result", res.Result, "result_text", protocol.StUnionIncenseResultText(res.Result))
+				}
 			}
 
-			// 2. 仙盟魔神挑战（不买挑战券）。
+			// 2. 仙盟魔神挑战（券不足时可用道源购买；不消耗元宝）。
 			if infoResp := call(protocol.BuildStUnionTaskInfoPacket(),
 				protocol.ActionIDStUnionTaskInfo, callTimeout); infoResp == nil {
-				return nil
+				slog.Info("仙盟魔神挑战面板无回包，稍后再试", "role_id", session.RoleID())
+				return scheduler.HandleSilentDrop(session, "st_union_ritual", 3,
+					time.Hour, "仙盟魔神挑战面板无回包")
 			} else if info, iErr := protocol.ParseStUnionTaskInfo(infoResp.Payload); iErr == nil {
 				slog.Info("仙盟魔神挑战面板", "role_id", session.RoleID(),
 					"a", info.A, "b", info.B, "c", info.C, "d", info.D)
@@ -121,8 +123,10 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 				fightResp := call(protocol.BuildStUnionTaskFightPacket(),
 					protocol.ActionIDStUnionTaskFight, fightTimeout)
 				if fightResp == nil {
-					return scheduler.NewCooldown(time.Hour, "仙盟魔神挑战无回包")
+					return scheduler.HandleSilentDrop(session, "st_union_ritual", 3,
+						time.Hour, "仙盟魔神挑战无回包")
 				}
+				scheduler.ResetSilentDrops(session, "st_union_ritual")
 				code, fErr := protocol.ParseStUnionResult(fightResp.Payload)
 				if fErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "仙盟魔神挑战回包解析失败")
