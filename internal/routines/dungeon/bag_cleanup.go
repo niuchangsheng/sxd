@@ -20,7 +20,9 @@ import (
 const (
 	// bagCleanupFreeThreshold 剩余空格低于该值时触发清理。
 	bagCleanupFreeThreshold = 5
-	// bagCleanupMaxSell 单轮最多出售的装备制作卷叠数。
+	// bagCleanupTargetFree 清理后希望达到的空格数。
+	bagCleanupTargetFree = 10
+	// bagCleanupMaxSell 单轮最多出售的装备制作卷叠数（兜底上限）。
 	bagCleanupMaxSell = 20
 )
 
@@ -62,11 +64,19 @@ func NewBagCleanupRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 			if int(pack.PackEmptyGrids) > bagCleanupFreeThreshold {
 				return nil
 			}
+			// 只卖到「目标空格数」即可（每卖一叠腾 1 格），避免一次清空全部制作卷。
+			need := bagCleanupTargetFree - int(pack.PackEmptyGrids)
+			if need > bagCleanupMaxSell {
+				need = bagCleanupMaxSell
+			}
+			if need <= 0 {
+				return nil
+			}
 			slog.Info("背包清理：空格不足，开始出售装备制作卷", "role_id", session.RoleID(),
-				"empty_grids", pack.PackEmptyGrids, "items", len(pack.PackItems))
+				"empty_grids", pack.PackEmptyGrids, "items", len(pack.PackItems), "need", need)
 			sold := 0
 			for _, it := range pack.PackItems {
-				if sold >= bagCleanupMaxSell || ctx.Err() != nil {
+				if sold >= need || ctx.Err() != nil {
 					break
 				}
 				if !isEquipmentCraftScroll(dictRepo, it.ItemID) {
