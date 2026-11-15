@@ -136,7 +136,16 @@ func TestNextWorldPkOpenAt(t *testing.T) {
 		t.Fatalf("关闭后应唤醒次日 12:00, got %v want %v", got, want)
 	}
 	atOpen := time.Date(2026, 11, 14, 12, 0, 0, 0, loc)
-	if got, want := nextWorldPkOpenAt(atOpen), time.Date(2026, 11, 15, 12, 0, 0, 0, loc); !got.Equal(want) {
-		t.Fatalf("整点 12:00 应指向次日, got %v want %v", got, want)
+	if got, want := nextWorldPkOpenAt(atOpen), time.Date(2026, 11, 14, 20, 0, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("整点 12:00 应指向当晚 20:00, got %v want %v", got, want)
+	}
+	midevening := time.Date(2026, 11, 14, 21, 0, 0, 0, loc)
+	if got, want := nextWorldPkOpenAt(midevening), time.Date(2026, 11, 15, 12, 0, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("20:00 窗口后应指向次日 12:00, got %v want %v", got, want)
+	}
+	// 13:30（12 点窗口结束后）应等待当晚 20:00，而不是次日。
+	middayClosed := time.Date(2026, 11, 14, 13, 30, 0, 0, loc)
+	if got, want := nextWorldPkOpenAt(middayClosed), time.Date(2026, 11, 14, 20, 0, 0, 0, loc); !got.Equal(want) {
+		t.Fatalf("午后应指向当晚 20:00, got %v want %v", got, want)
 	}
 }

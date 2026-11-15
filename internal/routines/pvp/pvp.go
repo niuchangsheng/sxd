@@ -1213,13 +1213,11 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 			statusResp, err := session.Call(sCtx, protocol.BuildWorldPkStatusPacket(), protocol.ActionIDWorldPkStatus)
 			sCancel()
 			if err != nil {
-				// 阶位赛只在 12:00 开放；窗口外服务端会把状态查询也静默丢弃
-				// （2026-11-15 19:41 实测）。窗口外直接等下一次 12:00，窗口内
+				// 阶位赛 12:00/20:00 开放；窗口外服务端会把状态查询也静默丢弃
+				// （2026-11-15 19:41 实测）。窗口外直接等下一次开放，窗口内
 				// 才按 10 分钟重试，避免整晚每 30 分钟空等。
 				now := time.Now()
-				open := time.Date(now.Year(), now.Month(), now.Day(), worldPkOpenHour, 0, 0, 0, now.Location())
-				windowEnd := open.Add(90 * time.Minute)
-				if now.Before(open) || now.After(windowEnd) {
+				if !inWorldPkWindow(now) {
 					wake := nextWorldPkOpenAt(now)
 					slog.Info("跨服PK状态查询无回包，等待下次开放",
 						"role_id", session.RoleID(), "wake_at", wake, "err", err)
@@ -1316,16 +1314,39 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 }
 
 // 跨服PK匹配等待时间（单测可缩短）。
-// worldPkOpenHour 阶位赛每日开放时刻（2026-11-15 12:07 实测已开放）。
-const worldPkOpenHour = 12
+// worldPkOpenHours 阶位赛每日开放时刻：中午 12:00 与晚上 20:00（用户确认，
+// 2026-11-15 12:07 实测已开放）。
+var worldPkOpenHours = []int{12, 20}
 
-// nextWorldPkOpenAt 返回下一次阶位赛开放时刻：当天 12:00，已过则次日 12:00。
-func nextWorldPkOpenAt(now time.Time) time.Time {
-	open := time.Date(now.Year(), now.Month(), now.Day(), worldPkOpenHour, 0, 0, 0, now.Location())
-	if !now.Before(open) {
-		open = open.AddDate(0, 0, 1)
+// worldPkWindow 阶位赛单次开放窗口时长。窗口内状态查询正常，窗口外服务端会
+// 把状态查询也静默丢弃（2026-11-15 19:41 实测）。
+const worldPkWindow = 90 * time.Minute
+
+// worldPkOpenAt 返回当天 hour 点的开放时刻。
+func worldPkOpenAt(now time.Time, hour int) time.Time {
+	return time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location())
+}
+
+// inWorldPkWindow 判断 now 是否处于任一开放窗口内。
+func inWorldPkWindow(now time.Time) bool {
+	for _, h := range worldPkOpenHours {
+		open := worldPkOpenAt(now, h)
+		if !now.Before(open) && now.Before(open.Add(worldPkWindow)) {
+			return true
+		}
 	}
-	return open
+	return false
+}
+
+// nextWorldPkOpenAt 返回下一次阶位赛开放时刻：当天未过的 12:00/20:00，
+// 都已过则次日 12:00。
+func nextWorldPkOpenAt(now time.Time) time.Time {
+	for _, h := range worldPkOpenHours {
+		if open := worldPkOpenAt(now, h); now.Before(open) {
+			return open
+		}
+	}
+	return worldPkOpenAt(now.AddDate(0, 0, 1), worldPkOpenHours[0])
 }
 
 var (
