@@ -2183,11 +2183,15 @@ func questSectionsAnchor(session *client.RoleSession) uint32 {
 // 依次尝试: 最近成功城镇 → 服务端上报的 TownMapID → 常见主城 3/1/2。
 // 成功返回 true；全部失败返回 false（调用方继续尝试 get_sections，不额外阻塞）。
 func enterQuestTownScene(ctx context.Context, session *client.RoleSession) (int32, bool) {
+	return enterQuestTownSceneWithAnchor(ctx, session, questSectionsAnchor(session))
+}
+
+// enterQuestTownSceneWithAnchor 使用指定 PrevAct 锚点复位城镇场景。
+func enterQuestTownSceneWithAnchor(ctx context.Context, session *client.RoleSession, anchor uint32) (int32, bool) {
 	try := func(id int32) bool {
 		if id <= 0 {
 			return false
 		}
-		anchor := questSectionsAnchor(session)
 		code, err := session.EnterTownWithAnchor(ctx, id, anchor)
 		if err != nil || code != 0 {
 			return false
@@ -3612,19 +3616,22 @@ func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapI
 	case <-time.After(500 * time.Millisecond):
 	}
 	var lastErr error
+	recoverAnchor := uint32(0)
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
-			// 2026-11-15 线上：4/0 超时后直接重放仍会丢包。先按客户端再次
-			// enter_town 复位场景并用新的回包锚点重试；仍失败时再用 0/2
-			// 重建 PrevAct 链，恢复被裸 enter_town/登录钩子打断的会话链。
-			if townID, ok := enterQuestTownScene(ctx, session); ok {
+			// 2026-11-15 线上：4/0 超时后直接重放仍会丢包。探针实测以「失败
+			// 的 4/0」作为显式 PrevAct 的 enter_town 能恢复 Mod 4 上下文；
+			// 若仍失败，再用 0/2 重建链后重试同一锚点。
+			if townID, ok := enterQuestTownSceneWithAnchor(ctx, session, recoverAnchor); ok {
 				slog.Info("章节列表重试前再次复位城镇场景",
-					"role_id", session.RoleID(), "map_id", townID, "target_map", mapID)
+					"role_id", session.RoleID(), "map_id", townID, "target_map", mapID,
+					"anchor", fmt.Sprintf("0x%08X", recoverAnchor))
 			} else if resyncDungeonChain(ctx, session) {
 				slog.Info("章节列表重试前已重建 PrevAct 链", "role_id", session.RoleID())
-				if townID, ok := enterQuestTownScene(ctx, session); ok {
+				if townID, ok := enterQuestTownSceneWithAnchor(ctx, session, recoverAnchor); ok {
 					slog.Info("章节列表重试前再次复位城镇场景",
-						"role_id", session.RoleID(), "map_id", townID, "target_map", mapID)
+						"role_id", session.RoleID(), "map_id", townID, "target_map", mapID,
+						"anchor", fmt.Sprintf("0x%08X", recoverAnchor))
 				}
 			}
 			select {
@@ -3650,6 +3657,10 @@ func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapI
 			"last_action", fmt.Sprintf("0x%08X", session.LastActionID()),
 			"last_ack", fmt.Sprintf("0x%08X", session.LastAckActionID()),
 			"err", lastErr)
+		if attempt == 0 {
+			// 保留失败 4/0 的动作号；后续 0/2 重同步会覆盖 LastAction。
+			recoverAnchor = session.LastActionID()
+		}
 		if errSessionTerminated(ctx, err) {
 			return nil, lastErr
 		}
