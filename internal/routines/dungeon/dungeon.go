@@ -1045,9 +1045,10 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 		"dungeon",
 		"dungeon",
 		scheduler.ScheduleLoop,
-		// 高于所有 Cron 玩法：魔王试炼等 Mod 57 请求会污染会话上下文，
-		// 导致后续 get_sections 被静默丢弃，任务推图必须先跑。
-		scheduler.RoutinePriority(200),
+		// 高于所有 Cron 玩法 (含天帝宝库 200)：魔王试炼 Mod 57、宝库 594 面板等
+		// 都会切换服务端会话上下文，导致随后的 enter_town/get_sections 被静默丢弃。
+		// 实测 2026-11-15：宝库先跑后，任务 564 的 enter_town/map 21 章节列表连续超时。
+		scheduler.RoutinePriority(300),
 		30*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -1202,10 +1203,8 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			sweepSuccessRounds := 0
 			if shouldRunSweep {
 				// 任务推图可能停留在剧情副本场景；扫荡前复位城镇，避免 25/1 被静默丢弃。
-				if townMapID := session.GetPlayerState().TownMapID; townMapID > 0 {
-					if _, tErr := session.EnterTown(ctx, int32(townMapID)); tErr == nil {
-						time.Sleep(200 * time.Millisecond)
-					}
+				if _, ok := enterQuestTownScene(ctx, session); ok {
+					time.Sleep(200 * time.Millisecond)
 				}
 				// 扫荡仅消耗自然体力，不补充体力药
 				sweepHasStamina := func() bool {
@@ -2148,6 +2147,67 @@ func NewSpiritTrialRoutine() scheduler.ActivityRoutine {
 	)
 }
 
+// questTownKnownGood 记录每个会话最近一次成功复位的城镇地图 id。
+// 服务端 get_player_info 的 townMapId 可能被写成副本场景 (如 21)，
+// 直接 enter_town 会被静默丢弃；缓存成功值后后续复位即可稳定命中。
+var questTownKnownGood sync.Map // *client.RoleSession -> int32
+
+// questSectionsAnchorCache 缓存会话最近一次 Mod 3/4 动作号。
+// enter_town 会推进 lastAction 到 Mod 1，若不缓存，后续复位将丢失任务链锚点。
+var questSectionsAnchorCache sync.Map // *client.RoleSession -> uint32
+
+// questSectionsAnchor 返回用于 enter_town 的 PrevAct 锚点。
+//
+// 2026-11-15 实测：以任务列表 3/9 或章节列表 4/0 为锚点的 8 字节 enter_town
+// 能保持任务上下文，复位后的 4/0 稳定回包；裸载荷会切出任务上下文。
+func questSectionsAnchor(session *client.RoleSession) uint32 {
+	if a := session.LastAckActionID(); a>>16 == 3 || a>>16 == 4 {
+		questSectionsAnchorCache.Store(session, a)
+		return a
+	}
+	if a := session.LastActionID(); a>>16 == 3 || a>>16 == 4 {
+		questSectionsAnchorCache.Store(session, a)
+		return a
+	}
+	if v, ok := questSectionsAnchorCache.Load(session); ok {
+		return v.(uint32)
+	}
+	return 0
+}
+
+// enterQuestTownScene 在推图/扫荡前复位城镇场景。
+//
+// 依次尝试: 最近成功城镇 → 服务端上报的 TownMapID → 常见主城 3/1/2。
+// 成功返回 true；全部失败返回 false（调用方继续尝试 get_sections，不额外阻塞）。
+func enterQuestTownScene(ctx context.Context, session *client.RoleSession) (int32, bool) {
+	try := func(id int32) bool {
+		if id <= 0 {
+			return false
+		}
+		anchor := questSectionsAnchor(session)
+		code, err := session.EnterTownWithAnchor(ctx, id, anchor)
+		if err != nil || code != 0 {
+			return false
+		}
+		questTownKnownGood.Store(session, id)
+		return true
+	}
+	if v, ok := questTownKnownGood.Load(session); ok {
+		if id, _ := v.(int32); try(id) {
+			return id, true
+		}
+	}
+	if id := int32(session.GetPlayerState().TownMapID); try(id) {
+		return id, true
+	}
+	for _, id := range []int32{3, 1, 2} {
+		if try(id) {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
 // executeQuestCycle 任务闭环状态机:
 // 循环接任务、完成任务，一直到没有任务可做了再 break，随后流转执行精英副本扫荡。
 func executeQuestCycle(
@@ -2173,16 +2233,11 @@ func executeQuestCycle(
 
 	// 魔王试炼/竞技场等战斗玩法结束后，服务端可能仍保留战场上下文；
 	// 此时 get_sections 会被静默丢弃。按官方客户端 gotoTownAtId 复位城镇场景。
-	if mapID := session.GetPlayerState().TownMapID; mapID > 0 {
-		if code, tErr := session.EnterTown(ctx, int32(mapID)); tErr != nil {
-			slog.Info("任务推图前复位城镇场景失败", "role_id", session.RoleID(),
-				"map_id", mapID, "err", tErr)
-		} else if code != 0 {
-			slog.Info("任务推图前复位城镇场景被拒绝", "role_id", session.RoleID(),
-				"map_id", mapID, "result", code)
-		} else {
-			slog.Info("任务推图前已复位城镇场景", "role_id", session.RoleID(), "map_id", mapID)
-		}
+	if mapID, ok := enterQuestTownScene(ctx, session); ok {
+		slog.Info("任务推图前已复位城镇场景", "role_id", session.RoleID(), "map_id", mapID)
+	} else {
+		slog.Info("任务推图前复位城镇场景失败", "role_id", session.RoleID(),
+			"town_map_id", session.GetPlayerState().TownMapID)
 	}
 
 	// 0. 主动向服务端全量同步当前任务列表 (Module 3, Action 9: town_quest_show)
@@ -3149,13 +3204,11 @@ func advanceQuestMission(
 		// 每关挑战前复位城镇场景：上一个剧情副本结束后服务端仍保留副本/战场上下文，
 		// 直接请求 get_sections 会被静默丢弃（2026-11-14 线上：任务 560 通关后，
 		// 任务 561/564 的 get_sections 连续无回包）。
-		if townMapID := session.GetPlayerState().TownMapID; townMapID > 0 {
-			if _, tErr := session.EnterTown(ctx, int32(townMapID)); tErr == nil {
-				select {
-				case <-ctx.Done():
-					return clearedPrereq || lastCount > initialCount
-				case <-time.After(200 * time.Millisecond):
-				}
+		if _, ok := enterQuestTownScene(ctx, session); ok {
+			select {
+			case <-ctx.Done():
+				return clearedPrereq || lastCount > initialCount
+			case <-time.After(200 * time.Millisecond):
 			}
 		}
 
@@ -3518,13 +3571,19 @@ func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapI
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
+			// 2026-11-15 线上：4/0 超时后直接重放仍会丢包；先按客户端再次
+			// enter_town（裸 4 字节）复位场景，再用新的回包锚点重试即可恢复。
+			if townID, ok := enterQuestTownScene(ctx, session); ok {
+				slog.Info("章节列表重试前再次复位城镇场景",
+					"role_id", session.RoleID(), "map_id", townID, "target_map", mapID)
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-time.After(500 * time.Millisecond):
 			}
 		}
-		secCtx, secCancel := context.WithTimeout(ctx, 3*time.Second)
+		secCtx, secCancel := context.WithTimeout(ctx, 5*time.Second)
 		resp, err := session.Call(secCtx,
 			protocol.BuildMissionGetSectionsPacket(mapID, questPrevAct(session)),
 			protocol.ActionIDMissionGetSections)
@@ -3536,6 +3595,11 @@ func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapI
 		if lastErr == nil {
 			lastErr = errors.New("dungeon: empty mission sections response")
 		}
+		slog.Info("章节列表请求无回包", "role_id", session.RoleID(),
+			"map_id", mapID, "attempt", attempt+1,
+			"last_action", fmt.Sprintf("0x%08X", session.LastActionID()),
+			"last_ack", fmt.Sprintf("0x%08X", session.LastAckActionID()),
+			"err", lastErr)
 		if errSessionTerminated(ctx, err) {
 			return nil, lastErr
 		}

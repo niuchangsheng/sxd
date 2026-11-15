@@ -153,6 +153,12 @@ type RoleSession struct {
 	lastAckActionID atomic.Uint32
 	lastSendTime    atomic.Int64
 
+	// recentRx 记录最近收到的 32 个包 ActionID（环形），仅用于静默丢包诊断：
+	// 请求超时时若服务端其实回了别的 ActionID，可据此判断是回包被分发到别处。
+	recentRxMu sync.Mutex
+	recentRx   [32]uint32
+	recentRxN  int
+
 	// factionUnavailable 标记本次会话内已确认帮派模块对当前角色不可用。
 	// 服务端对未加入帮派角色的帮派类请求会静默丢弃（无任何回包），
 	// 由首个超时的帮派任务置位，供其余帮派玩法直接跳过，避免重复空等。
@@ -623,12 +629,47 @@ func (s *RoleSession) CallWithPrevActResync(parent context.Context, timeout time
 	if anchor == 0 {
 		return nil, err
 	}
+	lastSent := s.LastActionID()
 	body := append([]byte(nil), req.Payload[:len(req.Payload)-4]...)
 	body = append(body, byte(anchor>>24), byte(anchor>>16), byte(anchor>>8), byte(anchor))
 	retry := &protocol.Packet{ActionID: req.ActionID, Payload: body}
 	c2, cancel2 := context.WithTimeout(parent, timeout)
 	defer cancel2()
-	return s.Call(c2, retry, respActionID)
+	resp, retryErr := s.Call(c2, retry, respActionID)
+	slog.Info("PrevAct 重同步重试", "role_id", s.RoleID(),
+		"action", fmt.Sprintf("0x%08X", req.ActionID),
+		"last_sent", fmt.Sprintf("0x%08X", lastSent),
+		"anchor", fmt.Sprintf("0x%08X", anchor),
+		"recent_rx", fmt.Sprintf("%X", s.RecentRxActions()),
+		"ok", retryErr == nil, "err", retryErr)
+	if retryErr != nil {
+		return nil, retryErr
+	}
+	return resp, nil
+}
+
+// recordRx 记录最近收到的包 ActionID（环形缓冲，仅用于诊断）。
+func (s *RoleSession) recordRx(actionID uint32) {
+	s.recentRxMu.Lock()
+	s.recentRx[s.recentRxN%len(s.recentRx)] = actionID
+	s.recentRxN++
+	s.recentRxMu.Unlock()
+}
+
+// RecentRxActions 返回最近收到的包 ActionID（按时间先后，最新的在最后）。
+func (s *RoleSession) RecentRxActions() []uint32 {
+	s.recentRxMu.Lock()
+	defer s.recentRxMu.Unlock()
+	n := s.recentRxN
+	if n > len(s.recentRx) {
+		n = len(s.recentRx)
+	}
+	out := make([]uint32, 0, n)
+	start := s.recentRxN - n
+	for i := start; i < s.recentRxN; i++ {
+		out = append(out, s.recentRx[i%len(s.recentRx)])
+	}
+	return out
 }
 
 // Call 发送指定请求封包并同步等待特定 ActionID 的对端回包。
@@ -1021,7 +1062,19 @@ func (s *RoleSession) FetchLatestPlayerInfo(ctx context.Context) (*protocol.Play
 func (s *RoleSession) EnterTown(ctx context.Context, townID int32) (uint8, error) {
 	// 2026-11-15 线上探针：enter_town 裸 4 字节稳定有回包；
 	// 追加 PrevAct 的 8 字节载荷会被静默丢弃，故这里不再携带 PrevAct。
-	pkt := protocol.BuildEnterTownPacket(townID)
+	return s.enterTownWithPacket(ctx, townID, protocol.BuildEnterTownPacket(townID))
+}
+
+// EnterTownWithAnchor 使用显式 PrevAct 锚点复位城镇场景。
+//
+// 2026-11-15 实测：裸 enter_town 会把会话切出任务上下文，随后 4/0 get_sections
+// 被静默丢弃；以最近的 Mod 3/4 动作 (3/9 任务列表或 4/0 章节列表) 作为锚点的
+// 8 字节 enter_town 可同时复位城镇并保持任务上下文。anchor=0 等价裸载荷。
+func (s *RoleSession) EnterTownWithAnchor(ctx context.Context, townID int32, anchor uint32) (uint8, error) {
+	return s.enterTownWithPacket(ctx, townID, protocol.BuildEnterTownWithPrevActPacket(townID, anchor))
+}
+
+func (s *RoleSession) enterTownWithPacket(ctx context.Context, townID int32, pkt *protocol.Packet) (uint8, error) {
 	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
 		timeout = 300 * time.Millisecond
@@ -2203,6 +2256,7 @@ func (s *RoleSession) readLoop(conn net.Conn, errCh chan<- error) {
 			return
 		}
 
+		s.recordRx(pkt.ActionID)
 		hexDump := hex.EncodeToString(pkt.Payload)
 		if len(hexDump) > 64 {
 			hexDump = hexDump[:64] + "..."

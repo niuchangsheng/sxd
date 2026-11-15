@@ -171,6 +171,14 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				"souls", len(panel.Souls),
 			)
 
+			// 屠魔令为 0 时任何类型的 start_expedition_single 都不可能成功。
+			// 实测（2026-11-15 16:04）该状态下服务端直接静默丢包、连结果码都不回，
+			// 等待超时只会白占一轮。这里依据面板数量直接跳过，不发必被丢弃的请求。
+			if panel.TumoLingNum <= 0 {
+				slog.Info("魔界远征屠魔令为 0，跳过所有伙伴挑战", "role_id", session.RoleID())
+				return scheduler.NewCooldown(time.Hour, "魔界远征屠魔令不足")
+			}
+
 			// 服务端在 start_expedition_single 后推送 notify_enter_mission。
 			entryState := devilStateFor(session)
 
