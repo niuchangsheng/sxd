@@ -34,17 +34,24 @@ func TestJieYuanBoxRoutine_SendsBatchOpenRequest(t *testing.T) {
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDJieYuanBoxOpenContext:
 			ctxCalls.Add(1)
-			// 528/1 set_setting 必须为裸 2 字节 [0x07 0x04]，追加 PrevAct 会被静默丢弃。
-			if got, want := hex.EncodeToString(pkt.Payload), "0704"; got != want {
-				t.Errorf("528/1 设置载荷 = %s, want %s", got, want)
+			// 抓包中官方 528/1 为 [0x07 0x04][PrevAct]；会话层用最后收包覆盖尾部。
+			// 兜底裸 2 字节版本也接受。
+			got := hex.EncodeToString(pkt.Payload)
+			if got != "0704" && !(len(pkt.Payload) == 6 && got[:4] == "0704") {
+				t.Errorf("528/1 设置载荷 = %s, want 0704 或 0704+PrevAct", got)
 			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.JieYuanOpenContextResultOK}))
 		case protocol.ActionIDJieYuanBoxOpen:
 			openCalls.Add(1)
 			if len(pkt.Payload) != 12 {
 				t.Errorf("开箱载荷长度 = %d, want 12", len(pkt.Payload))
-			} else if got := binary.BigEndian.Uint32(pkt.Payload[8:12]); got != protocol.ActionIDJieYuanBoxOpenContext {
-				t.Errorf("开箱 PrevAct = 0x%08X, want 0x%08X", got, protocol.ActionIDJieYuanBoxOpenContext)
+			} else {
+				if q := int32(binary.BigEndian.Uint32(pkt.Payload[4:8])); q != protocol.JieYuanBoxAutoMergeQuality {
+					t.Errorf("开箱第二参数 = %d, want 自动合成档位 %d", q, protocol.JieYuanBoxAutoMergeQuality)
+				}
+				if got := binary.BigEndian.Uint32(pkt.Payload[8:12]); got != protocol.ActionIDJieYuanBoxOpenContext {
+					t.Errorf("开箱 PrevAct = 0x%08X, want 0x%08X", got, protocol.ActionIDJieYuanBoxOpenContext)
+				}
 			}
 			// 官方抓包回包解压后首字节为成功码 5。
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.JieYuanBoxOpenResultSuccess, 0x00, 0x00}))

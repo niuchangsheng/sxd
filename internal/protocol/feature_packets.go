@@ -293,26 +293,41 @@ func FilterOpenableJieYuanBoxes(boxes []JieYuanBoxItem) []JieYuanBoxItem {
 	return openable
 }
 
+// JieYuanBoxAutoMergeQuality 结缘宝箱自动合成档位，与 528/1 set_setting
+// [0x07 0x04] 保持一致（客户端 LinkFateBoxView.autoMergeQuality）。
+const JieYuanBoxAutoMergeQuality int32 = 4
+
 // BuildJieYuanBoxOpenContextPacket 构造结缘宝箱开箱前置设置包 (Module 528, Action 1)。
 //
-// 528/1 是 set_setting，描述符 request=[Byte setting_id, Byte value]，固定为
-// [0x07 0x04]（结缘宝箱合成档位=4）。2026-11-14 线上实测：裸 2 字节稳定返回 0；
-// 追加 4 字节 PrevAct 的 6 字节载荷会被服务端静默丢弃。
+// 抓包 /tmp/jieyuan.pcapng 中官方请求为 [0x07 0x04][PrevAct]，PrevAct 为上一条
+// 232/30 列表动作；这里写入占位值并置 HasPrevAct，由会话层用最后收包覆盖。
 func BuildJieYuanBoxOpenContextPacket() *Packet {
+	w := NewWriter()
+	w.WriteUint8(0x07)
+	w.WriteUint8(0x04)
+	w.WriteUint32(0) // PrevAct 占位
+	pkt := NewPacket(ActionIDJieYuanBoxOpenContext, w.Bytes())
+	pkt.HasPrevAct = true
+	return pkt
+}
+
+// BuildJieYuanBoxOpenContextBarePacket 构造裸 2 字节的 528/1 兜底包。
+func BuildJieYuanBoxOpenContextBarePacket() *Packet {
 	w := NewWriter()
 	w.WriteUint8(0x07)
 	w.WriteUint8(0x04)
 	return NewPacket(ActionIDJieYuanBoxOpenContext, w.Bytes())
 }
 
-// BuildJieYuanBoxOpenPacket 构造批量开启结缘宝箱请求封包 (Module 232, Action 34)。
+// BuildJieYuanBoxOpenPacket 构造开启结缘宝箱请求封包 (Module 232, Action 34)。
 //
-// 抓包显示官方开箱请求为 [Int box_item_id, Int count, Uint32 PrevAct]；
-// PrevAct 必须指向紧邻的 528/1 前置握手，否则网关静默丢弃开箱请求。
-func BuildJieYuanBoxOpenPacket(itemID int32, openCount int32, prevAct uint32) *Packet {
+// 官方客户端 LinkFateBoxView.onOpenBox 传入的是 [box_item_id, autoMergeQuality]，
+// 不是数量：抓包 /tmp/jieyuan.pcapng 中为 [3938, 4]，4 正是当时的自动合成档位。
+// 每次请求开 1 个宝箱；PrevAct 须指向紧邻的 528/1 前置握手。
+func BuildJieYuanBoxOpenPacket(itemID int32, autoMergeQuality int32, prevAct uint32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(itemID)
-	w.WriteInt32(openCount)
+	w.WriteInt32(autoMergeQuality)
 	if prevAct == 0 {
 		prevAct = ActionIDJieYuanBoxOpenContext
 	}

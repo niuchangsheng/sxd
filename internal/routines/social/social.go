@@ -104,22 +104,27 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 
 			for _, box := range openable {
 				remaining := box.Count
-				maxBatchesPerItem := 50 // 单个道具最大批次上限，防止无限循环
+				maxBatchesPerItem := 200 // 单个道具最大批次上限（每次只开 1 个），防止无限循环
 				batchCount := 0
 
 				for remaining > 0 && batchCount < maxBatchesPerItem {
 					batchCount++
-					openCount := int32(maxBatch)
-					if remaining < openCount {
-						openCount = remaining
-					}
 
-					// 每次 232/34 开箱前先发送 528/1 set_setting [0x07 0x04]（裸 2 字节），
-					// 232/34 的 PrevAct 紧跟该设置动作 (0x02100001)。缺少设置时开箱被静默丢弃。
-					ctxPkt := protocol.BuildJieYuanBoxOpenContextPacket()
-					cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
-					ctxResp, cErr := session.Call(cCtx, ctxPkt, protocol.ActionIDJieYuanBoxOpenContext)
-					cCancel()
+					// 每次 232/34 开箱前先发送 528/1 set_setting [0x07 0x04]。
+					// 抓包中官方 528/1 带 PrevAct（上一条 232/30），优先按抓包发送；
+					// 若被丢弃则退回裸 2 字节（2026-11-14 实测裸载荷可返回 0）。
+					ctxResp, cErr := func() (*protocol.Packet, error) {
+						cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
+						defer cCancel()
+						return session.Call(cCtx, protocol.BuildJieYuanBoxOpenContextPacket(),
+							protocol.ActionIDJieYuanBoxOpenContext)
+					}()
+					if cErr != nil || ctxResp == nil {
+						cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
+						ctxResp, cErr = session.Call(cCtx, protocol.BuildJieYuanBoxOpenContextBarePacket(),
+							protocol.ActionIDJieYuanBoxOpenContext)
+						cCancel()
+					}
 					if cErr != nil || ctxResp == nil {
 						slog.Info("结缘宝箱开箱设置 528/1 无回包，稍后重试",
 							"role_id", session.RoleID(), "err", cErr)
@@ -138,22 +143,21 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱上下文握手被拒绝")
 					}
 
-					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID, openCount, protocol.ActionIDJieYuanBoxOpenContext)
+					// 232/34 的第二参数是自动合成档位（不是数量），见 protocol.BuildJieYuanBoxOpenPacket。
+					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID,
+						protocol.JieYuanBoxAutoMergeQuality, protocol.ActionIDJieYuanBoxOpenContext)
 					oCtx, oCancel := context.WithTimeout(ctx, 8*time.Second)
 					openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)
 					oCancel()
 
 					if oErr != nil || openResp == nil {
-						// 232/30 列表始终可读，而 232/34 开箱在活动未开放/不在
-						// 可开箱时段会被服务端静默丢弃（与抓包中活动期开箱成功一致）。
-						// 该状态无法与网络瞬断区分，按活动时段冷却 2 小时复查。
-						slog.Info("结缘宝箱当前不可开启（活动未开放或不在可开箱时段），稍后重试",
+						slog.Info("结缘宝箱开箱 232/34 无回包，稍后重试",
 							"role_id", session.RoleID(),
 							"item_id", box.ItemID,
-							"open_count", openCount,
+							"remaining", remaining,
 							"err", oErr,
 						)
-						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱不在可开启时段")
+						return scheduler.NewCooldown(2*time.Hour, "结缘宝箱开箱无回包")
 					}
 
 					openCode, openParseErr := protocol.ParseJieYuanBoxOpenResult(openResp.Payload)
@@ -164,11 +168,12 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 						return nil
 					}
 					if openCode != protocol.JieYuanBoxOpenResultSuccess {
-						// 非成功码（如次数不足、道具不存在、条件不满足）不得盲目重试。
-						slog.Warn("结缘宝箱开箱失败，终止本轮",
+						// 非成功码（道具不足/背包不足/非活动时间/购买次数不足等）不得盲目重试；
+						// 已开出的部分保留，本轮结束。
+						slog.Info("结缘宝箱开箱结束",
 							"role_id", session.RoleID(),
 							"item_id", box.ItemID,
-							"open_count", openCount,
+							"remaining", remaining,
 							"result_code", openCode)
 						return nil
 					}
