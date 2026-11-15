@@ -26,10 +26,10 @@ import (
 // 任务推图会话状态。
 //
 // 魔王试炼 (Mod 57) 等请求会让服务端在本次会话内进入特殊上下文，
-// 之后 get_sections 会被静默丢弃；因此每个会话只执行一次完整任务推图，
-// 若上下文已被污染则不再重试，避免每 30 分钟固定丢包。
+// 之后 get_sections 会被静默丢弃。每轮调度前用 Mod 3/4 锚点的 enter_town
+// 复位场景（2026-11-15 实测可恢复）；若连续两次仍失败则熔断本会话，
+// 避免每轮固定丢包。
 var (
-	questCycleDone  sync.Map // *client.RoleSession -> bool
 	questContextBad sync.Map // *client.RoleSession -> bool
 )
 
@@ -1153,9 +1153,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 						}
 					}
 
-					if _, done := questCycleDone.Load(session); done {
-						slog.Info("本会话已完成主线任务推图，跳过", "role_id", session.RoleID())
-					} else if _, bad := questContextBad.Load(session); bad {
+					if _, bad := questContextBad.Load(session); bad {
 						slog.Info("本会话任务上下文已不可用，跳过任务推图", "role_id", session.RoleID())
 					} else {
 						clearedMissions := make(map[int]bool)
@@ -1164,10 +1162,9 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							&totalCostStamina, &totalGainExp, &totalGainCoins,
 							clearedMissions,
 						)
-						// 剧情副本战斗后服务端会残留在副本上下文，后续 get_sections
-						// 无法恢复（2026-11-14 实测）；每个会话只做一轮任务推图，
-						// 下一轮由服务器重启/重连后的新会话继续。
-						questCycleDone.Store(session, true)
+						// 每轮调度推进一关；跨轮继续由 enter_town 的 Mod 3/4 锚点复位
+						// 恢复任务上下文（2026-11-15 实测）。若上下文再次不可用，
+						// fetchMissionSections 连续失败会置位 questContextBad 熔断本会话。
 					}
 				}
 			}
