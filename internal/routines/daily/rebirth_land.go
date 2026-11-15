@@ -23,6 +23,13 @@ import (
 // DailyTaskRebirthLand 每日轮回净地领取挂机奖励。
 const DailyTaskRebirthLand int32 = 70
 
+// altarDrawEnabled 渡业台自动抽取开关。
+//
+// 2026-11-15 实测：852/16 被静默丢弃后，整个会话的 Mod 4 (enter_town/get_sections)
+// 会连续丢包，任务推图完全无法推进；抽取奖励远小于推图收益，因此默认关闭自动抽取，
+// 仅保留渡业仙池免费奖励与挂机奖励领取。需要时改回 true 即可恢复。
+const altarDrawEnabled = false
+
 // maxAltarDrawsPerRun 单轮渡业台抽取上限，防止服务端异常导致死循环。
 // 实际次数由渡业符数量决定，收到非成功结果码即停止。
 const maxAltarDrawsPerRun = 50
@@ -71,9 +78,11 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 			// 1~2. 渡业台抽取：登录钩子已在会话激活后第一时间执行过则跳过；
 			// 长会话中再执行会被服务端静默丢弃（2026-11-11 实测）。
 			var drawCooldown error
-			if _, attempted := altarAttempted.Load(session); !attempted {
-				_, drawCooldown = runAltarDraws(ctx, session, call, true)
-				altarAttempted.Store(session, true)
+			if altarDrawEnabled {
+				if _, attempted := altarAttempted.Load(session); !attempted {
+					_, drawCooldown = runAltarDraws(ctx, session, call, true)
+					altarAttempted.Store(session, true)
+				}
 			}
 
 			// 3. 领取渡业仙池免费奖励 / 今日奖励 (852/13, 852/14)。
@@ -196,7 +205,7 @@ var altarAttempted sync.Map
 // 经过其他模块请求后再抽取会被静默丢弃（2026-11-11 线上实测）。
 // 调用方应在 dispatcher.StartAll 之前调用本函数。
 func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
-	if session == nil {
+	if session == nil || !altarDrawEnabled {
 		return
 	}
 	// RoleSession.Start 是异步连接：等待状态机进入 Active 后再抢占“第一业务请求”。
