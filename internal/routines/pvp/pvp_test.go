@@ -892,3 +892,16 @@ func TestCrossServerLadderRoutine_Join(t *testing.T) {
 		t.Fatalf("跨服PK任务执行失败: %v", err)
 	}
 }
+
+// TestWorldPkCDDuration 验证跨服PK冷却等待按服务端倒计时计算。
+func TestWorldPkCDDuration(t *testing.T) {
+	if got := worldPkCDDuration(7); got != 7*time.Second+500*time.Millisecond {
+		t.Fatalf("countdown=7 wait = %v", got)
+	}
+	if got := worldPkCDDuration(0); got != worldPkCDWait {
+		t.Fatalf("countdown=0 wait = %v, want %v", got, worldPkCDWait)
+	}
+	if got := worldPkCDDuration(int32(worldPkRunBudget/time.Second) + 100); got != worldPkRunBudget {
+		t.Fatalf("超长倒计时应截断到预算, wait = %v", got)
+	}
+}

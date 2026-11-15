@@ -1290,9 +1290,12 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 						return nil
 					}
 				case protocol.WorldPkResultTimeCD:
-					slog.Info("跨服PK冷却中", "role_id", session.RoleID(),
-						"attempt", i+1, "countdown", countdown)
-					if !waitWorldPk(ctx, worldPkCDWait) {
+					// 按服务端倒计时等待，避免 1.2s 一次的紧循环（实测会连续
+					// 匹配上百次并占用角色调度协程）。
+					wait := worldPkCDDuration(countdown)
+					slog.Info("跨服PK冷却中，按倒计时等待", "role_id", session.RoleID(),
+						"attempt", i+1, "countdown", countdown, "wait", wait)
+					if !waitWorldPk(ctx, wait) {
 						return nil
 					}
 				case protocol.WorldPkResultTimesLimit:
@@ -1370,6 +1373,19 @@ func call3(session *client.RoleSession, pkt *protocol.Packet, act uint32) *proto
 }
 
 // waitWorldPk 按上下文等待；被取消时返回 false。
+// worldPkCDDuration 把服务端返回的冷却秒数转换为等待时长。
+// countdown<=0 时退回默认短等待，并额外留 500ms 余量。
+func worldPkCDDuration(countdown int32) time.Duration {
+	if countdown <= 0 {
+		return worldPkCDWait
+	}
+	wait := time.Duration(countdown)*time.Second + 500*time.Millisecond
+	if wait > worldPkRunBudget {
+		wait = worldPkRunBudget
+	}
+	return wait
+}
+
 func waitWorldPk(ctx context.Context, d time.Duration) bool {
 	select {
 	case <-ctx.Done():
