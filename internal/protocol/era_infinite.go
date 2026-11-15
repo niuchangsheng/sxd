@@ -172,21 +172,31 @@ func ParseEraInfiniteFightResult(payload []byte) (*EraInfiniteFightResult, error
 	return out, nil
 }
 
-// EraInfiniteResultText 返回 853 结果码文本（0=成功）。
+// EraInfiniteResultText 返回 853 结果码文本。
 func EraInfiniteResultText(code uint8) string {
 	switch code {
 	case 0:
 		return "成功"
 	case 1:
-		return "失败"
+		return "功能未开放"
 	case 2:
-		return "未开放"
+		return "未解锁"
 	case 3:
-		return "次数不足"
+		return "已通关"
 	case 4:
-		return "背包已满"
+		return "已结束"
 	case 5:
-		return "条件不满足"
+		return "失败"
+	case 6:
+		return "参数错误"
+	case 7:
+		return "背包已满"
+	case 8:
+		return "道具不足"
+	case 9:
+		return "积分不足"
+	case 10:
+		return "活跃上限"
 	default:
 		return fmt.Sprintf("未知结果码(%d)", code)
 	}

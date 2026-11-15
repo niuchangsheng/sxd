@@ -55,8 +55,9 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 			_ = call(protocol.BuildEraInfinitePanelPacket(), protocol.ActionIDEraInfinitePanel, callTimeout)
 
 			fights := 0
-			// 归墟 1/2/3 境，每境按 now_level 逐关挑战；当前境无可打关卡时进入下一境。
-			for chapterID := int32(1); chapterID <= 3 && fights < maxWuliangFights; chapterID++ {
+			// 归墟 1/2/3 境与极境(4)，每境按 now_level 逐关挑战；
+			// 已通关(3)/未解锁(2)时进入下一境，极境解锁后自动尝试。
+			for chapterID := int32(1); chapterID <= 4 && fights < maxWuliangFights; chapterID++ {
 				lastLevel := int32(-1)
 				for fights < maxWuliangFights && ctx.Err() == nil {
 					chapterResp := call(protocol.BuildEraInfiniteChapterPacket(chapterID),
@@ -72,6 +73,7 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 					if chapter.Result != 0 || chapter.NowLevel <= 0 {
 						slog.Info("无量劫海该境暂无可挑战关卡", "role_id", session.RoleID(),
 							"chapter_id", chapterID, "result", chapter.Result,
+							"result_text", protocol.EraInfiniteResultText(chapter.Result),
 							"now_level", chapter.NowLevel)
 						break
 					}
