@@ -1170,7 +1170,11 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 
 					questBad := false
 					if _, bad := questContextBad.Load(session); bad {
-						if allowQuestReconnect(session) {
+						if session.GetBaseStamina() < 5 {
+							// 体力不足时重连没有收益，保留熔断标记等体力恢复。
+							slog.Info("任务上下文不可用且体力不足，暂不重连", "role_id", session.RoleID())
+							questBad = true
+						} else if allowQuestReconnect(session) {
 							// 服务端上下文被污染后同一连接内无法恢复：主动重连获取
 							// 全新会话（登录钩子已停用，重连后会话保持干净），
 							// 并**在当前调度内**等待会话恢复后继续推图，避免新一轮
