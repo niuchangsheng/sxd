@@ -90,6 +90,7 @@ func GetAllDefinitions() []RoutineDefinition {
 
 		// 4. Dungeon 领域 (8)
 		{ID: "dungeon", Name: "副本推图与扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/支线任务闭环推图与关卡扫荡", DefaultOn: true},
+		{ID: "bag_cleanup", Name: "背包清理（仅装备制作卷）", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "背包空格不足时出售装备制作卷腾格位（不卖其它物品、不耗元宝）", DefaultOn: true},
 		{ID: "six_realms", Name: "六道轮回挑战", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "六道轮回塔爬塔与灵件自动熔炼分解", DefaultOn: false},
 		{ID: "demon_tower", Name: "伏魔锁妖塔挑战", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "锁妖塔日常挑战与怪物试炼通关", DefaultOn: false},
 		{ID: "training_room", Name: "仙界练功房", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "仙界练功房普通/高级场挂机收益维护", DefaultOn: false},
@@ -431,6 +432,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 	// 4. Dungeon
 	case "dungeon", "dungeon_sweep":
 		return dungeon.NewDungeonSweepRoutine(f.dictRepo, f.dungeonCfg)
+	case "bag_cleanup":
+		return dungeon.NewBagCleanupRoutine(f.dictRepo)
 	case "six_realms":
 		return dungeon.NewSixRealmsRoutine(f.sixRealmsCfg)
 	case "demon_tower":
