@@ -60,6 +60,35 @@ func BuildEraInfinitePanelPacket() *Packet {
 	return eraInfinitePrevPacket(ActionIDEraInfinitePanel)
 }
 
+// EraInfinitePanel 表示 853/1 面板信息。
+//
+// 字段顺序（Mod_EraInfiniteData.get_panel_info）:
+// era_level, mission_level, rank_perc, rank, fight_end_ts, era_zone。
+type EraInfinitePanel struct {
+	EraLevel     int32
+	MissionLevel int32
+	RankPerc     int32
+	Rank         int32
+	FightEndTS   int32
+	EraZone      int32
+}
+
+// ParseEraInfinitePanel 解析 853/1 面板信息（6 个 Int）。
+func ParseEraInfinitePanel(payload []byte) (*EraInfinitePanel, error) {
+	p := DecompressPayloadIfNeeded(payload)
+	r := NewReader(p)
+	out := &EraInfinitePanel{}
+	for i, dst := range []*int32{&out.EraLevel, &out.MissionLevel, &out.RankPerc,
+		&out.Rank, &out.FightEndTS, &out.EraZone} {
+		v, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: era infinite panel[%d]: %v", ErrInvalidPayload, i, err)
+		}
+		*dst = v
+	}
+	return out, nil
+}
+
 // BuildEraInfiniteChapterPacket 构造章节面板 (853/2)。
 func BuildEraInfiniteChapterPacket(chapterID int32) *Packet {
 	return eraInfinitePrevPacket(ActionIDEraInfiniteChapter, chapterID)

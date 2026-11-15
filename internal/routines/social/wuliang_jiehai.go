@@ -62,7 +62,15 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 			}
 
 			_ = call(protocol.BuildEraInfiniteSeasonPacket(), protocol.ActionIDEraInfiniteSeason, callTimeout)
-			_ = call(protocol.BuildEraInfinitePanelPacket(), protocol.ActionIDEraInfinitePanel, callTimeout)
+			if panelResp := call(protocol.BuildEraInfinitePanelPacket(),
+				protocol.ActionIDEraInfinitePanel, callTimeout); panelResp != nil {
+				if panel, pErr := protocol.ParseEraInfinitePanel(panelResp.Payload); pErr == nil {
+					slog.Info("无量劫海面板", "role_id", session.RoleID(),
+						"era_level", panel.EraLevel, "mission_level", panel.MissionLevel,
+						"rank", panel.Rank, "rank_perc", panel.RankPerc,
+						"era_zone", panel.EraZone)
+				}
+			}
 
 			fights := 0
 			// 章节 id 来自客户端静态表（抓包中实测为 1,3,4,5,6…，2 不存在），
