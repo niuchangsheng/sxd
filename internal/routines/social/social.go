@@ -32,6 +32,28 @@ func DefaultJieYuanBoxConfig() JieYuanBoxConfig {
 
 // NewJieYuanBoxRoutine 构造结缘宝箱批量开启任务 (Feature 2: 结缘宝箱，除了传说，其他都开)。
 // 每批次最多开启 10 个，严格排除传说结缘宝箱 (3942)。
+// fetchJieYuanBoxCount 查询 232/30 列表中指定箱型的当前数量。
+// 返回 (数量, 是否成功获取)；列表中不存在该箱型时返回 (0, true)。
+func fetchJieYuanBoxCount(ctx context.Context, session *client.RoleSession, itemID int32) (int32, bool) {
+	pkt := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDJieYuanBoxOpen)
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
+	resp, err := session.Call(c, pkt, protocol.ActionIDJieYuanBoxList)
+	cancel()
+	if err != nil || resp == nil {
+		return 0, false
+	}
+	boxes, pErr := protocol.ParseJieYuanBoxListResult(resp.Payload)
+	if pErr != nil {
+		return 0, false
+	}
+	for _, b := range boxes {
+		if b.ItemID == itemID {
+			return b.Count, true
+		}
+	}
+	return 0, true
+}
+
 func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 	cfg := DefaultJieYuanBoxConfig()
 	if len(cfgs) > 0 {
@@ -161,12 +183,27 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					oCancel()
 
 					if oErr != nil || openResp == nil {
-						// 该箱型可能本身需要元宝/其他条件（例如高级结缘宝箱），服务端直接
-						// 静默丢弃。标记当天跳过该箱型，继续开启其余箱型，避免 2 小时
-						// 冷却把当天所有箱子都拖住。
-						slog.Info("结缘宝箱该箱型开箱无回包，今日跳过", "role_id", session.RoleID(),
+						// 服务端可能已经处理但没回包：先核对库存个数。
+						afterCount, ok := fetchJieYuanBoxCount(ctx, session, box.ItemID)
+						if ok && afterCount < remaining {
+							openedNow := remaining - afterCount
+							totalOpened += int(openedNow)
+							slog.Info("结缘宝箱开箱无回包但库存已减少，按成功处理",
+								"role_id", session.RoleID(),
+								"item_id", box.ItemID,
+								"before", remaining, "after", afterCount,
+								"err", oErr)
+							remaining = afterCount
+							time.Sleep(50 * time.Millisecond)
+							continue
+						}
+						// 库存不变：该箱型可能本身需要元宝/其他条件（如高级/至尊箱），
+						// 服务端静默丢弃。按错误记录并标记当天跳过，继续开启其余箱型。
+						slog.Warn("结缘宝箱开箱无回包且库存数量未变化，今日跳过该箱型",
+							"role_id", session.RoleID(),
 							"item_id", box.ItemID,
-							"remaining", remaining,
+							"before", remaining, "after", afterCount,
+							"verify_ok", ok,
 							"recent_rx", fmt.Sprintf("%X", session.RecentRxActions()),
 							"last_sent", fmt.Sprintf("0x%08X", session.LastActionID()),
 							"err", oErr,

@@ -12,6 +12,7 @@ package social
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -122,7 +123,14 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			// 179/10、179/11 显式携带 PrevAct（179/0、179/10），避免心跳/推送插队
 			// 覆盖链路（与结缘宝箱 232/34 同一根因，2026-11-15 实测）。
 			_ = call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo, callTimeout)
-			_ = call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo, callTimeout)
+			if godResp := call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo, callTimeout); godResp != nil {
+				head := godResp.Payload
+				if len(head) > 96 {
+					head = head[:96]
+				}
+				slog.Info("仙盟神像面板", "role_id", session.RoleID(),
+					"len", len(godResp.Payload), "hex", hex.EncodeToString(head))
+			}
 			incenseResp := call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
 				protocol.ActionIDStUnionGodIncense, callTimeout)
 			if incenseResp == nil {
