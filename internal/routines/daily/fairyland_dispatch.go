@@ -133,17 +133,16 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 	)
 }
 
-// nextFairylandWeeklyReset 返回下一次周重置时刻（周一 00:05）。
+// nextFairylandWeeklyReset 返回下一次可重试时刻（每天 05:05，游戏侧日常重置点）。
 //
-// 宠物仙域本周累积游历时间上限为 20 小时；达到上限后 714/1 返回 FAILED，
-// 只能等周重置后恢复，期间不再频繁轮询。
+// 宠物仙域本周累积游历时间上限为 20 小时；达到上限后 714/1 返回 FAILED。
+// 2026-11-16（周一）00:26 实测：00:05 之后仍返回上限，说明周重置不是周一
+// 00:00/00:05（游戏内常见为 05:00）。改为每天 05:05 低频探测：若确实是周重置，
+// 周一 05:05 之后自然恢复；否则每天一次空探测，成本可接受。
 func nextFairylandWeeklyReset(now time.Time) time.Time {
-	reset := time.Date(now.Year(), now.Month(), now.Day(), 0, 5, 0, 0, now.Location())
-	for reset.Weekday() != time.Monday {
-		reset = reset.AddDate(0, 0, 1)
-	}
+	reset := time.Date(now.Year(), now.Month(), now.Day(), 5, 5, 0, 0, now.Location())
 	if !now.Before(reset) {
-		reset = reset.AddDate(0, 0, 7)
+		reset = reset.AddDate(0, 0, 1)
 	}
 	return reset
 }
