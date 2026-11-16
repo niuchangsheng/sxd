@@ -299,6 +299,21 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			}
 
 			slog.Info("结缘宝箱批量开启流程完成", "role_id", session.RoleID(), "total_opened", totalOpened)
+			// 本轮一个都没开成（全部箱型被重新标记跳过）时，按最早到期时间唤醒，
+			// 避免 Cron 下一次唤醒被排到下一轮批量唤醒而漏掉到期时刻。
+			if totalOpened == 0 {
+				var earliest time.Time
+				for _, b := range openable {
+					if exp, ok := jiYuanBoxSkipExpiry(b.ItemID); ok && (earliest.IsZero() || exp.Before(earliest)) {
+						earliest = exp
+					}
+				}
+				if !earliest.IsZero() {
+					slog.Info("结缘宝箱本轮未开启，等待跳过到期", "role_id", session.RoleID(),
+						"wake_at", earliest)
+					return scheduler.NewCooldownUntil(earliest, "结缘宝箱等待跳过到期")
+				}
+			}
 			return nil
 		},
 	)
