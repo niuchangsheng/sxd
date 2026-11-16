@@ -307,16 +307,15 @@ func TestScheduler_SemanticCoolingOff(t *testing.T) {
 		t.Fatalf("期望冷却截止时间在未来，实际为 %v", coolingUntil)
 	}
 
-	// 模拟触发批处理唤醒（如次日重置或手动解除），解除冷却
-	woken := sched.TriggerBatch(scheduler.ScheduleLoop)
-	if woken == 0 {
-		t.Fatal("未唤醒任何任务")
+	// 次数耗尽的熔断属于语义冷却：批量唤醒（如盘中定点重置）不得提前解除，
+	// 必须等到次日重置点（holdUntil）之后才恢复；到期恢复见
+	// TestScheduler_TriggerBatchAfterHoldExpires。
+	if woken := sched.TriggerBatch(scheduler.ScheduleLoop); woken != 0 {
+		t.Fatalf("次数耗尽冷却期间不应被批量唤醒, woken=%d", woken)
 	}
-
-	// 唤醒后稍作等待，应恢复执行
 	time.Sleep(50 * time.Millisecond)
-	if count := runCount.Load(); count < 2 {
-		t.Fatalf("唤醒后任务应恢复执行，实际执行次数: %d", count)
+	if count := runCount.Load(); count != 1 {
+		t.Fatalf("冷却期间任务不应恢复执行，实际执行次数: %d", count)
 	}
 
 	sched.Stop()
@@ -434,5 +433,112 @@ func TestScheduler_CooldownErrorSchedulesExactWake(t *testing.T) {
 	}
 	if calls.Load() < 2 {
 		t.Fatalf("冷却结束后未再次执行, calls=%d", calls.Load())
+	}
+}
+
+// TestScheduler_TriggerBatchRespectsCooldown 验证定点 Cron 批量唤醒不会把仍处于
+// 「冷却结束再唤醒」窗口的任务提前拉起（例如 4 小时建队拒绝冷却）。
+func TestScheduler_TriggerBatchRespectsCooldown(t *testing.T) {
+	fastJitter := scheduler.NewJitter(scheduler.JitterConfig{
+		MinDuration: 2 * time.Millisecond,
+		MaxDuration: 5 * time.Millisecond,
+	})
+	sched := scheduler.NewRoleScheduler("role-batch-hold", nil, fastJitter)
+
+	var calls atomic.Int32
+	r := scheduler.NewBaseRoutine(
+		"hold_routine",
+		"test",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+			calls.Add(1)
+			return scheduler.NewCooldown(time.Hour, "服务端拒绝")
+		},
+	)
+	if err := sched.Register(r); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sched.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sched.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() < 1 {
+		t.Fatal("routine 未执行")
+	}
+
+	if triggered := sched.TriggerBatch(scheduler.ScheduleCron); triggered != 0 {
+		t.Fatalf("冷却中的任务不应被批量唤醒, triggered=%d", triggered)
+	}
+	_, next, _, found := sched.GetRoutineState("hold_routine")
+	if !found {
+		t.Fatal("未找到 routine 状态")
+	}
+	if wait := time.Until(next); wait < 55*time.Minute {
+		t.Fatalf("批量唤醒后 nextRun 被提前, wait=%v", wait)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("routine 被执行了 %d 次, want 1", calls.Load())
+	}
+}
+
+// TestScheduler_TriggerBatchAfterHoldExpires 验证冷却到期后批量唤醒恢复正常。
+func TestScheduler_TriggerBatchAfterHoldExpires(t *testing.T) {
+	fastJitter := scheduler.NewJitter(scheduler.JitterConfig{
+		MinDuration: 2 * time.Millisecond,
+		MaxDuration: 5 * time.Millisecond,
+	})
+	sched := scheduler.NewRoleScheduler("role-batch-expire", nil, fastJitter)
+
+	var calls atomic.Int32
+	r := scheduler.NewBaseRoutine(
+		"expire_routine",
+		"test",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+			if calls.Add(1) == 1 {
+				// NewCooldown 下限为 1 秒，测试按 1s 冷却等待。
+				return scheduler.NewCooldown(80*time.Millisecond, "短暂冷却")
+			}
+			return nil
+		},
+	)
+	if err := sched.Register(r); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sched.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sched.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() < 1 {
+		t.Fatal("routine 未执行")
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if triggered := sched.TriggerBatch(scheduler.ScheduleCron); triggered != 1 {
+		t.Fatalf("冷却到期后应被批量唤醒, triggered=%d", triggered)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() < 2 {
+		t.Fatalf("冷却到期后未再次执行, calls=%d", calls.Load())
 	}
 }

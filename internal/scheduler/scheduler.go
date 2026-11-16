@@ -20,8 +20,12 @@ type scheduledItem struct {
 	nextRun      time.Time
 	lastRun      time.Time
 	coolingUntil time.Time
-	runCount     int
-	disabled     bool
+	// holdUntil 语义冷却/定点唤醒截止时间（CooldownError、次数耗尽、体力/背包熔断）。
+	// TriggerBatch 定点批量唤醒不得在 holdUntil 之前把任务提前拉起，否则会丢弃
+	// 「冷却结束再唤醒」「活动开启后再唤醒」的语义。
+	holdUntil time.Time
+	runCount  int
+	disabled  bool
 }
 
 // RoleScheduler 为特定角色会话提供专属且隔离的任务调度器。
@@ -183,6 +187,7 @@ func (s *RoleScheduler) runLoop() {
 				// 服务端冷却/活动开启时间：按指定时间唤醒，而不是等到下一次 24h Cron。
 				item.nextRun = cdErr.Until
 				item.coolingUntil = time.Time{}
+				item.holdUntil = cdErr.Until
 				cooldownScheduled = true
 				slog.Info("任务进入定时等待，将在指定时间后唤醒",
 					"role_id", s.roleID,
@@ -195,6 +200,7 @@ func (s *RoleScheduler) runLoop() {
 				tomorrow := time.Now().AddDate(0, 0, 1)
 				midnight := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 10, 0, tomorrow.Location())
 				item.coolingUntil = midnight
+				item.holdUntil = midnight
 				slog.Info("日常任务次数耗尽，进入智能熔断挂起",
 					"role_id", s.roleID,
 					"routine", item.routine.Name(),
@@ -203,6 +209,7 @@ func (s *RoleScheduler) runLoop() {
 			} else if errors.Is(execErr, ErrStaminaDepleted) {
 				// 体力不足：挂起 30 分钟
 				item.coolingUntil = time.Now().Add(30 * time.Minute)
+				item.holdUntil = item.coolingUntil
 				slog.Info("体力耗尽，进入智能熔断挂起",
 					"role_id", s.roleID,
 					"routine", item.routine.Name(),
@@ -231,6 +238,7 @@ func (s *RoleScheduler) runLoop() {
 			} else if errors.Is(execErr, ErrBagFull) {
 				// 背包已满：挂起 10 分钟
 				item.coolingUntil = time.Now().Add(10 * time.Minute)
+				item.holdUntil = item.coolingUntil
 				slog.Info("背包已满，日常任务休眠待命",
 					"role_id", s.roleID,
 					"routine", item.routine.Name(),
@@ -243,6 +251,10 @@ func (s *RoleScheduler) runLoop() {
 					"error", execErr,
 				)
 			}
+		}
+		if execErr == nil {
+			// 本次执行成功：清除语义冷却，恢复常规调度（下次批量唤醒可正常拉起）。
+			item.holdUntil = time.Time{}
 		}
 
 		// 处理执行周期更新或单次任务移除
@@ -296,6 +308,10 @@ func (s *RoleScheduler) pickNextReadyItem() *scheduledItem {
 }
 
 // TriggerBatch 唤醒指定调度类型的全部任务（例如定点 Cron 重置），重置其执行时钟与冷却状态。
+//
+// 例外：仍处于语义冷却/定点唤醒窗口（holdUntil 未到期）的任务不会被提前拉起，
+// 以保证「冷却结束再唤醒」「活动开启后再唤醒」「次数耗尽等次日重置」的语义；
+// 到期后自动恢复正常批量调度。
 func (s *RoleScheduler) TriggerBatch(schedType ScheduleType) int {
 	s.itemsMu.Lock()
 	defer s.itemsMu.Unlock()
@@ -312,11 +328,17 @@ func (s *RoleScheduler) TriggerBatch(schedType ScheduleType) int {
 			matched = true
 		}
 
-		if matched {
-			it.nextRun = now
-			it.coolingUntil = time.Time{} // 解除冷却
-			count++
+		if !matched {
+			continue
 		}
+		if !it.holdUntil.IsZero() && now.Before(it.holdUntil) {
+			// 语义冷却未结束：保留原 nextRun/coolingUntil，不提前唤醒。
+			continue
+		}
+		it.holdUntil = time.Time{}
+		it.nextRun = now
+		it.coolingUntil = time.Time{} // 解除冷却
+		count++
 	}
 	return count
 }
