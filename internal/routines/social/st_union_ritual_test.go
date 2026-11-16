@@ -109,6 +109,56 @@ func TestStUnionRitualRoutine_BuysTicketThenFights(t *testing.T) {
 	}
 }
 
+func TestStUnionRitualRoutine_IncenseFallsBackToSectTownSession(t *testing.T) {
+	// 跨服会话：面板可读，但 179/11 被静默丢弃（不回包）。
+	var sectTree, sectGod, sectIncense atomic.Int32
+	cross := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDStUnionTreeInfo, protocol.ActionIDStUnionGodInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionGodIncense:
+			// 跨服会话静默丢弃：不回任何包。
+		case protocol.ActionIDStUnionTaskInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionTaskFight:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.StUnionTaskNoTicket, 0, 0, 0, 0, 0}))
+		}
+	})
+	town := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDStUnionTreeInfo:
+			sectTree.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionGodInfo:
+			sectGod.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionGodIncense:
+			sectIncense.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildStUnionIncenseResultPacket(
+				protocol.StUnionIncenseSuccess, 34, 34, 5))
+		}
+	})
+	restore := SetStUnionSessionOpenerForTest(func(_ context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+		return s, nil
+	})
+	defer restore()
+	restoreSect := SetStUnionSectSessionOpenerForTest(func(_ context.Context, _ *client.RoleSession) (*client.RoleSession, error) {
+		return town, nil
+	})
+	defer restoreSect()
+	defer cross.Close()
+	defer town.Close()
+
+	if err := NewStUnionRitualRoutine().Execute(context.Background(), cross, nil); err != nil {
+		t.Fatalf("st union ritual: %v", err)
+	}
+	if sectTree.Load() != 1 || sectGod.Load() != 1 || sectIncense.Load() != 1 {
+		t.Fatalf("城镇会话应依次发送 179/0、179/10、179/11，实际 tree=%d god=%d incense=%d",
+			sectTree.Load(), sectGod.Load(), sectIncense.Load())
+	}
+}
+
 func TestStUnionRitualRoutine_CrossSessionFailed(t *testing.T) {
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {})
 	restore := SetStUnionSessionOpenerForTest(func(_ context.Context, _ *client.RoleSession) (*client.RoleSession, error) {

@@ -1,10 +1,12 @@
 // Package protocol 提供仙盟上香与仙盟魔神挑战协议。
 //
-// 抓包基准: /tmp/xianmeng.pcapng（2026-11-15，qq s0，仙界跨服会话）：
+// 抓包基准: /tmp/xianmeng.pcapng（2026-11-15 11:29，qq s0，仙界跨服会话 8219）：
 //
 //	仙盟上香 (Mod_StUnionActivity_Base, Module 179):
 //	  10 get_st_union_god_info 面板
 //	  11 st_union_god_incense [Int offer_id] → [UByte result, Short, Short, Int]
+//	  实测成功样本：C2S 00000001 00B3000A → S2C 02 0022 0022 00000000
+//	  （result=2 成功、+34/+34、0），确认香档 1 与 PrevAct=179/10 均正确。
 //
 //	仙盟魔神挑战 (Mod_StUnionTask_Base, Module 337):
 //	  0 get_challenge_info 面板
