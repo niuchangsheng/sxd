@@ -2401,10 +2401,7 @@ func executeQuestCycle(
 				}
 				slog.Info("正在交付已达成任务", "role_id", session.RoleID(), "quest_id", qid, "title", title)
 
-				compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: int32(qid)})
-				compCtx, compCancel := context.WithTimeout(ctx, 8*time.Second)
-				_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
-				compCancel()
+				completeQuestAndLog(ctx, session, int32(qid), "身上已达成的任务")
 
 				session.RemoveQuest(qid)
 				if q != nil {
@@ -2480,10 +2477,7 @@ func executeQuestCycle(
 						title = q.Title
 					}
 					slog.Info("NPC 处发现已达成任务，正在交付结算", "role_id", session.RoleID(), "npc_id", npcID, "quest_id", questID, "title", title)
-					compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: it.QuestID})
-					compCtx, compCancel := context.WithTimeout(ctx, 8*time.Second)
-					_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
-					compCancel()
+					completeQuestAndLog(ctx, session, it.QuestID, "NPC 处已达成任务")
 
 					session.RemoveQuest(questID)
 					if q != nil {
@@ -2547,10 +2541,7 @@ func executeQuestCycle(
 
 			if q.MissionID == 0 {
 				slog.Info("正在交付对话剧情任务", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title)
-				compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: int32(qid)})
-				compCtx, compCancel := context.WithTimeout(ctx, 8*time.Second)
-				_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
-				compCancel()
+				completeQuestAndLog(ctx, session, int32(qid), "对话剧情任务")
 
 				session.RemoveQuest(qid)
 				session.AddRewards(q.AwardExp, q.AwardCoins)
@@ -2604,10 +2595,7 @@ func executeQuestCycle(
 				progressMade = true
 				slog.Info("任务关卡推进挑战成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
 
-				compPkt, _ := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: int32(qid)})
-				compCtx, compCancel := context.WithTimeout(ctx, 8*time.Second)
-				_, _ = session.Call(compCtx, compPkt, protocol.ActionIDQuestComplete)
-				compCancel()
+				completeQuestAndLog(ctx, session, int32(qid), "任务关卡推进成功")
 
 				session.RemoveQuest(qid)
 				session.AddRewards(q.AwardExp, q.AwardCoins)
@@ -2672,6 +2660,50 @@ func questBeginNPCID(q *dictionary.Quest) int32 {
 		return 0
 	}
 	return int32(q.BeginNPCID)
+}
+
+// finishQuestAndLog 发送 finish_quest (0x00030004) 并记录回包结果。
+// 与 completeQuestAndLog 同理：不再静默丢弃结果码。
+func finishQuestAndLog(ctx context.Context, session *client.RoleSession, questID int32, where string) (uint8, bool) {
+	pkt := protocol.BuildFinishQuestPacket(questID, questPrevAct(session))
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	resp, err := session.Call(c, pkt, protocol.ActionIDQuestFinish)
+	if err != nil || resp == nil || len(resp.Payload) == 0 {
+		slog.Warn("任务 finish 无回包", "role_id", session.RoleID(),
+			"quest_id", questID, "where", where, "err", err)
+		return 0, false
+	}
+	return resp.Payload[0], true
+}
+
+// completeQuestAndLog 交付单个任务并解析回包结果码。
+//
+// 铁律要求所有业务请求解析回包：原先这些交付点直接丢弃回包，一旦服务端静默
+// 丢弃（当日进度已结束/条件不满足），例程仍会在本地 RemoveQuest 并记账奖励，
+// 表现为「资源没有变化」。这里统一记录无回包与非 0 结果码，便于定位，
+// 但保持原有本地记账行为不变，避免改变已验证的任务推进流程。
+func completeQuestAndLog(ctx context.Context, session *client.RoleSession, questID int32, where string) bool {
+	pkt, err := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: questID})
+	if err != nil {
+		slog.Warn("任务交付包构造失败", "role_id", session.RoleID(),
+			"quest_id", questID, "where", where, "err", err)
+		return false
+	}
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	resp, cErr := session.Call(c, pkt, protocol.ActionIDQuestComplete)
+	if cErr != nil || resp == nil || len(resp.Payload) == 0 {
+		slog.Warn("任务交付无回包，本地按已交付记账", "role_id", session.RoleID(),
+			"quest_id", questID, "where", where, "err", cErr)
+		return false
+	}
+	if code := resp.Payload[0]; code != 0 {
+		slog.Info("任务交付返回非 0 结果码，本地仍按已交付记账", "role_id", session.RoleID(),
+			"quest_id", questID, "where", where, "result", code)
+		return false
+	}
+	return true
 }
 
 // resolveTownNPCID 将任务字典中的静态 NPC 编号解析为 NPCposition 行号。
@@ -3097,10 +3129,7 @@ func executeAuthoritativeQuestCycle(
 			// 3A. 对话类任务 (MissionID == 0 或 TalkQuest == 1)
 			if q.MissionID == 0 || q.TalkQuest == 1 {
 				slog.Info("正在交付对话剧情任务", "role_id", session.RoleID(), "quest_id", q.ID, "title", q.Title)
-				finPkt := protocol.BuildFinishQuestPacket(it.QuestID, questPrevAct(session))
-				finCtx, finCancel := context.WithTimeout(ctx, 8*time.Second)
-				_, _ = session.Call(finCtx, finPkt, protocol.ActionIDQuestFinish)
-				finCancel()
+				finishQuestAndLog(ctx, session, it.QuestID, "对话剧情任务")
 
 				ok, packFull := submitCompleteQuest(ctx, session, it.QuestID, resolveTownNPCID(dictRepo, questEndNPCID(q)))
 				if packFull {
@@ -3207,10 +3236,7 @@ func submitCompleteQuest(ctx context.Context, session *client.RoleSession, quest
 	}
 
 	// 若任务尚未标记 finish (state == -1)，补发一次 finish_quest (0x00030004) 后重试 complete_quest (0x00030005)
-	finPkt := protocol.BuildFinishQuestPacket(questID, questPrevAct(session))
-	finCtx, finCancel := context.WithTimeout(ctx, 8*time.Second)
-	_, _ = session.Call(finCtx, finPkt, protocol.ActionIDQuestFinish)
-	finCancel()
+	finishQuestAndLog(ctx, session, questID, "补发 finish 后重试交付")
 
 	subPkt2 := protocol.BuildSubmitCompleteQuestPacket(questID, questPrevAct(session))
 	subCtx2, subCancel2 := context.WithTimeout(ctx, 8*time.Second)
