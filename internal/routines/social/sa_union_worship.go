@@ -41,7 +41,12 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 			}
 
 			if panelResp := call(protocol.BuildSaUnionWorshipPanelPacketWithPrev(session.LastActionID()), protocol.ActionIDSaUnionWorshipPanel); panelResp != nil {
-				slog.Info("圣盟膜拜面板", "role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
+				if vals, vErr := protocol.ParseSaUnionWorshipPanel(panelResp.Payload); vErr != nil {
+					slog.Warn("解析圣盟膜拜面板失败", "role_id", session.RoleID(), "err", vErr)
+				} else {
+					slog.Info("圣盟膜拜面板", "role_id", session.RoleID(),
+						"payload_len", len(panelResp.Payload), "values", vals)
+				}
 			}
 			resp := call(protocol.BuildSaUnionWorshipPacket(protocol.SaUnionWorshipUseCoin), protocol.ActionIDSaUnionWorship)
 			if resp == nil {

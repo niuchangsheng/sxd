@@ -31,6 +31,27 @@ const (
 	SaUnionWorshipResultIsVoted   uint8 = 9
 )
 
+// ParseSaUnionWorshipPanel 解析 419/1 面板回包（[Int×11]）。
+//
+// 面板用于判断「今日是否已膜拜 / 当前是否可膜拜」，仅作诊断与前置判断，
+// 不改变膜拜请求本身的 [UByte type] 载荷。
+func ParseSaUnionWorshipPanel(payload []byte) ([]int32, error) {
+	p := DecompressPayloadIfNeeded(payload)
+	if len(p) < 4 || len(p)%4 != 0 {
+		return nil, fmt.Errorf("圣盟膜拜面板长度异常: %d", len(p))
+	}
+	r := NewReader(p)
+	out := make([]int32, 0, len(p)/4)
+	for i := 0; i < len(p)/4; i++ {
+		v, err := r.ReadInt32()
+		if err != nil {
+			return out, fmt.Errorf("圣盟膜拜面板第 %d 个字段: %v", i, err)
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
 // BuildSaUnionWorshipPanelPacket 构造面板查询封包。
 func BuildSaUnionWorshipPanelPacket() *Packet {
 	pkt := NewPacket(ActionIDSaUnionWorshipPanel, []byte{0, 0, 0, 0})
