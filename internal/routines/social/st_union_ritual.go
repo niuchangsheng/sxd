@@ -34,9 +34,9 @@ const stUnionIncenseOfferID int32 = 1
 // 避免 337 的成功把上香计数清零，也避免上香失败拖累 337 的退避。
 const stUnionIncenseDropKey = "st_union_incense"
 
-// maxStUnionIncenseSilentDrops 上香连续无回包达到该次数后，本轮不再尝试
-// （每次尝试含跨服 10s + 城镇会话 30s 超时，避免整日反复空等）。
-const maxStUnionIncenseSilentDrops = 5
+// maxStUnionIncenseSectTownTries 跨服无回包后，改用仙盟城镇会话兜底探测的最大次数。
+// 2026-11-16 16:42 实测城镇会话连 179/10 也收不到回包，故只保留最初两次探测。
+const maxStUnionIncenseSectTownTries = 2
 
 // maxStUnionGodFights 单轮最多魔神挑战次数（每周 3 次）。
 const maxStUnionGodFights = 3
@@ -186,26 +186,24 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			}
 			var incenseResp *protocol.Packet
 			variant := "cross"
-			if scheduler.SilentDropCount(session, stUnionIncenseDropKey) >= maxStUnionIncenseSilentDrops {
-				slog.Info("仙盟上香连续无回包，本轮跳过上香（仍尝试魔神挑战）",
-					"role_id", session.RoleID(),
-					"consecutive", scheduler.SilentDropCount(session, stUnionIncenseDropKey))
-			} else {
-				incenseResp = call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
-					protocol.ActionIDStUnionGodIncense, callTimeout)
-				if incenseResp == nil {
-					slog.Info("仙盟上香在跨服会话无回包，改在仙盟城镇会话重试",
-						"role_id", session.RoleID())
-					variant = "sect_town"
-					incenseResp = tryStUnionIncenseOnSectSession(ctx, session, callTimeout)
-				}
+			drops := scheduler.SilentDropCount(session, stUnionIncenseDropKey)
+			incenseResp = call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
+				protocol.ActionIDStUnionGodIncense, callTimeout)
+			if incenseResp == nil && drops < maxStUnionIncenseSectTownTries {
+				// 城镇会话兜底只做前几次探测：2026-11-16 16:42 实测该会话下连
+				// 179/10 面板都被静默丢弃，长期重试只是每小时多花 30 秒。
+				// 保留最初两次探测，便于服务端会话策略变化时自动发现。
+				slog.Info("仙盟上香在跨服会话无回包，改在仙盟城镇会话重试",
+					"role_id", session.RoleID(), "consecutive", drops)
+				variant = "sect_town"
+				incenseResp = tryStUnionIncenseOnSectSession(ctx, session, callTimeout)
 			}
 			if incenseResp == nil {
 				// 上香（179/11）在当天已完成后会被服务端静默丢弃，但魔神挑战（337/1）
 				// 仍可正常进行：2026-11-15 15:48/16:13/16:24/16:36 实测在上香无回包后
 				// 挑战均成功。不能因为上香失败就放弃当天剩余挑战次数。
 				n := scheduler.NoteSilentDrop(session, stUnionIncenseDropKey)
-				if n == 1 || n == maxStUnionIncenseSilentDrops {
+				if n == 1 || n%24 == 0 {
 					slog.Warn("仙盟上香无回包，继续尝试魔神挑战", "role_id", session.RoleID(),
 						"consecutive", n, "last_variant", variant)
 				}
