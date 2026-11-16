@@ -59,17 +59,22 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 			}
 			switch code {
 			case protocol.SaUnionWorshipResultSuccess:
+				scheduler.ResetSilentDrops(session, "sa_union_worship")
 				slog.Info("圣盟膜拜成功", "role_id", session.RoleID())
 			case protocol.SaUnionWorshipResultPackFull:
 				return scheduler.ErrBagFull
 			case protocol.SaUnionWorshipResultJoinToday, protocol.SaUnionWorshipResultIsVoted,
 				protocol.SaUnionWorshipResultNoTime:
+				scheduler.ResetSilentDrops(session, "sa_union_worship")
 				slog.Info("圣盟膜拜今日已完成", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.SaUnionWorshipResultText(code))
 			default:
+				// 线上长期返回 8「失败」且 419/1 面板 11 个字段全为 0（活动未开放/
+				// 圣盟未分配），每小时重试没有意义：连续 3 次后挂起（最长 6 小时）。
 				slog.Info("圣盟膜拜未成功，稍后重试", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.SaUnionWorshipResultText(code))
-				return scheduler.NewCooldown(time.Hour, "圣盟膜拜失败")
+				return scheduler.HandleSilentDrop(session, "sa_union_worship", 3,
+					time.Hour, "圣盟膜拜失败")
 			}
 			return nil
 		},

@@ -30,6 +30,27 @@ func TestSaUnionWorshipRoutine_FailureCooldown(t *testing.T) {
 	}
 }
 
+func TestSaUnionWorshipRoutine_ThreeFailuresBackOff(t *testing.T) {
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDSaUnionWorshipPanel:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(
+				protocol.ActionIDSaUnionWorshipPanel, make([]byte, 44)))
+		case protocol.ActionIDSaUnionWorship:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(
+				protocol.ActionIDSaUnionWorship, []byte{protocol.SaUnionWorshipResultFailed, 0, 0}))
+		}
+	})
+	defer sess.Close()
+	scheduler.ResetSilentDrops(sess, "sa_union_worship")
+	for i := 0; i < 3; i++ {
+		_ = NewSaUnionWorshipRoutine().Execute(context.Background(), sess, nil)
+	}
+	if n := scheduler.SilentDropCount(sess, "sa_union_worship"); n != 3 {
+		t.Fatalf("连续失败计数 = %d, want 3", n)
+	}
+}
+
 func TestSaUnionWorshipRoutine_Success(t *testing.T) {
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
