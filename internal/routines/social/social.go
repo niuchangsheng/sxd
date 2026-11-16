@@ -128,6 +128,19 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			}
 			openable = filtered
 			if len(openable) == 0 {
+				// 所有可开箱型都在 6 小时跳过期内：按最早到期时间唤醒，
+				// 而不是等下一轮批量唤醒（否则到期后可能数小时无人重试）。
+				var earliest time.Time
+				for _, b := range boxes {
+					if exp, ok := jiYuanBoxSkipExpiry(b.ItemID); ok && (earliest.IsZero() || exp.Before(earliest)) {
+						earliest = exp
+					}
+				}
+				if !earliest.IsZero() && time.Until(earliest) > 0 {
+					slog.Info("无待开启的非传说结缘宝箱，等待跳过到期", "total_kinds", len(boxes),
+						"wake_at", earliest)
+					return scheduler.NewCooldownUntil(earliest, "结缘宝箱等待跳过到期")
+				}
 				slog.Info("无待开启的非传说结缘宝箱", "total_kinds", len(boxes))
 				return nil
 			}

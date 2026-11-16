@@ -39,6 +39,22 @@ func loadJieyuanSkipLocked() jieyuanSkipState {
 	return st
 }
 
+// jiYuanBoxSkipExpiry 返回箱型跳过标记的到期时间；未标记或已过期返回 false。
+func jiYuanBoxSkipExpiry(itemID int32) (time.Time, bool) {
+	jieyuanSkipMu.Lock()
+	defer jieyuanSkipMu.Unlock()
+	st := loadJieyuanSkipLocked()
+	exp, ok := st.ExpireAt[strconv.FormatInt(int64(itemID), 10)]
+	if !ok {
+		return time.Time{}, false
+	}
+	expiry := time.Unix(exp, 0)
+	if !time.Now().Before(expiry) {
+		return time.Time{}, false
+	}
+	return expiry, true
+}
+
 // jiYuanBoxSkippedToday 判断箱型是否仍在跳过有效期内。
 func jiYuanBoxSkippedToday(itemID int32) bool {
 	jieyuanSkipMu.Lock()
