@@ -1981,11 +1981,20 @@ func NewXunXianRoutine() scheduler.ActivityRoutine {
 				cCancel()
 
 				if cErr == nil && cResp != nil {
-					// 领取节点宝箱 (Act 13)
+					// 领取节点宝箱 (Act 13)。奖励类请求必须解析回包，否则静默
+					// 丢弃时会出现「节点已挑战但资源没变化」且无从排查。
 					chestPkt := protocol.BuildXunXianClaimChestPacket(protocol.ActionIDXunXianChallenge)
 					chCtx, chCancel := context.WithTimeout(ctx, 8*time.Second)
-					_, _ = session.Call(chCtx, chestPkt, protocol.ActionIDXunXianClaimChest)
+					chResp, chErr := session.Call(chCtx, chestPkt, protocol.ActionIDXunXianClaimChest)
 					chCancel()
+					switch {
+					case chErr != nil || chResp == nil || len(chResp.Payload) == 0:
+						slog.Warn("寻仙之路宝箱领取无回包", "role_id", session.RoleID(),
+							"node_id", nID, "err", chErr)
+					case chResp.Payload[0] != 0:
+						slog.Info("寻仙之路宝箱领取结果码非 0", "role_id", session.RoleID(),
+							"node_id", nID, "result", chResp.Payload[0])
+					}
 					clearedCount++
 				}
 			}
@@ -3993,12 +4002,26 @@ func challengeStoryMission(
 
 	enterStatus := enterResp.Payload[0]
 	if enterStatus == 20 { // AWARD_BOX_NO_OPEN: 上次通关宝箱尚未开启或拾取，先行清理再重进
+		// 补开上次通关宝箱并拾取奖励：奖励类请求必须解析回包，避免静默丢弃
+		// 导致「关卡显示已通关但没有资源进账」。
 		boxCtx, boxCancel := context.WithTimeout(ctx, 8*time.Second)
-		_, _ = session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(protocol.ActionIDMissionRank), protocol.ActionIDMissionOpenBox)
+		boxResp, boxErr := session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(protocol.ActionIDMissionRank), protocol.ActionIDMissionOpenBox)
 		boxCancel()
+		if boxErr != nil || boxResp == nil || len(boxResp.Payload) == 0 {
+			slog.Warn("补开通关宝箱无回包", "role_id", session.RoleID(), "mission_id", m.ID, "err", boxErr)
+		} else if boxResp.Payload[0] != 0 {
+			slog.Info("补开通关宝箱结果码非 0", "role_id", session.RoleID(),
+				"mission_id", m.ID, "result", boxResp.Payload[0])
+		}
 		pickCtx, pickCancel := context.WithTimeout(ctx, 8*time.Second)
-		_, _ = session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
+		pickResp, pickErr := session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
 		pickCancel()
+		if pickErr != nil || pickResp == nil || len(pickResp.Payload) == 0 {
+			slog.Warn("拾取通关宝箱奖励无回包", "role_id", session.RoleID(), "mission_id", m.ID, "err", pickErr)
+		} else if pickResp.Payload[0] != 0 {
+			slog.Info("拾取通关宝箱奖励结果码非 0", "role_id", session.RoleID(),
+				"mission_id", m.ID, "result", pickResp.Payload[0])
+		}
 
 		enterPkt = protocol.BuildMissionPlotEnterPacket(int32(m.ID), questPrevAct(session))
 		enterCtxR, enterCancelR := context.WithTimeout(ctx, 8*time.Second)
