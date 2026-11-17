@@ -423,13 +423,13 @@ func TestDungeonSweep_HeroMission_NotEnoughPowerKeepsLocalStamina(t *testing.T) 
 			w := protocol.NewWriter()
 			w.WriteUint16(1) // 条数
 			w.WriteInt32(166)
-			w.WriteInt8(1)   // 可挑战
-			w.WriteUint8(0)  // 通关次数
-			w.WriteInt8(1)   // 已首通
-			w.WriteInt8(0)   // 当日总购买次数
-			w.WriteInt8(0)   // 剩余购买次数
-			w.WriteInt16(0)  // 购买价格
-			w.WriteInt32(1)  // 已通关数量
+			w.WriteInt8(1)  // 可挑战
+			w.WriteUint8(0) // 通关次数
+			w.WriteInt8(1)  // 已首通
+			w.WriteInt8(0)  // 当日总购买次数
+			w.WriteInt8(0)  // 剩余购买次数
+			w.WriteInt16(0) // 购买价格
+			w.WriteInt32(1) // 已通关数量
 			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
 			return true
 		case protocol.ActionHeroMissionStartPractice:
@@ -452,6 +452,61 @@ func TestDungeonSweep_HeroMission_NotEnoughPowerKeepsLocalStamina(t *testing.T) 
 	}
 	if got := sess.GetStamina(); got != initialStamina {
 		t.Fatalf("服务端拒绝扫荡时不应清零本地体力, 期望 %d, 实际 %d", initialStamina, got)
+	}
+}
+
+// TestDungeonSweep_QuestCompleteRejectedKeepsQuest 验证降级扫描路径中任务交付返回
+// 非 0 结果码时不移除本地任务、不记账奖励。
+//
+// 铁律：不得以「收到回包」判定业务成功；未确认的交付若在本地 RemoveQuest 并记账，
+// 会表现为「资源没有变化」。
+func TestDungeonSweep_QuestCompleteRejectedKeepsQuest(t *testing.T) {
+	sess, srvConn := createTestSession(t, 50)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	sess.SetQuestState(145, 2)
+	coinsBefore := sess.GetPlayerState().Coins
+	expBefore := sess.GetPlayerState().Experience
+
+	var completeCalls atomic.Int32
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		if pkt.ActionID == protocol.ActionIDQuestComplete {
+			completeCalls.Add(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestComplete, []byte{0x01}))
+			return true
+		}
+		return false
+	})
+
+	repo := &mockQuestDungeonRepo{
+		quests: map[int]*dictionary.Quest{
+			145: {
+				ID: 145, Type: 2, Title: "蚕丝",
+				BeginNPCID: 48, EndNPCID: 48,
+				MissionID: 88, AwardExp: 5000, AwardCoins: 20000,
+			},
+		},
+	}
+
+	routine := dungeon.NewDungeonSweepRoutine(repo, dungeon.SweepConfig{
+		Pipeline: []string{"push_mainline"},
+	})
+	if err := routine.Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("执行降级任务循环失败: %v", err)
+	}
+
+	if completeCalls.Load() == 0 {
+		t.Fatal("期望至少尝试一次任务交付")
+	}
+	if state, ok := sess.GetQuests()[145]; !ok || state != 2 {
+		t.Fatalf("交付被拒后应保留状态 2 的任务, 实际 state=%d exists=%v", state, ok)
+	}
+	if got := sess.GetPlayerState().Coins; got != coinsBefore {
+		t.Fatalf("交付被拒不应记账铜钱奖励, 期望 %d, 实际 %d", coinsBefore, got)
+	}
+	if got := sess.GetPlayerState().Experience; got != expBefore {
+		t.Fatalf("交付被拒不应记账经验奖励, 期望 %d, 实际 %d", expBefore, got)
 	}
 }
 

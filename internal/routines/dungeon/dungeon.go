@@ -2404,7 +2404,12 @@ func executeQuestCycle(
 				}
 				slog.Info("正在交付已达成任务", "role_id", session.RoleID(), "quest_id", qid, "title", title)
 
-				completeQuestAndLog(ctx, session, int32(qid), "身上已达成的任务")
+				if !completeQuestAndLog(ctx, session, int32(qid), "身上已达成的任务") {
+					// 未获服务端确认（无回包/非 0 结果码）时不记账：
+					// 本地 RemoveQuest + 奖励记账会造成「资源没变化」的假象，
+					// 保留任务等待下一次 SyncQuests 与真实回包。
+					continue
+				}
 
 				session.RemoveQuest(qid)
 				if q != nil {
@@ -2480,7 +2485,10 @@ func executeQuestCycle(
 						title = q.Title
 					}
 					slog.Info("NPC 处发现已达成任务，正在交付结算", "role_id", session.RoleID(), "npc_id", npcID, "quest_id", questID, "title", title)
-					completeQuestAndLog(ctx, session, it.QuestID, "NPC 处已达成任务")
+					if !completeQuestAndLog(ctx, session, it.QuestID, "NPC 处已达成任务") {
+						// 未确认交付时保留任务，避免本地记账造成资源无变化假象。
+						continue
+					}
 
 					session.RemoveQuest(questID)
 					if q != nil {
@@ -2544,7 +2552,9 @@ func executeQuestCycle(
 
 			if q.MissionID == 0 {
 				slog.Info("正在交付对话剧情任务", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title)
-				completeQuestAndLog(ctx, session, int32(qid), "对话剧情任务")
+				if !completeQuestAndLog(ctx, session, int32(qid), "对话剧情任务") {
+					continue
+				}
 
 				session.RemoveQuest(qid)
 				session.AddRewards(q.AwardExp, q.AwardCoins)
@@ -2598,14 +2608,18 @@ func executeQuestCycle(
 				progressMade = true
 				slog.Info("任务关卡推进挑战成功", "role_id", session.RoleID(), "mission_id", mid, "remaining_stamina", remStamina)
 
-				completeQuestAndLog(ctx, session, int32(qid), "任务关卡推进成功")
-
-				session.RemoveQuest(qid)
-				session.AddRewards(q.AwardExp, q.AwardCoins)
-				*totalGainExp += q.AwardExp
-				*totalGainCoins += q.AwardCoins
-				slog.Info("任务达成并成功交付结算", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title)
-				time.Sleep(50 * time.Millisecond)
+				if completeQuestAndLog(ctx, session, int32(qid), "任务关卡推进成功") {
+					session.RemoveQuest(qid)
+					session.AddRewards(q.AwardExp, q.AwardCoins)
+					*totalGainExp += q.AwardExp
+					*totalGainCoins += q.AwardCoins
+					slog.Info("任务达成并成功交付结算", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title)
+					time.Sleep(50 * time.Millisecond)
+				} else {
+					// 关卡进度已记账，但交付未确认：保留任务，下次同步后重试交付。
+					slog.Info("任务关卡推进成功但交付未确认，保留任务待下次同步",
+						"role_id", session.RoleID(), "quest_id", qid, "title", q.Title)
+				}
 			} else {
 				slog.Info("任务关卡暂未通关或卡战力/等级，记录跳过", "role_id", session.RoleID(), "mission_id", mid, "quest_id", qid)
 				failedMissions[mid] = true
@@ -2684,8 +2698,8 @@ func finishQuestAndLog(ctx context.Context, session *client.RoleSession, questID
 //
 // 铁律要求所有业务请求解析回包：原先这些交付点直接丢弃回包，一旦服务端静默
 // 丢弃（当日进度已结束/条件不满足），例程仍会在本地 RemoveQuest 并记账奖励，
-// 表现为「资源没有变化」。这里统一记录无回包与非 0 结果码，便于定位，
-// 但保持原有本地记账行为不变，避免改变已验证的任务推进流程。
+// 表现为「资源没有变化」。这里统一返回服务端确认结果：只有结果码为 0 才视为
+// 交付成功，调用方不得在未确认时移除本地任务或记账奖励。
 func completeQuestAndLog(ctx context.Context, session *client.RoleSession, questID int32, where string) bool {
 	pkt, err := protocol.BuildCompleteQuestPacket(protocol.CompleteQuestRequest{QuestID: questID})
 	if err != nil {
@@ -2697,12 +2711,12 @@ func completeQuestAndLog(ctx context.Context, session *client.RoleSession, quest
 	defer cancel()
 	resp, cErr := session.Call(c, pkt, protocol.ActionIDQuestComplete)
 	if cErr != nil || resp == nil || len(resp.Payload) == 0 {
-		slog.Warn("任务交付无回包，本地按已交付记账", "role_id", session.RoleID(),
+		slog.Warn("任务交付无回包，保留本地任务待下次同步", "role_id", session.RoleID(),
 			"quest_id", questID, "where", where, "err", cErr)
 		return false
 	}
 	if code := resp.Payload[0]; code != 0 {
-		slog.Info("任务交付返回非 0 结果码，本地仍按已交付记账", "role_id", session.RoleID(),
+		slog.Info("任务交付返回非 0 结果码，保留本地任务待下次同步", "role_id", session.RoleID(),
 			"quest_id", questID, "where", where, "result", code)
 		return false
 	}
