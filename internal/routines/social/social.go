@@ -190,10 +190,19 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			// 开箱会产出奖励。背包 0 空格时服务端可能直接丢弃开箱请求，表现为
 			// 「无回包且库存不变」，与其他不可开启情形无法区分，还会把箱型错误
 			// 标记 6 小时跳过。先确认空格，满仓则交给背包清理后再开。
-			if pack, pErr := fetchJieYuanPack(ctx, session); pErr == nil && pack != nil && pack.PackEmptyGrids == 0 {
-				slog.Info("结缘宝箱开箱前背包已满，等待背包清理后再开",
-					"role_id", session.RoleID(), "pack_items", len(pack.PackItems), "empty_grids", pack.PackEmptyGrids)
-				return scheduler.ErrBagFull
+			// 以「容量 - 已用格位」判断空格：线上 2/41 的 empty 字段在物品数变化时
+			// 仍恒为 0（47 件/50 件都报 0），单看它会永久误判满仓。
+			if pack, pErr := fetchJieYuanPack(ctx, session); pErr == nil && pack != nil {
+				freeSlots := int(pack.PackCapacity) - len(pack.PackItems)
+				slog.Info("结缘宝箱开箱前背包状态", "role_id", session.RoleID(),
+					"capacity", pack.PackCapacity, "pack_items", len(pack.PackItems),
+					"free_slots", freeSlots, "empty_grids", pack.PackEmptyGrids)
+				if freeSlots <= 0 {
+					slog.Info("结缘宝箱开箱前背包已满，等待背包清理后再开", "role_id", session.RoleID())
+					// 背包腾挪靠扫荡物/装备制作卷出售，间隔不固定；2 分钟轮询可尽快
+					// 抓住出现的空格（每次仅一次 2/41 查询，成本可忽略）。
+					return scheduler.NewCooldown(2*time.Minute, "结缘宝箱背包已满")
+				}
 			} else if pErr != nil {
 				slog.Info("结缘宝箱开箱前查询背包无回包，继续按原流程尝试",
 					"role_id", session.RoleID(), "err", pErr)
