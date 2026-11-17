@@ -3837,7 +3837,71 @@ func resyncDungeonChain(ctx context.Context, session *client.RoleSession) bool {
 	return false
 }
 
+// missionSectionsCallTimeout 单次 4/0 章节列表请求的应答等待时间。
+//
+// 4/0 的应答延迟多在 5~6 秒之间（2026-11-17 s1 实测：5 秒超时后约 0.6 秒
+// 迟到回包，把 lastRx 更新为 0x00040000，紧随其后的 4/1 进入才成功），
+// 因此放宽到 8 秒以捕获迟到应答。变量形式便于单测缩短。
+var missionSectionsCallTimeout = 8 * time.Second
+
+// questSectionsDownTTL 同一地图 4/0 连续失败后的静默期。
+//
+// 同一轮调度里多个任务常共用同一地图；4/0 被丢弃时逐个任务重试会浪费
+// 数十秒并污染 PrevAct 链（2026-11-17 s1 实测：同轮两个任务各探测两轮）。
+// 失败后 10 分钟内对该地图直接返回错误，交给直接挑战兜底，保证周期时长可控。
+var questSectionsDownTTL = 10 * time.Minute
+
+type sectionsDownEntry struct {
+	mu sync.Mutex
+	m  map[int32]time.Time
+}
+
+// questSectionsDown 按会话记录 4/0 连续失败的地图与截止时间。
+var questSectionsDown sync.Map // *client.RoleSession -> *sectionsDownEntry
+
+func sectionsDownEntryFor(session *client.RoleSession) *sectionsDownEntry {
+	if v, ok := questSectionsDown.Load(session); ok {
+		return v.(*sectionsDownEntry)
+	}
+	actual, _ := questSectionsDown.LoadOrStore(session, &sectionsDownEntry{m: make(map[int32]time.Time)})
+	return actual.(*sectionsDownEntry)
+}
+
+// questSectionsRecentlyDown 返回该地图是否仍处于 4/0 静默期。
+func questSectionsRecentlyDown(session *client.RoleSession, mapID int32) (time.Time, bool) {
+	e := sectionsDownEntryFor(session)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	until, ok := e.m[mapID]
+	if !ok {
+		return time.Time{}, false
+	}
+	if time.Now().After(until) {
+		delete(e.m, mapID)
+		return time.Time{}, false
+	}
+	return until, true
+}
+
+func markQuestSectionsDown(session *client.RoleSession, mapID int32, ttl time.Duration) {
+	e := sectionsDownEntryFor(session)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.m[mapID] = time.Now().Add(ttl)
+}
+
+func clearQuestSectionsDown(session *client.RoleSession, mapID int32) {
+	e := sectionsDownEntryFor(session)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.m, mapID)
+}
+
 func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapID int32) (*protocol.Packet, error) {
+	if until, down := questSectionsRecentlyDown(session, mapID); down {
+		return nil, fmt.Errorf("dungeon: sections for map %d recently dropped (until %s)",
+			mapID, until.Format(time.RFC3339))
+	}
 	// 3/9 任务列表回包后立刻发 4/0 会被网关丢弃（2026-11-14 线上：间隔 0ms 丢包，
 	// 间隔 600ms 稳定回包），因此首发前统一留出 500ms 间隔。
 	select {
@@ -3874,12 +3938,13 @@ func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapI
 		// 迟到回包，把 lastRx 更新为 0x00040000，紧随其后的 4/1 进入才成功）。
 		// 5 秒会漏掉这部分迟到应答；放宽到 8 秒可直接拿到正常回包，避免
 		// 走重同步/直接挑战兜底。
-		secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
+		secCtx, secCancel := context.WithTimeout(ctx, missionSectionsCallTimeout)
 		resp, err := session.Call(secCtx,
 			protocol.BuildMissionGetSectionsPacket(mapID, questPrevAct(session)),
 			protocol.ActionIDMissionGetSections)
 		secCancel()
 		if err == nil && resp != nil {
+			clearQuestSectionsDown(session, mapID)
 			return resp, nil
 		}
 		lastErr = err
@@ -3899,6 +3964,7 @@ func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapI
 			return nil, lastErr
 		}
 	}
+	markQuestSectionsDown(session, mapID, questSectionsDownTTL)
 	questContextBad.Store(session, true)
 	return nil, lastErr
 }
