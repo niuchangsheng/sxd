@@ -2310,38 +2310,61 @@ func questSectionsAnchor(session *client.RoleSession) uint32 {
 // enterQuestTownScene 在推图/扫荡前复位城镇场景。
 //
 // 依次尝试: 最近成功城镇 → 服务端上报的 TownMapID → 常见主城 3/1/2。
+// 首轮全部失败时，用显式 0/2 锚点重试主城镇一次：2026-11-17 s1 实测
+// 以 Mod 3/4 锚点的 1/0 被静默丢弃，而 0/2 锚点能回包，且随后 4/0
+// 章节列表恢复正常（13:05 成功 / 13:37 失败对照）。
 // 成功返回 true；全部失败返回 false（调用方继续尝试 get_sections，不额外阻塞）。
 func enterQuestTownScene(ctx context.Context, session *client.RoleSession) (int32, bool) {
-	return enterQuestTownSceneWithAnchor(ctx, session, questSectionsAnchor(session))
+	anchor := questSectionsAnchor(session)
+	if id, ok := enterQuestTownSceneWithAnchor(ctx, session, anchor); ok {
+		return id, true
+	}
+	if anchor == 0 {
+		return 0, false
+	}
+	primary := int32(session.GetPlayerState().TownMapID)
+	if v, ok := questTownKnownGood.Load(session); ok {
+		if cached, _ := v.(int32); cached > 0 {
+			primary = cached
+		}
+	}
+	if primary > 0 && enterQuestTownSceneSingle(ctx, session, primary, 0) {
+		slog.Info("城镇复位改用 0/2 锚点成功",
+			"role_id", session.RoleID(), "map_id", primary)
+		return primary, true
+	}
+	return 0, false
 }
 
 // enterQuestTownSceneWithAnchor 使用指定 PrevAct 锚点复位城镇场景。
 func enterQuestTownSceneWithAnchor(ctx context.Context, session *client.RoleSession, anchor uint32) (int32, bool) {
-	try := func(id int32) bool {
-		if id <= 0 {
-			return false
-		}
-		code, err := session.EnterTownWithAnchor(ctx, id, anchor)
-		if err != nil || code != 0 {
-			return false
-		}
-		questTownKnownGood.Store(session, id)
-		return true
-	}
 	if v, ok := questTownKnownGood.Load(session); ok {
-		if id, _ := v.(int32); try(id) {
+		if id, _ := v.(int32); enterQuestTownSceneSingle(ctx, session, id, anchor) {
 			return id, true
 		}
 	}
-	if id := int32(session.GetPlayerState().TownMapID); try(id) {
+	if id := int32(session.GetPlayerState().TownMapID); enterQuestTownSceneSingle(ctx, session, id, anchor) {
 		return id, true
 	}
 	for _, id := range []int32{3, 1, 2} {
-		if try(id) {
+		if enterQuestTownSceneSingle(ctx, session, id, anchor) {
 			return id, true
 		}
 	}
 	return 0, false
+}
+
+// enterQuestTownSceneSingle 以指定锚点进入单个城镇，成功时记录最近可用城镇。
+func enterQuestTownSceneSingle(ctx context.Context, session *client.RoleSession, id int32, anchor uint32) bool {
+	if id <= 0 {
+		return false
+	}
+	code, err := session.EnterTownWithAnchor(ctx, id, anchor)
+	if err != nil || code != 0 {
+		return false
+	}
+	questTownKnownGood.Store(session, id)
+	return true
 }
 
 // executeQuestCycle 任务闭环状态机:
