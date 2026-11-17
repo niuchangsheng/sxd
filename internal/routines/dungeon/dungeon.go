@@ -3870,7 +3870,11 @@ func fetchMissionSections(ctx context.Context, session *client.RoleSession, mapI
 			case <-time.After(500 * time.Millisecond):
 			}
 		}
-		secCtx, secCancel := context.WithTimeout(ctx, 5*time.Second)
+		// 4/0 的应答延迟在 5~6 秒之间（2026-11-17 s1 实测：5 秒超时后约 0.6 秒
+		// 迟到回包，把 lastRx 更新为 0x00040000，紧随其后的 4/1 进入才成功）。
+		// 5 秒会漏掉这部分迟到应答；放宽到 8 秒可直接拿到正常回包，避免
+		// 走重同步/直接挑战兜底。
+		secCtx, secCancel := context.WithTimeout(ctx, 8*time.Second)
 		resp, err := session.Call(secCtx,
 			protocol.BuildMissionGetSectionsPacket(mapID, questPrevAct(session)),
 			protocol.ActionIDMissionGetSections)
