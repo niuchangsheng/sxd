@@ -31,6 +31,16 @@ var dailyAutomationFunctionIDs = []int32{
 
 func newDailyMockSession(t *testing.T, handler func(net.Conn, *protocol.Packet)) *client.RoleSession {
 	t.Helper()
+	return newDailyMockSessionWithFunctions(t, dailyAutomationFunctionIDs, handler)
+}
+
+// newDailyMockSessionWithFunctions 允许指定“已开放功能”列表，用于验证功能门槛跳过路径。
+func newDailyMockSessionWithFunctions(
+	t *testing.T,
+	functionIDs []int32,
+	handler func(net.Conn, *protocol.Packet),
+) *client.RoleSession {
+	t.Helper()
 	serverConn, clientConn := net.Pipe()
 	t.Cleanup(func() {
 		_ = serverConn.Close()
@@ -44,7 +54,7 @@ func newDailyMockSession(t *testing.T, handler func(net.Conn, *protocol.Packet))
 			}
 			// 参与自动化功能门槛的玩法在 Mock 下一律视为已开放。
 			if pkt.ActionID == protocol.ActionIDPlayerGetFunctions {
-				_ = protocol.WritePacket(serverConn, protocol.BuildPlayerFunctionsResultPacket(dailyAutomationFunctionIDs))
+				_ = protocol.WritePacket(serverConn, protocol.BuildPlayerFunctionsResultPacket(functionIDs))
 				continue
 			}
 			// 神龙龙珠一键合成默认成功，避免各例程单测等待超时；

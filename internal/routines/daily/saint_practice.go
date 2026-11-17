@@ -46,6 +46,18 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行日常任务: 圣域修炼替身", "role_id", session.RoleID())
 
+			// 0. 功能开放原生探测：未开放时服务端会静默丢弃 293/2 或登录凭据
+			// 不完整（2026-11-17 s1 实测每 30 分钟空跑一次），先按功能门槛跳过。
+			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDSaintArea); fErr != nil {
+				slog.Info("圣域功能开放状态查询失败，本轮跳过",
+					"role_id", session.RoleID(), "err", fErr)
+				return scheduler.NewCooldown(30*time.Minute, "圣域功能开放状态查询失败")
+			} else if !open {
+				slog.Info("圣域功能未开放，跳过圣域修炼替身",
+					"role_id", session.RoleID(), "function_id", protocol.FunctionIDSaintArea)
+				return nil
+			}
+
 			// 1. 圣域开启状态。
 			sCtx, sCancel := context.WithTimeout(ctx, 5*time.Second)
 			statusResp, err := session.Call(sCtx, protocol.BuildSaintAreaStatusPacket(), protocol.ActionIDSaintAreaStatus)
