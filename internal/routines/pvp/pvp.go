@@ -1109,6 +1109,8 @@ func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSess
 	}
 
 	claimed := 0
+	// taskResults 统计每个任务领取的结果码，用于定位「面板有可领但实际领不到」。
+	taskResults := make(map[uint8]int, 4)
 	for _, t := range claimable {
 		if ctx.Err() != nil {
 			break
@@ -1121,6 +1123,7 @@ func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSess
 		if cErr != nil {
 			break
 		}
+		taskResults[code]++
 		switch code {
 		case protocol.WorldPkRewardSuccess:
 			claimed++
@@ -1158,7 +1161,8 @@ func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSess
 			slog.Info("跨服PK奖励面板", "role_id", session.RoleID(), "result", code)
 		}
 	}
-	slog.Info("跨服PK奖励巡检完成", "role_id", session.RoleID(), "claimed", claimed, "claimable", len(claimable))
+	slog.Info("跨服PK奖励巡检完成", "role_id", session.RoleID(), "claimed", claimed,
+		"claimable", len(claimable), "task_results", taskResults)
 	return nil
 }
 
