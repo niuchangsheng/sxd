@@ -542,3 +542,54 @@ func TestScheduler_TriggerBatchAfterHoldExpires(t *testing.T) {
 		t.Fatalf("冷却到期后未再次执行, calls=%d", calls.Load())
 	}
 }
+
+// TestScheduler_BagFullSchedulesShortRetry 验证 Cron 任务返回 ErrBagFull 时，
+// nextRun 跟随 10 分钟冷却，而不是被 24h Cron 推迟到次日。
+func TestScheduler_BagFullSchedulesShortRetry(t *testing.T) {
+	fastJitter := scheduler.NewJitter(scheduler.JitterConfig{
+		MinDuration: 2 * time.Millisecond,
+		MaxDuration: 5 * time.Millisecond,
+	})
+	sched := scheduler.NewRoleScheduler("role-bagfull", nil, fastJitter)
+
+	var calls atomic.Int32
+	r := scheduler.NewBaseRoutine(
+		"bagfull_routine",
+		"test",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+			calls.Add(1)
+			return scheduler.ErrBagFull
+		},
+	)
+	if err := sched.Register(r); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sched.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sched.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() < 1 {
+		t.Fatal("routine 未执行")
+	}
+
+	_, next, cooling, found := sched.GetRoutineState("bagfull_routine")
+	if !found {
+		t.Fatal("未找到 routine 状态")
+	}
+	if wait := time.Until(next); wait > 15*time.Minute {
+		t.Fatalf("背包满后 nextRun 被推迟过久: %v", wait)
+	}
+	if cooling.IsZero() {
+		t.Fatal("背包满应设置 coolingUntil")
+	}
+}

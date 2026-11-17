@@ -181,6 +181,7 @@ func (s *RoleScheduler) runLoop() {
 
 		s.itemsMu.Lock()
 		cooldownScheduled := false
+		coolingScheduled := false
 		if execErr != nil {
 			var cdErr *CooldownError
 			if errors.As(execErr, &cdErr) {
@@ -201,6 +202,7 @@ func (s *RoleScheduler) runLoop() {
 				midnight := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 10, 0, tomorrow.Location())
 				item.coolingUntil = midnight
 				item.holdUntil = midnight
+				coolingScheduled = true
 				slog.Info("日常任务次数耗尽，进入智能熔断挂起",
 					"role_id", s.roleID,
 					"routine", item.routine.Name(),
@@ -210,6 +212,7 @@ func (s *RoleScheduler) runLoop() {
 				// 体力不足：挂起 30 分钟
 				item.coolingUntil = time.Now().Add(30 * time.Minute)
 				item.holdUntil = item.coolingUntil
+				coolingScheduled = true
 				slog.Info("体力耗尽，进入智能熔断挂起",
 					"role_id", s.roleID,
 					"routine", item.routine.Name(),
@@ -239,6 +242,7 @@ func (s *RoleScheduler) runLoop() {
 				// 背包已满：挂起 10 分钟
 				item.coolingUntil = time.Now().Add(10 * time.Minute)
 				item.holdUntil = item.coolingUntil
+				coolingScheduled = true
 				slog.Info("背包已满，日常任务休眠待命",
 					"role_id", s.roleID,
 					"routine", item.routine.Name(),
@@ -264,6 +268,10 @@ func (s *RoleScheduler) runLoop() {
 		}
 		if cooldownScheduled {
 			// nextRun 已由 CooldownError.Until 指定，保留该唤醒时间。
+		} else if coolingScheduled {
+			// 体力/背包/次数熔断：冷却结束即重新就绪，而不是被 24h Cron 推迟一天
+			// （否则 coolingUntil 只有 10~30 分钟，实际却要等到次日批量唤醒）。
+			item.nextRun = item.coolingUntil
 		} else if item.routine.Interval() > 0 {
 			item.nextRun = time.Now().Add(item.routine.Interval())
 		} else if isCron {
