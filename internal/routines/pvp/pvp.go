@@ -7,6 +7,7 @@ package pvp
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -985,6 +986,11 @@ func NewWorldBossRoutine() scheduler.ActivityRoutine {
 			listResp, err := session.Call(lCtx, protocol.BuildWorldBossListPacket(), protocol.ActionIDWorldBossList)
 			lCancel()
 			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					// 5 分钟巡检下，列表查询被静默丢弃会变成每小时 12 次空请求；
+					// 连续丢包按静默丢包机制退避（首次 10 分钟，连续 3 次挂起到重置）。
+					return scheduler.HandleSilentDrop(session, "world_boss", 3, 10*time.Minute, "世界Boss列表无回包")
+				}
 				return fmt.Errorf("查询世界Boss列表失败: %w", err)
 			}
 			bosses, err := protocol.ParseWorldBossListResult(listResp.Payload)
