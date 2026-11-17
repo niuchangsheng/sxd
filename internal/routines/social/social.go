@@ -34,6 +34,31 @@ func DefaultJieYuanBoxConfig() JieYuanBoxConfig {
 // 每批次最多开启 10 个，严格排除传说结缘宝箱 (3942)。
 // fetchJieYuanBoxCount 查询 232/30 列表中指定箱型的当前数量。
 // 返回 (数量, 是否成功获取)；列表中不存在该箱型时返回 (0, true)。
+// jieYuanOpenWithQuality 执行 528/1 上下文握手 + 232/34 开箱，返回开箱回包。
+// 仅用于「换自动合成档位」的变体探测，正常开箱路径仍内联在例程中。
+func jieYuanOpenWithQuality(ctx context.Context, session *client.RoleSession, itemID, quality int32) (*protocol.Packet, error) {
+	callCtx := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
+		c, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		return session.Call(c, pkt, act)
+	}
+	ctxResp, err := callCtx(protocol.BuildJieYuanBoxOpenContextPacket(), protocol.ActionIDJieYuanBoxOpenContext)
+	if err != nil || ctxResp == nil {
+		ctxResp, err = callCtx(protocol.BuildJieYuanBoxOpenContextBarePacket(), protocol.ActionIDJieYuanBoxOpenContext)
+	}
+	if err != nil || ctxResp == nil {
+		return nil, err
+	}
+	if code, pErr := protocol.ParseJieYuanOpenContextResult(ctxResp.Payload); pErr != nil || code != protocol.JieYuanOpenContextResultOK {
+		if pErr != nil {
+			return nil, pErr
+		}
+		return nil, fmt.Errorf("528/1 握手被拒绝: result=%d", code)
+	}
+	return callCtx(protocol.BuildJieYuanBoxOpenPacket(itemID, quality, protocol.ActionIDJieYuanBoxOpenContext),
+		protocol.ActionIDJieYuanBoxOpen)
+}
+
 func fetchJieYuanBoxCount(ctx context.Context, session *client.RoleSession, itemID int32) (int32, bool) {
 	pkt := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDJieYuanBoxOpen)
 	c, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -147,6 +172,8 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 
 			var totalOpened int
 
+			// altQualityTried 记录已做过「0 档自动合成」变体探测的箱型，每进程每种一次。
+			altQualityTried := make(map[int32]bool, len(openable))
 			for _, box := range openable {
 				remaining := box.Count
 				maxBatchesPerItem := 200 // 单个道具最大批次上限（每次只开 1 个），防止无限循环
@@ -209,6 +236,31 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 							remaining = afterCount
 							time.Sleep(50 * time.Millisecond)
 							continue
+						}
+						// 变体探测：普通结缘宝箱 (3937) 在 autoMergeQuality=4 下长期被
+						// 静默丢弃，而同轮的 3938/3941 正常。用 0 档（不自动合成）对
+						// 同一箱型重试一次，确认是否与合成档位相关；每种箱型每进程只试一次。
+						if ok && afterCount >= remaining && !altQualityTried[box.ItemID] {
+							altQualityTried[box.ItemID] = true
+							slog.Info("结缘宝箱开箱无回包，改用 0 档自动合成重试一次",
+								"role_id", session.RoleID(), "item_id", box.ItemID, "before", remaining)
+							altResp, altErr := jieYuanOpenWithQuality(ctx, session, box.ItemID, 0)
+							if altResp != nil {
+								altAfter, altOK := fetchJieYuanBoxCount(ctx, session, box.ItemID)
+								slog.Info("结缘宝箱 0 档重试结果",
+									"role_id", session.RoleID(), "item_id", box.ItemID,
+									"reply_hex", hex.EncodeToString(altResp.Payload),
+									"after", altAfter, "verify_ok", altOK)
+								if altOK && altAfter < remaining {
+									totalOpened += int(remaining - altAfter)
+									remaining = altAfter
+									time.Sleep(50 * time.Millisecond)
+									continue
+								}
+							} else {
+								slog.Info("结缘宝箱 0 档重试无回包",
+									"role_id", session.RoleID(), "item_id", box.ItemID, "err", altErr)
+							}
 						}
 						// 库存不变：该箱型可能本身需要元宝/其他条件（如高级/至尊箱），
 						// 服务端静默丢弃。按错误记录并标记当天跳过，继续开启其余箱型。
