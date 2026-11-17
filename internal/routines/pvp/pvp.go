@@ -1104,20 +1104,12 @@ func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSess
 		}
 	}
 
-	// 任务奖励需在仙界跨服会话发送；无已完成任务时不建立额外连接。
+	// 领取先走主服：任务面板只在主服可用，主服与面板同源；若主服返回
+	// FAILED(5)，再懒加载仙界跨服会话重试一次同一任务并记录两者的结果码，
+	// 用于确认「领奖应在哪个会话」。2026-11-17 起不再默认走跨服。
 	reward := session
-	if len(claimable) > 0 {
-		cross, cErr := openLadderRewardSession(ctx, session)
-		if cErr != nil || cross == nil {
-			slog.Warn("跨服PK奖励会话建立失败，回退主服", "role_id", session.RoleID(), "err", cErr)
-		} else {
-			if cross != session {
-				defer cross.Close()
-			}
-			reward = cross
-			slog.Info("跨服PK奖励会话已建立", "role_id", session.RoleID(), "player_id", cross.PlayerID())
-		}
-	}
+	crossTried := false
+	var crossSess *client.RoleSession
 
 	claimed := 0
 	// taskResults 统计每个任务领取的结果码，用于定位「面板有可领但实际领不到」。
@@ -1126,13 +1118,35 @@ func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSess
 		if ctx.Err() != nil {
 			break
 		}
-		awardResp := call(reward, protocol.BuildWorldPkTaskAwardPacket(t.ID), protocol.ActionIDWorldPkTaskAward)
+		awardPkt := protocol.BuildWorldPkTaskAwardPacket(t.ID)
+		awardResp := call(reward, awardPkt, protocol.ActionIDWorldPkTaskAward)
 		if awardResp == nil {
 			break
 		}
 		code, cErr := protocol.ParseActionFirstByte(awardResp.Payload, "跨服PK任务奖励")
 		if cErr != nil {
 			break
+		}
+		if code == protocol.WorldPkRewardFailed && reward == session && !crossTried {
+			crossTried = true
+			cross, ccErr := openLadderRewardSession(ctx, session)
+			if ccErr != nil || cross == nil {
+				slog.Warn("跨服PK奖励会话建立失败", "role_id", session.RoleID(), "err", ccErr)
+			} else {
+				if cross != session {
+					crossSess = cross
+					defer crossSess.Close()
+				}
+				if retry := call(cross, awardPkt, protocol.ActionIDWorldPkTaskAward); retry != nil {
+					if c2, e := protocol.ParseActionFirstByte(retry.Payload, "跨服PK任务奖励(跨服重试)"); e == nil {
+						slog.Info("跨服PK任务奖励主服返回失败，跨服会话重试",
+							"role_id", session.RoleID(), "task_id", t.ID,
+							"main_result", code, "cross_result", c2)
+						reward = cross
+						code = c2
+					}
+				}
+			}
 		}
 		taskResults[code]++
 		switch code {
