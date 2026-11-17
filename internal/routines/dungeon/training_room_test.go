@@ -490,3 +490,73 @@ func (f *fakeStPracticeRoomAPI) RobStPracticeRoomSeat(_ context.Context, quality
 	}
 	return protocol.StPracticeRoomSuccess, nil
 }
+
+// TestRunStPracticeRoom_ListDropStillClaims 验证房间列表被静默丢弃时仍然领取经验，
+// 保证「每日经验必须领取」不因查询失败而丢失。
+func TestRunStPracticeRoom_ListDropStillClaims(t *testing.T) {
+	api := newFakeStPracticeRoomAPI() // 不注入 lists，GetStPracticeRoomList 返回错误
+	api.claimResults = []*protocol.StPracticeRoomExpResult{{Result: protocol.StPracticeRoomSuccess, Exp: 5000}}
+
+	if err := runStPracticeRoomMaintenance(context.Background(), api, DefaultTrainingRoomConfig()); err != nil {
+		t.Fatalf("列表失败时不应返回错误: %v", err)
+	}
+	if got := api.countCall("claim"); got != 1 {
+		t.Fatalf("列表查询失败后应仍领取经验一次, 实际 %d 次", got)
+	}
+	if api.hasCall("sit:100:0") {
+		t.Errorf("列表不可用时不应尝试入座, 调用序列: %v", api.calls)
+	}
+}
+
+// TestRunStPracticeRoom_StarClosedFallsBackToFree 验证目标星级房间返回
+// FUNCTION_NO_OPEN 时仍回落普通练功场，而不是直接放弃导致整段时间无收益。
+func TestRunStPracticeRoom_StarClosedFallsBackToFree(t *testing.T) {
+	api := newFakeStPracticeRoomAPI()
+	api.lists = []*protocol.StPracticeRoomList{{
+		Rooms: []protocol.StPracticeRoomEntry{
+			{Quality: 3, Count: 0},
+			{Quality: 100, Count: 1},
+		},
+		InPracticeFlag: protocol.StPracticeRoomNo,
+	}}
+	api.infos[3] = &protocol.StPracticeRoomInfo{RoomQuality: 3}
+	api.claimResults = []*protocol.StPracticeRoomExpResult{{Result: protocol.StPracticeRoomNoExpToGet}}
+	api.sitResults[seatKey{3, 0}] = protocol.StPracticeRoomFunctionNoOpen
+	api.sitResults[seatKey{100, 0}] = protocol.StPracticeRoomSuccess
+
+	if err := runStPracticeRoomMaintenance(context.Background(), api, DefaultTrainingRoomConfig()); err != nil {
+		t.Fatalf("练功房维护失败: %v", err)
+	}
+	if !api.hasCall("sit:100:0") {
+		t.Fatalf("星级房间不可用时应回落普通练功场, 调用序列: %v", api.calls)
+	}
+}
+
+// TestRunStPracticeRoom_RestoresOriginalSeatWhenTargetFails 验证换房失败后
+// 尝试恢复原练功房席位，避免角色长时间无收益。
+func TestRunStPracticeRoom_RestoresOriginalSeatWhenTargetFails(t *testing.T) {
+	api := newFakeStPracticeRoomAPI()
+	api.lists = []*protocol.StPracticeRoomList{{
+		Rooms: []protocol.StPracticeRoomEntry{
+			{Quality: 5, Count: 0},
+			{Quality: 3, Count: 1},
+			{Quality: 100, Count: 1},
+		},
+		InPracticeFlag: protocol.StPracticeRoomYes,
+		Quality:        3,
+	}}
+	api.infos[5] = &protocol.StPracticeRoomInfo{RoomQuality: 5}
+	api.infos[3] = &protocol.StPracticeRoomInfo{RoomQuality: 3}
+	api.claimResults = []*protocol.StPracticeRoomExpResult{{Result: protocol.StPracticeRoomSuccess}}
+	api.leaveResults = []uint8{protocol.StPracticeRoomSuccess}
+	api.sitResults[seatKey{5, 0}] = protocol.StPracticeRoomFunctionNoOpen
+	api.sitResults[seatKey{100, 0}] = protocol.StPracticeRoomFunctionNoOpen
+	api.sitResults[seatKey{3, 0}] = protocol.StPracticeRoomSuccess
+
+	if err := runStPracticeRoomMaintenance(context.Background(), api, DefaultTrainingRoomConfig()); err != nil {
+		t.Fatalf("练功房维护失败: %v", err)
+	}
+	if !api.hasCall("sit:3:0") {
+		t.Fatalf("目标房间与普通场均不可用时应恢复原席位, 调用序列: %v", api.calls)
+	}
+}

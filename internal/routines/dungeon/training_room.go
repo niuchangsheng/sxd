@@ -143,7 +143,10 @@ func runStPracticeRoomMaintenance(ctx context.Context, api stPracticeRoomAPI, cf
 	// 2. 查询房间列表与当前练功状态。
 	list, err := api.GetStPracticeRoomList(ctx)
 	if err != nil {
-		slog.Warn("查询仙界练功房房间列表失败", "error", err)
+		// 房间列表被静默丢弃时，已累积经验仍需领取（游戏按日结算，
+		// 每日未领取会损失当天收益）。
+		slog.Warn("查询仙界练功房房间列表失败，先领取已累积经验", "error", err)
+		claimStPracticeRoomExp(ctx, api, 0)
 		return nil
 	}
 
@@ -162,6 +165,8 @@ func runStPracticeRoomMaintenance(ctx context.Context, api stPracticeRoomAPI, cf
 	emptyCandidate, err := findBestEmptyStPracticeRoom(ctx, api, list)
 	if err != nil {
 		slog.Warn("查询仙界练功房空闲席位失败", "error", err)
+		// 查询失败也要保证经验领取，避免当天经验因巡检失败而丢失。
+		claimStPracticeRoomExp(ctx, api, currentQuality)
 		return nil
 	}
 	var robCandidate *stPracticeRoomCandidate
@@ -222,23 +227,34 @@ func runStPracticeRoomMaintenance(ctx context.Context, api stPracticeRoomAPI, cf
 	}
 
 	if err := sitInStPracticeRoom(ctx, api, target); err != nil {
+		if target.quality != protocol.StPracticeRoomFreeQuality {
+			// 星级房间不可用（功能未开放/条件不符/业务失败）时一律回落普通练功场：
+			// 服务端对部分星级房间会在特定时段返回 FUNCTION_NO_OPEN，
+			// 直接跳过会让角色整段时间无收益、当天经验也无法累积。
+			slog.Info("仙界练功房星级入座未成功，回落普通练功场",
+				"quality", target.quality, "error", err)
+			fallbackErr := sitDownStPracticeRoomFree(ctx, api)
+			if fallbackErr == nil {
+				return nil
+			}
+			if errors.Is(fallbackErr, scheduler.ErrConditionNotMet) {
+				slog.Info("仙界练功房普通练功场同样不可用，尝试恢复原席位", "error", fallbackErr)
+			} else {
+				slog.Warn("仙界练功房回落普通练功场失败", "error", fallbackErr)
+			}
+			restoreStPracticeRoomSeat(ctx, api, currentQuality)
+			return nil
+		}
+
 		if errors.Is(err, scheduler.ErrConditionNotMet) {
 			// 服务端以 FUNCTION_NO_OPEN 表达当前资格/条件不满足（如等级或跨服限制），
 			// 属于正常业务状态，本轮跳过等待下次调度即可。
 			slog.Info("仙界练功房暂不可入座，跳过本轮", "quality", target.quality, "error", err)
-			return nil
+		} else {
+			slog.Warn("仙界练功房入座失败", "quality", target.quality, "error", err)
 		}
-		slog.Warn("仙界练功房入座失败", "quality", target.quality, "error", err)
-		// 星级房间入座异常时兜底回到普通练功场，避免角色长时间离线无收益。
-		if target.quality != protocol.StPracticeRoomFreeQuality {
-			if fallbackErr := sitDownStPracticeRoomFree(ctx, api); fallbackErr != nil {
-				if errors.Is(fallbackErr, scheduler.ErrConditionNotMet) {
-					slog.Info("仙界练功房普通练功场同样不可用，跳过本轮", "error", fallbackErr)
-				} else {
-					slog.Warn("仙界练功房回落普通练功场失败", "error", fallbackErr)
-				}
-			}
-		}
+		// 入座前已离开原席位，尽最大努力恢复，避免整段时间无收益。
+		restoreStPracticeRoomSeat(ctx, api, currentQuality)
 		return nil
 	}
 
@@ -435,6 +451,36 @@ func sitDownStPracticeRoomStar(ctx context.Context, api stPracticeRoomAPI, quali
 	// 所有候选席位都在竞态中被占用，回落到普通练功场。
 	slog.Info("仙界练功房星级席位已满，回落普通练功场", "quality", quality)
 	return sitDownStPracticeRoomFree(ctx, api)
+}
+
+// restoreStPracticeRoomSeat 尝试回到原星级房间的空闲席位。
+//
+// 换房流程会先离开当前席位再入座；若目标房间随后被拒（功能未开放/席位竞争），
+// 角色会落在无席位状态、当天经验不再累积。这里重新查询原房间并争取一个空闲席位。
+func restoreStPracticeRoomSeat(ctx context.Context, api stPracticeRoomAPI, quality uint8) bool {
+	if quality <= 0 || quality == protocol.StPracticeRoomFreeQuality {
+		return false
+	}
+	seatCount := protocol.StPracticeRoomSeatCount(quality)
+	if seatCount <= 0 {
+		return false
+	}
+	info, err := api.GetStPracticeRoomInfo(ctx, quality)
+	if err != nil {
+		slog.Debug("恢复原练功房席位时查询房间失败", "quality", quality, "error", err)
+		return false
+	}
+	seats := stPracticeRoomFreeSeats(info.Seats, seatCount)
+	if len(seats) == 0 {
+		slog.Info("原练功房暂无空闲席位，无法恢复", "quality", quality)
+		return false
+	}
+	if err := sitDownStPracticeRoomStar(ctx, api, quality, seats); err != nil {
+		slog.Warn("恢复原练功房席位失败", "quality", quality, "error", err)
+		return false
+	}
+	slog.Info("已恢复原练功房席位", "quality", quality)
+	return true
 }
 
 // stPracticeRoomSitError 描述入座失败的业务结果码。
