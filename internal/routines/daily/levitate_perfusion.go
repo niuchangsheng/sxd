@@ -59,12 +59,16 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 					protocol.ActionIDLevitateInfo)
 			}
 			if infoResp == nil {
-				// 伙伴灌注达到当日/阶段上限后服务端会静默丢弃 357/0；
-				// 连续 3 次挂起到次日重置，避免每 30 分钟空等。
-				return scheduler.HandleSilentDrop(session, "levitate_perfusion", 3,
-					30*time.Minute, "飞升信息无回包")
+				// 面板不是业务前置：抓包证明官方客户端直接发 357/1 并按结果码
+				// （2 成功 / 3 已灌注完 / 4 未开放…）决定后续，完全不依赖 357/0。
+				// 2026-11-17 实测本账号 357/0 无论 type=1 还是 type=0 都被静默
+				// 丢弃，若继续以面板为门槛，整条链路永远走不到灌注（资源不变）。
+				// 因此面板无回包时仍尝试一次 357/1，以结果码为准。
+				slog.Info("飞升信息面板无回包，直接尝试灌注一次（以结果码判断状态）",
+					"role_id", session.RoleID())
+			} else {
+				scheduler.ResetSilentDrops(session, "levitate_perfusion")
 			}
-			scheduler.ResetSilentDrops(session, "levitate_perfusion")
 
 			perfused := 0
 			for perfused < maxLevitatePerfusions && ctx.Err() == nil {

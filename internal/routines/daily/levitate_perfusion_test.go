@@ -70,10 +70,11 @@ func TestLevitatePerfusionRoutine_InfoNoResponse(t *testing.T) {
 
 	err := NewLevitatePerfusionRoutine().Execute(context.Background(), sess, nil)
 	if err == nil {
-		t.Fatal("信息无回包应进入冷却")
+		t.Fatal("灌注也无回包时应进入冷却")
 	}
-	if perfCalls.Load() != 0 {
-		t.Fatalf("信息无回包时不得灌注, calls = %d", perfCalls.Load())
+	// 面板 357/0 无回包不再阻断链路：仍要尝试一次 357/1 以结果码为准。
+	if perfCalls.Load() != 1 {
+		t.Fatalf("面板无回包时仍应尝试一次灌注, calls = %d", perfCalls.Load())
 	}
 }
 
