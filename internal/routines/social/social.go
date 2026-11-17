@@ -1132,6 +1132,18 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			// 功能开放原生探测：未开通家园的账号连 210/0 都可能被静默丢弃
+			// （2026-11-17 qq 账号实测），先按功能门槛跳过，避免每轮白等超时。
+			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDMarryHome); fErr != nil {
+				slog.Info("家园功能开放状态查询失败，本轮跳过",
+					"role_id", session.RoleID(), "err", fErr)
+				return scheduler.NewCooldown(30*time.Minute, "家园功能开放状态查询失败")
+			} else if !open {
+				slog.Info("家园功能未开放，跳过",
+					"role_id", session.RoleID(), "function_id", protocol.FunctionIDMarryHome)
+				return nil
+			}
+
 			// 官方小助手"家园奖励"直接调用 210/18，不发 210/0。
 			// 但未结婚/无家园角色发送 210/18 会被服务端静默丢弃（qq 实测），
 			// 因此先用只读的 210/0 判定婚姻状态：未结婚直接挂起至次日，

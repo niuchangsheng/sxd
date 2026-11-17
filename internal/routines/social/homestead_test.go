@@ -14,6 +14,18 @@ import (
 // newHomesteadTestSession 构造只响应住宅状态与家具效果领取的测试会话。
 func newHomesteadTestSession(t *testing.T, selfResult uint8, effects []protocol.MarryHomeFurnitureEffect) (*client.RoleSession, *[]uint32) {
 	t.Helper()
+	return newHomesteadTestSessionWithFunctions(t,
+		[]int32{protocol.FunctionIDMarryHome}, selfResult, effects)
+}
+
+// newHomesteadTestSessionWithFunctions 允许指定已开放功能列表，用于验证功能门槛。
+func newHomesteadTestSessionWithFunctions(
+	t *testing.T,
+	functionIDs []int32,
+	selfResult uint8,
+	effects []protocol.MarryHomeFurnitureEffect,
+) (*client.RoleSession, *[]uint32) {
+	t.Helper()
 
 	serverConn, clientConn := net.Pipe()
 	t.Cleanup(func() {
@@ -33,6 +45,9 @@ func newHomesteadTestSession(t *testing.T, selfResult uint8, effects []protocol.
 			actions = append(actions, pkt.ActionID)
 			mu.Unlock()
 			switch pkt.ActionID {
+			case protocol.ActionIDPlayerGetFunctions:
+				_ = protocol.WritePacket(serverConn,
+					protocol.BuildPlayerFunctionsResultPacket(functionIDs))
 			case protocol.ActionIDMarryHomeSelfInfo:
 				_ = protocol.WritePacket(serverConn, protocol.BuildMarryHomeSelfInfoResultPacket(selfResult))
 			case protocol.ActionIDMarryHomeGetCake:
@@ -110,5 +125,25 @@ func TestHomesteadRoutine_MarriedClaimsFurnitureEffect(t *testing.T) {
 	}
 	if cakeIdx < 0 || effectIdx < 0 || cakeIdx > effectIdx {
 		t.Fatalf("已婚角色应先发 210/19 探测再发 210/18, actions=%v", *actions)
+	}
+}
+
+// TestHomesteadRoutine_FunctionClosedSkips 验证家园功能 (131) 未开放时不发送
+// 任何住宅业务请求，直接跳过且不进入冷却（2026-11-17：qq 账号未开通家园，
+// 210/18 被静默丢弃，每轮都白等超时）。
+func TestHomesteadRoutine_FunctionClosedSkips(t *testing.T) {
+	s, actions := newHomesteadTestSessionWithFunctions(t, []int32{protocol.FunctionIDSaintArea},
+		protocol.MarryHomeResultSuccess, nil)
+
+	if err := NewHomesteadRoutine().Execute(context.Background(), s, nil); err != nil {
+		t.Fatalf("功能未开放时应正常跳过, 实际: %v", err)
+	}
+
+	for _, act := range *actions {
+		switch act {
+		case protocol.ActionIDMarryHomeSelfInfo, protocol.ActionIDMarryHomeGetCake,
+			protocol.ActionIDMarryHomeBatchFurnitureEffect:
+			t.Fatalf("功能未开放时不应发送住宅业务请求, 实际发送 action=0x%08X", act)
+		}
 	}
 }
