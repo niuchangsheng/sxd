@@ -62,11 +62,14 @@ func NewBagCleanupRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 				slog.Warn("背包清理：拉取背包列表失败", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(10*time.Minute, "背包清理查询无回包")
 			}
-			if int(pack.PackEmptyGrids) > bagCleanupFreeThreshold {
+			// 线上 2/41 的 empty_grids 字段恒为 0（容量 60、已用 47 时仍报 0），
+			// 不能作为满仓判据；用「容量 - 已用格位」计算真实空格。
+			freeSlots := int(pack.PackCapacity) - len(pack.PackItems)
+			if freeSlots > bagCleanupFreeThreshold {
 				return nil
 			}
 			// 只卖到「目标空格数」即可（每卖一叠腾 1 格），避免一次清空全部制作卷。
-			need := bagCleanupTargetFree - int(pack.PackEmptyGrids)
+			need := bagCleanupTargetFree - freeSlots
 			if need > bagCleanupMaxSell {
 				need = bagCleanupMaxSell
 			}
@@ -84,6 +87,7 @@ func NewBagCleanupRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 				return nil
 			}
 			slog.Info("背包清理：空格不足，开始出售装备制作卷", "role_id", session.RoleID(),
+				"free_slots", freeSlots, "capacity", pack.PackCapacity,
 				"empty_grids", pack.PackEmptyGrids, "items", len(pack.PackItems),
 				"scrolls", len(candidates), "need", need)
 			sold := 0

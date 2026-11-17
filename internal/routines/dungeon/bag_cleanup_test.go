@@ -31,8 +31,10 @@ func TestBagCleanup_SellsOnlyEquipmentCraftScrolls(t *testing.T) {
 		switch pkt.ActionID {
 		case protocol.ActionIDItemGetPackList:
 			buf := new(bytes.Buffer)
-			_ = binary.Write(buf, binary.BigEndian, int16(30))
-			_ = binary.Write(buf, binary.BigEndian, int32(2)) // 只剩 2 格
+			// 容量 6、已用 3 件 → 真实空格 3（<= 阈值 5，触发清理）。
+			// empty 字段在线上不可靠（恒为 0），这里仍填入 2 以确认逻辑不依赖它。
+			_ = binary.Write(buf, binary.BigEndian, int16(6))
+			_ = binary.Write(buf, binary.BigEndian, int32(2))
 			_ = binary.Write(buf, binary.BigEndian, uint16(3))
 			// 940 = 逍遥戟制作卷（TypeID 1002，装备制作卷）
 			_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
