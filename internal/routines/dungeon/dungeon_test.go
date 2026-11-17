@@ -406,6 +406,55 @@ func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
 	}
 }
 
+// TestDungeonSweep_HeroMission_NotEnoughPowerKeepsLocalStamina 验证英雄副本扫荡
+// 返回体力不足 (HeroMissionResultNotEnoughPower) 时不清零本地体力。
+//
+// 2026-11-17 线上实测：本地体力 115 点时 35/2 仍返回 NotEnoughPower，旧实现清零
+// 本地体力并挂起 30 分钟，导致后续任务推图误判为体力耗尽，白白浪费约 110 点体力。
+func TestDungeonSweep_HeroMission_NotEnoughPowerKeepsLocalStamina(t *testing.T) {
+	const initialStamina = 115
+	sess, srvConn := createTestSession(t, initialStamina)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionHeroMissionList:
+			w := protocol.NewWriter()
+			w.WriteUint16(1) // 条数
+			w.WriteInt32(166)
+			w.WriteInt8(1)   // 可挑战
+			w.WriteUint8(0)  // 通关次数
+			w.WriteInt8(1)   // 已首通
+			w.WriteInt8(0)   // 当日总购买次数
+			w.WriteInt8(0)   // 剩余购买次数
+			w.WriteInt16(0)  // 购买价格
+			w.WriteInt32(1)  // 已通关数量
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+			return true
+		case protocol.ActionHeroMissionStartPractice:
+			// 失败码回包仍需携带 practice_time 字段 (官方布局: [u8 result][i32 time])。
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.HeroMissionResultNotEnoughPower)
+			w.WriteInt32(0)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionStartPractice, w.Bytes()))
+			return true
+		}
+		return false
+	})
+
+	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		Pipeline: []string{"sweep_elite"},
+	})
+	err := routine.Execute(context.Background(), sess, nil)
+	if !errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("期望返回 ErrStaminaDepleted 触发熔断, 实际返回: %v", err)
+	}
+	if got := sess.GetStamina(); got != initialStamina {
+		t.Fatalf("服务端拒绝扫荡时不应清零本地体力, 期望 %d, 实际 %d", initialStamina, got)
+	}
+}
+
 type mockQuestDungeonRepo struct {
 	quests     map[int]*dictionary.Quest
 	missions   map[int]*dictionary.Mission

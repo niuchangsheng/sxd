@@ -635,6 +635,9 @@ Int32 lucky_item_num
 > 该差异为服务端角色/版本状态决定，客户端无法通过载荷修正；自动化必须在建队请求
 > 连续无回包时熔断本轮试炼（见 `client.ErrBeelzebubTrialsNoResponse`），
 > 禁止遍历全部可挑战关卡盲目重试。
+> 2026-11-17 调整：熔断阈值由 1 次改为连续 3 次（`beelzebubSilentDropThreshold=3`），
+> 循环每轮前进到下一个候选 boss，因此 3 次落在 3 个不同关卡上，兼顾「仅个别关卡被拒」
+> 的发现能力与「挑战副本 N 次失败才退出」的统一约定；熔断后仍按 4 小时冷却。
 
 **关卡状态（`open` 回包）**：官方描述符中的 Boss 行是
 `[Int bossID, Int times, Int todayChallenged]`，语义以官方客户端

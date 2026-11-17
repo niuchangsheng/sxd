@@ -912,9 +912,12 @@ func executeEliteMissionSweep(
 			case eliteTownNoMission:
 				slog.Debug("该城镇暂无可扫荡英雄副本", "role_id", session.RoleID(), "town_id", townID)
 			case eliteTownNotEnoughPower:
-				slog.Info("英雄副本扫荡返回体力不足，结束扫荡", "role_id", session.RoleID(), "town_id", townID)
-				session.SetStamina(0)
-				session.SetExtraStamina(0)
+				// 服务端返回体力不足时不要清零本地体力：实测本地 115 点仍可能
+				// 收到该结果码（英雄副本可能使用独立次数/条件）。清零会让后续
+				// 任务推图误判为体力耗尽，白白浪费一整个 30 分钟周期。
+				slog.Info("英雄副本扫荡返回体力不足，结束扫荡",
+					"role_id", session.RoleID(), "town_id", townID,
+					"local_stamina", session.GetStamina())
 				return successRounds, scheduler.ErrStaminaDepleted
 			case eliteTownIngotRisk:
 				slog.Warn("英雄副本扫荡返回元宝不足，立即停止以避免误消耗元宝", "role_id", session.RoleID(), "town_id", townID)
@@ -2886,6 +2889,10 @@ func executeAuthoritativeQuestCycle(
 ) {
 	const powerPerSweep = 5
 	const maxCycles = 50
+	// maxMissionsPerCycle 单次调度最多推进的剧情关卡数：体力充足时连续推图，
+	// 避免 115 点体力只打一关后干等 30 分钟（2026-11-17 实机）。
+	const maxMissionsPerCycle = 10
+	missionsCleared := 0
 	items := initialItems
 
 	for cycle := 1; cycle <= maxCycles; cycle++ {
@@ -3166,10 +3173,18 @@ func executeAuthoritativeQuestCycle(
 				clearedMissions, failedMissions,
 			) {
 				progressMade = true
-				// 剧情副本战斗后服务端上下文已变化，后续 get_sections/enter_mission
-				// 必然被静默丢弃；本会话只推进这一关，剩余关卡留待新会话。
-				slog.Info("本会话任务推图已完成一关，结束任务循环", "role_id", session.RoleID())
-				return
+				missionsCleared++
+				if missionsCleared >= maxMissionsPerCycle || session.GetBaseStamina() < powerPerSweep {
+					slog.Info("任务推图本轮完成，结束任务循环",
+						"role_id", session.RoleID(), "missions", missionsCleared,
+						"remaining_stamina", session.GetBaseStamina())
+					return
+				}
+				slog.Info("任务推图继续挑战下一关",
+					"role_id", session.RoleID(), "missions", missionsCleared,
+					"remaining_stamina", session.GetBaseStamina())
+				// 跳出内层任务列表，外层 cycle 会重新 SyncQuests 获取最新进度。
+				break
 			}
 			if _, bad := questContextBad.Load(session); bad {
 				slog.Info("任务上下文已不可用，结束本会话任务推图", "role_id", session.RoleID())
@@ -3669,8 +3684,14 @@ func practiceMission(
 		return true, actualRounds, nil
 
 	case protocol.PracticeResultNotEnoughPower:
-		session.SetStamina(0)
-		session.SetExtraStamina(0)
+		// 同上：仅在本地体力已接近耗尽时才清零，避免服务端单次拒绝污染本地状态。
+		if session.GetStamina() <= 5 {
+			session.SetStamina(0)
+			session.SetExtraStamina(0)
+		} else {
+			slog.Warn("扫荡返回体力不足但本地体力充足，保留本地体力",
+				"role_id", session.RoleID(), "local_stamina", session.GetStamina())
+		}
 		return false, 0, scheduler.ErrStaminaDepleted
 
 	case protocol.PracticeResultBagFull:
@@ -3928,6 +3949,15 @@ func challengeStoryMission(
 	}
 
 	if enterStatus == protocol.MissionResultNotEnoughPower || enterStatus == 18 { // LESS_POWER == 18
+		if session.GetBaseStamina() > 5 {
+			// 本地体力充足却收到 LESS_POWER：服务端状态与本地快照不一致，
+			// 清零本地体力会掩盖真实值并拖垮后续周期；记录后放弃本关。
+			slog.Warn("进入剧情副本返回体力不足但本地体力充足，跳过本关",
+				"role_id", session.RoleID(), "mission_id", m.ID,
+				"base_stamina", session.GetBaseStamina(),
+				"total_stamina", session.GetStamina())
+			return false
+		}
 		session.SetStamina(0)
 		session.SetExtraStamina(0)
 		if !ensureStamina() {
