@@ -48,6 +48,31 @@ func allowQuestReconnect(session *client.RoleSession) bool {
 	return true
 }
 
+// waitForReconnect 等待主动重连完成一次「离开 Active → 回到 Active」的状态迁移。
+//
+// ReconnectNow 仅关闭底层连接，状态机由读循环异步切入 StateReconnecting。
+// 若关闭后立即检查 State()==Active，会读到尚未更新的旧状态并把本轮当成
+// 已恢复，导致随后整轮请求都以 "session is not active" 失败
+// （2026-11-17 12:34 实测 10 次无效任务交付）。
+//
+// state 参数化以便单测用假状态序列验证；返回 false 表示重连未在超时内完成。
+func waitForReconnect(
+	ctx context.Context,
+	state func() client.SessionState,
+	leaveGrace time.Duration,
+	activeTimeout time.Duration,
+) bool {
+	leaveDeadline := time.Now().Add(leaveGrace)
+	for state() == client.StateActive && time.Now().Before(leaveDeadline) && ctx.Err() == nil {
+		time.Sleep(50 * time.Millisecond)
+	}
+	deadline := time.Now().Add(activeTimeout)
+	for state() != client.StateActive && time.Now().Before(deadline) && ctx.Err() == nil {
+		time.Sleep(300 * time.Millisecond)
+	}
+	return state() == client.StateActive
+}
+
 // eliteSweepBlocked 记录连续/反复开始失败的精英副本，避免每轮固定丢包。
 // key = roleID:dungeonID，value = 解禁时间。
 var eliteSweepBlocked sync.Map
@@ -1244,11 +1269,11 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							session.ReconnectNow()
 							slog.Info("任务上下文不可用，主动重连后继续本轮推图",
 								"role_id", session.RoleID())
-							deadline := time.Now().Add(60 * time.Second)
-							for session.State() != client.StateActive && time.Now().Before(deadline) && ctx.Err() == nil {
-								time.Sleep(300 * time.Millisecond)
-							}
-							if session.State() != client.StateActive {
+							// ReconnectNow 只是关闭连接，状态机由读循环异步切到
+							// Reconnecting；若立即检查 State()==Active 会误判为已恢复，
+							// 随后一整轮交付/同步全部以 session is not active 失败
+							// （2026-11-17 12:34 实测 10 次无效交付）。
+							if !waitForReconnect(ctx, session.State, 5*time.Second, 60*time.Second) {
 								slog.Info("主动重连未在超时内恢复，跳过本轮任务推图", "role_id", session.RoleID())
 								questBad = true
 							}
