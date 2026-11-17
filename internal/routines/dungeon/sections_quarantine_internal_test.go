@@ -7,8 +7,76 @@ import (
 	"testing"
 	"time"
 
+	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
 )
+
+// newPushTestSession 构造可主动向客户端推送回包的测试会话。
+func newPushTestSession(t *testing.T) (*client.RoleSession, net.Conn) {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+	go func() {
+		for {
+			if _, err := protocol.ReadPacket(serverConn); err != nil {
+				return
+			}
+		}
+	}()
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-push-test",
+		RoleName:   "推送测试",
+		ServerAddr: "mock",
+		Dialer: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	t.Cleanup(sess.Close)
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != client.StateActive {
+		t.Fatalf("session not active, state=%v", sess.State())
+	}
+	return sess, serverConn
+}
+
+// TestWaitForMod4Response_SeesLateResponse 验证等待期间收到 4/0 迟到回包时返回 true。
+func TestWaitForMod4Response_SeesLateResponse(t *testing.T) {
+	sess, serverConn := newPushTestSession(t)
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		_ = protocol.WritePacket(serverConn,
+			protocol.NewPacket(protocol.ActionIDMissionGetSections, []byte{0x00, 0x00}))
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if !waitForMod4Response(ctx, sess, time.Second) {
+		t.Fatal("收到 4/0 迟到回包后应返回 true")
+	}
+}
+
+// TestWaitForMod4Response_TimesOut 验证没有 Mod 4 回包时按时返回 false。
+func TestWaitForMod4Response_TimesOut(t *testing.T) {
+	sess, _ := newPushTestSession(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	if waitForMod4Response(ctx, sess, 150*time.Millisecond) {
+		t.Fatal("没有 Mod 4 回包时应返回 false")
+	}
+	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+		t.Fatalf("应等待到超时再返回, 实际耗时 %s", elapsed)
+	}
+}
 
 // TestFetchMissionSections_FailedMapQuarantined 验证同一地图 4/0 连续失败后，
 // 静默期内不再重复探测（避免同轮多任务各等两轮 8 秒超时）。

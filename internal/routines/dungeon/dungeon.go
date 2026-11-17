@@ -3883,6 +3883,32 @@ func questSectionsRecentlyDown(session *client.RoleSession, mapID int32) (time.T
 	return until, true
 }
 
+// waitForMod4Response 等待最近收到的包来自 Mod 4（4/0 章节列表回包）。
+//
+// 服务端对 get_sections 的应答常在超时后 0.5~2 秒才到达；进入剧情副本时
+// 会话层会用 lastRx 覆盖 PrevAct，若该值不是 Mod 4 则 4/1 被静默丢弃。
+// 返回 true 表示已在超时内观察到 Mod 4 回包。
+func waitForMod4Response(ctx context.Context, session *client.RoleSession, timeout time.Duration) bool {
+	if session == nil || timeout <= 0 {
+		return false
+	}
+	if session.LastRxActionID()>>16 == 4 {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(100 * time.Millisecond):
+		}
+		if session.LastRxActionID()>>16 == 4 {
+			return true
+		}
+	}
+	return false
+}
+
 func markQuestSectionsDown(session *client.RoleSession, mapID int32, ttl time.Duration) {
 	e := sectionsDownEntryFor(session)
 	e.mu.Lock()
@@ -4030,6 +4056,13 @@ func challengeStoryMission(
 		if ctx.Err() != nil || session.State() == client.StateClosed {
 			return false
 		}
+	}
+
+	// 服务端常在 4/0 超时后 0.5~2 秒才回包。若最近收到的包不是 Mod 4 响应，
+	// 短暂等待迟到回包：会话层发包时用 lastRx 覆盖 PrevAct，进入剧情副本要求
+	// 该值为 Mod 4（2026-11-17 实测 lastRx=0x00040000 稳定成功，0x00000002 必失败）。
+	if m.Type != 1 {
+		waitForMod4Response(ctx, session, 2*time.Second)
 	}
 
 	// 1. 进入副本 (Mod 4, Act 1: enter_mission, 前置对齐 ActionIDMissionGetSections)
