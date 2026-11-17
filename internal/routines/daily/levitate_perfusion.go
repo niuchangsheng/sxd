@@ -5,7 +5,7 @@
 //	357/0 get_levitate_info [UByte type]
 //	357/1 perfusion         [UByte type] → [UByte result, [Int,Int]]
 //
-// 伙伴 type=1。结果码 2=成功继续、3=已灌注完、4=功能未开放、5/7/8/9/10 等=停止。
+// 伙伴 type=1（官方 ROLE 页签），主角 type=0（MAINROLE，默认页签）。结果码 2=成功继续、3=已灌注完、4=功能未开放、5/7/8/9/10 等=停止。
 // 不消耗元宝。
 package daily
 
@@ -50,6 +50,14 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 
 			infoResp := call(protocol.BuildLevitateInfoPacket(protocol.LevitateTypeRole),
 				protocol.ActionIDLevitateInfo)
+			if infoResp == nil {
+				// 伙伴页签的 357/0 会被服务端静默丢弃（2026-11-17 实测），
+				// 而官方默认页签是主角 (MAINROLE=0)。面板本身只作为存活探针
+				// （载荷未解析），因此改用主角页签再探一次，再把结果用于决定是否继续灌注。
+				slog.Info("飞升信息（伙伴页签）无回包，改试主角页签", "role_id", session.RoleID())
+				infoResp = call(protocol.BuildLevitateInfoPacket(protocol.LevitateTypeMainRole),
+					protocol.ActionIDLevitateInfo)
+			}
 			if infoResp == nil {
 				// 伙伴灌注达到当日/阶段上限后服务端会静默丢弃 357/0；
 				// 连续 3 次挂起到次日重置，避免每 30 分钟空等。

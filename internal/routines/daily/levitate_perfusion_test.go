@@ -76,3 +76,34 @@ func TestLevitatePerfusionRoutine_InfoNoResponse(t *testing.T) {
 		t.Fatalf("信息无回包时不得灌注, calls = %d", perfCalls.Load())
 	}
 }
+
+// TestLevitatePerfusionRoutine_InfoFallsBackToMainRole 验证伙伴页签 (type=1) 的
+// 357/0 被服务端静默丢弃时，改用主角页签 (type=0) 探测后仍会继续灌注。
+func TestLevitatePerfusionRoutine_InfoFallsBackToMainRole(t *testing.T) {
+	var perfCalls, mainInfoCalls atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDLevitateInfo:
+			if len(pkt.Payload) > 0 && pkt.Payload[0] == protocol.LevitateTypeMainRole {
+				mainInfoCalls.Add(1)
+				_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0}))
+			}
+			// type=1 伙伴页签：静默丢弃，不回包。
+		case protocol.ActionIDLevitatePerfusion:
+			perfCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildLevitatePerfusionResultPacket(
+				protocol.LevitateUsedUp, nil))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewLevitatePerfusionRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("levitate: %v", err)
+	}
+	if mainInfoCalls.Load() != 1 {
+		t.Fatalf("应回退到主角页签探测, calls = %d", mainInfoCalls.Load())
+	}
+	if perfCalls.Load() != 1 {
+		t.Fatalf("主角页签探活后应继续灌注, calls = %d", perfCalls.Load())
+	}
+}
