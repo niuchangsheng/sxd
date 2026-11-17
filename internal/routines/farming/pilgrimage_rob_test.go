@@ -799,3 +799,51 @@ func TestCrossPilgrimageEscort_StopsWhenTimesFull(t *testing.T) {
 		t.Fatalf("剩余 1 次应只启程 1 次, starts=%d info_calls=%d", starts, infoCalls)
 	}
 }
+
+// TestPilgrimageRobBackoff_StreakLimitEscalatesToDailyReset 验证连续失败达到上限后
+// 直接挂起到次日重置，避免整晚每个 30 分钟窗口都重复战败。
+func TestPilgrimageRobBackoff_StreakLimitEscalatesToDailyReset(t *testing.T) {
+	now := time.Date(2026, 11, 17, 22, 0, 0, 0, time.Local)
+	wait, capped := pilgrimageRobBackoff(pilgrimageRobStreakLimit, 10*time.Minute, now)
+	if !capped {
+		t.Fatal("达到失败上限应返回 capped=true")
+	}
+	// 次日 00:05 重置 → 2 小时 5 分钟。
+	if want := 2*time.Hour + 5*time.Minute; wait != want {
+		t.Fatalf("期望退避到次日重置 %s, 实际 %s", want, wait)
+	}
+}
+
+// TestPilgrimageRobBackoff_NearMidnightClampsTo30m 验证临近重置时至少退避 30 分钟，
+// 避免刚挂起就被立刻唤醒再次失败。
+func TestPilgrimageRobBackoff_NearMidnightClampsTo30m(t *testing.T) {
+	now := time.Date(2026, 11, 17, 23, 58, 0, 0, time.Local)
+	wait, capped := pilgrimageRobBackoff(pilgrimageRobStreakLimit, 10*time.Minute, now)
+	if !capped {
+		t.Fatal("达到失败上限应返回 capped=true")
+	}
+	if wait != 30*time.Minute {
+		t.Fatalf("临近重置应夹紧到 30 分钟, 实际 %s", wait)
+	}
+}
+
+// TestPilgrimageRobBackoff_ThreeLossesExtendTo30m 验证累计 3 次失败延长到 30 分钟。
+func TestPilgrimageRobBackoff_ThreeLossesExtendTo30m(t *testing.T) {
+	now := time.Date(2026, 11, 17, 20, 0, 0, 0, time.Local)
+	wait, capped := pilgrimageRobBackoff(3, 10*time.Minute, now)
+	if capped {
+		t.Fatal("未达上限不应挂起到次日")
+	}
+	if wait != 30*time.Minute {
+		t.Fatalf("3 次失败应退避 30 分钟, 实际 %s", wait)
+	}
+}
+
+// TestPilgrimageRobBackoff_BelowThresholdKeepsRetry 验证未达阈值时保留原重试时长。
+func TestPilgrimageRobBackoff_BelowThresholdKeepsRetry(t *testing.T) {
+	now := time.Date(2026, 11, 17, 20, 0, 0, 0, time.Local)
+	wait, capped := pilgrimageRobBackoff(2, 10*time.Minute, now)
+	if capped || wait != 10*time.Minute {
+		t.Fatalf("未达阈值应保留 10 分钟重试, 实际 wait=%s capped=%v", wait, capped)
+	}
+}

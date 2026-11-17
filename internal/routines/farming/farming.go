@@ -710,6 +710,31 @@ const pilgrimageRobMaxLosses = 2
 // 冷却结束后立刻再打只会反复失败，累计 3 次后延长退避到 30 分钟。
 var pilgrimageRobLossStreak sync.Map // *client.RoleSession -> int
 
+// pilgrimageRobStreakLimit 连续打劫失败上限：达到后直接挂起到次日重置。
+//
+// 2026-11-17 s0 实测：全天每个 30 分钟窗口都去打等级 300 的对手并战败，
+// 每次都要建立跨服会话、查询路况与目标详情，整晚空转。失败不消耗次数，
+// 但战力差距当天不会改变，因此 N 次（6 次 ≈ 3 小时）后挂起到次日。
+const pilgrimageRobStreakLimit = 6
+
+// pilgrimageRobBackoff 根据连续失败次数计算退避时长。
+//
+// 返回 (wait, capped)：capped=true 表示已达上限、应挂起到次日重置；
+// 否则 wait 为延长后的退避（可能等于入参 retryAfter）。
+func pilgrimageRobBackoff(streak int, retryAfter time.Duration, now time.Time) (time.Duration, bool) {
+	if streak >= pilgrimageRobStreakLimit {
+		wait := scheduler.NextDailyReset(now).Sub(now)
+		if wait < 30*time.Minute {
+			wait = 30 * time.Minute
+		}
+		return wait, true
+	}
+	if streak >= 3 && retryAfter < 30*time.Minute {
+		return 30 * time.Minute, false
+	}
+	return retryAfter, false
+}
+
 type PilgrimageConfig struct {
 	// AutoRob 是否在启程护送后自动打劫取经路上其他玩家队伍。
 	AutoRob bool
@@ -1294,11 +1319,18 @@ func crossPilgrimageRob(ctx context.Context, session *client.RoleSession, selfID
 					}
 				}
 				pilgrimageRobLossStreak.Store(session, streak)
-				if streak >= 3 && retryAfter < 30*time.Minute {
+				if wait, capped := pilgrimageRobBackoff(streak, retryAfter, time.Now()); capped {
+					// 连续失败达到上限：战力差距当天不会改变，挂起到次日重置，
+					// 避免整晚每 30 分钟重复建立跨服会话并战败。
+					slog.Info("跨服取经连续打劫失败达上限，挂起至次日重置",
+						"role_id", session.RoleID(), "loss_streak", streak,
+						"retry_after", wait.Round(time.Minute))
+					return wait
+				} else if wait > retryAfter {
 					slog.Info("跨服取经累计打劫失败，延长退避 30 分钟",
 						"role_id", session.RoleID(), "loss_streak", streak)
 					// 立即返回，避免随后查询服务端 10 分钟冷却时把退避覆盖回 10 分钟。
-					return 30 * time.Minute
+					return wait
 				}
 				if losses >= pilgrimageRobMaxLosses {
 					slog.Info("跨服取经连续打劫失败，延长退避",
