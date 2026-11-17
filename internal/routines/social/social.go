@@ -59,6 +59,21 @@ func jieYuanOpenWithQuality(ctx context.Context, session *client.RoleSession, it
 		protocol.ActionIDJieYuanBoxOpen)
 }
 
+// fetchJieYuanPack 查询背包列表（用于开箱前确认空格）。
+func fetchJieYuanPack(ctx context.Context, session *client.RoleSession) (*protocol.PackItemListResponse, error) {
+	pkt := protocol.BuildGetPackItemListPacket()
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	resp, err := session.Call(c, pkt, protocol.ActionIDItemGetPackList)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("背包列表返回空响应")
+	}
+	return protocol.ParsePackItemListResponse(resp.Payload)
+}
+
 func fetchJieYuanBoxCount(ctx context.Context, session *client.RoleSession, itemID int32) (int32, bool) {
 	pkt := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDJieYuanBoxOpen)
 	c, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -171,6 +186,18 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			}
 
 			var totalOpened int
+
+			// 开箱会产出奖励。背包 0 空格时服务端可能直接丢弃开箱请求，表现为
+			// 「无回包且库存不变」，与其他不可开启情形无法区分，还会把箱型错误
+			// 标记 6 小时跳过。先确认空格，满仓则交给背包清理后再开。
+			if pack, pErr := fetchJieYuanPack(ctx, session); pErr == nil && pack != nil && pack.PackEmptyGrids == 0 {
+				slog.Info("结缘宝箱开箱前背包已满，等待背包清理后再开",
+					"role_id", session.RoleID(), "pack_items", len(pack.PackItems), "empty_grids", pack.PackEmptyGrids)
+				return scheduler.ErrBagFull
+			} else if pErr != nil {
+				slog.Info("结缘宝箱开箱前查询背包无回包，继续按原流程尝试",
+					"role_id", session.RoleID(), "err", pErr)
+			}
 
 			// altQualityTried 记录已做过「0 档自动合成」变体探测的箱型，每进程每种一次。
 			altQualityTried := make(map[int32]bool, len(openable))
