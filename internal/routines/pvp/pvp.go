@@ -6,6 +6,7 @@ package pvp
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -1083,6 +1084,16 @@ func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSess
 		} else {
 			tasks = parsed
 		}
+		// 面板载荷较小，打印原始字节与解析结果，便于核对任务 ID/进度/领取位
+		// 是否正确（2026-11-17：15 条可领任务全部返回 FAILED(5)，需排除
+		// 「解析错位导致用错 task_id」的可能）。
+		head := resp.Payload
+		if len(head) > 256 {
+			head = head[:256]
+		}
+		slog.Info("跨服PK任务面板", "role_id", session.RoleID(),
+			"payload_len", len(resp.Payload), "hex", hex.EncodeToString(head),
+			"tasks", tasks)
 	}
 	// 回包条目为 [task_id, progress, claimed]；claimed=1 表示已领取。
 	// 未领取的任务都尝试一次，未完成时服务端返回 NOT_COMPLETED(22) 并继续。
