@@ -3,7 +3,9 @@ package dungeon
 import (
 	"context"
 	"fmt"
+	"net"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -558,5 +560,28 @@ func TestRunStPracticeRoom_RestoresOriginalSeatWhenTargetFails(t *testing.T) {
 	}
 	if !api.hasCall("sit:3:0") {
 		t.Fatalf("目标房间与普通场均不可用时应恢复原席位, 调用序列: %v", api.calls)
+	}
+}
+
+// TestTrainingRoomRoutine_FunctionClosedSkips 验证练功房功能 (94) 未开放时
+// 不建立跨服会话、不发起任何业务请求。
+func TestTrainingRoomRoutine_FunctionClosedSkips(t *testing.T) {
+	var nonFunctionCalls atomic.Int32
+	sess := newTownResetTestSession(t, func(pkt *protocol.Packet, conn net.Conn) bool {
+		if pkt.ActionID == protocol.ActionIDPlayerGetFunctions {
+			_ = protocol.WritePacket(conn,
+				protocol.BuildPlayerFunctionsResultPacket([]int32{protocol.FunctionIDZodiac}))
+			return true
+		}
+		nonFunctionCalls.Add(1)
+		return true
+	})
+	defer sess.Close()
+
+	if err := NewTrainingRoomRoutine(DefaultTrainingRoomConfig()).Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("功能未开放时应正常跳过, 实际: %v", err)
+	}
+	if got := nonFunctionCalls.Load(); got != 0 {
+		t.Fatalf("功能未开放时不应建立跨服会话或发业务请求, 实际 %d 次", got)
 	}
 }

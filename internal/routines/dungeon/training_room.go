@@ -74,6 +74,18 @@ func NewTrainingRoomRoutine(cfg TrainingRoomConfig) scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行副本任务: 仙界练功房普通/高级场挂机收益维护", "role_id", session.RoleID())
 
+			// 功能开放原生探测：未开放时每次巡检都会建立一次跨服会话并
+			// 在入座阶段收到 FUNCTION_NO_OPEN（2026-11-18 s0 实测每小时空跑）。
+			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDStPracticeRoom); fErr != nil {
+				slog.Info("仙界练功房功能开放状态查询失败，本轮跳过",
+					"role_id", session.RoleID(), "err", fErr)
+				return nil
+			} else if !open {
+				slog.Info("仙界练功房功能未开放，跳过",
+					"role_id", session.RoleID(), "function_id", protocol.FunctionIDStPracticeRoom)
+				return nil
+			}
+
 			// 单轮跨服维护包含登录、查询、领取与入座，预留 3 分钟预算。
 			crossCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			defer cancel()
