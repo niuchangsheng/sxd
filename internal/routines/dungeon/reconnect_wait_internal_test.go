@@ -56,3 +56,26 @@ func TestWaitForReconnect_ContextCanceled(t *testing.T) {
 		t.Fatalf("上下文取消后应立即返回, 实际耗时 %s", elapsed)
 	}
 }
+
+// TestAllowQuestMidCycleReconnect_Throttle 验证轮内重连按间隔节流，
+// 避免每关都重连造成重连风暴。
+func TestAllowQuestMidCycleReconnect_Throttle(t *testing.T) {
+	sess := &client.RoleSession{}
+	old := questMidReconnectInterval
+	questMidReconnectInterval = 20 * time.Millisecond
+	t.Cleanup(func() {
+		questMidReconnectInterval = old
+		questMidReconnectAt.Delete(sess)
+	})
+
+	if !allowQuestMidCycleReconnect(sess) {
+		t.Fatal("首次应允许轮内重连")
+	}
+	if allowQuestMidCycleReconnect(sess) {
+		t.Fatal("节流间隔内不应再次允许重连")
+	}
+	time.Sleep(30 * time.Millisecond)
+	if !allowQuestMidCycleReconnect(sess) {
+		t.Fatal("超过节流间隔后应重新允许重连")
+	}
+}

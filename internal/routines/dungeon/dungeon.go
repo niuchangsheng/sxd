@@ -48,6 +48,31 @@ func allowQuestReconnect(session *client.RoleSession) bool {
 	return true
 }
 
+// maxQuestReconnectsPerCycle 单轮调度内为恢复任务上下文允许的最大重连次数。
+const maxQuestReconnectsPerCycle = 5
+
+// questMidReconnectInterval 轮内重连节流间隔（变量形式便于单测缩短）。
+var questMidReconnectInterval = 3 * time.Minute
+
+// questMidReconnectAt 记录每个会话上次轮内重连时间，避免重连风暴。
+var questMidReconnectAt sync.Map // *client.RoleSession -> time.Time
+
+// allowQuestMidCycleReconnect 判断当前是否允许在任务循环中途重连。
+//
+// 单独战斗后服务端 Mod 4 上下文即失效，同一会话内无法恢复；体力充足时
+// 立即换新会话继续推图，避免「160 点体力只打一波就等 30 分钟」
+// （2026-11-18 实机）。按 3 分钟节流，单轮上限见 maxQuestReconnectsPerCycle。
+func allowQuestMidCycleReconnect(session *client.RoleSession) bool {
+	now := time.Now()
+	if v, ok := questMidReconnectAt.Load(session); ok {
+		if t, _ := v.(time.Time); now.Sub(t) < questMidReconnectInterval {
+			return false
+		}
+	}
+	questMidReconnectAt.Store(session, now)
+	return true
+}
+
 // waitForReconnect 等待主动重连完成一次「离开 Active → 回到 Active」的状态迁移。
 //
 // ReconnectNow 仅关闭底层连接，状态机由读循环异步切入 StateReconnecting。
@@ -2964,6 +2989,7 @@ func executeAuthoritativeQuestCycle(
 	// 避免 115 点体力只打一关后干等 30 分钟（2026-11-17 实机）。
 	const maxMissionsPerCycle = 10
 	missionsCleared := 0
+	missionsReconnects := 0
 	items := initialItems
 
 	for cycle := 1; cycle <= maxCycles; cycle++ {
@@ -3258,6 +3284,25 @@ func executeAuthoritativeQuestCycle(
 				break
 			}
 			if _, bad := questContextBad.Load(session); bad {
+				// 单次战斗后服务端 Mod 4 上下文即失效，同一会话内无法恢复；
+				// 体力充足且未达单轮上限时立即重连换新会话继续推图，
+				// 避免大量体力只用一波就等 30 分钟（2026-11-18 实机）。
+				if session.GetBaseStamina() >= powerPerSweep &&
+					missionsReconnects < maxQuestReconnectsPerCycle &&
+					allowQuestMidCycleReconnect(session) {
+					missionsReconnects++
+					questContextBad.Delete(session)
+					questSectionsAnchorCache.Delete(session)
+					questTownKnownGood.Delete(session)
+					session.ReconnectNow()
+					if waitForReconnect(ctx, session.State, 5*time.Second, 60*time.Second) {
+						slog.Info("任务上下文失效，本轮内重连后继续推图",
+							"role_id", session.RoleID(),
+							"reconnects", missionsReconnects,
+							"remaining_stamina", session.GetBaseStamina())
+						break
+					}
+				}
 				slog.Info("任务上下文已不可用，结束本会话任务推图", "role_id", session.RoleID())
 				return
 			}
