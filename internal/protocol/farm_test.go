@@ -5,8 +5,6 @@
 package protocol
 
 import (
-	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"testing"
 )
@@ -286,27 +284,27 @@ func TestFarmIntRequests_BarePayload(t *testing.T) {
 	}
 }
 
-// TestParseFarmGetInfoResult_Real48ByteLayout 验证真实 48 字节土地切片格式：
-// 每块 4B LandID + 44B 其他数据，必须逐块对齐，不能错位。
-func TestParseFarmGetInfoResult_Real48ByteLayout(t *testing.T) {
-	landIDs := []int32{49530, 49531, 49532}
-	buf := bytes.NewBuffer(nil)
-	_ = binary.Write(buf, binary.BigEndian, uint16(len(landIDs)))
-	for _, id := range landIDs {
-		_ = binary.Write(buf, binary.BigEndian, id)
-		buf.Write(make([]byte, 44))
+// TestParseFarmGetInfoResult_RealVariableLayout 验证 2026-11-18 实机回包的
+// 变长土地记录格式：已种植土地带两个长度前缀字符串（"ZhuBaJie"/"猪八戒"），
+// 空闲土地字符串长度为 0，必须逐条按变长结构对齐。
+func TestParseFarmGetInfoResult_RealVariableLayout(t *testing.T) {
+	const payloadHex = "0004000279bd000d7df200085a687542614a6965000ce4bb99e78caae585abe68892000000640000000005d61a78000000000f8e8b40000000230000000000000001000300000279bc000d7df200085a687542614a6965000ce4bb99e78caae585abe68892000000640000000005d61a78000000000f8e8b40000000230000000000000001000300000279be00000000000000000000000000000000000000000000000000000000000000000000000000000001010200000279bf000000000000000000000000000000000000000000000000000000000000000000000000000000010102000000000800000064"
+	payload, err := hex.DecodeString(payloadHex)
+	if err != nil {
+		t.Fatalf("测试数据解码失败: %v", err)
 	}
 
-	res, err := ParseFarmGetInfoResult(buf.Bytes())
+	res, err := ParseFarmGetInfoResult(payload)
 	if err != nil {
-		t.Fatalf("解析 48 字节格式失败: %v", err)
+		t.Fatalf("解析真实变长格式失败: %v", err)
 	}
-	if len(res.Fields) != len(landIDs) {
-		t.Fatalf("土地数量不符: %d", len(res.Fields))
+	want := []int32{162237, 162236, 162238, 162239}
+	if len(res.Fields) != len(want) {
+		t.Fatalf("土地数量不符: 期望 %d, 实际 %d", len(want), len(res.Fields))
 	}
-	for i, want := range landIDs {
-		if res.Fields[i].LandID != want {
-			t.Fatalf("第 %d 块土地 ID 错位: 期望 %d, 实际 %d", i+1, want, res.Fields[i].LandID)
+	for i, id := range want {
+		if res.Fields[i].LandID != id {
+			t.Fatalf("第 %d 块土地 ID 错位: 期望 %d, 实际 %d", i+1, id, res.Fields[i].LandID)
 		}
 	}
 }

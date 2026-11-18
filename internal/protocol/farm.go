@@ -388,29 +388,39 @@ func ParseFarmGetInfoResult(payload []byte) (*FarmGetInfoResult, error) {
 	}
 
 	fields := make([]FarmField, 0, count)
-	// 真实抓包与实机返回中每块土地固定 48 字节
-	// （docs/research/farm-protocol-reconstruction.md：4B LandID + 36B 养成 + 4B 标志 + 4B 附加）。
-	// 2026-11-18 线上按 47 字节解析导致第 2 块起整体错位，
-	// 日志出现 land_id=0 / 负数并与实时状态表无法匹配。
-	isRealFormat := len(payload) >= 2+int(count)*48
+	// 真实回包（2026-11-18 实机抓取）中土地记录为变长结构：
+	//   4B LandID + 4B 附加ID + (2B 长度 + 名称) + (2B 长度 + 作物/称号) + 35B 数值
+	// 已种植土地带两个字符串（如 "ZhuBaJie" 与 "猪八戒"），空闲土地两个长度均为 0，
+	// 因此记录长度在 47~N 之间浮动，不能按固定步长解析（固定 47/48 都会错位）。
+	isVariableFormat := len(payload) >= 2+int(count)*47
+	isSimpleFormat := !isVariableFormat && len(payload) >= 2+int(count)*16
 
 	for i := 0; i < int(count); i++ {
-		if isRealFormat {
+		if isVariableFormat {
 			landID, rErr := r.ReadInt32()
 			if rErr != nil {
 				return nil, rErr
 			}
-			// 4..47: 44 字节地皮与升级数据 (跳过)
-			_, _ = r.ReadBytes(44)
-
-			fields = append(fields, FarmField{
-				LandID:       landID,
-				State:        1, // 默认已开垦空闲状态，后续由 Act 21 精准覆写
-				Cooldown:     0,
-				SeedOrRoleID: 0,
-			})
-		} else {
-			// 兼容 16 字节简易格式
+			// 4B 附加 ID（已种植时非 0，与 LandID 无关，仅作对齐）。
+			if _, rErr = r.ReadInt32(); rErr != nil {
+				return nil, rErr
+			}
+			for s := 0; s < 2; s++ {
+				n, rErr := r.ReadUint16()
+				if rErr != nil {
+					return nil, rErr
+				}
+				if _, rErr = r.ReadBytes(int(n)); rErr != nil {
+					return nil, rErr
+				}
+			}
+			// 35B 数值字段（等级/冷却/标志等），基础列表阶段不需要。
+			if _, rErr := r.ReadBytes(35); rErr != nil {
+				return nil, rErr
+			}
+			fields = append(fields, FarmField{LandID: landID, State: 1})
+		} else if isSimpleFormat {
+			// 兼容 16 字节简易格式（单测/Mock 构造）。
 			landID, _ := r.ReadInt32()
 			state, _ := r.ReadInt32()
 			cooldown, _ := r.ReadInt32()
@@ -421,6 +431,9 @@ func ParseFarmGetInfoResult(payload []byte) (*FarmGetInfoResult, error) {
 				Cooldown:     cooldown,
 				SeedOrRoleID: seedOrRoleID,
 			})
+		} else {
+			return nil, fmt.Errorf("%w: unsupported farm info layout (len=%d count=%d)",
+				ErrInvalidPayload, len(payload), count)
 		}
 	}
 
