@@ -111,13 +111,37 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 			if deployResp := call(protocol.BuildEraCreationFightDeployPacket(),
 				protocol.ActionIDEraCreationFightDeploy); deployResp != nil {
 				head := deployResp.Payload
-				if len(head) > 64 {
-					head = head[:64]
+				if len(head) > 128 {
+					head = head[:128]
 				}
 				slog.Info("造化秘境布阵面板", "role_id", session.RoleID(),
-					"len", len(deployResp.Payload),
-					"result", head[0],
-					"hex", hex.EncodeToString(head))
+					"len", len(deployResp.Payload), "hex", hex.EncodeToString(head))
+				// 布阵探测：用面板里的 deploy_id 与一个非空槽位实体调用 866/9，
+				// 确认「先布阵再挑战」是否是 fight(10) 不再被丢弃的前置条件。
+				if panel, pErr := protocol.ParseEraCreationDeployPanel(deployResp.Payload); pErr != nil {
+					slog.Info("解析造化秘境布阵面板失败", "role_id", session.RoleID(), "err", pErr)
+				} else {
+					slog.Info("造化秘境布阵数据", "role_id", session.RoleID(),
+						"deploy_id", panel.DeployID, "slots", panel.Slots)
+					entityID := int32(0)
+					for _, sl := range panel.Slots {
+						if sl[1] != 0 {
+							entityID = sl[1]
+							break
+						}
+					}
+					if entityID != 0 {
+						if dResp := call(protocol.BuildEraCreationDeployPacket(panel.DeployID, entityID, 0),
+							protocol.ActionIDEraCreationDeploy); dResp != nil {
+							code, _ := protocol.ParseActionFirstByte(dResp.Payload, "造化秘境布阵")
+							slog.Info("造化秘境布阵结果", "role_id", session.RoleID(),
+								"deploy_id", panel.DeployID, "entity_id", entityID,
+								"result", code, "result_text", protocol.EraCreationResultText(code))
+						} else {
+							slog.Info("造化秘境布阵无回包", "role_id", session.RoleID())
+						}
+					}
+				}
 			} else {
 				slog.Info("造化秘境布阵面板无回包", "role_id", session.RoleID())
 			}

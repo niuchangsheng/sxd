@@ -101,9 +101,11 @@ const (
 	// 官方 flow: fight_event(7) → fight_deploy(8) → deploy(9) → fight(10)；
 	// 缺少布阵时 fight(10) 会被服务端静默丢弃。
 	ActionIDEraCreationFightDeploy uint32 = 0x03620008
-	ActionIDEraCreationFight       uint32 = 0x0362000A
-	ActionIDEraCreationAwardPanel  uint32 = 0x0362000B
-	ActionIDEraCreationChoose      uint32 = 0x0362000C
+	// ActionIDEraCreationDeploy 布阵（866/9, request=[Int deploy_id, Int entity_id, UByte type]）。
+	ActionIDEraCreationDeploy     uint32 = 0x03620009
+	ActionIDEraCreationFight      uint32 = 0x0362000A
+	ActionIDEraCreationAwardPanel uint32 = 0x0362000B
+	ActionIDEraCreationChoose     uint32 = 0x0362000C
 )
 
 // 纪元造化秘境结果码 (Module 866)。
@@ -350,6 +352,53 @@ func BuildEraCreationFightEventPacket() *Packet {
 // BuildEraCreationFightDeployPacket 构造战斗布阵面板查询封包 (866/8)。
 func BuildEraCreationFightDeployPacket() *Packet {
 	return eraCreationPrevPacket(ActionIDEraCreationFightDeploy, nil)
+}
+
+// BuildEraCreationDeployPacket 构造布阵封包 (866/9)。
+// 官方 CommonDeployView 以 [deploy_id, entity_id, 0] 调用。
+func BuildEraCreationDeployPacket(deployID, entityID int32, typ uint8) *Packet {
+	w := NewWriter()
+	w.WriteInt32(deployID)
+	w.WriteInt32(entityID)
+	w.WriteUint8(typ)
+	return eraCreationPrevPacket(ActionIDEraCreationDeploy, w.Bytes())
+}
+
+// EraCreationDeployPanel 表示 866/8 布阵面板。
+type EraCreationDeployPanel struct {
+	DeployID int32
+	Slots    [][2]int32
+}
+
+// ParseEraCreationDeployPanel 解析 866/8：result + deploy_id + [count][(pos, entity_id)]。
+func ParseEraCreationDeployPanel(payload []byte) (*EraCreationDeployPanel, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	code, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: era creation deploy panel", ErrInvalidPayload)
+	}
+	if code != EraCreationSuccess {
+		return nil, fmt.Errorf("era creation deploy panel result=%d", code)
+	}
+	out := &EraCreationDeployPanel{}
+	if out.DeployID, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: deploy id", ErrInvalidPayload)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: deploy slot count", ErrInvalidPayload)
+	}
+	for i := 0; i < int(count); i++ {
+		var a, b int32
+		if a, err = r.ReadInt32(); err != nil {
+			return out, nil
+		}
+		if b, err = r.ReadInt32(); err != nil {
+			return out, nil
+		}
+		out.Slots = append(out.Slots, [2]int32{a, b})
+	}
+	return out, nil
 }
 
 // BuildEraCreationFightPacket 构造挑战事件封包。
