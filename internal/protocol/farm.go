@@ -388,17 +388,20 @@ func ParseFarmGetInfoResult(payload []byte) (*FarmGetInfoResult, error) {
 	}
 
 	fields := make([]FarmField, 0, count)
-	// 真实抓包与实机返回中每块土地固定 47 字节
-	isReal47Format := len(payload) >= 2+int(count)*47
+	// 真实抓包与实机返回中每块土地固定 48 字节
+	// （docs/research/farm-protocol-reconstruction.md：4B LandID + 36B 养成 + 4B 标志 + 4B 附加）。
+	// 2026-11-18 线上按 47 字节解析导致第 2 块起整体错位，
+	// 日志出现 land_id=0 / 负数并与实时状态表无法匹配。
+	isRealFormat := len(payload) >= 2+int(count)*48
 
 	for i := 0; i < int(count); i++ {
-		if isReal47Format {
+		if isRealFormat {
 			landID, rErr := r.ReadInt32()
 			if rErr != nil {
 				return nil, rErr
 			}
-			// 4..46: 43 字节地皮与升级数据 (跳过)
-			_, _ = r.ReadBytes(43)
+			// 4..47: 44 字节地皮与升级数据 (跳过)
+			_, _ = r.ReadBytes(44)
 
 			fields = append(fields, FarmField{
 				LandID:       landID,

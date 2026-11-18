@@ -5,6 +5,8 @@
 package protocol
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"testing"
 )
@@ -280,6 +282,31 @@ func TestFarmIntRequests_BarePayload(t *testing.T) {
 		}
 		if len(pkt.Payload) != c.wantLen {
 			t.Errorf("%s 载荷长度 = %d, want %d", c.name, len(pkt.Payload), c.wantLen)
+		}
+	}
+}
+
+// TestParseFarmGetInfoResult_Real48ByteLayout 验证真实 48 字节土地切片格式：
+// 每块 4B LandID + 44B 其他数据，必须逐块对齐，不能错位。
+func TestParseFarmGetInfoResult_Real48ByteLayout(t *testing.T) {
+	landIDs := []int32{49530, 49531, 49532}
+	buf := bytes.NewBuffer(nil)
+	_ = binary.Write(buf, binary.BigEndian, uint16(len(landIDs)))
+	for _, id := range landIDs {
+		_ = binary.Write(buf, binary.BigEndian, id)
+		buf.Write(make([]byte, 44))
+	}
+
+	res, err := ParseFarmGetInfoResult(buf.Bytes())
+	if err != nil {
+		t.Fatalf("解析 48 字节格式失败: %v", err)
+	}
+	if len(res.Fields) != len(landIDs) {
+		t.Fatalf("土地数量不符: %d", len(res.Fields))
+	}
+	for i, want := range landIDs {
+		if res.Fields[i].LandID != want {
+			t.Fatalf("第 %d 块土地 ID 错位: 期望 %d, 实际 %d", i+1, want, res.Fields[i].LandID)
 		}
 	}
 }
