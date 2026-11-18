@@ -83,6 +83,12 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 				slog.Info("造化秘境探索成功", "role_id", session.RoleID(), "values", explore.Values)
 			case protocol.EraCreationNoExploreNum:
 				slog.Info("造化秘境探索次数不足，继续检查已有事件", "role_id", session.RoleID())
+			case protocol.EraCreationHaveAward:
+				// 上一场奖励未领会阻断新的挑战；先领取再继续。
+				code, ok := claimEraCreationAward(session, call)
+				slog.Info("造化秘境有奖励待领取，已先行领取", "role_id", session.RoleID(),
+					"result", code, "claimed", ok,
+					"result_text", protocol.EraCreationResultText(code))
 			default:
 				slog.Info("造化秘境探索未成功", "role_id", session.RoleID(),
 					"result", explore.Result, "result_text", protocol.EraCreationResultText(explore.Result))
@@ -184,33 +190,36 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 
 		award:
 			// 4. 领取战斗奖励。
-			awardResp := call(protocol.BuildEraCreationAwardPanelPacket(), protocol.ActionIDEraCreationAwardPanel)
-			if awardResp == nil {
-				return nil
-			}
-			awardCode, aErr := protocol.ParseActionFirstByte(awardResp.Payload, "造化秘境奖励面板")
-			if aErr != nil {
-				slog.Warn("造化秘境奖励面板解析失败", "role_id", session.RoleID(), "err", aErr)
-				return nil
-			}
-			if awardCode != protocol.EraCreationSuccess {
-				slog.Info("造化秘境暂无战斗奖励", "role_id", session.RoleID(),
-					"result", awardCode, "result_text", protocol.EraCreationResultText(awardCode))
-				return nil
-			}
-			chooseResp := call(protocol.BuildEraCreationChooseAwardPacket(), protocol.ActionIDEraCreationChoose)
-			if chooseResp == nil {
-				return nil
-			}
-			chooseCode, cErr := protocol.ParseActionFirstByte(chooseResp.Payload, "造化秘境领取奖励")
-			if cErr != nil {
-				slog.Warn("造化秘境领取奖励回包解析失败", "role_id", session.RoleID(), "err", cErr)
-				return nil
-			}
+			code, ok := claimEraCreationAward(session, call)
 			slog.Info("造化秘境领取奖励结果", "role_id", session.RoleID(),
-				"result", chooseCode, "result_text", protocol.EraCreationResultText(chooseCode),
-				"fights", fights)
+				"result", code, "claimed", ok,
+				"result_text", protocol.EraCreationResultText(code), "fights", fights)
 			return nil
 		},
 	)
+}
+
+// claimEraCreationAward 查询并领取战斗奖励，返回结果码与是否领取成功。
+//
+// explore 返回 HaveAward(8) 时说明上一场奖励还没领，服务端会拒绝新的
+// 挑战（fight 被静默丢弃）；因此探索后如遇 8 先领奖再挑战。
+func claimEraCreationAward(session *client.RoleSession,
+	call func(*protocol.Packet, uint32) *protocol.Packet) (uint8, bool) {
+	awardResp := call(protocol.BuildEraCreationAwardPanelPacket(), protocol.ActionIDEraCreationAwardPanel)
+	if awardResp == nil {
+		return 0, false
+	}
+	awardCode, aErr := protocol.ParseActionFirstByte(awardResp.Payload, "造化秘境奖励面板")
+	if aErr != nil || awardCode != protocol.EraCreationSuccess {
+		return awardCode, false
+	}
+	chooseResp := call(protocol.BuildEraCreationChooseAwardPacket(), protocol.ActionIDEraCreationChoose)
+	if chooseResp == nil {
+		return awardCode, false
+	}
+	chooseCode, cErr := protocol.ParseActionFirstByte(chooseResp.Payload, "造化秘境领取奖励")
+	if cErr != nil {
+		return awardCode, false
+	}
+	return chooseCode, chooseCode == protocol.EraCreationSuccess
 }
