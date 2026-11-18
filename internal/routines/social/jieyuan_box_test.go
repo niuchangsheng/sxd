@@ -144,15 +144,21 @@ func TestJieYuanBoxRoutine_StopsOnContextReject(t *testing.T) {
 	}
 }
 
-func TestJieYuanBoxRoutine_SkipsWhenFunctionClosed(t *testing.T) {
+// TestJieYuanBoxRoutine_StillListsWhenFunctionClosed 验证功能列表缺少 140 时
+// 不直接跳过，而是继续查询宝箱列表（2026-11-18 用户反馈 s1 仍需开箱）；
+// 列表为空时不会发起开箱握手。
+func TestJieYuanBoxRoutine_StillListsWhenFunctionClosed(t *testing.T) {
 	var listCalls, ctxCalls atomic.Int32
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDPlayerGetFunctions:
-			// 功能 140 未开放。
+			// 功能 140 未在列表中下发。
 			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(nil))
 		case protocol.ActionIDJieYuanBoxList:
 			listCalls.Add(1)
+			w := protocol.NewWriter()
+			w.WriteUint16(0) // 空背包
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDJieYuanBoxOpenContext:
 			ctxCalls.Add(1)
 		}
@@ -160,9 +166,12 @@ func TestJieYuanBoxRoutine_SkipsWhenFunctionClosed(t *testing.T) {
 	defer sess.Close()
 
 	if err := NewJieYuanBoxRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("功能未开放应静默跳过: %v", err)
+		t.Fatalf("执行失败: %v", err)
 	}
-	if listCalls.Load() != 0 || ctxCalls.Load() != 0 {
-		t.Fatalf("功能未开放不应发宝箱请求, list=%d ctx=%d", listCalls.Load(), ctxCalls.Load())
+	if listCalls.Load() == 0 {
+		t.Fatal("功能列表缺少 140 时仍应查询结缘宝箱列表")
+	}
+	if ctxCalls.Load() != 0 {
+		t.Fatalf("空背包不应发起开箱握手, ctx=%d", ctxCalls.Load())
 	}
 }

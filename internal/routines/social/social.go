@@ -124,9 +124,11 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					"role_id", session.RoleID(), "err", fErr)
 				return scheduler.NewCooldown(30*time.Minute, "结缘宝箱功能状态查询失败")
 			} else if !open {
-				slog.Info("结缘宝箱功能未开放，跳过",
+				// 功能列表并非对所有区服/账号都下发 140（2026-11-18 用户反馈 s1
+				// 仍需开箱）。只记 INFO 继续尝试；开箱有无回包/库存是否变化由
+				// 下方核对逻辑按箱型退避 6 小时，不会热循环。
+				slog.Info("功能列表未包含结缘(140)，仍尝试开箱",
 					"role_id", session.RoleID(), "function_id", protocol.FunctionIDLinkFate)
-				return nil
 			}
 
 			slog.Info("正在执行结缘任务: 结缘宝箱自动开启 (每批最多10个，严格排除传说宝箱)",
