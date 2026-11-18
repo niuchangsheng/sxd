@@ -212,7 +212,11 @@ func (p *rolePlan) fetchCredentials(ctx context.Context, ticketCache *platform.T
 		pWord := acc.Password
 		sID := p.role.ServerID
 		roleID := p.roleID
-		p.cfg.MaxReconnectAttempts = 10
+		// 主会话必须无限重连（0）：网关在跨服活动后可能持续拒绝握手数分钟，
+		// 2026-11-18 20:20 实测 s1 连续 5 次认证超时；若按上限终止，角色会
+		// 在整个进程生命周期内失联且无法自动恢复。凭据每轮都会自愈换票，
+		// 失败仅以 30 秒退避重试，不会狂刷。
+		p.cfg.MaxReconnectAttempts = 0
 		p.cfg.RefreshCredentials = func(c context.Context, sCfg *client.SessionConfig) error {
 			ticketCache.Invalidate(pName, uName, sID)
 			freshTicket, err := ticketCache.GetOrFetch(c, pName, uName, pWord, sID)
