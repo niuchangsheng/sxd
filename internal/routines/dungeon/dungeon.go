@@ -49,7 +49,16 @@ func allowQuestReconnect(session *client.RoleSession) bool {
 }
 
 // maxQuestReconnectsPerCycle 单轮调度内为恢复任务上下文允许的最大重连次数。
-const maxQuestReconnectsPerCycle = 8
+//
+// 调度器每个角色只有一个串行 runLoop，单轮耗时过长会推迟其它所有玩法；
+// 结合 questCycleBudget 限制到 4 次（约 4 波）。
+const maxQuestReconnectsPerCycle = 4
+
+// questCycleBudget 单轮任务推图的时间预算（变量形式便于单测）。
+//
+// 每次轮内重连 + 章节探测约 1.5~2.5 分钟；预算到期即结束本轮，
+// 把调度让给其它玩法，下一轮循环再继续推图。
+var questCycleBudget = 8 * time.Minute
 
 // questMidReconnectInterval 轮内重连节流间隔（变量形式便于单测缩短）。
 //
@@ -2997,6 +3006,7 @@ func executeAuthoritativeQuestCycle(
 	const maxMissionsPerCycle = 10
 	missionsCleared := 0
 	missionsReconnects := 0
+	cycleStarted := time.Now()
 	items := initialItems
 
 	for cycle := 1; cycle <= maxCycles; cycle++ {
@@ -3278,10 +3288,11 @@ func executeAuthoritativeQuestCycle(
 			) {
 				progressMade = true
 				missionsCleared++
-				if missionsCleared >= maxMissionsPerCycle || session.GetBaseStamina() < powerPerSweep {
+				if missionsCleared >= maxMissionsPerCycle || session.GetBaseStamina() < powerPerSweep ||
+					time.Since(cycleStarted) > questCycleBudget {
 					slog.Info("任务推图本轮完成，结束任务循环",
 						"role_id", session.RoleID(), "missions", missionsCleared,
-						"remaining_stamina", session.GetBaseStamina())
+						"remaining_stamina", session.GetBaseStamina(), "elapsed", time.Since(cycleStarted).Round(time.Second))
 					return
 				}
 				slog.Info("任务推图继续挑战下一关",
@@ -3295,6 +3306,7 @@ func executeAuthoritativeQuestCycle(
 				// 体力充足且未达单轮上限时立即重连换新会话继续推图，
 				// 避免大量体力只用一波就等 30 分钟（2026-11-18 实机）。
 				if session.GetBaseStamina() >= powerPerSweep &&
+					time.Since(cycleStarted) <= questCycleBudget &&
 					missionsReconnects < maxQuestReconnectsPerCycle &&
 					allowQuestMidCycleReconnect(session) {
 					missionsReconnects++
