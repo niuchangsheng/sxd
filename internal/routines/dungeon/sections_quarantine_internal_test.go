@@ -164,3 +164,19 @@ func TestFetchMissionSections_QuarantineExpires(t *testing.T) {
 		t.Fatalf("静默期结束后应重新探测 2 次 (累计 4), 实际累计 %d 次", got)
 	}
 }
+
+// TestQuestSectionsDown_ClearedOnReconnect 验证重连时清除地图静默期，
+// 让新会话的首个 4/0 能真正发出，从而拿到 Mod 4 锚点供 4/1 使用。
+func TestQuestSectionsDown_ClearedOnReconnect(t *testing.T) {
+	sess := &client.RoleSession{}
+	t.Cleanup(func() { questSectionsDown.Delete(sess) })
+
+	markQuestSectionsDown(sess, 21, time.Minute)
+	if _, down := questSectionsRecentlyDown(sess, 21); !down {
+		t.Fatal("标记后应处于静默期")
+	}
+	questSectionsDown.Delete(sess) // 重连路径的清理动作
+	if _, down := questSectionsRecentlyDown(sess, 21); down {
+		t.Fatal("重连后不应继承旧会话的地图静默期")
+	}
+}

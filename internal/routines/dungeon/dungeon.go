@@ -1291,6 +1291,9 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							questContextBad.Delete(session)
 							questSectionsAnchorCache.Delete(session)
 							questTownKnownGood.Delete(session)
+							// 新会话的 Mod 4 状态与旧会话无关，必须清除地图静默期，
+							// 否则重连后首个 4/0 会被静默期直接跳过，4/1 缺少 Mod 4 锚点。
+							questSectionsDown.Delete(session)
 							session.ReconnectNow()
 							slog.Info("任务上下文不可用，主动重连后继续本轮推图",
 								"role_id", session.RoleID())
@@ -3294,6 +3297,9 @@ func executeAuthoritativeQuestCycle(
 					questContextBad.Delete(session)
 					questSectionsAnchorCache.Delete(session)
 					questTownKnownGood.Delete(session)
+					// 新会话不应继承旧会话的地图静默期，否则重连后首个 4/0
+					// 被直接跳过，4/1 只能带非 Mod 4 锚点而被丢弃。
+					questSectionsDown.Delete(session)
 					session.ReconnectNow()
 					if waitForReconnect(ctx, session.State, 5*time.Second, 60*time.Second) {
 						slog.Info("任务上下文失效，本轮内重连后继续推图",
