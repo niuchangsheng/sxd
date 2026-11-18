@@ -49,10 +49,14 @@ func allowQuestReconnect(session *client.RoleSession) bool {
 }
 
 // maxQuestReconnectsPerCycle 单轮调度内为恢复任务上下文允许的最大重连次数。
-const maxQuestReconnectsPerCycle = 5
+const maxQuestReconnectsPerCycle = 8
 
 // questMidReconnectInterval 轮内重连节流间隔（变量形式便于单测缩短）。
-var questMidReconnectInterval = 3 * time.Minute
+//
+// 实测一次完整重连约 10~30 秒；3 分钟节流会让只剩 5 点体力时错过第二波
+// （2026-11-18 17:45 实机：距上次重连 108 秒被节流拦下，体力转去扫荡）。
+// 90 秒约等于「一次重连 + 一次战斗」，仍可防止风暴。
+var questMidReconnectInterval = 90 * time.Second
 
 // questMidReconnectAt 记录每个会话上次轮内重连时间，避免重连风暴。
 var questMidReconnectAt sync.Map // *client.RoleSession -> time.Time
