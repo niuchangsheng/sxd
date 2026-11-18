@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -39,12 +40,29 @@ func loadJieyuanSkipLocked() jieyuanSkipState {
 	return st
 }
 
-// jiYuanBoxSkipExpiry 返回箱型跳过标记的到期时间；未标记或已过期返回 false。
-func jiYuanBoxSkipExpiry(itemID int32) (time.Time, bool) {
+// jieyuanSkipKey 生成「角色 + 箱型」维度的跳过键。
+//
+// 历史版本只按箱型 ID 记录，导致 s0 的不可开启标记会误伤 s1（同一箱型
+// 在另一账号上其实可以开箱，2026-11-18 实测 s1 被 s0 的 3937 标记挡住）。
+func jieyuanSkipKey(roleID string, itemID int32) string {
+	return roleID + ":" + strconv.FormatInt(int64(itemID), 10)
+}
+
+// jiYuanBoxSkippedToday 判断该角色的箱型是否仍在跳过有效期内。
+func jiYuanBoxSkippedToday(roleID string, itemID int32) bool {
 	jieyuanSkipMu.Lock()
 	defer jieyuanSkipMu.Unlock()
 	st := loadJieyuanSkipLocked()
-	exp, ok := st.ExpireAt[strconv.FormatInt(int64(itemID), 10)]
+	exp, ok := st.ExpireAt[jieyuanSkipKey(roleID, itemID)]
+	return ok && time.Now().Unix() < exp
+}
+
+// jiYuanBoxSkipExpiry 返回该角色箱型的跳过到期时间；未标记或已过期返回 false。
+func jiYuanBoxSkipExpiry(roleID string, itemID int32) (time.Time, bool) {
+	jieyuanSkipMu.Lock()
+	defer jieyuanSkipMu.Unlock()
+	st := loadJieyuanSkipLocked()
+	exp, ok := st.ExpireAt[jieyuanSkipKey(roleID, itemID)]
 	if !ok {
 		return time.Time{}, false
 	}
@@ -55,17 +73,8 @@ func jiYuanBoxSkipExpiry(itemID int32) (time.Time, bool) {
 	return expiry, true
 }
 
-// jiYuanBoxSkippedToday 判断箱型是否仍在跳过有效期内。
-func jiYuanBoxSkippedToday(itemID int32) bool {
-	jieyuanSkipMu.Lock()
-	defer jieyuanSkipMu.Unlock()
-	st := loadJieyuanSkipLocked()
-	exp, ok := st.ExpireAt[strconv.FormatInt(int64(itemID), 10)]
-	return ok && time.Now().Unix() < exp
-}
-
-// markJiYuanBoxSkipped 记录箱型在 TTL 内不可开启（跨进程持久化）。
-func markJiYuanBoxSkipped(itemID int32) {
+// markJiYuanBoxSkipped 记录该角色的箱型在 TTL 内不可开启（跨进程持久化）。
+func markJiYuanBoxSkipped(roleID string, itemID int32) {
 	jieyuanSkipMu.Lock()
 	defer jieyuanSkipMu.Unlock()
 	st := loadJieyuanSkipLocked()
@@ -73,13 +82,13 @@ func markJiYuanBoxSkipped(itemID int32) {
 		st.ExpireAt = map[string]int64{}
 	}
 	now := time.Now()
-	// 顺带清理已过期项，避免文件无限增长。
+	// 顺带清理已过期项，避免文件无限增长；旧版无角色前缀的键一并清掉。
 	for k, exp := range st.ExpireAt {
-		if now.Unix() >= exp {
+		if now.Unix() >= exp || !strings.Contains(k, ":") {
 			delete(st.ExpireAt, k)
 		}
 	}
-	st.ExpireAt[strconv.FormatInt(int64(itemID), 10)] = now.Add(jieyuanSkipTTL).Unix()
+	st.ExpireAt[jieyuanSkipKey(roleID, itemID)] = now.Add(jieyuanSkipTTL).Unix()
 	_ = os.MkdirAll(filepath.Dir(jieyuanSkipStatePath), 0o755)
 	b, _ := json.Marshal(st)
 	_ = os.WriteFile(jieyuanSkipStatePath, b, 0o644)

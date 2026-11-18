@@ -161,7 +161,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			openable := protocol.FilterOpenableJieYuanBoxes(boxes)
 			filtered := openable[:0]
 			for _, b := range openable {
-				if jiYuanBoxSkippedToday(b.ItemID) {
+				if jiYuanBoxSkippedToday(session.RoleID(), b.ItemID) {
 					slog.Info("结缘宝箱箱型暂不可开启，跳过", "role_id", session.RoleID(),
 						"item_id", b.ItemID, "count", b.Count)
 					continue
@@ -174,7 +174,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 				// 而不是等下一轮批量唤醒（否则到期后可能数小时无人重试）。
 				var earliest time.Time
 				for _, b := range boxes {
-					if exp, ok := jiYuanBoxSkipExpiry(b.ItemID); ok && (earliest.IsZero() || exp.Before(earliest)) {
+					if exp, ok := jiYuanBoxSkipExpiry(session.RoleID(), b.ItemID); ok && (earliest.IsZero() || exp.Before(earliest)) {
 						earliest = exp
 					}
 				}
@@ -311,7 +311,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 							"last_sent", fmt.Sprintf("0x%08X", session.LastActionID()),
 							"err", oErr,
 						)
-						markJiYuanBoxSkipped(box.ItemID)
+						markJiYuanBoxSkipped(session.RoleID(), box.ItemID)
 						break
 					}
 
@@ -394,7 +394,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			if totalOpened == 0 {
 				var earliest time.Time
 				for _, b := range openable {
-					if exp, ok := jiYuanBoxSkipExpiry(b.ItemID); ok && (earliest.IsZero() || exp.Before(earliest)) {
+					if exp, ok := jiYuanBoxSkipExpiry(session.RoleID(), b.ItemID); ok && (earliest.IsZero() || exp.Before(earliest)) {
 						earliest = exp
 					}
 				}
