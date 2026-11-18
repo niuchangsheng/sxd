@@ -3300,6 +3300,9 @@ func executeAuthoritativeQuestCycle(
 							"role_id", session.RoleID(),
 							"reconnects", missionsReconnects,
 							"remaining_stamina", session.GetBaseStamina())
+						// 重连恢复会话本身就是进展；置位后外层 cycle 才会
+						// 重新 SyncQuests 继续推图，而不是直接结束本轮流转扫荡。
+						progressMade = true
 						break
 					}
 				}
