@@ -112,38 +112,11 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 
 			// 3. 逐个挑战事件。
 			fights := 0
-			crossTried := false
 			for _, eventID := range events.IDs {
 				if ctx.Err() != nil || fights >= maxEraCreationFights {
 					break
 				}
 				fightResp := call(protocol.BuildEraCreationFightPacket(eventID), protocol.ActionIDEraCreationFight)
-				if fightResp == nil && !crossTried {
-					// 纪元体系多数玩法走仙界跨服会话；主服挑战被静默丢弃时，
-					// 改用跨服会话对同一事件重试一次并打印两侧结果。
-					crossTried = true
-					if cross, cErr := session.OpenCrossServerSession(ctx); cErr != nil || cross == nil {
-						slog.Info("造化秘境挑战主服无回包，跨服会话不可用",
-							"role_id", session.RoleID(), "err", cErr)
-					} else {
-						if cross != session {
-							defer cross.Close()
-						}
-						cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-						r, e := cross.Call(cCtx, protocol.BuildEraCreationFightPacket(eventID),
-							protocol.ActionIDEraCreationFight)
-						cancel()
-						if e == nil && r != nil {
-							slog.Info("造化秘境挑战改在跨服会话成功回包",
-								"role_id", session.RoleID(), "event_id", eventID,
-								"payload_len", len(r.Payload))
-							fightResp = r
-						} else {
-							slog.Info("造化秘境挑战跨服会话同样无回包",
-								"role_id", session.RoleID(), "event_id", eventID, "err", e)
-						}
-					}
-				}
 				if fightResp == nil {
 					// 当日次数结束后服务端会静默丢弃挑战：连续 3 次挂起（最长 6 小时）。
 					return scheduler.HandleSilentDrop(session, "era_creation", 3,
