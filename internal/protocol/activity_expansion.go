@@ -97,9 +97,13 @@ const (
 	ActionIDEraCreationPanel      uint32 = 0x03620001
 	ActionIDEraCreationExplore    uint32 = 0x03620006
 	ActionIDEraCreationFightEvent uint32 = 0x03620007
-	ActionIDEraCreationFight      uint32 = 0x0362000A
-	ActionIDEraCreationAwardPanel uint32 = 0x0362000B
-	ActionIDEraCreationChoose     uint32 = 0x0362000C
+	// ActionIDEraCreationFightDeploy 战斗布阵面板 (866/8, request=[])。
+	// 官方 flow: fight_event(7) → fight_deploy(8) → deploy(9) → fight(10)；
+	// 缺少布阵时 fight(10) 会被服务端静默丢弃。
+	ActionIDEraCreationFightDeploy uint32 = 0x03620008
+	ActionIDEraCreationFight       uint32 = 0x0362000A
+	ActionIDEraCreationAwardPanel  uint32 = 0x0362000B
+	ActionIDEraCreationChoose      uint32 = 0x0362000C
 )
 
 // 纪元造化秘境结果码 (Module 866)。
@@ -341,6 +345,11 @@ func BuildEraCreationExplorePacket() *Packet {
 // BuildEraCreationFightEventPacket 构造事件查询封包。
 func BuildEraCreationFightEventPacket() *Packet {
 	return eraCreationPrevPacket(ActionIDEraCreationFightEvent, nil)
+}
+
+// BuildEraCreationFightDeployPacket 构造战斗布阵面板查询封包 (866/8)。
+func BuildEraCreationFightDeployPacket() *Packet {
+	return eraCreationPrevPacket(ActionIDEraCreationFightDeploy, nil)
 }
 
 // BuildEraCreationFightPacket 构造挑战事件封包。

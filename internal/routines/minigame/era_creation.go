@@ -7,6 +7,7 @@ package minigame
 
 import (
 	"context"
+	"encoding/hex"
 	"log/slog"
 	"time"
 
@@ -102,6 +103,23 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 					"result", events.Result, "result_text", protocol.EraCreationResultText(events.Result))
 			} else {
 				slog.Info("造化秘境可挑战事件", "role_id", session.RoleID(), "event_ids", events.IDs)
+			}
+
+			// 2.5 布阵面板：官方 flow 为 fight_event(7) → fight_deploy(8) →
+			// deploy(9) → fight(10)。此前直接发 fight(10) 一直被静默丢弃，
+			// 先查询布阵面板并记录回包，确认是否必须布阵才能挑战。
+			if deployResp := call(protocol.BuildEraCreationFightDeployPacket(),
+				protocol.ActionIDEraCreationFightDeploy); deployResp != nil {
+				head := deployResp.Payload
+				if len(head) > 64 {
+					head = head[:64]
+				}
+				slog.Info("造化秘境布阵面板", "role_id", session.RoleID(),
+					"len", len(deployResp.Payload),
+					"result", head[0],
+					"hex", hex.EncodeToString(head))
+			} else {
+				slog.Info("造化秘境布阵面板无回包", "role_id", session.RoleID())
 			}
 
 			// 3. 逐个挑战事件。
