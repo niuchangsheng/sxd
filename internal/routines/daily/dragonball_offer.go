@@ -40,8 +40,11 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 				slog.Info("神龙上供功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			} else if !open {
-				slog.Info("神龙上供功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDDragonball)
-				return nil
+				// get_player_function 并非对所有区服/账号都下发 89，但神龙/火龙培养
+				// 实际可用（2026-11-18 用户确认 s1 仍可培养）。因此只记 INFO 继续，
+				// 由业务回包自身的 FUNCTION_NO_OPEN 结果码（下方 1 小时冷却）兜底。
+				slog.Info("功能列表未包含神龙(89)，仍尝试上供/培养",
+					"role_id", session.RoleID(), "function_id", protocol.FunctionIDDragonball)
 			}
 			slog.Info("正在执行日常任务: 神龙普通上供", "role_id", session.RoleID())
 

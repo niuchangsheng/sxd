@@ -96,3 +96,40 @@ func TestDragonballOfferRoutine_MergesNormalAndFireSeparately(t *testing.T) {
 		t.Fatalf("expected a separate fire merge batch, got %v", batches)
 	}
 }
+
+// TestDragonballOfferRoutine_ClosedInFunctionListStillTries 验证 get_player_function
+// 未下发 89 时不直接跳过，而是继续按业务回包判断（2026-11-18 用户确认 s1 仍可培养）。
+func TestDragonballOfferRoutine_ClosedInFunctionListStillTries(t *testing.T) {
+	withoutDragonball := make([]int32, 0, len(dailyAutomationFunctionIDs))
+	for _, id := range dailyAutomationFunctionIDs {
+		if id == protocol.FunctionIDDragonball {
+			continue
+		}
+		withoutDragonball = append(withoutDragonball, id)
+	}
+
+	var tmpCalls int
+	var mu sync.Mutex
+	sess := newDailyMockSessionWithFunctions(t, withoutDragonball, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDDragonballTmpInfo:
+			mu.Lock()
+			tmpCalls++
+			mu.Unlock()
+			_ = protocol.WritePacket(conn, protocol.BuildDragonballTmpInfoDetailResultPacket(protocol.DragonballTmpInfo{
+				RemainNormalCount: 0, // 次数已用尽，快速结束本轮
+			}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewDragonballOfferRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("执行失败: %v", err)
+	}
+	mu.Lock()
+	calls := tmpCalls
+	mu.Unlock()
+	if calls == 0 {
+		t.Fatal("功能列表缺少 89 时仍应查询神龙临时格（业务兜底）")
+	}
+}
