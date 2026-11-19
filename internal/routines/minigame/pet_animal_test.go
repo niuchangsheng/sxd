@@ -169,3 +169,35 @@ func TestPetAnimalRoutine_MaxLevelSkips(t *testing.T) {
 		t.Fatalf("满级后不得培养, 实际 %d 次", got)
 	}
 }
+
+// TestPetAnimalRoutine_FeedDropRetriesWithResync 验证培养首次无回包时会按
+// PrevAct 重同步重试一次，而不是直接把剩余次数留到下一轮。
+func TestPetAnimalRoutine_FeedDropRetriesWithResync(t *testing.T) {
+	var feedCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPetAnimalInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildPetAnimalInfoResultPacket(protocol.PetAnimalInfo{
+				Lv: 2, Star: 9, Exp: 180228, FeedNum: 1,
+			}))
+		case protocol.ActionIDPetAnimalFeed:
+			n := feedCalls.Add(1)
+			if n == 1 {
+				// 首次请求静默丢弃。
+				return
+			}
+			_ = protocol.WritePacket(conn, protocol.BuildPetAnimalFeedResultPacket(protocol.PetAnimalFeedResult{
+				Result: protocol.PetAnimalResultSuccess, Lv: 2, Star: 9, Exp: 180328,
+				ExpAdd: 100, FeedType: protocol.PetAnimalFeedTypeCoin, FeedNum: 0, Hit: 0,
+			}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewPetAnimalRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("pet animal: %v", err)
+	}
+	if got := feedCalls.Load(); got != 2 {
+		t.Fatalf("首次丢包后应重同步重试一次, 期望 2 次请求, 实际 %d 次", got)
+	}
+}

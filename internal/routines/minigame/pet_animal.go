@@ -73,18 +73,6 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			call := func(pkt *protocol.Packet, actionID uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, petAnimalCallTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, actionID)
-				if err != nil {
-					slog.Info("叶公好龙协议无回包，跳过本轮",
-						"role_id", session.RoleID(), "action", actionID, "err", err)
-					return nil
-				}
-				return resp
-			}
-
 			// tryInfoOnce 发送一次面板请求，不打印重复的无回包日志。
 			tryInfoOnce := func(pkt *protocol.Packet) *protocol.Packet {
 				cCtx, cancel := context.WithTimeout(ctx, petAnimalCallTimeout)
@@ -153,9 +141,15 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 					return nil
 				}
 				prevRemaining := remaining
-				resp := call(protocol.BuildPetAnimalFeedPacket(protocol.PetAnimalFeedTypeCoin, session.LastActionID()),
+				// Module 48 对 PrevAct 链敏感：首次无回包时按「最后收到的包」
+				// 重同步重试一次，避免一次丢包就把剩余培养次数拖到下一轮
+				// （2026-11-18 s1 实测多次因单次丢包提前中止）。
+				resp, _ := session.CallWithPrevActResync(ctx, petAnimalCallTimeout,
+					protocol.BuildPetAnimalFeedPacket(protocol.PetAnimalFeedTypeCoin, session.LastActionID()),
 					protocol.ActionIDPetAnimalFeed)
 				if resp == nil {
+					slog.Info("叶公好龙培养无回包，本轮中止并保留剩余次数",
+						"role_id", session.RoleID(), "remaining", remaining)
 					return nil
 				}
 				res, err := protocol.ParsePetAnimalFeedResult(resp.Payload)
