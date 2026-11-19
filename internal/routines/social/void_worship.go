@@ -126,6 +126,8 @@ func NewVoidWorshipRoutine() scheduler.ActivityRoutine {
 			default:
 				slog.Info("大神榜膜拜未成功", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.GodRankResultText(code))
+				// 非"已膜拜"的失败码持续出现时按 1 小时重试，避免每轮批次重复请求。
+				return scheduler.NewCooldown(time.Hour, "大神榜膜拜失败")
 			}
 			return nil
 		},

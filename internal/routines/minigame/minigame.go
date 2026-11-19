@@ -4054,8 +4054,11 @@ func NewAskFairyRoutine() scheduler.ActivityRoutine {
 			case protocol.AskFairyResultPackFull, protocol.AskFairyResultLinkFatePackFull:
 				return scheduler.ErrBagFull
 			default:
+				// 线上该账号持续返回 FAILED(3)（面板显示今日问灵 0/1 次、
+				// 官方客户端同样是空请求），判定为服务端资格限制：2 小时后再试，
+				// 避免每轮批次都重复请求并刷 WARN。
 				slog.Warn("问灵失败", "role_id", session.RoleID(), "result", result)
-				return nil
+				return scheduler.NewCooldown(2*time.Hour, "问灵失败")
 			}
 
 			// 重新拉取随机奖励候选，优先选择元宝
