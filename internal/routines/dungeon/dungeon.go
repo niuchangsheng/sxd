@@ -3288,12 +3288,23 @@ func executeAuthoritativeQuestCycle(
 			) {
 				progressMade = true
 				missionsCleared++
-				if missionsCleared >= maxMissionsPerCycle || session.GetBaseStamina() < powerPerSweep ||
-					time.Since(cycleStarted) > questCycleBudget {
+				if missionsCleared >= maxMissionsPerCycle || time.Since(cycleStarted) > questCycleBudget {
 					slog.Info("任务推图本轮完成，结束任务循环",
 						"role_id", session.RoleID(), "missions", missionsCleared,
 						"remaining_stamina", session.GetBaseStamina(), "elapsed", time.Since(cycleStarted).Round(time.Second))
 					return
+				}
+				// 基础体力按回速恰好只够一波时，开轮前的补给检查永远不会触发；
+				// 这里在继续下一关前按配置（上限 max_replenish_stamina）补一次体力，
+				// 否则每轮固定只能推进 1 波（2026-11-20 实机，用户确认可用道具）。
+				if session.GetBaseStamina() < powerPerSweep {
+					if !ensureStamina() {
+						slog.Info("任务推图体力不足且无可用补充道具，结束任务循环",
+							"role_id", session.RoleID(), "missions", missionsCleared)
+						return
+					}
+					slog.Info("任务推图已使用道具补充体力，继续推进",
+						"role_id", session.RoleID(), "stamina", session.GetBaseStamina())
 				}
 				slog.Info("任务推图继续挑战下一关",
 					"role_id", session.RoleID(), "missions", missionsCleared,
