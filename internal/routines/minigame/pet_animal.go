@@ -153,6 +153,16 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 					protocol.BuildPetAnimalFeedPacket(protocol.PetAnimalFeedTypeCoin, session.LastActionID()),
 					protocol.ActionIDPetAnimalFeed)
 				if resp == nil {
+					// Module 48 在上下文链失效时会连续丢弃培养请求；先发一次
+					// 功能开放查询（0/69）重置动作链，再重试一次（与面板查询
+					// 的恢复手段一致）。
+					if _, fErr := session.CheckFunctionOpen(ctx, protocol.FunctionIDPetAnimal); fErr == nil {
+						resp, _ = session.CallWithPrevActResync(ctx, petAnimalCallTimeout,
+							protocol.BuildPetAnimalFeedPacket(protocol.PetAnimalFeedTypeCoin, session.LastActionID()),
+							protocol.ActionIDPetAnimalFeed)
+					}
+				}
+				if resp == nil {
 					slog.Info("叶公好龙培养无回包，本轮中止并保留剩余次数",
 						"role_id", session.RoleID(), "remaining", remaining)
 					return nil
