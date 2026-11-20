@@ -23,6 +23,11 @@ const (
 	maxPetAnimalStaleFeeds = 20
 	// petAnimalCallTimeout 单次协议请求超时。
 	petAnimalCallTimeout = 8 * time.Second
+	// petAnimalFeedInterval 连续培养之间的节流间隔。
+	//
+	// 2026-11-20 实机：连续快速培养约 2 次后服务端即静默丢弃（剩 18/12 次
+	// 未用完）。按人工点击节奏留出间隔可显著降低被限流的概率。
+	petAnimalFeedInterval = 600 * time.Millisecond
 	// petAnimalPriority 叶公好龙调度优先级。
 	//
 	// 2026-11-07 线上实测：Module 48 在角色经过副本/农场等场景切换后再查询会
@@ -214,7 +219,7 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 				select {
 				case <-ctx.Done():
 					return nil
-				case <-time.After(200 * time.Millisecond):
+				case <-time.After(petAnimalFeedInterval):
 				}
 			}
 			slog.Info("叶公好龙普通培养巡检完成", "role_id", session.RoleID(),
