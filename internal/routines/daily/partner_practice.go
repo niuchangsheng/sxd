@@ -7,6 +7,7 @@ package daily
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -63,7 +64,8 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 				slog.Info("幻境修炼未选择伙伴，跳过", "role_id", session.RoleID())
 				return nil
 			}
-			slog.Info("幻境修炼当前伙伴", "role_id", session.RoleID(), "partner_role_id", info.PartnerRoleID)
+			slog.Info("幻境修炼当前伙伴", "role_id", session.RoleID(), "partner_role_id", info.PartnerRoleID,
+				"payload_hex", fmt.Sprintf("%x", infoResp.Payload))
 
 			// 用户实测（/tmp/xiulian.pcapng）：当前阶段修炼已满时，客户端直接发送
 			// enter_fight(306/5) 进入下一阶段，然后 306/10 取伙伴属性 → 306/9 挑战幻想；
@@ -72,6 +74,11 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 			if enterResp != nil {
 				enterCode, eErr := protocol.ParsePartnerPracticeResult(enterResp.Payload)
 				if eErr == nil {
+					// 无条件落结果码：线上长期卡在 11(其他伙伴修炼中) 时，enter_fight 的
+					// 返回码是判断「修炼是否已满/是否已结束」的唯一证据，不能只在成功的
+					// 分支里记录。
+					slog.Info("幻境修炼进入战斗结果", "role_id", session.RoleID(),
+						"result", enterCode, "result_text", protocol.PartnerPracticeResultText(enterCode))
 					switch enterCode {
 					case protocol.PartnerPracticeSuccess:
 						_ = call(protocol.BuildPartnerPracticeRoleWarAttrPacket(info.PartnerRoleID),
