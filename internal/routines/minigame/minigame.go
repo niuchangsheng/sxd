@@ -534,6 +534,7 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 					break
 				}
 				if rd.Result == protocol.GuessPartnerResultPackFull {
+					logGuessPartnerPackFull(ctx, session, "start_guess", times)
 					return scheduler.ErrBagFull
 				}
 				if rd.Result != protocol.GuessPartnerResultSuccess || len(rd.RoleIDs) == 0 {
@@ -585,6 +586,7 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 						return nil
 					}
 				case protocol.GuessPartnerResultPackFull:
+					logGuessPartnerPackFull(ctx, session, "guess", times)
 					return scheduler.ErrBagFull
 				default:
 					slog.Info("伙伴猜猜看作答未成功", "role_id", session.RoleID(), "result", gr.Result)
@@ -595,6 +597,33 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 			return nil
 		},
 	)
+}
+
+// logGuessPartnerPackFull 在伙伴猜猜看返回「背包已满」时输出背包实测快照。
+//
+// 服务端 369 的 PACK_FULL 与 2/41 的真实空格常不一致（历史上 10 个空格仍返回
+// PACK_FULL），因此这里必须落日志留证据，避免只看到调度器的「背包已满」而无法判断
+// 是背包真的满了、还是服务端另有「伙伴栏/活动状态」类前置条件不满足。
+func logGuessPartnerPackFull(ctx context.Context, session *client.RoleSession, stage string, remainTimes int32) {
+	pCtx, pCancel := context.WithTimeout(ctx, 8*time.Second)
+	resp, err := session.Call(pCtx, protocol.BuildGetPackItemListPacket(), protocol.ActionIDItemGetPackList)
+	pCancel()
+	if err != nil || resp == nil {
+		slog.Warn("伙伴猜猜看返回背包已满，但背包快照查询失败", "role_id", session.RoleID(),
+			"stage", stage, "remain_times", remainTimes, "err", err)
+		return
+	}
+	pack, pErr := protocol.ParsePackItemListResponse(resp.Payload)
+	if pErr != nil || pack == nil {
+		slog.Warn("伙伴猜猜看返回背包已满，但背包快照解析失败", "role_id", session.RoleID(),
+			"stage", stage, "remain_times", remainTimes, "err", pErr)
+		return
+	}
+	freeSlots := int(pack.PackCapacity) - len(pack.PackItems)
+	slog.Warn("伙伴猜猜看返回背包已满", "role_id", session.RoleID(),
+		"stage", stage, "remain_times", remainTimes,
+		"capacity", pack.PackCapacity, "pack_items", len(pack.PackItems),
+		"free_slots", freeSlots, "empty_grids", pack.PackEmptyGrids)
 }
 
 // NewFishingRoutine 构造自动钓鱼与命格整理任务。
