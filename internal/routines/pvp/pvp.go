@@ -1407,7 +1407,10 @@ var worldPkOpenHours = []int{12, 20}
 
 // worldPkWindow 阶位赛单次开放窗口时长。窗口内状态查询正常，窗口外服务端会
 // 把状态查询也静默丢弃（2026-11-15 19:41 实测）。
-const worldPkWindow = 90 * time.Minute
+//
+// 2026-11-20 实测：13:58/13:59 仍可匹配，14:00:00 的 join_pk 立即返回 FAILED(5)，
+// 即午间窗口为 12:00–14:00（120 分钟），原 90 分钟会在 13:30–14:00 误判为窗外。
+const worldPkWindow = 120 * time.Minute
 
 // worldPkOpenAt 返回当天 hour 点的开放时刻。
 func worldPkOpenAt(now time.Time, hour int) time.Time {
