@@ -125,6 +125,49 @@ func TestCrossServerLadderRoutine_OffSkipsRewards(t *testing.T) {
 	}
 }
 
+// TestCrossServerLadderRoutine_IdleJoinsStopEarly 验证匹配持续返回 SUCCESS 但不再产生
+// 战报（跳过战斗次数用尽）时，例程不会空转到 20 分钟预算，而是 3 次无战报后等待下次开放。
+func TestCrossServerLadderRoutine_IdleJoinsStopEarly(t *testing.T) {
+	oldBattle, oldCD, oldMax := worldPkBattleWait, worldPkCDWait, worldPkTestMaxJoins
+	worldPkBattleWait, worldPkCDWait, worldPkTestMaxJoins = 0, 0, 0
+	t.Cleanup(func() {
+		worldPkBattleWait, worldPkCDWait, worldPkTestMaxJoins = oldBattle, oldCD, oldMax
+	})
+	orig := openLadderRewardSession
+	openLadderRewardSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+		return s, nil
+	}
+	defer func() { openLadderRewardSession = orig }()
+
+	var joinCalls atomic.Int32
+	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDWorldPkStatus:
+			_ = protocol.WritePacket(conn, protocol.BuildWorldPkStatusResultPacket(protocol.WorldPkStatusOn))
+		case protocol.ActionIDWorldPkJoin:
+			joinCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildWorldPkJoinResultPacket(protocol.WorldPkResultSuccess))
+		case protocol.ActionIDWorldPkSetAutoMatch, protocol.ActionIDWorldPkSetSkipWar:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.WorldPkRewardSuccess}))
+		case protocol.ActionIDWorldPkOpenTaskPanel:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, ladderTaskPanelPayload(7)))
+		case protocol.ActionIDWorldPkTaskAward, protocol.ActionIDWorldPkReceiveSpecial,
+			protocol.ActionIDWorldPkAwardPanel:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.WorldPkRewardSuccess}))
+		}
+	})
+	defer sess.Close()
+
+	err := NewCrossServerLadderRoutine().Execute(context.Background(), sess, nil)
+	var cdErr *scheduler.CooldownError
+	if !errors.As(err, &cdErr) {
+		t.Fatalf("无战报空转时应返回 CooldownError, got %v", err)
+	}
+	if got := joinCalls.Load(); got != int32(worldPkIdleJoinsLimit) {
+		t.Fatalf("应在 %d 次无战报匹配后停止, join calls = %d", worldPkIdleJoinsLimit, got)
+	}
+}
+
 func TestNextWorldPkOpenAt(t *testing.T) {
 	loc := time.Local
 	before := time.Date(2026, 11, 14, 11, 30, 0, 0, loc)

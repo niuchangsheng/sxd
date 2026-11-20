@@ -1342,6 +1342,12 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 			warBefore, _ := warStats.snapshot()
 			deadline := time.Now().Add(worldPkRunBudget)
 			attempts := 0
+			// 战报停滞计数：2026-11-20 20:00 实测 joins=93 但 war_reports 只有 30，
+			// 说明 30 场（跳过战斗上限）打完后服务端仍返回 SUCCESS 却不产生战报，
+			// 后续 60 多次 join 全是空转。连续 worldPkIdleJoinsLimit 次匹配未见新战报
+			// 即判定今日战斗次数已用尽，直接等待下次开放。
+			lastWarTotal := warBefore
+			idleJoins := 0
 			for {
 				attempts++
 				if ctx.Err() != nil || time.Now().After(deadline) {
@@ -1369,6 +1375,23 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 						"attempt", i+1, "countdown", countdown)
 					if !waitWorldPk(ctx, worldPkBattleWait) {
 						return nil
+					}
+					if total, _ := warStats.snapshot(); total > lastWarTotal {
+						lastWarTotal = total
+						idleJoins = 0
+					} else {
+						idleJoins++
+						if idleJoins >= worldPkIdleJoinsLimit {
+							wake := nextWorldPkOpenAt(time.Now())
+							slog.Info("跨服PK连续匹配无战报，判定今日战斗次数已用尽，等待下次开放",
+								"role_id", session.RoleID(),
+								"attempt", i+1,
+								"war_reports", lastWarTotal,
+								"idle_joins", idleJoins,
+								"wake_at", wake,
+							)
+							return scheduler.NewCooldown(time.Until(wake), "跨服PK今日战斗次数已用尽")
+						}
 					}
 				case protocol.WorldPkResultTimeCD:
 					// 按服务端倒计时等待，避免 1.2s 一次的紧循环（实测会连续
@@ -1444,6 +1467,8 @@ var (
 	worldPkCDWait     = 1200 * time.Millisecond
 	// worldPkRunBudget 单次例程的匹配时长预算（活动窗口内可持续匹配）。
 	worldPkRunBudget = 20 * time.Minute
+	// worldPkIdleJoinsLimit 连续多少次匹配未产生新战报即判定战斗次数已用尽。
+	worldPkIdleJoinsLimit = 3
 	// worldPkTestMaxJoins 仅供单测限制循环次数（>0 生效）。
 	worldPkTestMaxJoins = 0
 )
