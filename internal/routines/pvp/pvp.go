@@ -589,9 +589,11 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 					}
 					continue
 				case protocol.StArenaResultCDTime:
-					slog.Info("仙界竞技场挑战冷却中，结束本轮挑战",
+					// 回包未带冷却秒数，按 10 分钟低频复查；比等下一次
+					// Cron 更早恢复剩余挑战次数。
+					slog.Info("仙界竞技场挑战冷却中，10 分钟后再试",
 						"role_id", session.RoleID(), "target_player_id", target.StPlayerID)
-					return nil
+					return scheduler.NewCooldown(10*time.Minute, "仙界竞技场挑战冷却")
 				case protocol.StArenaResultFuncEnd:
 					slog.Info("仙界竞技场不在积分赛阶段或功能已关闭，30 分钟后再试",
 						"role_id", session.RoleID(), "result", result.Result)

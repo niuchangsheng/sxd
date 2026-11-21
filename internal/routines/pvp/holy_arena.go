@@ -159,8 +159,10 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 					slog.Info("圣域竞技场活动已关闭", "role_id", session.RoleID())
 					return nil
 				case protocol.SaArenaResultCDTime:
-					slog.Info("圣域竞技场抢占冷却中", "role_id", session.RoleID())
-					return nil
+					// 回包未带冷却秒数，按 10 分钟低频复查，避免把剩余
+					// 免费席位拖到下一次 Cron。
+					slog.Info("圣域竞技场抢占冷却中，10 分钟后再试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(10*time.Minute, "圣域竞技场抢占冷却")
 				case protocol.SaArenaResultCountUsedUp:
 					slog.Info("圣域竞技场抢占次数已用尽", "role_id", session.RoleID())
 					return nil
