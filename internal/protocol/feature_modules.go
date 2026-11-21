@@ -350,3 +350,12 @@ const (
 	// LuckyWheelResultFailed 抽奖失败
 	LuckyWheelResultFailed uint8 = 4
 )
+
+// 状态记录模块动作 (Mod_StateRecord_Base, Module 701)。
+const (
+	// ActionIDStateRecordGetState 查询状态记录 (Module 701, Action 0 -> 0x02BD0000)。
+	//
+	// 请求 [Int key]；回包 [Int key, Int value]，无结果码。轮回净地渡业台在
+	// 快速挂机 (852/8) 前会先以 key=8 查询一次该接口作为动作链锚点 (2026-11-21 抓包)。
+	ActionIDStateRecordGetState uint32 = 0x02BD0000
+)

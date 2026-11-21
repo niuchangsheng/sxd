@@ -45,3 +45,124 @@
 2. 例程在抽取前先发 0/2 重建链，并依次尝试候选锚点，直到 0/2 真正被处理
    （`LastAckActionID == 0x00000002`）；
 3. 心跳回包不计入业务锚点（已从 LastAckActionID 中排除）。
+
+## 2026-11-21 渡业台领取挂机收益 + 两次免费快速挂机（852/9、852/8）
+
+### 输入
+用户抓包 `/tmp/duyetai.pcapng`（轮回净地，渡业台领取挂机收益并触发两次免费快速挂机）。
+游戏连接为 `10.0.0.13:61029 → 81.70.56.121:8200`，客户端上行 16 帧、服务端下行 21 帧。
+该连接为整包 zlib 压缩格式：`[4B len][zlib(4B ActionID + payload)]`，解压后按标准 8 字节头解析。
+
+### 客户端请求时序（全部 12 字节 = 8 字节头 + 4 字节 PrevAct）
+
+| # | ActionID | 请求载荷 | PrevAct |
+| -: | --- | --- | --- |
+| 1 | 851/0 | `[]` | 0x00EB000D |
+| 2 | 851/1 | `[]` | 851/0 |
+| 3 | 851/4 | `[]` | 851/1 |
+| 4 | **852/1** | `[]` | 851/4 |
+| 5 | **852/9** | `[]` | 852/1 |
+| 6 | 852/1 | `[]` | 852/9 |
+| 7 | 52/0 (助手面板) | `[]` | 852/1 |
+| 8 | 52/0 | `[]` | 52/0 |
+| 9 | **701/0 get_state** | `[Int key=8]` | 52/0 |
+| 10 | **852/8 quick_auto** | `[]` | 701/0 |
+| 11 | 852/1 | `[]` | 852/8 |
+| 12 | 52/0 | `[]` | 852/1 |
+| 13 | **701/0 get_state** | `[Int key=8]` | 52/0 |
+| 14 | **852/8 quick_auto** | `[]` | 701/0 |
+| 15 | 852/1 | `[]` | 852/8 |
+| 16 | 52/0 | `[]` | 852/1 |
+
+关键点：官方客户端在**每次 852/8 之前**都会先发一次 `701/0 get_state [Int 8]`，
+把 PrevAct 链锚点推进到 701/0；两次快速挂机之间以及之后都重发 852/1 刷新面板。
+
+### 服务端回包
+
+- `852/9 get_auto_profit`（43 字节，未压缩）：
+  ```
+  00 | 00 01 54 41 | 00 03 |
+  00 00 2a f1 00 00 00 00 00 02 5d 99
+  00 00 2a f0 00 00 00 00 00 67 cb 54
+  00 00 2a f2 00 00 00 00 00 19 f2 d5
+  ```
+  - `[UByte result=0][Int 87105][UInt16 count=3][Int item, Long num] × 3`
+  - 奖励：`10993×155033`、`10992×6802260`、`10994×1700565`（资源类 ID，不在 item 静态表）。
+- `852/8 quick_auto`（39 字节，两次回包完全相同）：
+  ```
+  00 | 00 03 |
+  00 00 2a f0 00 00 00 00 00 04 59 c0
+  00 00 2a f1 00 00 00 00 00 00 19 50
+  00 00 2a f2 00 00 00 00 00 01 16 70
+  ```
+  - `[UByte result=0][UInt16 count=3][Int item, Long num] × 3`
+  - 奖励：`10992×285120`、`10993×6480`、`10994×71280`。
+  - 与 852/6 回包结构完全一致，可直接复用 `ParseEraRebirthFreeBackResult`。
+- `701/0 get_state`（16 字节）：`[Int key=8][Int value=0]`，无结果码。
+- `852/1 get_panel_info` 回包为整包 zlib（解压后 329 字节），无 UByte 结果码，
+  首字段为 Int（本次为 4）；自动化只用于建立 PrevAct 上下文，不据此判定成功。
+
+### 结论与实现
+
+- `852/8`（`quick_auto`）是**免费快速挂机**：官方客户端每次产出一组挂机奖励，
+  每日免费触发两次；付费档是 `852/5 quick_auto_back`（`[Int]`，历史实测 10 元宝），
+  自动化永久禁用。
+- `852/9`（`get_auto_profit`）回包带奖励列表，按「渡业台领取挂机收益」接入；
+  无收益时返回 `NO_PROFIT(10)` / `NO_CAN_GET_GIFT(4)` 等，不应报错。
+- 已落地：
+  - `internal/protocol/era_rebirth_land.go`：新增 `ActionIDEraRebirthLandQuickAuto`、
+    `BuildEraRebirthLandPanelPrevActPacket`、`BuildEraRebirthLandAutoProfitPrevActPacket`、
+    `BuildEraRebirthLandQuickAutoPacket`、`BuildStateRecordGetStatePacket`、
+    `ParseEraRebirthAutoProfit`、`ParseStateRecordGetStateResult`。
+  - `internal/routines/daily/rebirth_land.go`：`runAltarProfitAndQuickAuto` /
+    `runQuickAuto`，顺序对齐抓包（线上确认 701/0 锚点可省略）；`852/8` 只调用
+    面板剩余免费次数，遇到 `NO_TIMES/NO_PROFIT/NO_FREE_STORAGE/NOT_ENOUGH_ITEM/ALREADY_GET`
+    立即停止，`PACKAGE_FULL` 返回熔断，`NOT_ENOUGH_INGOT/NOT_ENOUGH_TODAY_INGOT`
+    6 小时熔断；每次成功后刷新面板核对免费次数并比较元宝余额，异常即熔断。
+- 单测：
+  - `protocol/era_rebirth_land_test.go`：852/8 请求 4 字节 PrevAct、701/0 请求/回包、
+    852/9 与 852/8 抓包回包、852/1 面板免费/付费次数逐字段解析。
+  - `routines/daily/rebirth_land_test.go`：两次快速挂机成功、`NO_TIMES` 停止、
+    `quick_free_used=2` 时零调用、剩余 1 次只补 1 次、852/9 `PACKAGE_FULL` 熔断。
+
+### 2026-11-21 线上实测（configs/qq.yaml / s0-tongchen）
+
+用 `test/probes/probe_rebirth_routine_live.go` 直接执行例程，实测结果：
+
+1. **第 1 轮**（面板 `quick_free_used=0`）：`852/9` 领取成功 `profit=172800`；
+   `852/8` 连续两次成功，各返回 3 条奖励；元宝无变化。
+2. **第 2 轮**（新进程，重新登录）：`852/9` 成功；`852/8` 第 1 次成功，
+   随后服务端推送 `元宝 before=100000 after=99990 delta=-10`。
+   **结论：每日免费次数为 2，第 3 次 `852/8` 起仍返回 `result=0`，但会扣 10 元宝。**
+   例程的元宝熔断在扣费后才发现，只能止损，不能防止扣费。
+3. 只读探针 `probe_rebirth_panel_profit_live.go` 确认 `852/9` 本身免费
+   （`ingot_delta=0`），扣费来自 `852/8`。
+
+据此解析 852/1 面板（329 字节，两个账号结构一致）：
+
+```
+[Int level=4][UInt16 28][28 × (Int id, Int value)][Int × 12][String/String/...]
+```
+
+尾部 12 个 Int 的关键字段：
+
+| 下标 | 含义 | 实测变化 |
+| -: | --- | --- |
+| 4 | 当前挂机累计秒数 | 87111 → 12 → 21 → 27（领取后清零再累计） |
+| 5 | 挂机收益上限秒数 | 恒为 172800（48 小时） |
+| 10 | 当日已用**免费**快速挂机次数 | 0 → 1 → 2 |
+| 11 | 当日已用**付费**快速挂机次数 | 第 3 次后变为 1 |
+
+因此最终实现改为：**先读 852/1 面板的 `QuickFreeUsed`，剩余次数为 0 时绝不调用 852/8**；
+每次成功后刷新面板核对免费次数确实 +1，付费次数增加则立即熔断。面板解析失败时
+放弃快速挂机（宁可少领，不可扣元宝）。
+
+第 3 轮实测输出（当天免费次数已用尽）：
+
+```
+轮回净地面板 idle_seconds=277 idle_cap_seconds=172800
+  quick_free_used=2 quick_free_remaining=0 quick_paid_used=1
+轮回净地挂机收益领取成功 profit=272 rewards="10992 x 14760, 10994 x 3690, 10993 x 306"
+轮回净地免费快速挂机次数已用尽，跳过以避免扣元宝
+轮回净地例程结束 coin_delta=0 ingot_delta=0
+```

@@ -16,8 +16,14 @@ const (
 	ActionIDEraRebirthLandPanel uint32 = 0x03540001
 	// ActionIDEraRebirthLandFreeBack 免费一键领取挂机奖励 (Module 852, Action 6 -> 0x03540006)
 	ActionIDEraRebirthLandFreeBack uint32 = 0x03540006
-	// ActionIDEraRebirthLandAutoProfit 查询挂机收益 (Module 852, Action 9 -> 0x03540009)
+	// ActionIDEraRebirthLandAutoProfit 查询/领取挂机收益 (Module 852, Action 9 -> 0x03540009)
 	ActionIDEraRebirthLandAutoProfit uint32 = 0x03540009
+	// ActionIDEraRebirthLandQuickAuto 免费快速挂机 (Module 852, Action 8 -> 0x03540008)
+	//
+	// 抓包 (2026-11-21): 请求 [Uint32 PrevAct]（req 为空），回包与 852/6 相同，
+	// 为 [UByte result, UInt16 count, [Int item_id, Long num] * count]。
+	// 官方客户端每日可免费触发两次，每次直接产出挂机奖励；付费档是 852/5，自动化永不调用。
+	ActionIDEraRebirthLandQuickAuto uint32 = 0x03540008
 	// ActionIDEraRebirthLandPoolPanel 渡业台/渡业仙池面板 (Module 852, Action 12 -> 0x0354000C)
 	ActionIDEraRebirthLandPoolPanel uint32 = 0x0354000C
 	// ActionIDEraRebirthLandFreeAward 领取渡业仙池免费奖励 (Module 852, Action 13 -> 0x0354000D)
@@ -71,6 +77,149 @@ const (
 	EraRebirthResultNotEnoughFu uint8 = 17
 )
 
+// EraRebirthQuickFreeDailyLimit 每日免费快速挂机次数上限。
+//
+// 2026-11-21 线上实测: 免费次数用尽后 852/8 仍返回 result=0，但会扣除 10 元宝；
+// 因此自动化必须先读取 852/1 面板的 QuickFreeUsed，达到上限后绝不再调用。
+const EraRebirthQuickFreeDailyLimit int32 = 2
+
+// EraRebirthLandPanel 表示轮回净地面板 (852/1) 的关键字段。
+//
+// 线格式 (2026-11-21 两个账号实测一致):
+//
+//	[Int level][UInt16 entry_count][entry_count × (Int id, Int value)][Int × 12][...]
+//
+// 尾部 12 个 Int 中:
+//
+//	[4] 当前挂机累计秒数
+//	[5] 挂机收益上限秒数 (172800 = 48 小时)
+//	[10] 当日已使用的免费快速挂机次数 (上限 2)
+//	[11] 当日已使用的付费快速挂机次数 (每次 10 元宝)
+type EraRebirthLandPanel struct {
+	// Level 面板首字段（实测为 4）
+	Level int32
+	// Entries 键值对条目数
+	Entries int
+	// IdleSeconds 当前挂机累计秒数
+	IdleSeconds int32
+	// IdleCapSeconds 挂机收益上限秒数
+	IdleCapSeconds int32
+	// QuickFreeUsed 当日已使用的免费快速挂机次数
+	QuickFreeUsed int32
+	// QuickPaidUsed 当日已使用的付费快速挂机次数
+	QuickPaidUsed int32
+	// Tail 面板尾部 12 个 Int 原始值，便于后续字段重新定位
+	Tail []int32
+}
+
+// eraRebirthPanelTailInts 面板键值对之后的固定 Int 数量。
+const eraRebirthPanelTailInts = 12
+
+// ParseEraRebirthLandPanel 解析轮回净地面板 (852/1) 回包。
+func ParseEraRebirthLandPanel(payload []byte) (*EraRebirthLandPanel, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	p := &EraRebirthLandPanel{}
+	var err error
+	if p.Level, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("轮回净地面板 level 读取失败: %w", err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("轮回净地面板条目数读取失败: %w", err)
+	}
+	// 防御异常回包：条目数超过合理上限说明结构漂移，直接拒绝以免误读免费次数。
+	if count > 512 {
+		return nil, fmt.Errorf("轮回净地面板条目数异常: %d", count)
+	}
+	p.Entries = int(count)
+	for i := 0; i < int(count); i++ {
+		if _, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("轮回净地面板条目[%d] id 读取失败: %w", i, err)
+		}
+		if _, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("轮回净地面板条目[%d] value 读取失败: %w", i, err)
+		}
+	}
+	p.Tail = make([]int32, 0, eraRebirthPanelTailInts)
+	for i := 0; i < eraRebirthPanelTailInts; i++ {
+		v, rErr := r.ReadInt32()
+		if rErr != nil {
+			return nil, fmt.Errorf("轮回净地面板尾部字段[%d]读取失败: %w", i, rErr)
+		}
+		p.Tail = append(p.Tail, v)
+	}
+	p.IdleSeconds = p.Tail[4]
+	p.IdleCapSeconds = p.Tail[5]
+	p.QuickFreeUsed = p.Tail[10]
+	p.QuickPaidUsed = p.Tail[11]
+	// 字段合理性校验：结构漂移时宁可解析失败让例程跳过快速挂机，也不能误判为
+	// 「免费次数未用」而调用 852/8 导致扣元宝。
+	if p.QuickFreeUsed < 0 || p.QuickFreeUsed > EraRebirthQuickFreeDailyLimit {
+		return nil, fmt.Errorf("轮回净地面板免费快速挂机次数异常: %d", p.QuickFreeUsed)
+	}
+	if p.QuickPaidUsed < 0 {
+		return nil, fmt.Errorf("轮回净地面板付费快速挂机次数异常: %d", p.QuickPaidUsed)
+	}
+	if p.IdleCapSeconds <= 0 || p.IdleCapSeconds > 7*24*3600 {
+		return nil, fmt.Errorf("轮回净地面板挂机收益上限异常: %d", p.IdleCapSeconds)
+	}
+	if p.IdleSeconds < 0 {
+		return nil, fmt.Errorf("轮回净地面板挂机累计秒数异常: %d", p.IdleSeconds)
+	}
+	return p, nil
+}
+
+// QuickFreeRemaining 返回当日剩余免费快速挂机次数。
+func (p *EraRebirthLandPanel) QuickFreeRemaining() int32 {
+	remaining := EraRebirthQuickFreeDailyLimit - p.QuickFreeUsed
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+// EraRebirthAutoProfit 表示 852/9 查询到的挂机收益。
+type EraRebirthAutoProfit struct {
+	// Result 结果码
+	Result uint8
+	// Profit 服务端返回的收益值（抓包实测为 87105，语义疑似挂机时长/收益系数）
+	Profit int32
+	// Rewards 可领取奖励列表
+	Rewards []EraRebirthReward
+}
+
+// ParseEraRebirthAutoProfit 解析挂机收益回包 [UByte, Int, [Int, Long]]。
+//
+// 抓包 (2026-11-21) 样本 43 字节:
+// 00 | 00 01 54 41 | 00 03 | (Int 10993, Long 154009) (Int 10992, Long 6802260) ...
+func ParseEraRebirthAutoProfit(payload []byte) (*EraRebirthAutoProfit, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	res := &EraRebirthAutoProfit{}
+	var err error
+	if res.Result, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("轮回净地挂机收益结果码读取失败: %w", err)
+	}
+	if res.Profit, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("轮回净地挂机收益值读取失败: %w", err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("轮回净地挂机收益奖励数量读取失败: %w", err)
+	}
+	res.Rewards = make([]EraRebirthReward, 0, count)
+	for i := 0; i < int(count); i++ {
+		var reward EraRebirthReward
+		if reward.ItemID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("轮回净地挂机收益奖励[%d]道具读取失败: %w", i, err)
+		}
+		if reward.Num, err = r.ReadInt64(); err != nil {
+			return nil, fmt.Errorf("轮回净地挂机收益奖励[%d]数量读取失败: %w", i, err)
+		}
+		res.Rewards = append(res.Rewards, reward)
+	}
+	return res, nil
+}
+
 // EraRebirthReward 表示轮回净地领取的一笔奖励。
 type EraRebirthReward struct {
 	// ItemID 道具编号
@@ -95,6 +244,56 @@ func BuildEraRebirthLandPanelPacket() *Packet {
 // BuildEraRebirthLandAutoProfitPacket 构造挂机收益查询封包。
 func BuildEraRebirthLandAutoProfitPacket() *Packet {
 	return NewPacket(ActionIDEraRebirthLandAutoProfit, nil)
+}
+
+// BuildEraRebirthLandPanelPrevActPacket 构造带回包锚点的轮回净地面板封包 (852/1)。
+//
+// 官方客户端所有 852 请求尾部都带 4 字节 PrevAct（空 req 时为唯一载荷）。
+// HasPrevAct 置位后由会话在发送瞬间用最近收到的包覆盖，避免本地链漂移。
+func BuildEraRebirthLandPanelPrevActPacket(prevAct uint32) *Packet {
+	return buildEraRebirthLandPrevActPacket(ActionIDEraRebirthLandPanel, prevAct)
+}
+
+// BuildEraRebirthLandAutoProfitPrevActPacket 构造带回包锚点的挂机收益封包 (852/9)。
+func BuildEraRebirthLandAutoProfitPrevActPacket(prevAct uint32) *Packet {
+	return buildEraRebirthLandPrevActPacket(ActionIDEraRebirthLandAutoProfit, prevAct)
+}
+
+// BuildEraRebirthLandQuickAutoPacket 构造免费快速挂机封包 (852/8)。
+//
+// 抓包线格式: 仅 4 字节 PrevAct。HasPrevAct 置位，由会话用最近收到的包覆盖。
+func BuildEraRebirthLandQuickAutoPacket(prevAct uint32) *Packet {
+	return buildEraRebirthLandPrevActPacket(ActionIDEraRebirthLandQuickAuto, prevAct)
+}
+
+// buildEraRebirthLandPrevActPacket 构造「空 req + PrevAct」的 852 请求。
+func buildEraRebirthLandPrevActPacket(actionID, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint32(prevAct)
+	return &Packet{ActionID: actionID, Payload: w.Bytes(), HasPrevAct: true}
+}
+
+// BuildStateRecordGetStatePacket 构造状态记录查询封包 (701/0)。
+//
+// 抓包 (2026-11-21): 渡业台每次快速挂机前，官方客户端先以 key=8 查询状态记录，
+// 服务端回包 [Int key, Int value]（无结果码）。该请求同时把 PrevAct 链锚点推进到
+// 701/0，紧随其后的 852/8 才能被受理。
+func BuildStateRecordGetStatePacket(key int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(key)
+	return &Packet{ActionID: ActionIDStateRecordGetState, Payload: w.Bytes(), HasPrevAct: true}
+}
+
+// ParseStateRecordGetStateResult 解析 701/0 回包 [Int key, Int value]。
+func ParseStateRecordGetStateResult(payload []byte) (key, value int32, err error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	if key, err = r.ReadInt32(); err != nil {
+		return 0, 0, fmt.Errorf("状态记录 key 读取失败: %w", err)
+	}
+	if value, err = r.ReadInt32(); err != nil {
+		return 0, 0, fmt.Errorf("状态记录 value 读取失败: %w", err)
+	}
+	return key, value, nil
 }
 
 // BuildEraRebirthLandFreeBackPacket 构造免费一键领取挂机奖励封包。

@@ -1,17 +1,20 @@
 // Package daily 提供签到、邮件、在线奖励、绑定奖励与日常维护类玩法。
 //
 // 本文件实现轮回净地 (Mod_EraRebirthLandAuto_Base, Module 852)：
+//   - 渡业台挂机收益 (852/9) 与每日两次免费快速挂机 (852/8)；
 //   - 渡业台抽取 (852/16)：消耗渡业符/活动道具，不消耗元宝；
 //   - 渡业仙池免费/今日奖励 (852/13, 852/14)；
 //   - 每日活跃度任务 70「每日轮回净地领取挂机奖励」的免费一键领取 (852/6)。
 //
-// 元宝档 one_click_quick_ingot_back (852/7) 永不调用。
+// 元宝档 one_click_quick_ingot_back (852/7) 与 quick_auto_back (852/5) 永不调用；
+// 852/8 免费次数用尽后仍返回成功但会扣 10 元宝，必须先读 852/1 面板确认剩余次数。
 package daily
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,7 +88,14 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				}
 			}
 
-			// 3. 领取渡业仙池免费奖励 / 今日奖励 (852/13, 852/14)。
+			// 3. 渡业台：领取挂机收益 + 两次免费快速挂机 (852/9, 852/8)。
+			//    抓包时序 (2026-11-21): 852/1 面板 → 852/9 收益 → 701/0 锚点 → 852/8
+			//    → 852/1 刷新；第二次快速挂机重复同一链路。
+			if qErr := runAltarProfitAndQuickAuto(ctx, session, call); qErr != nil {
+				return qErr
+			}
+
+			// 4. 领取渡业仙池免费奖励 / 今日奖励 (852/13, 852/14)。
 			claim := func(pkt *protocol.Packet, act uint32, label string) (uint8, bool) {
 				resp := call(pkt, act)
 				if resp == nil && act == protocol.ActionIDEraRebirthLandTodayAward {
@@ -134,7 +144,7 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				return scheduler.ErrBagFull
 			}
 
-			// 4. 活跃度任务 70 未完成时才领取挂机奖励，避免无意义请求。
+			// 5. 活跃度任务 70 未完成时才领取挂机奖励，避免无意义请求。
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
 				// 单次无回包多为网关瞬断；短暂重试一次再进入较长冷却。
@@ -158,7 +168,7 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 5. 兜底：免费一键领取挂机奖励 (852/6)。
+			// 6. 兜底：免费一键领取挂机奖励 (852/6)。
 			resp := call(protocol.BuildEraRebirthLandFreeBackPacket(), protocol.ActionIDEraRebirthLandFreeBack)
 			if resp == nil {
 				slog.Info("轮回净地不可用或未开放，跳过", "role_id", session.RoleID())
@@ -391,4 +401,192 @@ func runAltarDraws(
 		slog.Info("渡业台本轮抽取完成", "role_id", session.RoleID(), "draws", draws)
 	}
 	return draws, drawCooldown
+}
+
+// runAltarProfitAndQuickAuto 完成「渡业台领取挂机收益 + 两次免费快速挂机」。
+//
+// 抓包时序 (2026-11-21): 852/1 面板 → 852/9 收益 → 852/8 → 852/1 刷新；
+// 第二次快速挂机重复。线上实测 701/0 锚点会被静默丢弃，852/8 只需 PrevAct 连续。
+// 任何失败码只驱动本阶段分支，不阻断后续渡业仙池领取。
+func runAltarProfitAndQuickAuto(
+	ctx context.Context,
+	session *client.RoleSession,
+	call func(*protocol.Packet, uint32) *protocol.Packet,
+) error {
+	// 1. 面板用于建立 PrevAct 上下文，并读取当日已用免费快速挂机次数。
+	//    852/8 在免费次数用尽后仍返回 result=0 但会扣 10 元宝 (2026-11-21 实测)，
+	//    因此面板解析失败时必须放弃快速挂机，宁可少领也不能扣元宝。
+	freeRemaining := int32(0)
+	freeUsedBefore := int32(0)
+	paidUsed := int32(0)
+	panelOK := false
+	if resp := call(protocol.BuildEraRebirthLandPanelPrevActPacket(session.LastActionID()),
+		protocol.ActionIDEraRebirthLandPanel); resp != nil {
+		if panel, err := protocol.ParseEraRebirthLandPanel(resp.Payload); err != nil {
+			slog.Warn("解析轮回净地面板失败，本轮跳过快速挂机",
+				"role_id", session.RoleID(), "payload_len", len(resp.Payload), "err", err)
+		} else {
+			panelOK = true
+			freeRemaining = panel.QuickFreeRemaining()
+			freeUsedBefore = panel.QuickFreeUsed
+			paidUsed = panel.QuickPaidUsed
+			slog.Info("轮回净地面板", "role_id", session.RoleID(),
+				"idle_seconds", panel.IdleSeconds,
+				"idle_cap_seconds", panel.IdleCapSeconds,
+				"quick_free_used", panel.QuickFreeUsed,
+				"quick_free_remaining", freeRemaining,
+				"quick_paid_used", panel.QuickPaidUsed)
+		}
+	}
+
+	// 2. 领取渡业台挂机收益 (852/9)。
+	if resp := call(protocol.BuildEraRebirthLandAutoProfitPrevActPacket(session.LastActionID()),
+		protocol.ActionIDEraRebirthLandAutoProfit); resp == nil {
+		slog.Info("轮回净地挂机收益无回包，跳过快速挂机", "role_id", session.RoleID())
+		return nil
+	} else if profit, err := protocol.ParseEraRebirthAutoProfit(resp.Payload); err != nil {
+		slog.Warn("解析轮回净地挂机收益失败", "role_id", session.RoleID(), "err", err)
+	} else {
+		switch profit.Result {
+		case protocol.EraRebirthResultSuccess:
+			slog.Info("轮回净地挂机收益领取成功", "role_id", session.RoleID(),
+				"profit", profit.Profit, "rewards", eraRebirthRewardText(profit.Rewards))
+		case protocol.EraRebirthResultNoCanGetGift, protocol.EraRebirthResultNoProfit,
+			protocol.EraRebirthResultNoFreeStorage, protocol.EraRebirthResultAlreadyGet:
+			slog.Info("轮回净地暂无挂机收益", "role_id", session.RoleID(),
+				"result", profit.Result, "result_text", protocol.EraRebirthResultText(profit.Result))
+		case protocol.EraRebirthResultPackageFull:
+			return scheduler.ErrBagFull
+		case protocol.EraRebirthResultFuncNotOpen:
+			return scheduler.NewCooldown(30*time.Minute, "轮回净地功能未开放")
+		case protocol.EraRebirthResultNotEnoughIngot, protocol.EraRebirthResultNotEnoughTodayIngot:
+			// 收益档若开始索要元宝，立即熔断，绝不允许继续调用。
+			return scheduler.NewCooldown(6*time.Hour, "轮回净地挂机收益要求元宝，熔断")
+		default:
+			slog.Info("轮回净地挂机收益未成功", "role_id", session.RoleID(),
+				"result", profit.Result, "result_text", protocol.EraRebirthResultText(profit.Result))
+		}
+	}
+
+	if !panelOK {
+		return nil
+	}
+	return runQuickAuto(ctx, session, call, freeRemaining, freeUsedBefore, paidUsed)
+}
+
+// runQuickAuto 触发每日免费快速挂机 (852/8)，只消耗服务端面板显示的剩余免费次数。
+//
+// 每次成功均校验元宝余额：852/8 是免费档，若余额变化说明协议漂移或误触发付费档，
+// 立即 6 小时熔断。
+func runQuickAuto(
+	ctx context.Context,
+	session *client.RoleSession,
+	call func(*protocol.Packet, uint32) *protocol.Packet,
+	freeRemaining int32,
+	freeUsedBefore int32,
+	paidUsedBefore int32,
+) error {
+	if freeRemaining <= 0 {
+		slog.Info("轮回净地免费快速挂机次数已用尽，跳过以避免扣元宝", "role_id", session.RoleID())
+		return nil
+	}
+	ingotsBefore := session.GetPlayerState().Ingots
+	for i := int32(0); i < freeRemaining && i < protocol.EraRebirthQuickFreeDailyLimit; i++ {
+		if ctx.Err() != nil {
+			return nil
+		}
+		// 2026-11-21 线上实测: 官方抓包中的 701/0 get_state 锚点在本服被静默丢弃
+		// （每次白等 6 秒），而紧随其后的 852/8 仍能成功。说明 852/8 只要求
+		// PrevAct 链连续，不需要 701/0 参与；自动化直接省略该请求。
+
+		resp := call(protocol.BuildEraRebirthLandQuickAutoPacket(session.LastActionID()),
+			protocol.ActionIDEraRebirthLandQuickAuto)
+		if resp == nil {
+			slog.Info("轮回净地快速挂机无回包", "role_id", session.RoleID(),
+				"times", i+1)
+			return nil
+		}
+		res, err := protocol.ParseEraRebirthFreeBackResult(resp.Payload)
+		if err != nil {
+			slog.Warn("解析轮回净地快速挂机回包失败", "role_id", session.RoleID(), "err", err)
+			return nil
+		}
+		switch res.Result {
+		case protocol.EraRebirthResultSuccess:
+			slog.Info("轮回净地快速挂机成功", "role_id", session.RoleID(),
+				"times", i+1, "rewards", eraRebirthRewardText(res.Rewards))
+		case protocol.EraRebirthResultNoTimes, protocol.EraRebirthResultNoProfit,
+			protocol.EraRebirthResultNoCanGetGift, protocol.EraRebirthResultNoFreeStorage,
+			protocol.EraRebirthResultNotEnoughItem, protocol.EraRebirthResultAlreadyGet:
+			slog.Info("轮回净地快速挂机结束（免费次数用尽或暂无可领取）",
+				"role_id", session.RoleID(), "times", i+1,
+				"result", res.Result, "result_text", protocol.EraRebirthResultText(res.Result))
+			return nil
+		case protocol.EraRebirthResultPackageFull:
+			return scheduler.ErrBagFull
+		case protocol.EraRebirthResultFuncNotOpen:
+			return scheduler.NewCooldown(30*time.Minute, "轮回净地快速挂机功能未开放")
+		case protocol.EraRebirthResultNotEnoughIngot, protocol.EraRebirthResultNotEnoughTodayIngot:
+			// 852/8 应为免费档；出现元宝不足说明免费次数已耗尽且服务端转向付费，
+			// 立即熔断，绝不进入 852/5/852/7 付费链路。
+			slog.Error("快速挂机返回元宝不足，疑似免费次数耗尽后转向付费，立即熔断",
+				"role_id", session.RoleID(), "result", res.Result)
+			return scheduler.NewCooldown(6*time.Hour, "快速挂机免费次数已耗尽")
+		default:
+			slog.Info("轮回净地快速挂机未成功", "role_id", session.RoleID(),
+				"times", i+1, "result", res.Result,
+				"result_text", protocol.EraRebirthResultText(res.Result))
+			return nil
+		}
+
+		// 每次快速挂机后刷新面板，用服务端字段确认免费次数确实被消耗。
+		// 若面板解析失败或免费次数没有减少，立即停止，避免下一次落到付费档。
+		panelResp := call(protocol.BuildEraRebirthLandPanelPrevActPacket(session.LastActionID()),
+			protocol.ActionIDEraRebirthLandPanel)
+		if panelResp == nil {
+			slog.Warn("快速挂机后刷新面板无回包，停止后续快速挂机", "role_id", session.RoleID())
+			return nil
+		}
+		panel, pErr := protocol.ParseEraRebirthLandPanel(panelResp.Payload)
+		if pErr != nil {
+			slog.Warn("快速挂机后解析面板失败，停止后续快速挂机",
+				"role_id", session.RoleID(), "err", pErr)
+			return nil
+		}
+		if panel.QuickPaidUsed > paidUsedBefore {
+			slog.Error("快速挂机误入付费档，已扣元宝，立即熔断",
+				"role_id", session.RoleID(),
+				"paid_before", paidUsedBefore, "paid_after", panel.QuickPaidUsed)
+			return scheduler.NewCooldown(6*time.Hour, "快速挂机误入付费档")
+		}
+		if want := freeUsedBefore + i + 1; panel.QuickFreeUsed < want {
+			slog.Warn("快速挂机后面板免费次数未按预期增加，停止以避免扣元宝",
+				"role_id", session.RoleID(), "want_used", want,
+				"quick_free_used", panel.QuickFreeUsed)
+			return nil
+		}
+		// 以服务端最新面板为准确认是否还有剩余免费次数：期间若有其他客户端消耗了
+		// 免费次数，这里会立即归零并停止，绝不会把下一次调用落到付费档。
+		if remaining := panel.QuickFreeRemaining(); remaining <= 0 {
+			slog.Info("轮回净地免费快速挂机次数已用尽，停止", "role_id", session.RoleID(),
+				"quick_free_used", panel.QuickFreeUsed)
+			return nil
+		}
+
+		if ingotsAfter := session.GetPlayerState().Ingots; ingotsAfter != ingotsBefore {
+			slog.Error("快速挂机导致元宝变化，疑似协议漂移，立即熔断",
+				"role_id", session.RoleID(), "before", ingotsBefore, "after", ingotsAfter)
+			return scheduler.NewCooldown(6*time.Hour, "快速挂机导致元宝变化")
+		}
+	}
+	return nil
+}
+
+// eraRebirthRewardText 将奖励列表格式化为 "item x num, ..." 便于日志检索。
+func eraRebirthRewardText(rewards []protocol.EraRebirthReward) string {
+	parts := make([]string, 0, len(rewards))
+	for _, reward := range rewards {
+		parts = append(parts, fmt.Sprintf("%d x %d", reward.ItemID, reward.Num))
+	}
+	return strings.Join(parts, ", ")
 }
