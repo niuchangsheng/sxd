@@ -839,8 +839,12 @@ func TestImperialExamRoutine_Execute(t *testing.T) {
 	}
 	defer session.Close()
 	time.Sleep(100 * time.Millisecond)
-	if err := NewImperialExamRoutine(nil).Execute(context.Background(), session, nil); err != nil {
-		t.Fatalf("金榜题名检测任务执行失败: %v", err)
+	// mock 环境没有开始答题回包：现在按连续丢包退避返回 CooldownError，
+	// 而不是当作成功结束等到下一个 cron 时段。
+	err := NewImperialExamRoutine(nil).Execute(context.Background(), session, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("开始答题无回包应返回 CooldownError, got %v", err)
 	}
 }
 
@@ -1261,5 +1265,35 @@ func TestIceCaveRoutine_HitSilentDropBacksOff(t *testing.T) {
 	}
 	if got := scheduler.SilentDropCount(sess, "ice_cave"); got < 1 {
 		t.Fatalf("应记录冰窟静默丢包，got %d", got)
+	}
+}
+
+// TestImperialExamRoutine_StartSilentDropBacksOff 验证金榜题名开始答题无应答时
+// 按连续丢包退避，而不是 break + return nil 把剩余答题丢到下一个 cron 时段。
+func TestImperialExamRoutine_StartSilentDropBacksOff(t *testing.T) {
+	now := time.Now()
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDImperialExamStatus:
+			_ = protocol.WritePacket(conn, protocol.BuildImperialExamStatusResultPacket(protocol.ImperialExamStatus{
+				StartTime: int32(now.Add(-time.Minute).Unix()),
+				EndTime:   int32(now.Add(time.Hour).Unix()),
+				Status:    protocol.ImperialExamActivityStart,
+			}))
+		case protocol.ActionIDImperialExamStart:
+			// 静默丢弃：不回包。
+		}
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewImperialExamRoutine(nil).Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("开始答题无应答应返回 CooldownError, got %v", err)
+	}
+	if got := scheduler.SilentDropCount(sess, "imperial_exam"); got < 1 {
+		t.Fatalf("应记录金榜题名静默丢包，got %d", got)
 	}
 }

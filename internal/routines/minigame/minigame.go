@@ -1107,8 +1107,10 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				qResp, qErr := session.Call(qCtx, protocol.BuildImperialExamStartPacket(), protocol.ActionIDImperialExamStart)
 				qCancel()
 				if qErr != nil {
-					slog.Info("金榜题名开始答题无应答", "role_id", session.RoleID(), "err", qErr)
-					break
+					slog.Info("金榜题名开始答题无应答，按连续丢包退避",
+						"role_id", session.RoleID(), "err", qErr)
+					return scheduler.HandleSilentDrop(session, "imperial_exam", 3,
+						10*time.Minute, "金榜题名开始答题无应答")
 				}
 				q, pErr := protocol.ParseImperialExamQuestionResult(qResp.Payload)
 				if pErr != nil {
@@ -1162,8 +1164,10 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				sResp, sErr := session.Call(sCtx, protocol.BuildImperialExamSubmitPacket(q.CurAnswerSeq, seq), protocol.ActionIDImperialExamSubmit)
 				sCancel()
 				if sErr != nil {
-					slog.Info("金榜题名提交答案无应答", "role_id", session.RoleID(), "err", sErr)
-					break
+					slog.Info("金榜题名提交答案无应答，按连续丢包退避",
+						"role_id", session.RoleID(), "err", sErr)
+					return scheduler.HandleSilentDrop(session, "imperial_exam", 3,
+						10*time.Minute, "金榜题名提交答案无应答")
 				}
 				sub, spErr := protocol.ParseImperialExamSubmitResult(sResp.Payload)
 				if spErr != nil {
@@ -1187,6 +1191,7 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				)
 				switch sub.Result {
 				case protocol.ImperialExamResultSuccess:
+					scheduler.ResetSilentDrops(session, "imperial_exam")
 					// 继续下一题
 				case protocol.ImperialExamAnswerOver:
 					slog.Info("金榜题名今日答题已结束", "role_id", session.RoleID(), "answered", answered, "right", right, "wrong", wrong)
