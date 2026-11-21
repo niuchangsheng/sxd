@@ -12,11 +12,12 @@ import (
 )
 
 // TestJieYuanBoxRoutine_SendsBatchOpenRequest 验证官方抓包链路：
-// 232/30 列表 -> 2/41 背包查询 -> 528/1 上下文握手 [0x0704, PrevAct=2/41]
+// 2/41 背包查询 -> 232/30 列表 -> 528/1 上下文握手 [0x0704, PrevAct=232/30]
 // -> 232/34 开箱 [item, autoMerge, PrevAct=528/1] -> 232/30 库存核对。
 //
-// 528/1 与 232/34 的 PrevAct 必须等于「上一条发送的请求」：开箱前的背包查询
-// 会让锚点从 232/30 变成 2/41，固定写 232/30 会被服务端静默丢弃（2026-11-21 线上复现）。
+// 2026-11-22 对照 /tmp/jieyuan2.pcapng：官方客户端在 232/30 之后紧接 528/1，
+// 中间没有 2/41。本服在两者之间插入 2/41 会导致 528/1 前直接 EOF，因此背包
+// 查询必须提前到列表之前；528/1 与 232/34 的 PrevAct 仍等于上一条发送动作。
 func TestJieYuanBoxRoutine_SendsBatchOpenRequest(t *testing.T) {
 	var listCalls, ctxCalls, openCalls atomic.Int32
 	var lastAction uint32

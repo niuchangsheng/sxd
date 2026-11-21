@@ -151,6 +151,32 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 				"max_batch_size", maxBatch,
 			)
 
+			// 0. 开箱会产出奖励，先确认背包空格。
+			//
+			// 线上 2/41 的 empty 字段在物品数变化时仍恒为 0（47/50 件都报 0），
+			// 因此以「容量 - 已用格位」判断空格；满仓交给背包清理后再开，避免
+			// 「无回包且库存不变」把箱型错误标记 6 小时跳过。
+			//
+			// 顺序要点：2/41 必须放在 232/30 之前。官方抓包 (/tmp/jieyuan2.pcapng)
+			// 中 232/30 之后紧接 528/1，528/1 的 PrevAct 必须是 232/30；若在两者
+			// 之间插入 2/41，本服会直接断开连接（2026-11-22 02:07/02:36 两次
+			// 528/1 前 EOF）。
+			if pack, pErr := fetchJieYuanPack(ctx, session); pErr == nil && pack != nil {
+				freeSlots := int(pack.PackCapacity) - len(pack.PackItems)
+				slog.Info("结缘宝箱开箱前背包状态", "role_id", session.RoleID(),
+					"capacity", pack.PackCapacity, "pack_items", len(pack.PackItems),
+					"free_slots", freeSlots, "empty_grids", pack.PackEmptyGrids)
+				if freeSlots <= 0 {
+					slog.Info("结缘宝箱开箱前背包已满，等待背包清理后再开", "role_id", session.RoleID())
+					// 背包腾挪靠扫荡物/装备制作卷出售，间隔不固定；2 分钟轮询可尽快
+					// 抓住出现的空格（每次仅一次 2/41 查询，成本可忽略）。
+					return scheduler.NewCooldown(2*time.Minute, "结缘宝箱背包已满")
+				}
+			} else if pErr != nil {
+				slog.Info("结缘宝箱开箱前查询背包无回包，继续按原流程尝试",
+					"role_id", session.RoleID(), "err", pErr)
+			}
+
 			// 1. 查询背包持有的结缘宝箱列表 (Mod 232, Act 30)
 			queryPkt := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDTownEnter)
 			callCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -203,27 +229,6 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			}
 
 			var totalOpened int
-
-			// 开箱会产出奖励。背包 0 空格时服务端可能直接丢弃开箱请求，表现为
-			// 「无回包且库存不变」，与其他不可开启情形无法区分，还会把箱型错误
-			// 标记 6 小时跳过。先确认空格，满仓则交给背包清理后再开。
-			// 以「容量 - 已用格位」判断空格：线上 2/41 的 empty 字段在物品数变化时
-			// 仍恒为 0（47 件/50 件都报 0），单看它会永久误判满仓。
-			if pack, pErr := fetchJieYuanPack(ctx, session); pErr == nil && pack != nil {
-				freeSlots := int(pack.PackCapacity) - len(pack.PackItems)
-				slog.Info("结缘宝箱开箱前背包状态", "role_id", session.RoleID(),
-					"capacity", pack.PackCapacity, "pack_items", len(pack.PackItems),
-					"free_slots", freeSlots, "empty_grids", pack.PackEmptyGrids)
-				if freeSlots <= 0 {
-					slog.Info("结缘宝箱开箱前背包已满，等待背包清理后再开", "role_id", session.RoleID())
-					// 背包腾挪靠扫荡物/装备制作卷出售，间隔不固定；2 分钟轮询可尽快
-					// 抓住出现的空格（每次仅一次 2/41 查询，成本可忽略）。
-					return scheduler.NewCooldown(2*time.Minute, "结缘宝箱背包已满")
-				}
-			} else if pErr != nil {
-				slog.Info("结缘宝箱开箱前查询背包无回包，继续按原流程尝试",
-					"role_id", session.RoleID(), "err", pErr)
-			}
 
 			// altQualityTried 记录已做过「0 档自动合成」变体探测的箱型，每进程每种一次。
 			altQualityTried := make(map[int32]bool, len(openable))
