@@ -6,6 +6,7 @@ package social
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -60,16 +61,23 @@ func jieYuanOpenWithQuality(ctx context.Context, session *client.RoleSession, it
 // 若首次仍无回包（例如链路被并发心跳推进），重试一次即可用最新锚点重新握手。
 // 不能用裸 2 字节兜底：服务端虽回 0，但上下文不成立，随后的 232/34 仍被丢弃。
 func callJieYuanContext(ctx context.Context, session *client.RoleSession) (*protocol.Packet, error) {
+	// 首次发送前记录最后一条业务回包锚点（排除心跳）。首次 528/1 超时期间
+	// 心跳回包会推进 LastRxActionID，不能让重试尾链漂移到 0/75。
+	anchor := session.LastAckActionID()
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		pkt := protocol.BuildJieYuanBoxOpenContextPacket()
 		if attempt > 0 {
 			// 第一次 528/1 已把会话的「上一条发送动作」推进到 528/1 自身。
 			// 若重试仍用 PrevActFromLastSent，会发出 528/1 -> 528/1 的自引用
-			// 尾链，服务端必然丢弃。重试改用「最后收到的动作」（通常仍是
-			// 232/30 列表回包）作为锚点。
+			// 尾链，服务端必然丢弃。重试显式写回首次发送前的业务回包锚点
+			// （通常是 232/30 列表回包）。
 			pkt.PrevActFromLastSent = false
-			pkt.HasPrevAct = true
+			if anchor != 0 && len(pkt.Payload) >= 6 {
+				binary.BigEndian.PutUint32(pkt.Payload[2:6], anchor)
+			} else {
+				pkt.HasPrevAct = true
+			}
 		}
 		c, cancel := context.WithTimeout(ctx, 8*time.Second)
 		resp, err := session.Call(c, pkt, protocol.ActionIDJieYuanBoxOpenContext)
