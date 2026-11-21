@@ -204,3 +204,64 @@ func TestJieYuanBoxRoutine_StillListsWhenFunctionClosed(t *testing.T) {
 		t.Fatalf("空背包不应发起开箱握手, ctx=%d", ctxCalls.Load())
 	}
 }
+
+// TestJieYuanBoxRoutine_ContextRetryUsesLastRxAnchor 验证 528/1 首次无回包后，
+// 重试不能用「上一条发送动作」（此时已是 528/1 自身），而应使用最后收到的
+// 232/30 列表回包作为尾链锚点。
+func TestJieYuanBoxRoutine_ContextRetryUsesLastRxAnchor(t *testing.T) {
+	var ctxCalls atomic.Int32
+	var lastResponseAction uint32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetFunctions:
+			lastResponseAction = pkt.ActionID
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(
+				[]int32{protocol.FunctionIDLinkFate}))
+		case protocol.ActionIDJieYuanBoxList:
+			n := ctxCalls.Load()
+			w := protocol.NewWriter()
+			if n == 0 {
+				w.WriteUint16(1)
+				w.WriteInt32(protocol.ItemJieYuanBoxCommon)
+				w.WriteInt32(2)
+			} else {
+				w.WriteUint16(0)
+			}
+			lastResponseAction = pkt.ActionID
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDItemGetPackList:
+			w := protocol.NewWriter()
+			w.WriteInt16(60)
+			w.WriteInt32(0)
+			w.WriteUint16(0)
+			lastResponseAction = pkt.ActionID
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDJieYuanBoxOpenContext:
+			n := ctxCalls.Add(1)
+			if n == 1 {
+				// 首次静默丢弃：不回包，触发重试。
+				return
+			}
+			tail := binary.BigEndian.Uint32(pkt.Payload[2:6])
+			if tail != lastResponseAction {
+				t.Errorf("528/1 重试尾链 = 0x%08X, want 最后收到动作 0x%08X",
+					tail, lastResponseAction)
+			}
+			lastResponseAction = pkt.ActionID
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.JieYuanOpenContextResultOK}))
+		case protocol.ActionIDJieYuanBoxOpen:
+			lastResponseAction = pkt.ActionID
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.JieYuanBoxOpenResultSuccess, 0x00, 0x00}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewJieYuanBoxRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("jieyuan box: %v", err)
+	}
+	if got := ctxCalls.Load(); got != 2 {
+		t.Fatalf("首次 528/1 无回包后应重试一次, ctx calls = %d", got)
+	}
+}

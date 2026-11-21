@@ -62,9 +62,17 @@ func jieYuanOpenWithQuality(ctx context.Context, session *client.RoleSession, it
 func callJieYuanContext(ctx context.Context, session *client.RoleSession) (*protocol.Packet, error) {
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
+		pkt := protocol.BuildJieYuanBoxOpenContextPacket()
+		if attempt > 0 {
+			// 第一次 528/1 已把会话的「上一条发送动作」推进到 528/1 自身。
+			// 若重试仍用 PrevActFromLastSent，会发出 528/1 -> 528/1 的自引用
+			// 尾链，服务端必然丢弃。重试改用「最后收到的动作」（通常仍是
+			// 232/30 列表回包）作为锚点。
+			pkt.PrevActFromLastSent = false
+			pkt.HasPrevAct = true
+		}
 		c, cancel := context.WithTimeout(ctx, 8*time.Second)
-		resp, err := session.Call(c, protocol.BuildJieYuanBoxOpenContextPacket(),
-			protocol.ActionIDJieYuanBoxOpenContext)
+		resp, err := session.Call(c, pkt, protocol.ActionIDJieYuanBoxOpenContext)
 		cancel()
 		if err == nil && resp != nil {
 			return resp, nil
