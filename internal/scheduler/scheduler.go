@@ -15,6 +15,13 @@ import (
 	"sxd-pie-ng/internal/client"
 )
 
+// sessionLostRetryInterval 例行任务执行中途会话断开后的短重试间隔。
+//
+// 断线并不代表玩法已完成：剩余次数需要尽快补做，而不是等下一次 Cron
+// （2~4 小时）。调度器在会话非激活期间本来就不会拉起任务，因此该间隔
+// 只会在会话恢复后生效。
+const sessionLostRetryInterval = 5 * time.Minute
+
 type scheduledItem struct {
 	routine      ActivityRoutine
 	nextRun      time.Time
@@ -182,6 +189,7 @@ func (s *RoleScheduler) runLoop() {
 		s.itemsMu.Lock()
 		cooldownScheduled := false
 		coolingScheduled := false
+		retrySoon := false
 		if execErr != nil {
 			var cdErr *CooldownError
 			if errors.As(execErr, &cdErr) {
@@ -219,16 +227,27 @@ func (s *RoleScheduler) runLoop() {
 					"cooling_until", item.coolingUntil,
 				)
 			} else if errors.Is(execErr, client.ErrNotConnected) {
-				// 重连窗口内的确定性失败：本轮跳过，不进入冷却、不产生告警。
-				slog.Info("会话重连中，任务本轮跳过",
+				// 执行中途断线：本轮确实没做完（可能还有剩余次数），
+				// 若按 Cron 推迟到下一次定点唤醒（2~4 小时）会长期漏做。
+				// 会话恢复后 5 分钟即重试；调度器在重连期间本身也不会拉起任务。
+				retrySoon = true
+				slog.Info("会话重连中，任务本轮跳过并稍后重试",
 					"role_id", s.roleID,
 					"routine", item.routine.Name(),
+					"retry_in", sessionLostRetryInterval,
 				)
 			} else if errors.Is(execErr, context.DeadlineExceeded) {
-				// 超时多数源于服务端对不满足条件请求的静默丢弃，按本轮跳过处理。
-				slog.Info("任务请求超时/被服务端静默丢弃，本轮跳过",
+				// 超时多数源于服务端对不满足条件请求的静默丢弃。Cron 例程若
+				// 直接当作「本轮跳过」，剩余业务要等到下一个 cron 时段（可能
+				// 数小时）；统一给 30 分钟短重试，连续丢包由 Routine 内部的
+				// dropbackoff 计数熔断。
+				item.coolingUntil = time.Now().Add(30 * time.Minute)
+				item.holdUntil = item.coolingUntil
+				coolingScheduled = true
+				slog.Info("任务请求超时/被服务端静默丢弃，30 分钟后重试",
 					"role_id", s.roleID,
 					"routine", item.routine.Name(),
+					"cooling_until", item.coolingUntil,
 					"error", execErr,
 				)
 			} else if errors.Is(execErr, ErrConditionNotMet) {
@@ -272,6 +291,10 @@ func (s *RoleScheduler) runLoop() {
 			// 体力/背包/次数熔断：冷却结束即重新就绪，而不是被 24h Cron 推迟一天
 			// （否则 coolingUntil 只有 10~30 分钟，实际却要等到次日批量唤醒）。
 			item.nextRun = item.coolingUntil
+		} else if retrySoon {
+			// 会话中途断线：本轮可能还有未消耗的次数，按短间隔重试，
+			// 不按 Cron/Interval 推迟到下一次唤醒。
+			item.nextRun = time.Now().Add(sessionLostRetryInterval)
 		} else if item.routine.Interval() > 0 {
 			item.nextRun = time.Now().Add(item.routine.Interval())
 		} else if isCron {

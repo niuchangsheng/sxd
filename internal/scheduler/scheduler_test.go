@@ -593,3 +593,53 @@ func TestScheduler_BagFullSchedulesShortRetry(t *testing.T) {
 		t.Fatal("背包满应设置 coolingUntil")
 	}
 }
+
+// TestScheduler_DeadlineExceededRetriesInThirtyMinutes 验证 Routine 返回
+// context.DeadlineExceeded（服务端静默丢包）时不再按 Cron 推迟到下一个时段，
+// 而是 30 分钟后短重试。
+func TestScheduler_DeadlineExceededRetriesInThirtyMinutes(t *testing.T) {
+	fastJitter := scheduler.NewJitter(scheduler.JitterConfig{
+		MinDuration: 2 * time.Millisecond,
+		MaxDuration: 5 * time.Millisecond,
+	})
+	sched := scheduler.NewRoleScheduler("role-timeout", nil, fastJitter)
+
+	var calls atomic.Int32
+	r := scheduler.NewBaseRoutine(
+		"timeout_routine",
+		"test",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+			calls.Add(1)
+			return context.DeadlineExceeded
+		},
+	)
+	if err := sched.Register(r); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sched.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sched.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() < 1 {
+		t.Fatal("routine 未执行")
+	}
+
+	_, next, _, found := sched.GetRoutineState("timeout_routine")
+	if !found {
+		t.Fatal("未找到 routine 状态")
+	}
+	if wait := time.Until(next); wait < 25*time.Minute || wait > 35*time.Minute {
+		t.Fatalf("静默丢包后应在约 30 分钟后重试, 实际 wait=%v", wait)
+	}
+}
