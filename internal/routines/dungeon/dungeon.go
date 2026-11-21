@@ -3851,14 +3851,40 @@ func practiceMission(
 
 	switch m25Res.Result {
 	case protocol.PracticeResultSuccess:
-		// 快速完成扫荡 (ActionIDPracticeQuickly: 0x00190003，服务端主动推送 0x00190004 结算通知)
-		quickPkt, _ := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
+		// 快速完成扫荡 (ActionIDPracticeQuickly: 0x00190003)。必须解析回包结果：
+		// 之前这里丢弃响应后无条件扣体力/加奖励，加速请求被静默丢弃时会凭空
+		// 记账，导致本地体力与收益和服务端不一致。
+		quickPkt, qBuildErr := protocol.BuildQuicklyPacket(protocol.QuicklyRequest{Count: 0})
+		if qBuildErr != nil {
+			return false, 0, qBuildErr
+		}
 		qCtx, qCancel := context.WithTimeout(ctx, 8*time.Second)
-		_, _ = session.Call(qCtx, quickPkt, protocol.ActionIDPracticeNotify)
+		quickResp, quickErr := session.Call(qCtx, quickPkt, protocol.ActionIDPracticeQuickly)
 		qCancel()
+		if quickErr != nil || quickResp == nil {
+			slog.Warn("Module 25 扫荡加速无回包，不扣体力也不加奖励",
+				"role_id", session.RoleID(), "mission_id", missionID, "err", quickErr)
+			if quickErr != nil {
+				return false, 0, fmt.Errorf("扫荡加速无回包: %w", quickErr)
+			}
+			return false, 0, errors.New("扫荡加速无回包")
+		}
+		quickRes, qParseErr := protocol.ParseQuicklyResult(quickResp.Payload)
+		if qParseErr != nil {
+			slog.Warn("Module 25 扫荡加速回包解析失败，不记账",
+				"role_id", session.RoleID(), "mission_id", missionID, "err", qParseErr)
+			return false, 0, qParseErr
+		}
+		if quickRes.Result != protocol.PracticeResultSuccess {
+			slog.Info("Module 25 扫荡加速未成功，不记账",
+				"role_id", session.RoleID(), "mission_id", missionID, "result", quickRes.Result)
+			return false, 0, nil
+		}
 
 		actualRounds := int(count)
-		if m25Res.Count > 0 && int(m25Res.Count) <= actualRounds {
+		if quickRes.Count > 0 && int(quickRes.Count) <= actualRounds {
+			actualRounds = int(quickRes.Count)
+		} else if m25Res.Count > 0 && int(m25Res.Count) <= actualRounds {
 			actualRounds = int(m25Res.Count)
 		}
 		cost := actualRounds * 5
