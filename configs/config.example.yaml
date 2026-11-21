@@ -58,8 +58,9 @@ scheduler:
     weekend_event: true           # 周末狂欢礼 + 水果机 (仅免费次数, 不消耗元宝)
     daoyuan_vip_shop: true        # 精品杂货 VIP5/VIP8 购买 (仅低价档, 不消耗元宝)
     void_worship: true            # 仙界虚空/大神榜膜拜 (每日免费一次)
-    sa_union_worship: true
-    sa_world_tower: true          # 全网幻魔塔 (免费挑战, 不买次数)        # 万古神墟/圣盟膜拜 (仅铜钱档)
+    sa_union_worship: true        # 圣盟膜拜面板 (仅铜钱/免费档, 不使用元宝档)
+    wangu_shenxu: true            # 万古神墟膜拜 (膜拜免费; 奖励归被膜拜榜一)
+    sa_world_tower: true          # 全网幻魔塔 (免费挑战, 不买次数)
     tower_room: true              # 全服伏魔塔房间 (创建→解除封印→进入战斗, 不耗元宝)
     devil_expedition: true        # 魔界远征单人挑战 (双生/魔神/隐仙, 材料达上限不触发, 不买宝箱)
     device_bind_reward: true      # 手机绑定首绑/月度奖励

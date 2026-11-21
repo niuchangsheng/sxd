@@ -113,7 +113,7 @@ s0 返回 13 条活动记录，按时间窗过滤后**当前开放 8 条**：
 | `CommonRankTypeData` 排行奖励 | 跨仙界排行 (`RankType.YW_KUA_XIAN_JIE=19`) 前列 3000–6000 元宝 | 需高排名，非稳定免费产出 |
 | 周年塔 (Mod 685) | `ingot_get_list` / `ingot_times` 需消耗元宝 | 付费轨，不接入 |
 | 财运亨通 (Mod 798) | `charge_ingot=0`，全部档位锁定；`get_return_ingot` 为充值返利 | 充值向，不接入 |
-| 永恒游戏赠礼 (Mod 840) | `worship` 消耗元宝膜拜他人 (`worship_min/max_ingot_num`) | 消耗向，不接入 |
+| 万古神墟 (Mod 840) | `worship` 回包 `worship_ingot` 为**被膜拜榜一**获得元宝；膜拜者本身免费但无元宝收益 | 已接入 `wangu_shenxu`（榜一可领累计铜钱）；详见 [wangu-shenxu-recon.md](./wangu-shenxu-recon.md) |
 | 任务板 (Mod 364) | 奖励为铜钱/道具（1747/4649/2016 等），无 3345 | 非元宝，不接入 |
 | 寻宝盒 (Mod 662) | 面板全 0，未开放 | 跳过 |
 
@@ -122,3 +122,10 @@ s0 返回 13 条活动记录，按时间窗过滤后**当前开放 8 条**：
 
 > 说明：本侦察仅覆盖**不消耗元宝**的合法路径。充值返利、开格、元宝抽奖等
 > 消耗向活动一律未接入；不使用任何游戏漏洞或规避检测手段。
+
+> 更正（2026-11-21）：本节对 Mod 840 的判断有误。抓包 `/tmp/wangushenxu.pcapng`
+> 证明 840 是**万古神墟**。`worship` 回包中的 `worship_ingot` 是给**被膜拜榜一**
+> 的元宝奖励：抓包客户端自身就是榜一，所以能看到 0/3 PLAYER_INGOT 按该值增加；
+> 用普通角色「同尘」实测膜拜他人成功但元宝不变。膜拜对膜拜者免费、不消耗元宝，
+> 但也不是普通角色的免费元宝产出。已接入 `wangu_shenxu`（只读面板 + 膜拜 +
+> `can_get_coin>0` 时领奖），详见 [wangu-shenxu-recon.md](./wangu-shenxu-recon.md)。

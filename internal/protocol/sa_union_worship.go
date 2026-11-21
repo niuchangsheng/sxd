@@ -1,4 +1,7 @@
-// Package protocol 提供圣盟膜拜/万古神墟协议 (Mod_SaUnionWorship_Base, Module 419)。
+// Package protocol 提供圣盟膜拜协议 (Mod_SaUnionWorship_Base, Module 419)。
+//
+// 注意: 万古神墟是另一个模块 Mod_EternalGamesPresent_Base (840)，
+// 见 wangu_shenxu.go；419 仅对应圣盟内部膜拜。
 //
 //	open_panel 419/1 request=[] response=[Int×11]
 //	worship    419/2 request=[UByte type] response=[UByte result, [Int,Int]]

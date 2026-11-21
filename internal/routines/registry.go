@@ -78,7 +78,8 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "sa_world_tower", Name: "全网幻魔塔", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "开放时按塔编号免费挑战 (不买次数)", DefaultOn: false},
 		{ID: "devil_expedition", Name: "魔界远征", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "周五至周日单人远征：双生/魔神/隐仙，材料达上限不触发", DefaultOn: false},
 		{ID: "tower_room", Name: "全服伏魔塔房间", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "创建房间→解除封印→进入战斗 (不调用元宝动作)", DefaultOn: false},
-		{ID: "sa_union_worship", Name: "万古神墟膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "圣盟膜拜面板铜钱/免费档 (不使用元宝档)", DefaultOn: false},
+		{ID: "sa_union_worship", Name: "圣盟膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "圣盟膜拜面板铜钱/免费档 (不使用元宝档)", DefaultOn: false},
+		{ID: "wangu_shenxu", Name: "万古神墟膜拜", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "膜拜万古神墟大神像 (对膜拜者免费, 不消耗元宝)；被膜拜累计铜钱可领取", DefaultOn: false},
 		{ID: "jieyuan_box", Name: "结缘宝箱开启", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "批量开启结缘宝箱 (除了传说，其他都开)", DefaultOn: false},
 		{ID: "faction_blessing", Name: "帮派祭神", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "每日帮派上香祭神，获取祝福、声望与神像灵气", DefaultOn: false},
 		{ID: "faction_lucky_wheel", Name: "帮派转盘", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "消耗青龙令自动转动帮派转盘直至次数耗尽", DefaultOn: false},
@@ -402,6 +403,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewFriendshipRoutine()
 	case "sa_union_worship":
 		return social.NewSaUnionWorshipRoutine()
+	case "wangu_shenxu":
+		return social.NewWanguShenxuRoutine()
 	case "sa_world_tower":
 		return social.NewSaWorldTowerRoutine()
 	case "devil_expedition":

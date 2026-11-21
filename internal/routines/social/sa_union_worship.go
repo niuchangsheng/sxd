@@ -1,4 +1,4 @@
-// 本文件实现万古神墟/圣盟膜拜 (Mod_SaUnionWorship_Base, Module 419)。
+// 本文件实现圣盟膜拜 (Mod_SaUnionWorship_Base, Module 419)。
 //
 // 仅使用 COIN=0 铜钱/免费档；INGOT=1 元宝档永久禁用。
 package social
