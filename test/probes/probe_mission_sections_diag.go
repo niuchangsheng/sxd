@@ -4,7 +4,9 @@
 // 基准对齐: 原版 pie.exe 网关 PrevAct 原子链 (用于定位“请求已发出但无回包”是拒绝、丢包还是回包 ActionID 漂移)
 // 运行命令: SXD_CONFIG=configs/config.yaml go run -tags=probe test/probes/probe_mission_sections_diag.go [mapID]
 // 预期表现: 分别在同一次登录内于「GetInfo 之后」与「town_quest_show 之后」各发一次 get_sections,
-//           打印每次的原始回包 Hex、耗时，并全量观察入站 ActionID，从而区分载荷被拒与回包编号漂移。
+//
+//	打印每次的原始回包 Hex、耗时，并全量观察入站 ActionID，从而区分载荷被拒与回包编号漂移。
+//
 // 安全性: 仅发送只读查询（get_sections / town_quest_show），不进入副本、不消耗体力、不改变任务状态。
 package main
 
@@ -147,12 +149,7 @@ func main() {
 	fmt.Printf("\n等待 %s 空闲后发送一次心跳包 (模拟战斗波次间隙)...\n", idle)
 	time.Sleep(idle)
 	hbPrev := sess.LastActionID()
-	hbPayload := make([]byte, 4)
-	hbPayload[0] = byte(hbPrev >> 24)
-	hbPayload[1] = byte(hbPrev >> 16)
-	hbPayload[2] = byte(hbPrev >> 8)
-	hbPayload[3] = byte(hbPrev)
-	if hbErr := sess.Send(protocol.NewPacket(protocol.ActionHeartbeat, hbPayload)); hbErr != nil {
+	if hbErr := sess.Send(protocol.NewPacket(protocol.ActionHeartbeat, nil)); hbErr != nil {
 		fmt.Printf("!!! 心跳发送失败: %v\n", hbErr)
 	}
 	time.Sleep(400 * time.Millisecond)

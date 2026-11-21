@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	// ActionHeartbeat 心跳保活协议号 (Module 0, Action 23 -> 0x00000017)
-	ActionHeartbeat uint32 = 0x00000017
+	// ActionHeartbeat 心跳保活协议号 (Module 0, Action 75 -> 0x0000004B)
+	ActionHeartbeat uint32 = 0x0000004B
 	// ActionPlayerLogin 角色登录握手认证协议号
 	ActionPlayerLogin uint32 = 0x00000000
 	// ActionPlayerInfo 角色属性与体力同步协议号

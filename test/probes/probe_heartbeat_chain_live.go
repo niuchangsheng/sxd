@@ -1,6 +1,11 @@
 //go:build probe
 
-// 目标协议: [Module 0, Action 23] 心跳保活与 [Module 4, Action 0] get_sections 的 PrevAct 链冲突
+// [历史探针 / DEPRECATED]
+// 目标协议: [Module 0, Action 23] 与 [Module 4, Action 0] get_sections 的 PrevAct 链冲突
+//
+// 2026-11-21 更正: Main.swf 中 action 23 是 get_buy_power_data, 不是心跳;
+// 真正的 heart 是 action 75 (0/75, 空请求)。本文件保留用于历史对照,
+// 其中 hb-golden / hb-prevact 模式已不再代表心跳行为。
 // 基准对齐: 原版 pie.exe 心跳黄金包 c2s_m0_a23.bin (payload=00000030) 与 mod 4 原子链语义
 // 运行命令: SXD_CONFIG=configs/config.yaml go run -tags=probe test/probes/probe_heartbeat_chain_live.go <mode>
 //

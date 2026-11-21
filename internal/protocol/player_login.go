@@ -419,15 +419,14 @@ func BuildPlayerGetInfoPacket(prevActionID int32) *Packet {
 	return NewPacket(ActionIDPlayerGetInfo, w.Bytes())
 }
 
-// BuildPlayerHeartbeatPacket 构造长连接心跳保活封包 (Module 0, Action 23 -> 0x00000017)。
-// 对应微端抓包中周期性发送的大端序序列号/时间参数。
+// BuildPlayerHeartbeatPacket 构造长连接心跳保活封包 (Module 0, Action 75 -> 0x0000004B)。
+// 官方 AS3 协议定义 request=[] / response=[Byte]，心跳请求不带任何载荷。
+// 参数 seq 仅为兼容旧调用方保留，不写入封包。
 //
-// @param seq 客户端心跳序列号或时间参数 (默认或初次可为 0x00000030)
+// @param seq 旧版心跳序列号参数 (已废弃，忽略)
 // @return 编码好的封包实例
-func BuildPlayerHeartbeatPacket(seq int32) *Packet {
-	w := NewWriter()
-	w.WriteInt32(seq)
-	return NewPacket(ActionIDPlayerHeartbeat, w.Bytes())
+func BuildPlayerHeartbeatPacket(_ int32) *Packet {
+	return NewPacket(ActionIDPlayerHeartbeat, nil)
 }
 
 // BuildPlayerServerTimePacket 构造同步服务器系统时间封包 (Module 0, Action 22 -> 0x00000016)。

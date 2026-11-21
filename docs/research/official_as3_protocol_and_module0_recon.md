@@ -47,14 +47,19 @@
 
 ---
 
-### 2. 长连接心跳保活与同步 (`Action 23`: `Mod_Player_Base.heartbeat`)
+### 2. 长连接心跳保活与同步 (`Action 75`: `Mod_Player_Base.heart`)
 
-- 官方微端在长连接建立后，以高频周期性向服务器发送心跳探活封包；
+> **2026-11-21 更正**：`Main.swf` 导出的 `Mod_Player_Base` 中，
+> `action 23` 是 `get_buy_power_data`（request=`[]`，response=`[Byte,Short,Byte]`），
+> 不是心跳；此前把 `c2s_m0_a23.bin`（payload `00000030`）当作心跳是误判。
+> 真正的 `heart` 是 **`action 75`**。
+
 - **客户端请求 (Client -> Server)**：
-  - 封包结构：`[4B Length=8] + [2B Module=0] + [2B Action=23] + [4B Sequence/Timestamp]`
-  - 初始参数通常为 `0x00000030`（48），后续携带累加或同步序列号。
+  - 封包结构：`[4B Length=4] + [2B Module=0] + [2B Action=75]`，**请求为空载荷**。
 - **服务端响应 (Server -> Client)**：
-  - 返回确认应答 `0x06000a28`。
+  - `[4B Length=5] + [2B Module=0] + [2B Action=75] + [1B result]`（抓包中 `result=01`）。
+- `internal/client/session.go` 已按 1.5s 空闲间隔发送 `0/75` 心跳；旧实现误发
+  `0/23` 加 4 字节 PrevAct，既不是心跳，也会被服务端当成 `get_buy_power_data` 查询。
 
 ---
 

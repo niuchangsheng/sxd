@@ -153,7 +153,7 @@ func TestRoleSession_ConnectAndAuthenticate(t *testing.T) {
 func TestRoleSession_Heartbeat(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 
-	const actionHeartbeat uint32 = 0x00000017
+	const actionHeartbeat uint32 = 0x0000004B
 	heartbeatCount := 0
 	var countMu sync.Mutex
 
@@ -167,8 +167,8 @@ func TestRoleSession_Heartbeat(t *testing.T) {
 				return
 			}
 			if pkt.ActionID == actionHeartbeat {
-				if len(pkt.Payload) != 4 {
-					t.Errorf("expected 4-byte heartbeat payload, got %d", len(pkt.Payload))
+				if len(pkt.Payload) != 0 {
+					t.Errorf("expected empty heartbeat payload, got %d bytes", len(pkt.Payload))
 				}
 				countMu.Lock()
 				heartbeatCount++
@@ -235,7 +235,7 @@ func TestRoleSession_HeartbeatAdvancesPrevActChain(t *testing.T) {
 			}
 			capturedCh <- capturedPacket{actionID: pkt.ActionID, payload: append([]byte(nil), pkt.Payload...)}
 			if pkt.ActionID == protocol.ActionHeartbeat {
-				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x01}))
 			}
 		}
 	}()
@@ -290,8 +290,8 @@ func TestRoleSession_HeartbeatAdvancesPrevActChain(t *testing.T) {
 		t.Fatalf("expected lastActionID 0x%08X after get_info, got 0x%08X", protocol.ActionIDPlayerGetInfo, got)
 	}
 
-	// 2. 发送心跳：载荷应为心跳前的业务动作号。
-	hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, []byte{0, 0, 0, 0})
+	// 2. 发送心跳：官方 Mod_Player_Base.heart 请求为空载荷。
+	hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, nil)
 	if err := session.Send(hbPkt); err != nil {
 		t.Fatalf("send heartbeat failed: %v", err)
 	}
@@ -299,8 +299,8 @@ func TestRoleSession_HeartbeatAdvancesPrevActChain(t *testing.T) {
 	if hb.actionID != protocol.ActionHeartbeat {
 		t.Fatalf("expected heartbeat packet, got 0x%08X", hb.actionID)
 	}
-	if len(hb.payload) != 4 || binary.BigEndian.Uint32(hb.payload) != protocol.ActionIDPlayerGetInfo {
-		t.Fatalf("心跳载荷应携带前序业务动作 0x%08X, got %x", protocol.ActionIDPlayerGetInfo, hb.payload)
+	if len(hb.payload) != 0 {
+		t.Fatalf("心跳请求应为空载荷, got %x", hb.payload)
 	}
 
 	// 3. 关键回归：心跳发出后必须推进 lastActionID，否则后续 Mod 4 请求会带旧 PrevAct 被网关丢弃。

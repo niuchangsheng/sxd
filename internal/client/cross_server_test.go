@@ -49,7 +49,7 @@ func TestOpenCrossServerSessionWithInfo(t *testing.T) {
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDStTownEnter, []byte{protocol.StTownResultSuccess}))
 
 			case protocol.ActionHeartbeat:
-				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28}))
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x01}))
 			}
 		}
 	}()

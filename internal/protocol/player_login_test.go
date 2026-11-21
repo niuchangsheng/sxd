@@ -149,9 +149,12 @@ func TestPlayerLogin_HeartbeatAndServerTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal 心跳包失败: %v", err)
 	}
-	// 期望长度 4 (header) + 4 (module/action) + 4 (payload) = 12 字节
-	if len(hbBytes) != 12 {
-		t.Errorf("心跳包长度期望 12 字节, 实际 %d 字节", len(hbBytes))
+	// 期望长度 4 (header) + 4 (module/action) = 8 字节 (request=[])
+	if len(hbBytes) != 8 {
+		t.Errorf("心跳包长度期望 8 字节, 实际 %d 字节", len(hbBytes))
+	}
+	if len(hbPkt.Payload) != 0 {
+		t.Errorf("心跳请求应为空载荷, got %x", hbPkt.Payload)
 	}
 
 	// 测试同步系统时间包构造

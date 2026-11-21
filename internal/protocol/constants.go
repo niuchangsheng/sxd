@@ -80,8 +80,8 @@ const (
 	ActionIDPlayerGetInfo uint32 = 0x00000002
 	// ActionIDPlayerUpdateData 服务器主动下发属性变更协议号 (Module 0, Action 3 -> 0x00000003, Mod_Player_Base.update_player_data)
 	ActionIDPlayerUpdateData uint32 = 0x00000003
-	// ActionIDPlayerHeartbeat 角色与网关长连接心跳保活协议号 (Module 0, Action 23 -> 0x00000017, Mod_Player_Base.heartbeat)
-	ActionIDPlayerHeartbeat uint32 = 0x00000017
+	// ActionIDPlayerHeartbeat 角色与网关长连接心跳保活协议号 (Module 0, Action 75 -> 0x0000004B, Mod_Player_Base.heart)
+	ActionIDPlayerHeartbeat uint32 = 0x0000004B
 	// ActionIDPlayerServerTime 同步服务器系统时间协议号 (Module 0, Action 22 -> 0x00000016, Mod_Player_Base.get_server_time)
 	ActionIDPlayerServerTime uint32 = 0x00000016
 	// ActionIDPlayerGetOnlineGift 领取在线成长礼包协议号 (Module 0, Action 30 -> 0x0000001E, Mod_Player_Base.player_get_online_gift)

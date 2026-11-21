@@ -867,9 +867,9 @@ func executeEliteMissionSweep(
 	for i, j := 0, len(towns)-1; i < j; i, j = i+1, j-1 {
 		towns[i], towns[j] = towns[j], towns[i]
 	}
-	// 官方抓包 (saodang.pcapng) 中 35/0 的 PrevAct 均为心跳 0x00000017。
+	// 官方抓包 (saodang.pcapng) 中 35/0 的 PrevAct 为 0/23 (get_buy_power_data)。
 	// 实测活动面板 (0/42) 等查询后直接发 35/0 会被服务端静默丢弃；
-	// 先补发一次心跳，把 PrevAct 链锚点恢复为心跳动作再开始扫荡。
+	// 先补发一次 0/75 心跳，把 PrevAct 链锚点恢复为心跳动作再开始扫荡。
 	if hb := protocol.BuildPlayerHeartbeatPacket(int32(session.LastActionID())); hb != nil {
 		if err := session.Send(hb); err == nil {
 			time.Sleep(80 * time.Millisecond)

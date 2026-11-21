@@ -74,7 +74,7 @@ type SessionConfig struct {
 	HeartbeatInterval time.Duration
 	// HeartbeatTimeout 心跳超时时间 (默认 5s)
 	HeartbeatTimeout time.Duration
-	// HeartbeatActionID 心跳消息号 (默认 0x00000017)
+	// HeartbeatActionID 心跳消息号 (默认 0x0000004B, Mod_Player_Base.heart)
 	HeartbeatActionID uint32
 
 	// ReconnectInterval 重连回退重试时间间隔 (默认 2s)
@@ -2278,14 +2278,9 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 				continue
 			}
 
-			// 发送心跳包：携带 4 字节前序 ActionID（神仙道网关防假死与保活校验）
-			prevAct := s.lastActionID.Load()
-			if prevAct == 0 {
-				prevAct = s.cfg.HeartbeatActionID
-			}
-			hbPayload := make([]byte, 4)
-			binary.BigEndian.PutUint32(hbPayload, prevAct)
-			heartbeat := protocol.NewPacket(s.cfg.HeartbeatActionID, hbPayload)
+			// 发送心跳包：官方 Mod_Player_Base.heart 请求为空载荷 (request=[]),
+			// 不能覆盖 lastActionID 的末 4 字节，否则会被服务端当作非法参数。
+			heartbeat := protocol.NewPacket(s.cfg.HeartbeatActionID, nil)
 			if err := s.Send(heartbeat); err != nil {
 				slog.Warn("发送心跳失败", "role_id", s.cfg.RoleID, "error", err)
 				s.closeCurrentConn()
@@ -2608,8 +2603,8 @@ func runMockGameServer(conn net.Conn) {
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerGetFunctions, w.Bytes()))
 
 		case protocol.ActionHeartbeat:
-			// 响应心跳包
-			hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28})
+			// 响应心跳包 (Mod_Player_Base.heart response=[Byte])
+			hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x01})
 			_ = protocol.WritePacket(conn, hbPkt)
 
 		case protocol.ActionIDPracticeGetStatus:

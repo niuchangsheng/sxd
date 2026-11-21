@@ -91,7 +91,7 @@ func TestRoleSession_DefaultGatewayHandshake_FullFlow(t *testing.T) {
 				default:
 				}
 				// 回复心跳
-				hbResp := protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28})
+				hbResp := protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x01})
 				_ = protocol.WritePacket(serverConn, hbResp)
 			}
 		}
@@ -189,7 +189,6 @@ func TestRoleSession_DefaultGatewayHandshake_FullFlow(t *testing.T) {
 	session.Close()
 	serverWg.Wait()
 }
-
 
 // TestRoleSession_DefaultGatewayHandshake_Rejected 验证当服务端返回非法凭据 (ResultCode!=4) 时抛出明确异常并拒绝激活
 func TestRoleSession_DefaultGatewayHandshake_Rejected(t *testing.T) {
