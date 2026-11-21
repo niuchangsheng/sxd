@@ -786,20 +786,36 @@ func NewScratchCardRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildScratchCardInfoPacket(), protocol.ActionIDScratchCardInfo)
 			iCancel()
 			if err != nil {
-				return fmt.Errorf("查询刮刮卡状态失败: %w", err)
+				// 状态查询被静默丢弃时不能返回普通 error：ScheduleCron 会等到
+				// 下一个 cron 时段。按连续丢包退避，恢复回包后计数自动清零。
+				slog.Info("刮刮卡状态查询无回包，按连续丢包退避",
+					"role_id", session.RoleID(), "err", err)
+				return scheduler.HandleSilentDrop(session, "scratch_card", 3,
+					30*time.Minute, "刮刮卡状态查询无回包")
 			}
+			scheduler.ResetSilentDrops(session, "scratch_card")
 			info, err := protocol.ParseScratchCardInfoResult(infoResp.Payload)
 			if err != nil {
-				return fmt.Errorf("解析刮刮卡状态失败: %w", err)
+				return scheduler.NewCooldown(10*time.Minute, "刮刮卡状态解析失败")
 			}
-			if info.InActivity == 0 || info.CardTimes == 0 {
-				slog.Info("刮刮卡活动未开放或次数已用尽，跳过",
+			if info.InActivity == 0 {
+				// 协议只下发 end_time，没有开启时间；活动当天稍后开启时
+				// 每小时探测一次，避免等到下一个 cron 时段才重试。
+				slog.Info("刮刮卡活动未开放，1 小时后再探测",
 					"role_id", session.RoleID(),
-					"in_activity", info.InActivity,
 					"active_degree", info.ActiveDegree,
 					"card_times", info.CardTimes,
+					"end_time", info.EndTime,
 				)
-				return nil
+				return scheduler.NewCooldown(time.Hour, "刮刮卡活动未开放")
+			}
+			if info.CardTimes == 0 {
+				slog.Info("刮刮卡活动已开放但免费次数已用尽，挂起至次日",
+					"role_id", session.RoleID(),
+					"active_degree", info.ActiveDegree,
+					"end_time", info.EndTime,
+				)
+				return scheduler.ErrAttemptsExhausted
 			}
 			slog.Info("开始刮刮卡",
 				"role_id", session.RoleID(),
@@ -814,13 +830,18 @@ func NewScratchCardRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(sCtx, protocol.BuildScratchCardShavePacket(), protocol.ActionIDScratchCardShave)
 				sCancel()
 				if cErr != nil {
-					slog.Info("刮卡无应答", "role_id", session.RoleID(), "index", i+1, "err", cErr)
-					break
+					// 中途静默丢包不能 break + return nil：剩余免费次数会被当成
+					// 已完成，直到下一个 cron 时段。按连续丢包退避后重试剩余次数。
+					slog.Info("刮卡无应答，按连续丢包退避",
+						"role_id", session.RoleID(), "index", i+1, "err", cErr)
+					return scheduler.HandleSilentDrop(session, "scratch_card_shave", 3,
+						10*time.Minute, "刮卡无回包")
 				}
+				scheduler.ResetSilentDrops(session, "scratch_card_shave")
 				result, pErr := protocol.ParseScratchCardShaveResult(resp.Payload)
 				if pErr != nil {
 					slog.Warn("解析刮卡回包失败", "role_id", session.RoleID(), "index", i+1, "err", pErr)
-					break
+					return scheduler.NewCooldown(10*time.Minute, "刮卡回包解析失败")
 				}
 				switch result.Result {
 				case protocol.ScratchCardResultSuccess,
