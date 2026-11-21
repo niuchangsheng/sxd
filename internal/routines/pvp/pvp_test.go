@@ -1010,3 +1010,33 @@ func TestArenaRoutine_ChallengeSilentDropBacksOff(t *testing.T) {
 		t.Fatalf("应记录竞技场静默丢包，got %d", got)
 	}
 }
+
+// TestWorldBossRoutine_ConsumesAllAttempts 验证一次巡检内连续参战，
+// 直到服务端返回 MaxTimes（避免每次巡检只打一场导致次数打不完）。
+func TestWorldBossRoutine_ConsumesAllAttempts(t *testing.T) {
+	var fightCalls atomic.Int32
+	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDWorldBossList:
+			_ = protocol.WritePacket(conn, protocol.BuildWorldBossListResultPacket([]protocol.WorldBossEntry{{
+				BossID: 1, MapID: 1, Level: 100, State: protocol.WorldBossStateOpen,
+			}}))
+		case protocol.ActionIDWorldBossFight:
+			n := fightCalls.Add(1)
+			result := protocol.WorldBossResultSuccess
+			if n >= 3 {
+				result = protocol.WorldBossResultMaxTimes
+			}
+			_ = protocol.WritePacket(conn, protocol.BuildWorldBossFightResultPacket(result))
+		}
+	})
+	defer sess.Close()
+
+	err := NewWorldBossRoutine().Execute(context.Background(), sess, nil)
+	if !errors.Is(err, scheduler.ErrAttemptsExhausted) {
+		t.Fatalf("次数用尽应返回 ErrAttemptsExhausted, got %v", err)
+	}
+	if got := fightCalls.Load(); got != 3 {
+		t.Fatalf("应连续参战 2 次成功 + 1 次次数用尽，实际 %d 次", got)
+	}
+}

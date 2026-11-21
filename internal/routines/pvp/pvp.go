@@ -968,6 +968,10 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 // 5 分钟巡检会反复超时；按会话退避 30 分钟。
 var worldBossFightBlocked sync.Map // *client.RoleSession -> time.Time
 
+// maxWorldBossFightsPerRun 单轮巡检最多参战次数（安全上限，实际以服务端
+// MaxTimes 回包为准）。Boss 窗口较短时一次调度内连续打完剩余次数。
+const maxWorldBossFightsPerRun = 10
+
 func NewWorldBossRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 5 * time.Second
 	const fightTimeout = 30 * time.Second
@@ -1017,7 +1021,9 @@ func NewWorldBossRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 2. 发起一次免费战斗
+			// 2. 发起免费战斗，直到服务端提示次数用尽。
+			//    一次调度只打一场会把剩余次数留到下一个 5 分钟巡检，Boss 窗口
+			//    较短时可能打不完；这里按回包结果连续参战，MaxTimes 即停。
 			slog.Info("世界Boss开战中，发起参战",
 				"role_id", session.RoleID(),
 				"boss_id", open.BossID,
@@ -1030,38 +1036,56 @@ func NewWorldBossRoutine() scheduler.ActivityRoutine {
 					return nil
 				}
 			}
-			fCtx, fCancel := context.WithTimeout(ctx, fightTimeout)
-			fightResp, err := session.Call(fCtx, protocol.BuildWorldBossFightPacket(open.BossID), protocol.ActionIDWorldBossFight)
-			fCancel()
-			if err != nil {
-				worldBossFightBlocked.Store(session, time.Now().Add(30*time.Minute))
-				slog.Info("世界Boss战斗请求超时，暂停参战 30 分钟",
-					"role_id", session.RoleID(), "boss_id", open.BossID, "err", err)
-				return nil
+			fights := 0
+			for fights < maxWorldBossFightsPerRun {
+				if ctx.Err() != nil {
+					return nil
+				}
+				fCtx, fCancel := context.WithTimeout(ctx, fightTimeout)
+				fightResp, err := session.Call(fCtx, protocol.BuildWorldBossFightPacket(open.BossID), protocol.ActionIDWorldBossFight)
+				fCancel()
+				if err != nil {
+					worldBossFightBlocked.Store(session, time.Now().Add(30*time.Minute))
+					slog.Info("世界Boss战斗请求超时，暂停参战 30 分钟",
+						"role_id", session.RoleID(), "boss_id", open.BossID, "fights", fights, "err", err)
+					return nil
+				}
+				result, err := protocol.ParseWorldBossFightResult(fightResp.Payload)
+				if err != nil {
+					return fmt.Errorf("解析世界Boss战斗回包失败: %w", err)
+				}
+				switch result {
+				case protocol.WorldBossResultSuccess:
+					fights++
+					slog.Info("世界Boss参战成功",
+						"role_id", session.RoleID(), "boss_id", open.BossID, "fights", fights)
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(time.Second):
+					}
+					continue
+				case protocol.WorldBossResultNotEnoughIngot:
+					slog.Warn("世界Boss参战提示元宝不足 (自动化不主动消耗元宝)",
+						"role_id", session.RoleID(), "boss_id", open.BossID, "fights", fights)
+					return nil
+				case protocol.WorldBossResultMaxTimes:
+					// 今日参战次数已满：挂起至次日，避免每次调度都重复发起参战。
+					slog.Info("世界Boss今日参战次数已满，今日不再参战",
+						"role_id", session.RoleID(), "boss_id", open.BossID, "fights", fights)
+					return scheduler.ErrAttemptsExhausted
+				default:
+					slog.Info("世界Boss参战未成功，结束本轮",
+						"role_id", session.RoleID(),
+						"boss_id", open.BossID,
+						"result", result,
+						"reason", worldBossResultName(result),
+					)
+					return nil
+				}
 			}
-			result, err := protocol.ParseWorldBossFightResult(fightResp.Payload)
-			if err != nil {
-				return fmt.Errorf("解析世界Boss战斗回包失败: %w", err)
-			}
-			switch result {
-			case protocol.WorldBossResultSuccess:
-				slog.Info("世界Boss参战成功", "role_id", session.RoleID(), "boss_id", open.BossID)
-			case protocol.WorldBossResultNotEnoughIngot:
-				slog.Warn("世界Boss参战提示元宝不足 (自动化不主动消耗元宝)",
-					"role_id", session.RoleID(), "boss_id", open.BossID)
-			case protocol.WorldBossResultMaxTimes:
-				// 今日参战次数已满：挂起至次日，避免每次调度都重复发起参战。
-				slog.Info("世界Boss今日参战次数已满，今日不再参战",
-					"role_id", session.RoleID(), "boss_id", open.BossID)
-				return scheduler.ErrAttemptsExhausted
-			default:
-				slog.Info("世界Boss参战未成功",
-					"role_id", session.RoleID(),
-					"boss_id", open.BossID,
-					"result", result,
-					"reason", worldBossResultName(result),
-				)
-			}
+			slog.Info("世界Boss本轮参战达到安全上限，等待下一次巡检",
+				"role_id", session.RoleID(), "fights", fights)
 			return nil
 		},
 	)
