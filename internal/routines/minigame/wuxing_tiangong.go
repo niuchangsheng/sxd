@@ -25,6 +25,10 @@ const wuxingCallTimeout = 15 * time.Second
 // wuxingStateFailed 面板中失败/待重试状态（抓包中挑战后由 4 变为 3）。
 const wuxingStateFailed uint8 = 3
 
+// wuxingMaxFailedRounds 连续多少轮一键挑战仍有失败关卡后结束本轮。
+// 按用户要求「挑战副本需 N 次失败才退出」，不再第一次失败就放弃。
+const wuxingMaxFailedRounds = 3
+
 // NewWuxingTiangongRoutine 构造五行天宫一键挑战任务。
 func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
@@ -83,40 +87,62 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 				}
 			}
 
-			// 3. 一键挑战；无回包直接退出（不做单独重试）。
-			fightResp := call(protocol.BuildWuxingFightPacket(protocol.WuxingFightModeAll, session.LastActionID()),
-				protocol.ActionIDWuxingFight, 30*time.Second)
-			if fightResp == nil {
-				// 一键挑战被静默丢弃时 10 分钟重试只会持续空等 30 秒；改为 1 小时低频探测。
-				slog.Info("五行天宫一键挑战无回包，1 小时后再试", "role_id", session.RoleID())
-				return scheduler.NewCooldown(time.Hour, "五行天宫一键挑战无回包")
-			}
-			slog.Info("五行天宫一键挑战已执行", "role_id", session.RoleID(), "report_len", len(fightResp.Payload))
+			// 3. 一键挑战；失败关卡按 N 轮重试后退出（挑战副本 N 次失败才退出）。
+			failedRounds := 0
+			for {
+				fightResp := call(protocol.BuildWuxingFightPacket(protocol.WuxingFightModeAll, session.LastActionID()),
+					protocol.ActionIDWuxingFight, 30*time.Second)
+				if fightResp == nil {
+					// 一键挑战被静默丢弃时 10 分钟重试只会持续空等 30 秒；改为 1 小时低频探测。
+					slog.Info("五行天宫一键挑战无回包，1 小时后再试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(time.Hour, "五行天宫一键挑战无回包")
+				}
+				scheduler.ResetSilentDrops(session, "wuxing_tiangong")
+				slog.Info("五行天宫一键挑战已执行",
+					"role_id", session.RoleID(), "report_len", len(fightResp.Payload), "round", failedRounds+1)
 
-			// 4. 刷新面板；存在失败关卡即退出。
-			afterResp := call(protocol.BuildWuxingPanelPacket(session.LastActionID()),
-				protocol.ActionIDWuxingPanel, wuxingCallTimeout)
-			if afterResp == nil {
-				slog.Info("五行天宫挑战后面板无回包，结束本轮", "role_id", session.RoleID())
-				return nil
-			}
-			after, aErr := protocol.ParseWuxingPanel(afterResp.Payload)
-			if aErr != nil {
-				slog.Warn("五行天宫挑战后面板解析失败，结束本轮", "role_id", session.RoleID(), "err", aErr)
-				return nil
-			}
-			slog.Info("五行天宫面板状态",
-				"role_id", session.RoleID(), "phase", "挑战后", "entries", after)
+				// 4. 刷新面板；统计本轮失败关卡。
+				afterResp := call(protocol.BuildWuxingPanelPacket(session.LastActionID()),
+					protocol.ActionIDWuxingPanel, wuxingCallTimeout)
+				if afterResp == nil {
+					slog.Info("五行天宫挑战后面板无回包，按连续丢包退避", "role_id", session.RoleID())
+					return scheduler.HandleSilentDrop(session, "wuxing_tiangong", 3,
+						30*time.Minute, "五行天宫挑战后面板无回包")
+				}
+				after, aErr := protocol.ParseWuxingPanel(afterResp.Payload)
+				if aErr != nil {
+					slog.Warn("五行天宫挑战后面板解析失败，稍后重试", "role_id", session.RoleID(), "err", aErr)
+					return scheduler.NewCooldown(10*time.Minute, "五行天宫挑战后面板解析失败")
+				}
+				slog.Info("五行天宫面板状态",
+					"role_id", session.RoleID(), "phase", "挑战后", "entries", after)
 
-			for _, e := range after {
-				if e.State == wuxingStateFailed {
-					slog.Info("五行天宫存在失败关卡，按用户要求结束本轮",
-						"role_id", session.RoleID(), "element", e.Element, "stage", e.Stage)
+				failed := 0
+				for _, e := range after {
+					if e.State == wuxingStateFailed {
+						failed++
+						slog.Info("五行天宫存在失败关卡",
+							"role_id", session.RoleID(), "element", e.Element, "stage", e.Stage)
+					}
+				}
+				if failed == 0 {
+					slog.Info("五行天宫本轮挑战完成", "role_id", session.RoleID())
 					return nil
 				}
+				failedRounds++
+				if failedRounds >= wuxingMaxFailedRounds {
+					slog.Info("五行天宫连续多轮仍有失败关卡，结束本轮",
+						"role_id", session.RoleID(), "failed_rounds", failedRounds, "failed_stages", failed)
+					return nil
+				}
+				slog.Info("五行天宫存在失败关卡，重试一键挑战",
+					"role_id", session.RoleID(), "failed_rounds", failedRounds, "failed_stages", failed)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(2 * time.Second):
+				}
 			}
-			slog.Info("五行天宫本轮挑战完成", "role_id", session.RoleID())
-			return nil
 		},
 	)
 }

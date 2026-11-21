@@ -15,9 +15,9 @@ import (
 
 const wuxingRoutinePanelHex = "000000001800050404000024a80000001f000016be0000000100000000000003260304000024a900000038000016be0000000100000000000002500204000024aa00000027000016be00000001000000000000025e0504000024ab00000019000016be0000000100000000000002c50104000024ac0000000e000016be00000001000000000000027b006400000101"
 
-// TestWuxingRoutine_OneKeyThenExitOnFailure 验证：一键挑战后刷新面板，
-// 只要存在失败关卡（state=3）就结束本轮，不再单独重试/部署。
-func TestWuxingRoutine_OneKeyThenExitOnFailure(t *testing.T) {
+// TestWuxingRoutine_OneKeyRetriesThenExitOnFailure 验证：一键挑战后刷新面板，
+// 存在失败关卡（state=3）时按用户要求重试，连续 N 轮仍失败才结束本轮。
+func TestWuxingRoutine_OneKeyRetriesThenExitOnFailure(t *testing.T) {
 	panelRaw, err := hex.DecodeString(wuxingRoutinePanelHex)
 	if err != nil {
 		t.Fatalf("panel hex: %v", err)
@@ -54,14 +54,50 @@ func TestWuxingRoutine_OneKeyThenExitOnFailure(t *testing.T) {
 	if err := NewWuxingTiangongRoutine().Execute(context.Background(), sess, nil); err != nil {
 		t.Fatalf("wuxing routine: %v", err)
 	}
-	if fightCalls.Load() != 1 {
-		t.Fatalf("期望仅 1 次一键挑战, 实际 %d", fightCalls.Load())
+	if got, want := fightCalls.Load(), int32(wuxingMaxFailedRounds); got != want {
+		t.Fatalf("连续失败时应重试到上限 %d 次, 实际 %d", want, got)
 	}
 	if deployCalls.Load() != 0 {
 		t.Fatalf("按用户要求不做阵容部署, 实际 %d 次", deployCalls.Load())
 	}
-	if panelCalls.Load() < 2 {
-		t.Fatalf("挑战后应刷新面板, panel calls=%d", panelCalls.Load())
+	if panelCalls.Load() < int32(wuxingMaxFailedRounds)+1 {
+		t.Fatalf("每轮挑战后都应刷新面板, panel calls=%d", panelCalls.Load())
+	}
+}
+
+// TestWuxingRoutine_RetrySucceeds 验证失败一轮后下一轮成功即结束，不再打满上限。
+func TestWuxingRoutine_RetrySucceeds(t *testing.T) {
+	panelRaw, err := hex.DecodeString(wuxingRoutinePanelHex)
+	if err != nil {
+		t.Fatalf("panel hex: %v", err)
+	}
+	failedPanel := append([]byte(nil), panelRaw...)
+	failedPanel[8] = wuxingStateFailed
+
+	var fightCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDWuxingPanel10:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDWuxingPanel:
+			// 第一次挑战后失败，第二次挑战后恢复正常。
+			body := panelRaw
+			if fightCalls.Load() == 1 {
+				body = failedPanel
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, body))
+		case protocol.ActionIDWuxingFight:
+			fightCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewWuxingTiangongRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("wuxing routine: %v", err)
+	}
+	if got := fightCalls.Load(); got != 2 {
+		t.Fatalf("首轮失败后重试一次即成功, 期望 2 次, 实际 %d", got)
 	}
 }
 
