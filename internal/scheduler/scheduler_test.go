@@ -643,3 +643,53 @@ func TestScheduler_DeadlineExceededRetriesInThirtyMinutes(t *testing.T) {
 		t.Fatalf("静默丢包后应在约 30 分钟后重试, 实际 wait=%v", wait)
 	}
 }
+
+// TestScheduler_NotConnectedRetriesInFiveMinutes 验证执行中途断线
+// (client.ErrNotConnected) 的 Cron 任务按 5 分钟短重试，而不是推迟到下一次
+// Cron（2~4 小时）导致剩余次数长期漏做。
+func TestScheduler_NotConnectedRetriesInFiveMinutes(t *testing.T) {
+	fastJitter := scheduler.NewJitter(scheduler.JitterConfig{
+		MinDuration: 2 * time.Millisecond,
+		MaxDuration: 5 * time.Millisecond,
+	})
+	sched := scheduler.NewRoleScheduler("role-not-connected", nil, fastJitter)
+
+	var calls atomic.Int32
+	r := scheduler.NewBaseRoutine(
+		"not_connected_routine",
+		"test",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+			calls.Add(1)
+			return client.ErrNotConnected
+		},
+	)
+	if err := sched.Register(r); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sched.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sched.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() < 1 {
+		t.Fatal("routine 未执行")
+	}
+
+	_, next, _, found := sched.GetRoutineState("not_connected_routine")
+	if !found {
+		t.Fatal("未找到 routine 状态")
+	}
+	if wait := time.Until(next); wait < 4*time.Minute || wait > 6*time.Minute {
+		t.Fatalf("断线后应在约 5 分钟后重试, 实际 wait=%v", wait)
+	}
+}
