@@ -63,8 +63,11 @@ func TestImmortalFantasyRoutine_Execute(t *testing.T) {
 
 	t.Run("金榜题名会试答题", func(t *testing.T) {
 		r2 := NewImperialExamRoutine(qaEngine)
-		if err := r2.Execute(context.Background(), session, nil); err != nil {
-			t.Fatalf("金榜题名执行失败: %v", err)
+		// mock 环境没有开始答题回包：现在按连续丢包退避返回 CooldownError。
+		err := r2.Execute(context.Background(), session, nil)
+		var cd *scheduler.CooldownError
+		if !errors.As(err, &cd) {
+			t.Fatalf("开始答题无回包应返回 CooldownError, got %v", err)
 		}
 	})
 
