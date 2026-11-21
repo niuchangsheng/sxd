@@ -72,9 +72,13 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 				return scheduler.NewCooldown(30*time.Minute, "圣域状态解析失败")
 			}
 			if status.Status != protocol.SaintAreaStatusOpen {
-				slog.Info("圣域当前未开启，稍后重试",
-					"role_id", session.RoleID(), "status", status.Status)
-				return scheduler.NewCooldown(time.Hour, "圣域未开启")
+				// 状态回包带关闭窗口 [start, end]：当前落在窗口内时精确到
+				// 结束后 1 分钟再唤醒，否则回退 1 小时探测。
+				until := scheduler.SaintAreaReopenTime(status, time.Now())
+				slog.Info("圣域当前未开启，按关闭窗口唤醒",
+					"role_id", session.RoleID(), "status", status.Status,
+					"windows", len(status.CloseTimes), "wake_at", until)
+				return scheduler.NewCooldownUntil(until, "圣域未开启")
 			}
 
 			// 2. 建立圣域独立会话。

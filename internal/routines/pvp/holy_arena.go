@@ -21,27 +21,6 @@ const maxSaArenaRobs = 10
 // errSaArenaNoResponse 标记圣域竞技场请求被服务端静默丢弃（无回包）。
 var errSaArenaNoResponse = errors.New("圣域竞技场请求无回包")
 
-// saintAreaReopenTime 根据圣域关闭窗口计算下次开启时间。
-//
-// 协议未明确窗口语义（可能是“今天已关闭的时段”）。仅当当前时间确实落在
-// 某个 [start, end] 窗口内时才采用 end+1 分钟；否则回退 1 小时探测，
-// 避免错误时间戳导致长时间不唤醒。
-func saintAreaReopenTime(status *protocol.SaintAreaStatus, now time.Time) time.Time {
-	if status != nil {
-		for _, w := range status.CloseTimes {
-			if w.StartTime <= 0 || w.EndTime <= 0 {
-				continue
-			}
-			start := time.Unix(int64(w.StartTime), 0)
-			end := time.Unix(int64(w.EndTime), 0)
-			if !now.Before(start) && now.Before(end) {
-				return end.Add(time.Minute)
-			}
-		}
-	}
-	return now.Add(time.Hour)
-}
-
 // openSaintAreaSession 建立圣域独立长连接。抽成变量以便单测注入。
 var openSaintAreaSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
 	return s.OpenSaintAreaSession(ctx)
@@ -105,7 +84,7 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 			if status.Status != protocol.SaintAreaStatusOpen {
 				// 圣域状态回包带关闭窗口 [start, end]。若当前落在某个窗口内，
 				// 精确到窗口结束再唤醒；否则保留 1 小时探测兜底。
-				until := saintAreaReopenTime(status, time.Now())
+				until := scheduler.SaintAreaReopenTime(status, time.Now())
 				slog.Info("圣域当前未开启，按关闭窗口唤醒",
 					"role_id", session.RoleID(), "status", status.Status,
 					"windows", len(status.CloseTimes), "wake_at", until)

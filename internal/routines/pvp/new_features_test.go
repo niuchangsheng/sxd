@@ -205,6 +205,7 @@ func TestHolyArenaRoutine_PanelSilentDropBacksOff(t *testing.T) {
 // TestSaintAreaReopenTime_UsesCurrentCloseWindow 验证关闭窗口包含当前时间时，
 // 精确到窗口结束后 1 分钟唤醒。
 func TestSaintAreaReopenTime_UsesCurrentCloseWindow(t *testing.T) {
+	// 计算逻辑由 scheduler.SaintAreaReopenTime 统一提供。
 	now := time.Now()
 	status := &protocol.SaintAreaStatus{
 		Status: protocol.SaintAreaStatusClose,
@@ -213,7 +214,7 @@ func TestSaintAreaReopenTime_UsesCurrentCloseWindow(t *testing.T) {
 			EndTime:   int32(now.Add(5 * time.Minute).Unix()),
 		}},
 	}
-	got := saintAreaReopenTime(status, now)
+	got := scheduler.SaintAreaReopenTime(status, now)
 	want := now.Add(6 * time.Minute)
 	if d := got.Sub(want); d > 5*time.Second || d < -5*time.Second {
 		t.Fatalf("唤醒时间 = %s, want %s", got, want)
@@ -223,7 +224,7 @@ func TestSaintAreaReopenTime_UsesCurrentCloseWindow(t *testing.T) {
 // TestSaintAreaReopenTime_FallbackHour 验证窗口不包含当前时间时回退 1 小时探测。
 func TestSaintAreaReopenTime_FallbackHour(t *testing.T) {
 	now := time.Now()
-	got := saintAreaReopenTime(&protocol.SaintAreaStatus{
+	got := scheduler.SaintAreaReopenTime(&protocol.SaintAreaStatus{
 		CloseTimes: []protocol.SaintAreaCloseTime{{StartTime: 1, EndTime: 2}},
 	}, now)
 	if d := got.Sub(now); d < 55*time.Minute || d > 65*time.Minute {
