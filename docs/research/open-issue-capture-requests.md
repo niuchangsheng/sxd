@@ -50,8 +50,16 @@
 
 ### #16 法相（造物佛手 / 守护魔兽）
 - 操作：进入法相页 → 「造物佛手」全部操作 → 「守护魔兽」进入/挑战/领奖。
-- 已知：`/tmp/faxiang2.pcapng` 已覆盖佛侧与在线礼包（玄铁领取/炼化），但未覆盖这两个子功能。
-- 需要：这两个页面点击瞬间的客户端 → 8200 全部报文（模块号未知）。
+- 已解决（2026-11-21）：`/tmp/faxiang3.pcapng` 覆盖完整点击链路，模块为
+  `Mod_MainRoleFaXiang_Base (518)`：
+  `518/11` 佛面板 → `518/17` 领取炼化 → `518/13` 祈愿 → `518/15` 选择炼化
+  → `518/12` 魔面板 → `518/16` 挑战。详见
+  [faxiang-module518-recon.md](./faxiang-module518-recon.md)。
+- 已实现：`internal/protocol/faxiang.go` + `internal/routines/minigame/faxiang.go`，
+  探针 `test/probes/probe_faxiang_live.go`、`probe_faxiang_routine_live.go`。
+- 已实机验证（2026-11-21，角色「同尘」）：领奖 +88 熟练度、祈愿/选择炼化、守护魔兽
+  kill_num=20、炼化未完成返回 29、魔兽冷却跳过挑战；元宝 delta=0。详见
+  [faxiang-module518-recon.md](./faxiang-module518-recon.md) 实机验证一节。
 
 ## 需要补抓细节（协议已有候选）
 

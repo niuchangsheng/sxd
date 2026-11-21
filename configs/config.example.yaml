@@ -163,7 +163,7 @@ scheduler:
     wuliang_jiehai: true          # 无量劫海(归墟)逐关挑战 (不消耗元宝)
     endless_box: true             # 无尽宝箱 (仅宝箱狂欢周触发, 不买箱子)
     cultivation_card: true        # 神仙卡牌收藏集 (仅铜钱商城, 不消耗元宝)
-    faxiang_trial: true           # 法相试炼(造物佛手/守护魔兽) 免费领奖+挑战
+    faxiang_trial: true           # 法相造物佛手领奖+道缘炼化 / 守护魔兽免费挑战 (不消耗元宝)
     wuxing_tiangong: true         # 五行天宫 一键挑战，失败即结束本轮
     fortune_box: true             # 奇缘宝藏 (免费开箱)
     era_yanjie: true               # 纪元湮劫每日一关战斗 (免费)

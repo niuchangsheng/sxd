@@ -199,7 +199,7 @@ func buildRoutine(name string) scheduler.ActivityRoutine {
 	case "expedition":
 		return daily.NewExpeditionRoutine()
 	case "faxiang_trial":
-		return minigame.NewFaxiangTrialRoutine()
+		return minigame.NewFaxiangRoutine()
 	case "cultivation_card":
 		return minigame.NewCultivationCardRoutine()
 	case "fortune_box":
