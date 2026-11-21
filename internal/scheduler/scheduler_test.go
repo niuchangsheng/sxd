@@ -6,6 +6,7 @@ package scheduler_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -691,5 +692,34 @@ func TestScheduler_NotConnectedRetriesInFiveMinutes(t *testing.T) {
 	}
 	if wait := time.Until(next); wait < 4*time.Minute || wait > 6*time.Minute {
 		t.Fatalf("断线后应在约 5 分钟后重试, 实际 wait=%v", wait)
+	}
+}
+
+// TestBaseRoutine_InactiveSessionReturnsErrNotConnected 验证会话未激活（断线重连窗口）
+// 时不再把任务当作成功返回 nil，而是返回 ErrNotConnected，交由调度器 5 分钟后重试。
+func TestBaseRoutine_InactiveSessionReturnsErrNotConnected(t *testing.T) {
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-inactive",
+		ServerAddr: "mock",
+	})
+	var calls atomic.Int32
+	r := scheduler.NewBaseRoutine(
+		"inactive_routine",
+		"test",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(context.Context, *client.RoleSession, *scheduler.Jitter) error {
+			calls.Add(1)
+			return nil
+		},
+	)
+
+	err := r.Execute(context.Background(), sess, nil)
+	if !errors.Is(err, client.ErrNotConnected) {
+		t.Fatalf("非激活会话应返回 ErrNotConnected, got %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("非激活会话不应执行业务逻辑, calls=%d", calls.Load())
 	}
 }

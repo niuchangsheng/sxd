@@ -1196,9 +1196,16 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			if ctx.Err() != nil || session.State() == client.StateClosed {
-				slog.Info("会话已关闭，跳过本次副本 Routine", "role_id", session.RoleID())
+			if ctx.Err() != nil {
 				return nil
+			}
+			// 重连窗口内 State 为 Connecting/Reconnecting 而非 Closed；此时发包
+			// 必然失败，整个扫荡批次会空跑并跳过扫荡物出售。返回 ErrNotConnected
+			// 让调度器在会话恢复后 5 分钟重试，而不是等下一个 30 分钟周期。
+			if session.State() != client.StateActive {
+				slog.Info("会话未就绪，副本 Routine 稍后重试",
+					"role_id", session.RoleID(), "state", session.State().String())
+				return client.ErrNotConnected
 			}
 
 			// 2. 检查背包容量；已满时先出售装备制作卷腾出扫荡空间。

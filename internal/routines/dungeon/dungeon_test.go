@@ -2864,3 +2864,16 @@ func TestDungeonSweep_AcceptQuestFailureDoesNotAdvance(t *testing.T) {
 		t.Fatalf("接取失败时不得写入本地进行中任务, quests=%v", sess.GetQuests())
 	}
 }
+
+// TestDungeonRoutine_NotActiveReturnsErrNotConnected 验证重连窗口内（State 非 Active）
+// 副本 Routine 不空跑整轮扫荡，而是返回 ErrNotConnected 让调度器 5 分钟后重试。
+func TestDungeonRoutine_NotActiveReturnsErrNotConnected(t *testing.T) {
+	sess, srvConn := createTestSession(t, 50)
+	defer srvConn.Close()
+	sess.Close()
+
+	err := dungeon.NewDungeonRoutine(nil).Execute(context.Background(), sess, nil)
+	if !errors.Is(err, client.ErrNotConnected) {
+		t.Fatalf("非激活会话应返回 ErrNotConnected, got %v", err)
+	}
+}
