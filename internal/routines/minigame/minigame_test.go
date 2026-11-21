@@ -1235,3 +1235,31 @@ func TestFishingRoutine_DoSilentDropBacksOff(t *testing.T) {
 		t.Fatalf("应记录钓鱼静默丢包，got %d", got)
 	}
 }
+
+// TestIceCaveRoutine_HitSilentDropBacksOff 验证冰窟敲击无应答时按连续丢包退避，
+// 而不是 break 后把剩余锤子丢到下一个 cron 时段。
+func TestIceCaveRoutine_HitSilentDropBacksOff(t *testing.T) {
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDIceCaveInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildIceCaveInfoResultPacket(protocol.IceCaveInfo{
+				Slots:     []protocol.IceCaveSlot{{Ice: 1, State: 0}},
+				HammerNum: 2,
+			}))
+		case protocol.ActionIDIceCaveHit:
+			// 静默丢弃：不回包。
+		}
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewIceCaveRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("冰窟敲击无应答应返回 CooldownError, got %v", err)
+	}
+	if got := scheduler.SilentDropCount(sess, "ice_cave"); got < 1 {
+		t.Fatalf("应记录冰窟静默丢包，got %d", got)
+	}
+}

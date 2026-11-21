@@ -975,8 +975,11 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(hCtx, protocol.BuildIceCaveHitPacket(slot.Ice, slot.IsIron), protocol.ActionIDIceCaveHit)
 				hCancel()
 				if cErr != nil {
-					slog.Info("冰窟敲击无应答", "role_id", session.RoleID(), "ice", slot.Ice, "err", cErr)
-					break
+					// 中途静默丢包不能 break：剩余锤子会丢到下一个 cron 时段。
+					slog.Info("冰窟敲击无应答，按连续丢包退避",
+						"role_id", session.RoleID(), "ice", slot.Ice, "err", cErr)
+					return scheduler.HandleSilentDrop(session, "ice_cave", 3,
+						10*time.Minute, "冰窟敲击无应答")
 				}
 				result, pErr := protocol.ParseIceCaveHitResult(resp.Payload)
 				if pErr != nil {
@@ -985,6 +988,7 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 				}
 				switch result.Result {
 				case protocol.IceCaveResultSuccess:
+					scheduler.ResetSilentDrops(session, "ice_cave")
 					hits++
 					slog.Info("冰窟敲击成功", "role_id", session.RoleID(), "ice", slot.Ice, "awards", result.AwardItems)
 				case protocol.IceCaveResultCompleted:
@@ -1014,8 +1018,9 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 				gResp, gErr := session.Call(gCtx, protocol.BuildIceCaveGetGiftPacket(), protocol.ActionIDIceCaveGetGift)
 				gCancel()
 				if gErr != nil {
-					slog.Info("冰窟奖励兑换无应答", "role_id", session.RoleID(), "err", gErr)
-					return nil
+					slog.Info("冰窟奖励兑换无应答，按连续丢包退避", "role_id", session.RoleID(), "err", gErr)
+					return scheduler.HandleSilentDrop(session, "ice_cave", 3,
+						10*time.Minute, "冰窟奖励兑换无应答")
 				}
 				result, pErr := protocol.ParseIceCaveGiftResult(gResp.Payload)
 				if pErr != nil {
