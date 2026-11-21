@@ -18,6 +18,30 @@ import (
 // maxSaArenaRobs 单轮调度的最大抢占次数。
 const maxSaArenaRobs = 10
 
+// errSaArenaNoResponse 标记圣域竞技场请求被服务端静默丢弃（无回包）。
+var errSaArenaNoResponse = errors.New("圣域竞技场请求无回包")
+
+// saintAreaReopenTime 根据圣域关闭窗口计算下次开启时间。
+//
+// 协议未明确窗口语义（可能是“今天已关闭的时段”）。仅当当前时间确实落在
+// 某个 [start, end] 窗口内时才采用 end+1 分钟；否则回退 1 小时探测，
+// 避免错误时间戳导致长时间不唤醒。
+func saintAreaReopenTime(status *protocol.SaintAreaStatus, now time.Time) time.Time {
+	if status != nil {
+		for _, w := range status.CloseTimes {
+			if w.StartTime <= 0 || w.EndTime <= 0 {
+				continue
+			}
+			start := time.Unix(int64(w.StartTime), 0)
+			end := time.Unix(int64(w.EndTime), 0)
+			if !now.Before(start) && now.Before(end) {
+				return end.Add(time.Minute)
+			}
+		}
+	}
+	return now.Add(time.Hour)
+}
+
 // openSaintAreaSession 建立圣域独立长连接。抽成变量以便单测注入。
 var openSaintAreaSession = func(ctx context.Context, s *client.RoleSession) (*client.RoleSession, error) {
 	return s.OpenSaintAreaSession(ctx)
@@ -66,25 +90,33 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 			statusResp, sErr := session.Call(sCtx, protocol.BuildSaintAreaStatusPacket(), protocol.ActionIDSaintAreaStatus)
 			sCancel()
 			if sErr != nil || statusResp == nil {
-				slog.Info("查询圣域状态无回包，跳过圣域竞技场", "role_id", session.RoleID(), "err", sErr)
-				return nil
+				// 状态查询被静默丢弃时不能 return nil，否则要等到下一个 cron 时段。
+				slog.Info("查询圣域状态无回包，按连续丢包退避",
+					"role_id", session.RoleID(), "err", sErr)
+				return scheduler.HandleSilentDrop(session, "holy_arena", 3,
+					30*time.Minute, "圣域状态查询无回包")
 			}
+			scheduler.ResetSilentDrops(session, "holy_arena")
 			status, sErr := protocol.ParseSaintAreaStatusResult(statusResp.Payload)
 			if sErr != nil {
 				slog.Warn("解析圣域状态失败，跳过圣域竞技场", "role_id", session.RoleID(), "err", sErr)
-				return nil
+				return scheduler.NewCooldown(10*time.Minute, "圣域状态解析失败")
 			}
 			if status.Status != protocol.SaintAreaStatusOpen {
-				slog.Info("圣域当前未开启，跳过圣域竞技场",
-					"role_id", session.RoleID(), "status", status.Status)
-				return nil
+				// 圣域状态回包带关闭窗口 [start, end]。若当前落在某个窗口内，
+				// 精确到窗口结束再唤醒；否则保留 1 小时探测兜底。
+				until := saintAreaReopenTime(status, time.Now())
+				slog.Info("圣域当前未开启，按关闭窗口唤醒",
+					"role_id", session.RoleID(), "status", status.Status,
+					"windows", len(status.CloseTimes), "wake_at", until)
+				return scheduler.NewCooldownUntil(until, "圣域未开启")
 			}
 
 			// 竞技场协议必须走圣域独立长连接。
 			sa, oErr := openSaintAreaSession(ctx, session)
 			if oErr != nil || sa == nil {
-				slog.Info("建立圣域会话失败，跳过圣域竞技场", "role_id", session.RoleID(), "err", oErr)
-				return nil
+				slog.Info("建立圣域会话失败，稍后重试", "role_id", session.RoleID(), "err", oErr)
+				return scheduler.NewCooldown(10*time.Minute, "建立圣域会话失败")
 			}
 			if sa != session {
 				defer sa.Close()
@@ -102,16 +134,23 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 					return nil, err
 				}
 				if resp == nil {
-					return nil, errors.New("圣域竞技场面板无回包")
+					return nil, errSaArenaNoResponse
 				}
 				return protocol.ParseSaArenaGetInfoResult(resp.Payload)
 			}
 
 			info, err := fetchInfo()
 			if err != nil {
-				slog.Info("圣域竞技场功能不可用或未开放，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				if errors.Is(err, errSaArenaNoResponse) || errors.Is(err, context.DeadlineExceeded) {
+					slog.Info("圣域竞技场面板无回包，按连续丢包退避",
+						"role_id", session.RoleID(), "err", err)
+					return scheduler.HandleSilentDrop(session, "holy_arena", 3,
+						30*time.Minute, "圣域竞技场面板无回包")
+				}
+				slog.Warn("圣域竞技场面板解析失败", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "圣域竞技场面板解析失败")
 			}
+			scheduler.ResetSilentDrops(session, "holy_arena")
 			slog.Info("圣域竞技场面板",
 				"role_id", session.RoleID(),
 				"seats", len(info.Seats),
@@ -135,9 +174,13 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 				}
 				resp, rErr := call(protocol.BuildSaArenaRobSeatPacket(seat.Seq), protocol.ActionIDSaArenaRobSeat)
 				if rErr != nil || resp == nil {
-					slog.Info("圣域竞技场抢占无回包", "role_id", session.RoleID(), "seq", seat.Seq, "err", rErr)
-					return nil
+					// 抢占被静默丢弃时剩余可用次数不能丢：按连续丢包退避后重试。
+					slog.Info("圣域竞技场抢占无回包，按连续丢包退避",
+						"role_id", session.RoleID(), "seq", seat.Seq, "err", rErr)
+					return scheduler.HandleSilentDrop(session, "holy_arena", 3,
+						10*time.Minute, "圣域竞技场抢占无回包")
 				}
+				scheduler.ResetSilentDrops(session, "holy_arena")
 				res, pErr := protocol.ParseSaArenaRobResult(resp.Payload)
 				if pErr != nil {
 					slog.Warn("解析圣域竞技场抢占回包失败", "role_id", session.RoleID(), "err", pErr)
