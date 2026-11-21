@@ -1357,9 +1357,10 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			chapResp, chapErr := session.Call(cCtx, chapPkt, protocol.ActionIDHuanshouInvadeChapter)
 			cCancel()
 			if chapErr != nil || chapResp == nil {
-				slog.Info("山海幻兽入侵章节请求无回包，稍后重试",
+				slog.Info("山海幻兽入侵章节请求无回包，按连续丢包退避",
 					"role_id", session.RoleID(), "err", chapErr)
-				return scheduler.NewCooldown(10*time.Minute, "山海幻兽入侵章节无回包")
+				return scheduler.HandleSilentDrop(session, "huanshou_invade", 3,
+					10*time.Minute, "山海幻兽入侵章节无回包")
 			}
 
 			chalPkt := protocol.BuildHuanshouInvadeChallengePacket(protocol.ActionIDHuanshouInvadeChapter)
@@ -1367,9 +1368,10 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			chalResp, chalErr := session.Call(chCtx, chalPkt, protocol.ActionIDHuanshouInvadeChallenge)
 			chCancel()
 			if chalErr != nil || chalResp == nil {
-				slog.Info("山海幻兽入侵挑战请求无回包，稍后重试",
+				slog.Info("山海幻兽入侵挑战请求无回包，按连续丢包退避",
 					"role_id", session.RoleID(), "err", chalErr)
-				return scheduler.NewCooldown(10*time.Minute, "山海幻兽入侵挑战无回包")
+				return scheduler.HandleSilentDrop(session, "huanshou_invade", 3,
+					10*time.Minute, "山海幻兽入侵挑战无回包")
 			}
 
 			// 3. 极速秒完成扫荡 (Mod 696, Act 3)
@@ -1378,10 +1380,16 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			sweepResp, sweepErr := session.Call(swCtx, sweepPkt, protocol.ActionIDHuanshouInvadeSweep)
 			swCancel()
 			if sweepErr != nil || sweepResp == nil {
-				slog.Info("山海幻兽入侵扫荡请求无回包，终止本轮",
+				// 扫荡是每日限次玩法，服务端对「当日次数已用完/资格不满足」会静默
+				// 丢弃请求。不能返回 nil（Cron 会等到次日才重试），也不能每 10 分钟
+				// 无限空转：按连续丢包退避，第 3 次起挂起至 min(次日 00:05, 6h)。
+				slog.Info("山海幻兽入侵扫荡请求无回包，按连续丢包退避",
 					"role_id", session.RoleID(), "err", sweepErr)
-				return nil
+				return scheduler.HandleSilentDrop(session, "huanshou_invade", 3,
+					10*time.Minute, "山海幻兽入侵扫荡无回包")
 			}
+			// 扫荡回包成功说明整条链路已经打通，清零章节/挑战/扫荡的连续丢包计数。
+			scheduler.ResetSilentDrops(session, "huanshou_invade")
 
 			// 4. 逐关扫荡入侵节点 (Mod 696, Act 4: 节点 1~8 依据抓包实采流)
 			prevAct := protocol.ActionIDHuanshouInvadeSweep
