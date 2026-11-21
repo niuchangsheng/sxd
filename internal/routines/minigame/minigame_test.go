@@ -1210,3 +1210,28 @@ func TestTravelEventRoutine_AnswerCDSchedulesWake(t *testing.T) {
 		t.Fatalf("应按 cd_timer=30s 唤醒，实际 %s", d)
 	}
 }
+
+// TestFishingRoutine_DoSilentDropBacksOff 验证钓鱼中途无应答时按连续丢包退避，
+// 而不是 break + return nil 把剩余鱼钩次数丢到下一个 cron 时段。
+func TestFishingRoutine_DoSilentDropBacksOff(t *testing.T) {
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFishHooks:
+			_ = protocol.WritePacket(conn, protocol.BuildFishHooksResultPacket(2))
+		case protocol.ActionIDFishDo:
+			// 静默丢弃：不回包。
+		}
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewFishingRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("钓鱼无应答应返回 CooldownError, got %v", err)
+	}
+	if got := scheduler.SilentDropCount(sess, "fishing"); got < 1 {
+		t.Fatalf("应记录钓鱼静默丢包，got %d", got)
+	}
+}

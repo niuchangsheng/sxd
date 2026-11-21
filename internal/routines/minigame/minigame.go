@@ -702,9 +702,10 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 			hooksResp, err := session.Call(hCtx, protocol.BuildFishHooksPacket(), protocol.ActionIDFishHooks)
 			hCancel()
 			if err != nil {
-				// 功能已开放但查询无回包，通常是服务端状态/场景不满足；跳过本轮。
-				slog.Info("查询鱼钩数量失败/服务端未响应，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				// 查询被静默丢弃时不能 return nil：要等到下一个 cron 时段。
+				slog.Info("查询鱼钩数量无回包，按连续丢包退避", "role_id", session.RoleID(), "err", err)
+				return scheduler.HandleSilentDrop(session, "fishing", 3,
+					10*time.Minute, "查询鱼钩数量无回包")
 			}
 			hooks, err := protocol.ParseFishHooksResult(hooksResp.Payload)
 			if err != nil {
@@ -722,8 +723,12 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(fCtx, protocol.BuildFishDoPacket(), protocol.ActionIDFishDo)
 				fCancel()
 				if cErr != nil {
-					slog.Info("钓鱼无应答", "role_id", session.RoleID(), "index", i+1, "err", cErr)
-					break
+					// 中途静默丢包不能 break + return nil：剩余鱼钩次数会被丢到
+					// 下一个 cron 时段。按连续丢包退避后继续。
+					slog.Info("钓鱼无应答，按连续丢包退避",
+						"role_id", session.RoleID(), "index", i+1, "err", cErr)
+					return scheduler.HandleSilentDrop(session, "fishing", 3,
+						10*time.Minute, "钓鱼无应答")
 				}
 				result, pErr := protocol.ParseFishDoResult(resp.Payload)
 				if pErr != nil {
@@ -732,6 +737,7 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 				}
 				switch result.Result {
 				case protocol.FishResultSuccess:
+					scheduler.ResetSilentDrops(session, "fishing")
 					caught++
 					slog.Info("钓鱼成功",
 						"role_id", session.RoleID(),
