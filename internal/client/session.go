@@ -30,6 +30,33 @@ var (
 	ErrSessionClosed = errors.New("client: session is closed")
 	// ErrNotConnected 当前未处于已连接且激活状态
 	ErrNotConnected = errors.New("client: session is not active")
+	// ErrAuthRejected 服务端明确拒绝登录凭据（resultCode 非成功值）。
+	// 与网络闪断不同，该错误通常意味着票据失效或被顶号，需要重新换票。
+	ErrAuthRejected = errors.New("client: authentication rejected by server")
+	// ErrRoleSelectionRequired 服务端返回 FIRST_TIME：要求客户端选择/创建角色。
+	// 自动化严禁替用户创建角色，只能等待用户在官方客户端选定角色后再登录。
+	ErrRoleSelectionRequired = errors.New("client: role selection required (FIRST_TIME)")
+)
+
+const (
+	// minCredentialRefreshInterval 两次 Web 换票之间的最小间隔。
+	// 同一平台账号下的多个角色共用一次 Web 登录态，过于频繁换票会把
+	// 另一角色的会话顶掉，形成「互相换票 → 互相踢下线」的活锁。
+	minCredentialRefreshInterval = 2 * time.Minute
+	// credentialRefreshFailureThreshold 普通断线连续失败多少次后才换票。
+	// 正常 EOF 优先复用现有票据重连；只有连续失败才说明票据可能已失效。
+	credentialRefreshFailureThreshold = 3
+	// roleSelectionRetryInterval 服务端要求选角时的低频复查间隔。
+	roleSelectionRetryInterval = 10 * time.Minute
+)
+
+const (
+	// reconnectLongBackoffAfter 连续重连失败达到该次数后进入长时间退避。
+	// 服务端持续拒绝握手（风控限流、区服维护、重复登录互踢）时，
+	// 每 30 秒重试只会让风控更严；达到阈值后改为每 5 分钟探测一次。
+	reconnectLongBackoffAfter = 10
+	// reconnectLongBackoff 长时间退避的重试间隔上限。
+	reconnectLongBackoff = 5 * time.Minute
 )
 
 // AuthenticatorFunc 角色登录认证握手函数
@@ -146,6 +173,13 @@ type RoleSession struct {
 	reconnectAttempts int
 	isCustomDialer    bool
 
+	// 凭据自愈节流：记录最近一次 Web 换票时间、换票后连续失败次数与最近一次
+	// 连接失败原因，避免普通 EOF 也触发 Web 登录（多角色同账号会互相顶号）。
+	credRefreshMu        sync.Mutex
+	lastCredRefresh      time.Time
+	failuresSinceRefresh int
+	lastConnectErr       error
+
 	lastActionID atomic.Uint32
 	// lastAckActionID 记录最后一次收到回包的业务 ActionID。
 	// 被服务端静默丢弃的请求也会推进 lastActionID，但不会推进本字段；
@@ -222,8 +256,11 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		cfg:            cfg,
 		isCustomDialer: isCustom,
 		state:          StateDisconnected,
-		handlers:       make(map[uint32][]func(*protocol.Packet)),
-		pendingCalls:   make(map[uint32][]chan *protocol.Packet),
+		// 启动时由 main 统一换取过票据，此处给出最小换票间隔，
+		// 避免首个连接抖动就立刻再登录一次 Web。
+		lastCredRefresh: time.Now(),
+		handlers:        make(map[uint32][]func(*protocol.Packet)),
+		pendingCalls:    make(map[uint32][]chan *protocol.Packet),
 		playerState: PlayerState{
 			Level:           300,
 			Stamina:         201,
@@ -886,9 +923,44 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 	if loginRespActionID == protocol.ActionIDPlayerLogin {
 		authResp, err := protocol.ParsePlayerLoginAuthResponse(respPkt.Payload)
 		if err == nil {
-			if authResp.ResultCode != 4 && authResp.ResultCode != 0 {
-				return fmt.Errorf("client: authentication rejected by server: resultCode=%d", authResp.ResultCode)
+			// Golden Case 2（4 字节保留 + 结果码）布局下 4 表示成功；
+			// 官方 22 字节布局下 0 表示成功。
+			loginOK := (!authResp.GoldenLayout && authResp.ResultCode == protocol.PlayerLoginResultSucceed) ||
+				(authResp.GoldenLayout && authResp.ResultCode == 4)
+			if !loginOK {
+				// 记录原始载荷方便区分「需要选角/账号封禁/风控拒绝」等不同失败码。
+				head := hex.EncodeToString(respPkt.Payload)
+				if len(head) > 64 {
+					head = head[:64] + "..."
+				}
+				switch {
+				case !authResp.GoldenLayout && authResp.ResultCode == protocol.PlayerLoginResultFirstTime:
+					// FIRST_TIME(2)：服务端要求客户端进入「选择/创建角色」界面。
+					// 自动化绝不能自动创建角色，只能等待用户在官方客户端选好角色。
+					return fmt.Errorf("%w: resultCode=%d payload_len=%d payload_head=%s",
+						ErrRoleSelectionRequired, authResp.ResultCode, len(respPkt.Payload), head)
+				case !authResp.GoldenLayout && authResp.ResultCode == protocol.PlayerLoginResultDisableLogin:
+					return fmt.Errorf("%w: resultCode=%d(%s) enable_time=%d enable_type=%d payload_head=%s",
+						ErrAuthRejected, authResp.ResultCode, protocol.PlayerLoginResultText(authResp.ResultCode),
+						authResp.EnableTime, authResp.EnableType, head)
+				default:
+					return fmt.Errorf("%w: resultCode=%d(%s) payload_len=%d payload_head=%s",
+						ErrAuthRejected, authResp.ResultCode, protocol.PlayerLoginResultText(authResp.ResultCode),
+						len(respPkt.Payload), head)
+				}
 			}
+			// 成功时也记录一次原始载荷（每次登录一行），便于对比不同区服的
+			// 响应格式与失败回包，定位网关/角色级问题。
+			okHead := hex.EncodeToString(respPkt.Payload)
+			if len(okHead) > 64 {
+				okHead = okHead[:64] + "..."
+			}
+			slog.Info("登录认证通过",
+				"role_id", s.cfg.RoleID,
+				"result_code", authResp.ResultCode,
+				"payload_len", len(respPkt.Payload),
+				"payload_head", okHead,
+			)
 			if authResp.PlayerID > 0 {
 				s.UpdatePlayerState(func(ps *PlayerState) {
 					ps.PlayerID = authResp.PlayerID
@@ -1264,9 +1336,13 @@ func (s *RoleSession) ClaimNewPracticeExp(ctx context.Context) (*protocol.NewPra
 	if err != nil {
 		return nil, err
 	}
-	s.playerMu.Lock()
-	s.playerState.PracticeExp = 0
-	s.playerMu.Unlock()
+	// 只有服务端确认成功才清零本地累积经验，避免失败回包被当成已领取
+	// 导致「经验没到账、本地却记为零」的资源无变化假象。
+	if res.Result == protocol.NewPracticeSuccess {
+		s.playerMu.Lock()
+		s.playerState.PracticeExp = 0
+		s.playerMu.Unlock()
+	}
 	return res, nil
 }
 
@@ -1274,8 +1350,12 @@ func (s *RoleSession) ClaimNewPracticeExp(ctx context.Context) (*protocol.NewPra
 // 优先使用官方现代新版练功系统 (Mod_NewPractice_Base.collect_all)，无缝兼容老版双步结算流程。
 func (s *RoleSession) ClaimTownPracticeExp(ctx context.Context) error {
 	// 尝试现代打坐一键领取
-	if _, err := s.ClaimNewPracticeExp(ctx); err == nil {
-		return nil
+	if res, err := s.ClaimNewPracticeExp(ctx); err == nil {
+		if res == nil || res.Result == protocol.NewPracticeSuccess {
+			return nil
+		}
+		// 服务端已明确返回业务失败码：不再回退老版协议，交由调用方记录。
+		return fmt.Errorf("client: new practice collect failed: result=%d", res.Result)
 	}
 
 	// 回退机制：若服务端未开启新练功模块，执行老版结算流程
@@ -2127,12 +2207,16 @@ func (s *RoleSession) runLoop() {
 		default:
 		}
 
-		// 1. 若处于重连状态且配置了自愈回调，重新换取最新平台动态凭据
-		if s.State() == StateReconnecting && s.cfg.RefreshCredentials != nil {
+		// 1. 若处于重连状态且配置了自愈回调，按需换取最新平台动态凭据。
+		// 注意：普通 EOF 不应每次重连都重新 Web 登录——同一平台账号下多个角色
+		// 共用一次登录态，频繁换票会把另一角色顶下线（2026-11-21 s0/s1 实测：
+		// 一个角色的换票循环把另一个角色的握手持续顶掉，resultCode=2）。
+		if s.State() == StateReconnecting && s.cfg.RefreshCredentials != nil && s.shouldRefreshCredentials() {
 			slog.Info("正在通过自愈管道重新换取最新平台动态凭据...", "role_id", s.cfg.RoleID)
 			if rErr := s.cfg.RefreshCredentials(s.ctx, &s.cfg); rErr != nil {
 				slog.Warn("凭据自愈换票未成功", "role_id", s.cfg.RoleID, "error", rErr)
 			} else {
+				s.markCredentialRefreshed()
 				slog.Info("凭据自愈换票成功，已装载新动态凭据", "role_id", s.cfg.RoleID, "server_addr", s.cfg.ServerAddr)
 			}
 		}
@@ -2182,6 +2266,73 @@ func (s *RoleSession) runLoop() {
 	}
 }
 
+// nextReconnectDelay 计算第 attempt 次连续重连失败后的等待时长。
+//
+// base 为配置的 ReconnectInterval；前置指数退避（×1/2/4/8/16），
+// 常规上限 30 秒；连续失败达到 reconnectLongBackoffAfter 次后上限放宽到 5 分钟。
+func nextReconnectDelay(attempt int, base time.Duration) time.Duration {
+	if base <= 0 {
+		base = 2 * time.Second
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	if attempt >= reconnectLongBackoffAfter {
+		return reconnectLongBackoff
+	}
+	multiplier := 1
+	if attempt > 1 {
+		multiplier = 1 << min(attempt-1, 4)
+	}
+	wait := base * time.Duration(multiplier)
+	if wait > 30*time.Second {
+		wait = 30 * time.Second
+	}
+	return wait
+}
+
+// shouldRefreshCredentials 判断本次重连前是否需要重新向平台换票。
+//
+//   - 距上次换票不足 minCredentialRefreshInterval：不换，避免多角色同账号互相顶号；
+//   - 上一次失败是服务端明确拒绝认证：尽快换票（票据多半已失效）；
+//   - 普通断线（EOF/超时）：优先复用现有票据，连续失败达到阈值后才换票。
+func (s *RoleSession) shouldRefreshCredentials() bool {
+	s.credRefreshMu.Lock()
+	since := time.Since(s.lastCredRefresh)
+	failures := s.failuresSinceRefresh
+	lastErr := s.lastConnectErr
+	s.credRefreshMu.Unlock()
+
+	if since < minCredentialRefreshInterval {
+		return false
+	}
+	// 服务端要求选角：换票无济于事，只会制造登录抖动。
+	if errors.Is(lastErr, ErrRoleSelectionRequired) {
+		return false
+	}
+	if errors.Is(lastErr, ErrAuthRejected) {
+		return true
+	}
+	return failures >= credentialRefreshFailureThreshold
+}
+
+// markCredentialRefreshed 记录一次成功的 Web 换票。
+func (s *RoleSession) markCredentialRefreshed() {
+	s.credRefreshMu.Lock()
+	s.lastCredRefresh = time.Now()
+	s.failuresSinceRefresh = 0
+	s.lastConnectErr = nil
+	s.credRefreshMu.Unlock()
+}
+
+// noteConnectFailure 记录连接失败原因，供换票节流策略判断。
+func (s *RoleSession) noteConnectFailure(err error) {
+	s.credRefreshMu.Lock()
+	s.failuresSinceRefresh++
+	s.lastConnectErr = err
+	s.credRefreshMu.Unlock()
+}
+
 func (s *RoleSession) handleConnectFailure(err error) bool {
 	select {
 	case <-s.ctx.Done():
@@ -2191,6 +2342,7 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 	}
 
 	s.reconnectAttempts++
+	s.noteConnectFailure(err)
 	if s.cfg.MaxReconnectAttempts > 0 && s.reconnectAttempts >= s.cfg.MaxReconnectAttempts {
 		slog.Error("超过最大重连尝试次数，会话终止",
 			"role_id", s.cfg.RoleID,
@@ -2204,15 +2356,20 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 
 	s.setState(StateReconnecting)
 
-	// 计算指数退避等待时间：从 ReconnectInterval 开始递增，上限 30 秒
-	backoffMultiplier := 1
-	if s.reconnectAttempts > 1 {
-		shift := min(s.reconnectAttempts-1, 4)
-		backoffMultiplier = 1 << shift
-	}
-	waitDuration := s.cfg.ReconnectInterval * time.Duration(backoffMultiplier)
-	if waitDuration > 30*time.Second {
-		waitDuration = 30 * time.Second
+	// 计算指数退避等待时间：从 ReconnectInterval 开始递增。
+	// 前 10 次重试上限 30 秒（网关短暂抖动/跨服切换常见）；
+	// 连续 10 次以上仍失败时说明不是瞬时故障（例如服务端持续拒绝握手、
+	// 风控限流），把上限拉到 5 分钟，避免每 30 秒反复登录触发更强风控。
+	waitDuration := nextReconnectDelay(s.reconnectAttempts, s.cfg.ReconnectInterval)
+	// 服务端要求选择/创建角色：这是需要用户人工处理的状态，30 秒重试毫无意义，
+	// 固定按 10 分钟低频复查（用户可能在官方客户端选好角色后自动恢复）。
+	if errors.Is(err, ErrRoleSelectionRequired) {
+		waitDuration = roleSelectionRetryInterval
+		slog.Warn("服务端要求选择/创建角色，自动化不会创建角色；请在官方客户端选定角色后等待自动重连",
+			"role_id", s.cfg.RoleID,
+			"server_addr", s.cfg.ServerAddr,
+			"retry_in", waitDuration,
+		)
 	}
 
 	slog.Info("网络连接中断，等待重连",
@@ -2250,6 +2407,10 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 		case <-stableTimer.C:
 			// 连接已稳定存活，重置异常重试计数
 			s.reconnectAttempts = 0
+			s.credRefreshMu.Lock()
+			s.failuresSinceRefresh = 0
+			s.lastConnectErr = nil
+			s.credRefreshMu.Unlock()
 
 		case err := <-readErrCh:
 			slog.Info("网络读取循环退出", "role_id", s.cfg.RoleID, "error", err)

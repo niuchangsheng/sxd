@@ -419,11 +419,14 @@ func NewTravelEventRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				}
 				infoRes = &ansRes.Info
 				if infoRes.CdTimer > 0 {
-					slog.Info("仙旅奇缘事件进入冷却，等待下个恢复窗口",
+					slog.Info("仙旅奇缘事件进入冷却，等待冷却结束后再唤醒",
 						"role_id", session.RoleID(),
 						"cd_timer", infoRes.CdTimer,
 					)
-					return nil
+					// 按服务端 cd_timer 精确定点唤醒（+1s 余量），而不是等下一次 Cron。
+					return scheduler.NewCooldown(
+						time.Duration(infoRes.CdTimer)*time.Second+time.Second,
+						"仙旅奇缘事件冷却")
 				}
 				if infoRes.RemainingTimes() <= 0 {
 					break
@@ -550,9 +553,20 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 					if scErr != nil {
 						break
 					}
-					_, next, e := protocol.ParseGuessPartnerScrapeResult(scResp.Payload)
+					scRes, next, e := protocol.ParseGuessPartnerScrapeResult(scResp.Payload)
 					if e != nil {
 						break
+					}
+					switch scRes {
+					case protocol.GuessPartnerResultSuccess:
+						// 正常，继续按剩余次数刮图。
+					case protocol.GuessPartnerResultPackFull:
+						return guessPartnerPackFullError(ctx, session, "scrape", times)
+					default:
+						slog.Info("伙伴猜猜看刮图未成功，停止刮图", "role_id", session.RoleID(),
+							"result", scRes)
+						remain = 0
+						continue
 					}
 					if next >= remain {
 						break

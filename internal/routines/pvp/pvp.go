@@ -1327,13 +1327,25 @@ func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
 			// 抓包 (/tmp/jiewei.pcapng)：官方客户端勾选自动匹配 + 跳过战斗后，
 			// 约每 1 秒发送一次 join_pk；result=6(TIME_CD) 时回包带剩余秒数，
 			// 冷却归零后服务端推送 349/5 战报。每次战斗约 10 秒。
+			// 349/16、349/17 回包均为 UByte 结果码，3=SUCCESS。
+			// 只有确认成功才记录「已开启」，否则日志会误导后续排查。
 			if resp := call3(session, protocol.BuildWorldPkSetAutoMatchPacket(true),
 				protocol.ActionIDWorldPkSetAutoMatch); resp != nil {
-				slog.Info("跨服PK自动匹配已开启", "role_id", session.RoleID())
+				if len(resp.Payload) > 0 && resp.Payload[0] == protocol.WorldPkResultSuccess {
+					slog.Info("跨服PK自动匹配已开启", "role_id", session.RoleID())
+				} else {
+					slog.Info("跨服PK自动匹配设置未成功", "role_id", session.RoleID(),
+						"result", worldPkResultByte(resp.Payload))
+				}
 			}
 			if resp := call3(session, protocol.BuildWorldPkSetSkipWarPacket(true),
 				protocol.ActionIDWorldPkSetSkipWar); resp != nil {
-				slog.Info("跨服PK跳过战斗已开启", "role_id", session.RoleID())
+				if len(resp.Payload) > 0 && resp.Payload[0] == protocol.WorldPkResultSuccess {
+					slog.Info("跨服PK跳过战斗已开启", "role_id", session.RoleID())
+				} else {
+					slog.Info("跨服PK跳过战斗设置未成功", "role_id", session.RoleID(),
+						"result", worldPkResultByte(resp.Payload))
+				}
 			}
 
 			// 30 次只是“跳过战斗”的次数上限；超过后仍可自动匹配，只是需要正常
@@ -1505,4 +1517,12 @@ func waitWorldPk(ctx context.Context, d time.Duration) bool {
 	case <-time.After(d):
 		return true
 	}
+}
+
+// worldPkResultByte 提取 UByte 结果码用于日志（空回包返回 -1）。
+func worldPkResultByte(payload []byte) int {
+	if len(payload) == 0 {
+		return -1
+	}
+	return int(payload[0])
 }

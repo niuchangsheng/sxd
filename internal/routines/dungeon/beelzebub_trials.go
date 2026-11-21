@@ -123,6 +123,13 @@ func NewBeelzebubTrialsRoutine(cfg BeelzebubTrialsConfig) scheduler.ActivityRout
 						"role_id", session.RoleID())
 					return scheduler.NewCooldown(4*time.Hour, "魔王试炼建队被服务端拒绝")
 				}
+				if errors.Is(err, client.ErrBeelzebubTrialsChallengeFailed) {
+					// 连续多关被业务码拒绝（如 code=6 试炼ID无效）：
+					// 说明当前账号今日已无法继续推进，按冷却退避而不是每轮重打全表。
+					slog.Info("魔王试炼连续多关挑战失败，进入冷却等待",
+						"role_id", session.RoleID(), "error", err)
+					return scheduler.NewCooldown(2*time.Hour, "魔王试炼连续多关挑战失败")
+				}
 				if errors.Is(err, context.DeadlineExceeded) {
 					slog.Info("魔王试炼请求超时/被服务端丢弃，稍后重试", "role_id", session.RoleID(), "error", err)
 					return scheduler.NewCooldown(30*time.Minute, "魔王试炼请求被丢弃")

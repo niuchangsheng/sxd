@@ -69,6 +69,14 @@ func NewTownPracticeRoutine() scheduler.ActivityRoutine {
 				if legacyErr := session.ClaimTownPracticeExp(ctx); legacyErr != nil {
 					return fmt.Errorf("领取城镇打坐练功经验失败: %w (legacy: %v)", err, legacyErr)
 				}
+			} else if collectResult != nil && collectResult.Result != protocol.NewPracticeSuccess {
+				// 回包到达但业务失败：不能当作「已结算」继续记账。
+				slog.Info("新版打坐练功结算未成功，保留累积经验待下次",
+					"role_id", session.RoleID(),
+					"result", collectResult.Result,
+					"pending_exp", pendingExp,
+				)
+				return nil
 			}
 
 			// 等待网络回包与服务端经验同步

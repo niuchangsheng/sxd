@@ -6,11 +6,14 @@ package minigame
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestPetAnimalRoutine_CoinFeedsUntilExhausted(t *testing.T) {
@@ -202,5 +205,44 @@ func TestPetAnimalRoutine_FeedDropRetriesWithResync(t *testing.T) {
 	}
 	if got := feedCalls.Load(); got != 3 {
 		t.Fatalf("功能查询重置链后应再试一次, 期望 3 次请求, 实际 %d 次", got)
+	}
+}
+
+// TestPetAnimalRoutine_InfoOKFeedDroppedBacksOff 验证面板 48/0 正常回包、培养 48/1
+// 被静默丢弃时，丢包计数不会被面板成功清零：连续 3 轮后挂起到每日重置。
+func TestPetAnimalRoutine_InfoOKFeedDroppedBacksOff(t *testing.T) {
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPetAnimalInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildPetAnimalInfoResultPacket(protocol.PetAnimalInfo{
+				Lv: 2, Star: 9, Exp: 180228, FeedNum: 3,
+			}))
+		case protocol.ActionIDPetAnimalFeed:
+			// 静默丢弃：不回包。
+		}
+	})
+
+	routine := NewPetAnimalRoutine()
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		lastErr = routine.Execute(context.Background(), sess, nil)
+		if lastErr == nil {
+			t.Fatalf("第 %d 轮培养无回包应返回冷却错误", i+1)
+		}
+	}
+	if n := scheduler.SilentDropCount(sess, "pet_animal"); n < 3 {
+		t.Fatalf("面板成功不应清零培养丢包计数, got %d", n)
+	}
+	var cd *scheduler.CooldownError
+	if !errors.As(lastErr, &cd) {
+		t.Fatalf("达到阈值后应返回 CooldownError, got %v", lastErr)
+	}
+	// HandleSilentDrop 到阈值后挂起至 min(次日 00:05, 6 小时)。
+	exp := scheduler.NextDailyReset(time.Now())
+	if cap := time.Now().Add(6 * time.Hour); exp.After(cap) {
+		exp = cap
+	}
+	if d := cd.Until.Sub(exp); d > time.Minute || d < -time.Minute {
+		t.Fatalf("熔断唤醒时间 = %s, want %s", cd.Until, exp)
 	}
 }

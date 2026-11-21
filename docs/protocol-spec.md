@@ -127,6 +127,26 @@ Payload 中的字段无任何分隔符，严格按照指令接口签名紧凑排
   4. `04`：`Result Code = 4`（**4 代表登录认证成功**，对齐运行日志 `[10:04:23] 登陆游戏服务器成功4`）。
   5. `0a 00 00 00 00 00 00 00 01`：角色 ID 与基础属性标志位。
 
+#### 3.2.1 官方 22 字节登录回包布局与失败码（2026-11-21 实机确认）
+
+官方 AS3 `Mod_Player_Base.login.response` 为 10 字段、固定 22 字节：
+
+```
+UByte result, Int playerId, UByte _, Int enableTime, Byte enableType,
+Int allActivity, Byte isOpenMusic, UByte warEffectType, Int uiSetValue, Byte isNewUI
+```
+
+- 成功值为 `0`（`SUCCEED`）。**注意**：Golden Case 2（疯玩网关）使用另一种布局
+  （前 4 字节保留 + 第 5 字节结果码），该布局下 `4` 表示成功，两者不可混用。
+- 常见失败码：`1=FAILED`、`2=FIRST_TIME`（服务端要求选择/创建角色）、
+  `4=KID_LOGIN_CONTROL`、`6=DISABLE_LOGIN`（回包 `enableTime/enableType` 给出解禁时间）、
+  `7=IP_LOGIN_LIMIT`。
+- 自动化对 `FIRST_TIME` 的契约：**严禁调用 `player_first_init` 创建角色**；记录
+  `WARN` 后按 10 分钟低频复查，等待用户在官方客户端选定角色。该状态不触发 Web 换票。
+- 实机样例（心动 s0/s1）：成功 `000003952d0a000000000000000001000c0000108501`
+  （result=0、pid=234797）；`FIRST_TIME` `020005aded09000000000000000000010b00001c8001`
+  （result=2、pid=372205）。
+
 ### 3.3 角色初始化握手步 1 (Golden Case 3: Init Step 1)
 - **客户端发包 (12 字节)**：
   `00 00 00 08 00 00 00 48 00 00 00 00`

@@ -115,8 +115,13 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 
 			info := fetchInfo()
 			if info == nil {
-				return scheduler.NewCooldown(10*time.Minute, "叶公好龙面板无回包")
+				// 面板被静默丢弃通常意味着当日状态已结束/动作链失效；连续 3 次后
+				// 挂起到下一次每日重置，避免每 10 分钟无限空转。
+				return scheduler.HandleSilentDrop(session, "pet_animal", 3,
+					10*time.Minute, "叶公好龙面板无回包")
 			}
+			// 注意：面板成功不代表培养动作可用，此处不清零丢包计数；
+			// 计数只在培养请求真正回包成功时清零。
 			slog.Info("叶公好龙面板",
 				"role_id", session.RoleID(),
 				"player_id", session.PlayerID(),
@@ -165,8 +170,10 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 				if resp == nil {
 					slog.Info("叶公好龙培养无回包，本轮中止并保留剩余次数",
 						"role_id", session.RoleID(), "remaining", remaining)
-					return nil
+					return scheduler.HandleSilentDrop(session, "pet_animal", 3,
+						10*time.Minute, "叶公好龙培养无回包")
 				}
+				scheduler.ResetSilentDrops(session, "pet_animal")
 				res, err := protocol.ParsePetAnimalFeedResult(resp.Payload)
 				if err != nil {
 					slog.Warn("解析叶公好龙培养回包失败", "role_id", session.RoleID(), "err", err)

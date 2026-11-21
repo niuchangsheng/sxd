@@ -1178,3 +1178,35 @@ func TestSelectWuFaDrawSkipsBlockedFields(t *testing.T) {
 		t.Fatalf("全部秘馆被屏蔽后不应再选中")
 	}
 }
+
+// TestTravelEventRoutine_AnswerCDSchedulesWake 验证答题后服务端返回 cd_timer 时，
+// 例程返回 CooldownError 精确定点唤醒，而不是等到下一次 Cron。
+func TestTravelEventRoutine_AnswerCDSchedulesWake(t *testing.T) {
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFateGetInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildFateGetInfoResultPacket(protocol.FateGetInfoResult{
+				JoinCount: 0, TotalCount: 3, CdTimer: 0,
+			}))
+		case protocol.ActionIDFateGetQuestion:
+			_ = protocol.WritePacket(conn, protocol.BuildFateQuestionResultPacket(protocol.FateQuestionResult{
+				EventID: 1, Story: "测试奇缘故事", Msg: protocol.FateResultSuccess,
+				Options: []protocol.FateOption{{AnswerID: 1, Sign: "A", Text: "选项 A"}},
+			}))
+		case protocol.ActionIDFateAnswer:
+			_ = protocol.WritePacket(conn, protocol.BuildFateAnswerResultPacket(protocol.FateAnswerResult{
+				Message: "ok",
+				Info:    protocol.FateGetInfoResult{JoinCount: 1, TotalCount: 3, CdTimer: 30},
+			}))
+		}
+	})
+
+	err := NewTravelEventRoutine(nil).Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("答题后应返回 CooldownError, got %v", err)
+	}
+	if d := time.Until(cd.Until); d < 30*time.Second || d > 35*time.Second {
+		t.Fatalf("应按 cd_timer=30s 唤醒，实际 %s", d)
+	}
+}

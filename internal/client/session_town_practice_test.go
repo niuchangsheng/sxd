@@ -3,6 +3,7 @@ package client_test
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,5 +110,76 @@ func TestRoleSession_TownPracticeFlow(t *testing.T) {
 	}
 	if session.GetPlayerState().PracticeExp != 0 {
 		t.Errorf("expected PracticeExp to reset to 0 after sign finished, got %d", session.GetPlayerState().PracticeExp)
+	}
+}
+
+// TestRoleSession_ClaimNewPracticeExpFailureKeepsExp 验证新版打坐结算返回失败码时
+// 不清零本地累积经验（否则会出现「资源没变化但本地记为零」）。
+func TestRoleSession_ClaimNewPracticeExpFailureKeepsExp(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	var succeed atomic.Bool
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			if pkt.ActionID != protocol.ActionIDNewPracticeCollectAll {
+				continue
+			}
+			if !succeed.Load() {
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, []byte{protocol.NewPracticeFailed}))
+				continue
+			}
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.NewPracticeSuccess)
+			w.WriteUint16(0)  // air_list 空
+			w.WriteInt64(100) // gain_exp
+			_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-new-practice-fail",
+		RoleName:   "打坐失败测试",
+		ServerAddr: "sandbox",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error { return nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("session.Start failed: %v", err)
+	}
+	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	session.UpdatePlayerState(func(ps *client.PlayerState) { ps.PracticeExp = 12345 })
+
+	res, err := session.ClaimNewPracticeExp(ctx)
+	if err != nil {
+		t.Fatalf("ClaimNewPracticeExp: %v", err)
+	}
+	if res == nil || res.Result != protocol.NewPracticeFailed {
+		t.Fatalf("result = %+v, want FAILED", res)
+	}
+	if got := session.GetPlayerState().PracticeExp; got != 12345 {
+		t.Fatalf("失败回包不应清零 PracticeExp, got %d", got)
+	}
+
+	// 成功后必须清零。
+	succeed.Store(true)
+	if _, err := session.ClaimNewPracticeExp(ctx); err != nil {
+		t.Fatalf("ClaimNewPracticeExp success: %v", err)
+	}
+	if got := session.GetPlayerState().PracticeExp; got != 0 {
+		t.Fatalf("成功回包后应清零 PracticeExp, got %d", got)
 	}
 }

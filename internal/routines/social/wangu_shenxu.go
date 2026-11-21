@@ -66,8 +66,10 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 					"result", panel.Result, "result_text", protocol.WanguShenxuResultText(panel.Result))
 				return scheduler.HandleSilentDrop(session, routineID, 3, time.Hour, "万古神墟未开放")
 			}
-			scheduler.ResetSilentDrops(session, routineID)
-
+			// 面板成功不代表膜拜动作可用：此处不能 ResetSilentDrops，
+			// 否则「面板正常、膜拜被静默丢弃」时连续丢包计数每轮被清零，
+			// 永远达不到 3 次熔断阈值（与飞升灌注同类缺陷）。计数只在
+			// 膜拜/领奖真正成功时清零。
 			targets := make([]protocol.WanguShenxuPlayer, 0, len(panel.Players))
 			for _, p := range panel.Players {
 				// player_id=0 为空神像位，无法膜拜。

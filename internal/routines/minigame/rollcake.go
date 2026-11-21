@@ -114,8 +114,20 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 			prevAct = protocol.ActionIDRollCakeGetState
 
 			if state.Msg == protocol.RollCakeCodeHaveRecord {
-				if _, err := call(protocol.BuildRollCakeGetAwardPacket(prevAct), protocol.ActionIDRollCakeGetAward); err != nil {
-					slog.Warn("补领上次吉星高照奖励失败", "role_id", session.RoleID(), "err", err)
+				awardPayload, aErr := call(protocol.BuildRollCakeGetAwardPacket(prevAct), protocol.ActionIDRollCakeGetAward)
+				if aErr != nil {
+					slog.Warn("补领上次吉星高照奖励失败", "role_id", session.RoleID(), "err", aErr)
+					return nil
+				}
+				award, pErr := protocol.ParseRollCakeAwardResult(awardPayload)
+				if pErr != nil {
+					slog.Warn("解析吉星高照补领回包失败", "role_id", session.RoleID(), "err", pErr)
+					return nil
+				}
+				if award.Msg != protocol.RollCakeCodeSuccess {
+					// 回包到达但领奖未成功：不能记录为「已补领」，保留记录待下次。
+					slog.Info("补领上次吉星高照奖励未成功", "role_id", session.RoleID(),
+						"result", award.Msg)
 					return nil
 				}
 				prevAct = protocol.ActionIDRollCakeGetAward

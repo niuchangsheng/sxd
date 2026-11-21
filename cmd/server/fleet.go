@@ -191,7 +191,8 @@ func (p *rolePlan) fetchCredentials(ctx context.Context, ticketCache *platform.T
 			}
 			slog.Info("已成功全自动换取最新双轨凭据并直注会话",
 				"role_id", p.roleID, "server_id", p.cfg.ServerID,
-				"role_name", p.role.RoleName, "server_addr", p.cfg.ServerAddr)
+				"role_name", p.role.RoleName, "ticket_role_name", ticket.RoleName,
+				"server_addr", p.cfg.ServerAddr)
 		}
 	}
 

@@ -42,10 +42,10 @@ const (
 
 // QuestState 任务状态枚举
 const (
-	QuestStateUnaccepted   uint8 = 1 // 可接取
-	QuestStateIncompleted  uint8 = 0 // 进行中 (未完成目标)
-	QuestStateCompletable  uint8 = 1 // 已达成目标 (可交付NPC)
-	QuestStateFinished     uint8 = 2 // 已交付/已完成
+	QuestStateUnaccepted  uint8 = 1 // 可接取
+	QuestStateIncompleted uint8 = 0 // 进行中 (未完成目标)
+	QuestStateCompletable uint8 = 1 // 已达成目标 (可交付NPC)
+	QuestStateFinished    uint8 = 2 // 已交付/已完成
 )
 
 // GetNPCQuestsRequest 查询指定 NPC 任务列表请求。
@@ -96,6 +96,9 @@ func ParseNPCQuestsResponse(payload []byte) ([]NPCQuestItem, error) {
 	}
 	return items, nil
 }
+
+// QuestAcceptSucceed accept_quest (Module 3, Action 3) 的成功结果码。
+const QuestAcceptSucceed uint8 = 5
 
 // AcceptQuestRequest 接受任务请求。
 type AcceptQuestRequest struct {

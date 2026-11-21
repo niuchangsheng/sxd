@@ -19,6 +19,14 @@ import (
 // 对同一角色换任意关卡或载荷形态重试都不会恢复，必须直接熔断本轮试炼。
 var ErrBeelzebubTrialsNoResponse = errors.New("beelzebub trials request silently dropped by server")
 
+// ErrBeelzebubTrialsChallengeFailed 表示连续多个关卡都以明确的业务失败码被拒绝
+// （例如 code=6 INVALID_BEELZEBUB_TRIALS_ID）。
+//
+// 单关失败是正常业务分支，但连续 N 关都失败说明当前账号今日确实无法继续挑战
+// （关卡已打完/资格已耗尽/服务端版本不匹配），继续逐关重试只是浪费请求。
+// 调用方据此进入长冷却，而不是在每轮定时唤醒里把所有关卡再打一遍。
+var ErrBeelzebubTrialsChallengeFailed = errors.New("beelzebub trials consecutive challenge failures")
+
 const (
 	// beelzebubFightSettleDelay 战斗指令发出后等待服务端生成战报的结算时间。
 	beelzebubFightSettleDelay = 500 * time.Millisecond
@@ -36,6 +44,12 @@ const (
 	// 情况，也符合「挑战副本需 N 次失败才退出」的统一约定；单次开销仅多两个
 	// 建队超时（各约 10 秒），熔断后仍按 4 小时冷却。
 	beelzebubSilentDropThreshold = 3
+	// beelzebubChallengeFailureThreshold 连续多少个关卡以业务失败码被拒绝后终止本轮。
+	//
+	// 与静默丢包计数分开统计：两者都反映「服务端不接受当前请求」，但失败码会
+	// 重置静默计数，因此 code=6 这类明确拒绝此前会逐关打满整个列表。
+	// 按用户要求「挑战副本需 N 次失败才退出」，连续 3 关失败即熔断。
+	beelzebubChallengeFailureThreshold = 3
 )
 
 // beelzebubCandidate 魔王试炼可挑战关卡候选。
@@ -136,6 +150,9 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 
 	// silentDrops 记录连续被服务端静默丢弃的建队请求次数；成功或业务失败码会清零。
 	silentDrops := 0
+	// consecutiveFailures 记录连续以业务失败码被拒绝的关卡数；成功即清零。
+	// 达到阈值后终止本轮，避免在每轮定时唤醒里把整张列表重新打一遍。
+	consecutiveFailures := 0
 
 	for attempts := 0; attempts < beelzebubMaxChallenges; {
 		if ctx.Err() != nil {
@@ -199,6 +216,18 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 				}
 			} else {
 				silentDrops = 0
+				consecutiveFailures++
+				if consecutiveFailures >= beelzebubChallengeFailureThreshold {
+					slog.Info("魔王试炼连续多个关卡被业务拒绝，终止本轮并进入冷却",
+						"role_id", s.RoleID(),
+						"consecutive_failures", consecutiveFailures,
+						"boss_id", cand.id,
+						"boss_name", cand.name,
+						"error", cErr,
+					)
+					return results, fmt.Errorf("连续 %d 个关卡挑战失败（最后关卡 %d）: %v: %w",
+						consecutiveFailures, cand.id, cErr, ErrBeelzebubTrialsChallengeFailed)
+				}
 			}
 			slog.Warn("魔王试炼关卡挑战失败，继续尝试后续关卡",
 				"role_id", s.RoleID(),
@@ -209,7 +238,13 @@ func (s *RoleSession) BeelzebubTrialsAutoChallengeAll(ctx context.Context, prefe
 			)
 		} else if warRes != nil {
 			silentDrops = 0
+			consecutiveFailures = 0
 			results = append(results, warRes)
+		} else {
+			// 关卡未产生战报但也没有错误：视为服务端判定已完成/不可挑战，
+			// 不累计连续失败计数，避免把「已打过」的关卡当成业务拒绝。
+			silentDrops = 0
+			consecutiveFailures = 0
 		}
 
 		// 每关结束后立即刷新列表，尽早纳入新解锁的隐藏/神秘层关卡。
@@ -282,6 +317,14 @@ func mergeBeelzebubCandidates(queue *[]int32, seen map[int32]bool, fresh []int32
 	return added, newIDs
 }
 
+// beelzebubAlreadyDoneCode 判断建队回包码是否表示「该关卡今日已完成」。
+//
+// 13=TODAY_CHALLENGED、27=HASGET 都是服务端对已完成关卡的正常拒绝，
+// 既不是协议错误也不应触发连续失败熔断。
+func beelzebubAlreadyDoneCode(code uint8) bool {
+	return code == protocol.BeelzebubTrialsTodayChallenged || code == protocol.BeelzebubTrialsHasGet
+}
+
 // beelzebubChallengeOne 完成单个魔王关卡的挑战闭环。
 func (s *RoleSession) beelzebubChallengeOne(ctx context.Context, cand beelzebubCandidate) (*protocol.BeelzebubTrialsWarResult, error) {
 	cRes, err := s.BeelzebubTrialsCreateTeam(ctx, cand.id, protocol.BeelzebubTrialsNotLimit)
@@ -289,6 +332,13 @@ func (s *RoleSession) beelzebubChallengeOne(ctx context.Context, cand beelzebubC
 		// 静默丢弃属于协议/资格层面的确定性拒绝：换关卡或重发同样的建队包都不会恢复，
 		// 这里直接上抛，由 AutoChallengeAll 累计后熔断，避免多余退队与重试耗时。
 		return nil, fmt.Errorf("创建试炼队伍失败: %w", err)
+	}
+	// 明确表示「关卡今日已完成/奖励已领」的失败码不是异常，也不应计入连续失败，
+	// 直接跳过该关卡即可，避免反复退队重试与整张列表重新打一遍。
+	if err == nil && beelzebubAlreadyDoneCode(cRes) {
+		slog.Info("魔王试炼关卡今日已完成或奖励已领取，跳过",
+			"role_id", s.RoleID(), "boss_id", cand.id, "boss_name", cand.name, "code", cRes)
+		return nil, nil
 	}
 	if err != nil || cRes != protocol.BeelzebubTrialsSuccess {
 		// 上一关清理不彻底时服务端可能仍视角色处于队伍中，先退队再重试一次。
@@ -301,6 +351,11 @@ func (s *RoleSession) beelzebubChallengeOne(ctx context.Context, cand beelzebubC
 		cRes, err = s.BeelzebubTrialsCreateTeam(ctx, cand.id, protocol.BeelzebubTrialsNotLimit)
 		if err != nil {
 			return nil, fmt.Errorf("创建试炼队伍失败: %w", err)
+		}
+		if beelzebubAlreadyDoneCode(cRes) {
+			slog.Info("魔王试炼关卡今日已完成或奖励已领取，跳过",
+				"role_id", s.RoleID(), "boss_id", cand.id, "boss_name", cand.name, "code", cRes)
+			return nil, nil
 		}
 		if cRes != protocol.BeelzebubTrialsSuccess {
 			return nil, fmt.Errorf("创建试炼队伍被服务端拒绝 (code=%d)", cRes)

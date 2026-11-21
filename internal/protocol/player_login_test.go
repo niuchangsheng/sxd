@@ -237,3 +237,64 @@ func TestParsePlayerLoginResult_ZeroStaminaPresence(t *testing.T) {
 		t.Fatalf("元宝 0 应标记存在, got HasIngots=%v Ingots=%d", res.HasIngots, res.Ingots)
 	}
 }
+
+// TestParsePlayerLoginAuthResponse_OfficialLayout 使用 2026-11-21 s0/s1 实机回包
+// 验证官方 22 字节登录回包的字段解析与失败码语义。
+func TestParsePlayerLoginAuthResponse_OfficialLayout(t *testing.T) {
+	// s0 成功: result=0, pid=234797, uiSetValue=4229
+	okPayload, err := hex.DecodeString("000003952d0a000000000000000001000c0000108501")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := protocol.ParsePlayerLoginAuthResponse(okPayload)
+	if err != nil {
+		t.Fatalf("解析成功回包失败: %v", err)
+	}
+	if ok.GoldenLayout {
+		t.Fatal("官方 22 字节回包不应命中 Golden Case 2 布局")
+	}
+	if ok.ResultCode != protocol.PlayerLoginResultSucceed {
+		t.Fatalf("result = %d, want %d", ok.ResultCode, protocol.PlayerLoginResultSucceed)
+	}
+	if ok.PlayerID != 234797 {
+		t.Fatalf("playerID = %d, want 234797", ok.PlayerID)
+	}
+	if ok.UISetValue != 4229 || ok.IsNewUI != 1 {
+		t.Fatalf("uiSetValue/isNewUI = %d/%d, want 4229/1", ok.UISetValue, ok.IsNewUI)
+	}
+
+	// s1 失败: result=2 FIRST_TIME, pid=372205
+	firstTimePayload, err := hex.DecodeString("020005aded09000000000000000000010b00001c8001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft, err := protocol.ParsePlayerLoginAuthResponse(firstTimePayload)
+	if err != nil {
+		t.Fatalf("解析 FIRST_TIME 回包失败: %v", err)
+	}
+	if ft.ResultCode != protocol.PlayerLoginResultFirstTime {
+		t.Fatalf("result = %d, want FIRST_TIME(%d)", ft.ResultCode, protocol.PlayerLoginResultFirstTime)
+	}
+	if ft.PlayerID != 372205 {
+		t.Fatalf("playerID = %d, want 372205", ft.PlayerID)
+	}
+	if protocol.PlayerLoginResultText(ft.ResultCode) != "需要选择/创建角色" {
+		t.Fatalf("unexpected result text: %s", protocol.PlayerLoginResultText(ft.ResultCode))
+	}
+}
+
+// TestParsePlayerLoginAuthResponse_GoldenCase2 验证疯玩网关的 Golden Case 2 布局：
+// 前 4 字节保留 + 第 5 字节结果码，4 表示成功。
+func TestParsePlayerLoginAuthResponse_GoldenCase2(t *testing.T) {
+	payload, err := hex.DecodeString("00000000040a00000000000000000001000b0000108501")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := protocol.ParsePlayerLoginAuthResponse(payload)
+	if err != nil {
+		t.Fatalf("解析 Golden Case 2 失败: %v", err)
+	}
+	if !res.GoldenLayout || res.ResultCode != 4 {
+		t.Fatalf("golden=%v result=%d, want true/4", res.GoldenLayout, res.ResultCode)
+	}
+}

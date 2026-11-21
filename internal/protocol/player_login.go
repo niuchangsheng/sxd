@@ -20,6 +20,42 @@ var (
 	ErrPlayerLoginPayloadTooShort = errors.New("protocol: player login payload too short")
 )
 
+// 官方 Mod_Player_Base.login 回包结果码 (取自 AS3 Mod_Player_Base 常量表)。
+const (
+	// PlayerLoginResultSucceed 登录成功
+	PlayerLoginResultSucceed uint8 = 0
+	// PlayerLoginResultFailed 通用失败
+	PlayerLoginResultFailed uint8 = 1
+	// PlayerLoginResultFirstTime 服务端要求客户端选择/创建角色 (无角色或需选中角色)
+	PlayerLoginResultFirstTime uint8 = 2
+	// PlayerLoginResultKidLoginControl 防沉迷登录管控
+	PlayerLoginResultKidLoginControl uint8 = 4
+	// PlayerLoginResultDisableLogin 账号被禁止登录 (回包带 enableTime)
+	PlayerLoginResultDisableLogin uint8 = 6
+	// PlayerLoginResultIPLoginLimit IP 登录受限
+	PlayerLoginResultIPLoginLimit uint8 = 7
+)
+
+// PlayerLoginResultText 返回登录结果码的可读文本。
+func PlayerLoginResultText(code uint8) string {
+	switch code {
+	case PlayerLoginResultSucceed:
+		return "成功"
+	case PlayerLoginResultFailed:
+		return "失败"
+	case PlayerLoginResultFirstTime:
+		return "需要选择/创建角色"
+	case PlayerLoginResultKidLoginControl:
+		return "防沉迷登录管控"
+	case PlayerLoginResultDisableLogin:
+		return "账号被禁止登录"
+	case PlayerLoginResultIPLoginLimit:
+		return "IP 登录受限"
+	default:
+		return "未知结果码"
+	}
+}
+
 // PlayerLoginRequest 代表角色主服登录请求协议模型 (Mod_Player_Base.login, ActionID=0x00000000)。
 type PlayerLoginRequest struct {
 	// Username 平台登录账号
@@ -287,15 +323,34 @@ func isLikelyName(b []byte, offset int) (int, bool) {
 }
 
 // PlayerLoginAuthResponse 代表角色主服网关认证握手响应 (Module 0, Action 0)。
+//
+// 官方 AS3 的 login 回包 schema 为
+// [UByte result, Int playerID, UByte _, Int enableTime, Byte enableType,
+//
+//	Int allActivity, Byte isOpenMusic, UByte warEffectType, Int uiSetValue, Byte isNewUI]，
+//
+// 共 22 字节；结果码 0=SUCCEED、1=FAILED、2=FIRST_TIME(要求选择/创建角色)、
+// 4=KID_LOGIN_CONTROL、6=DISABLE_LOGIN、7=IP_LOGIN_LIMIT 等。
+// Golden Case 2（疯玩网关）是另一套布局：前 4 字节 Reserved=0，第 5 字节为结果码，
+// 该格式下 4 代表登录成功。
 type PlayerLoginAuthResponse struct {
 	Reserved   uint32
-	ResultCode uint8 // 0 或 4 代表登录成功
-	PlayerID   int32 // 官方协议返回的角色在当前区服 ID
+	ResultCode uint8
+	PlayerID   int32
+	// GoldenLayout 为 true 表示命中 Golden Case 2（4 字节保留 + 结果码）布局。
+	GoldenLayout bool
+	// EnableTime/EnableType 仅在 DISABLE_LOGIN 等封禁类结果码下有意义。
+	EnableTime int32
+	EnableType int8
+	// UISetValue 与 IsNewUI 为官方回包附带的前端配置。
+	UISetValue int32
+	IsNewUI    uint8
 	RawPayload []byte
 }
 
 // ParsePlayerLoginAuthResponse 解析角色网关登录认证握手响应。
-// 兼容官方协议 (首字节为 ResultCode=0，紧跟 4B PlayerID) 与 Golden Case 2 (前导 4 字节保留，第 5 字节为 ResultCode=4)。
+// 兼容官方协议 (首字节为 ResultCode，紧跟 4B PlayerID) 与 Golden Case 2
+// (前导 4 字节保留，第 5 字节为 ResultCode，4 表示成功)。
 //
 // @param payload 原始封包载荷切片
 // @return 登录认证响应模型或错误
@@ -311,28 +366,44 @@ func ParsePlayerLoginAuthResponse(payload []byte) (*PlayerLoginAuthResponse, err
 		code, _ := r.ReadUint8()
 		if reserved == 0 && (code >= 1 && code <= 4) {
 			return &PlayerLoginAuthResponse{
-				Reserved:   reserved,
-				ResultCode: code,
-				RawPayload: payload,
+				Reserved:     reserved,
+				ResultCode:   code,
+				GoldenLayout: true,
+				RawPayload:   payload,
 			}, nil
 		}
 	}
 
-	// 2. 官方协议格式: 首字节直接为 ResultCode (0 为成功)，随后紧跟 4 字节 PlayerID
-	if payload[0] == 0 && len(payload) >= 5 {
-		r := NewReader(payload[1:])
-		pid, _ := r.ReadInt32()
-		return &PlayerLoginAuthResponse{
-			ResultCode: 0,
-			PlayerID:   pid,
-			RawPayload: payload,
-		}, nil
-	}
-
-	return &PlayerLoginAuthResponse{
+	// 2. 官方协议格式: 首字节为 ResultCode，随后紧跟 4 字节 PlayerID。
+	// 注意不能只在 ResultCode==0 时解析：失败码 2/6/7 同样带完整 22 字节结构，
+	// 只有解析出 enableTime/enableType 才能给用户明确原因。
+	res := &PlayerLoginAuthResponse{
 		ResultCode: payload[0],
 		RawPayload: payload,
-	}, nil
+	}
+	if len(payload) >= 5 {
+		r := NewReader(payload[1:])
+		pid, _ := r.ReadInt32()
+		res.PlayerID = pid
+	}
+	if len(payload) >= 22 {
+		// [UByte result][Int pid][UByte x][Int enableTime][Byte enableType]
+		// [Int allActivity][Byte openMusic][UByte warEffect][Int uiSet][Byte newUI]
+		r := NewReader(payload[5:])
+		_, _ = r.ReadUint8() // 保留字段
+		enableTime, _ := r.ReadInt32()
+		enableType, _ := r.ReadInt8()
+		_, _ = r.ReadInt32() // allActivity
+		_, _ = r.ReadUint8() // isOpenMusic
+		_, _ = r.ReadUint8() // warEffectType
+		uiSet, _ := r.ReadInt32()
+		newUI, _ := r.ReadUint8()
+		res.EnableTime = enableTime
+		res.EnableType = enableType
+		res.UISetValue = uiSet
+		res.IsNewUI = newUI
+	}
+	return res, nil
 }
 
 // BuildPlayerInitStep1Packet 构造角色场景初始化握手步 1 封包 (ActionID 0x00000048)。

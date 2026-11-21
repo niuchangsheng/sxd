@@ -103,6 +103,9 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 10 * time.Second
 	const fightTimeout = 25 * time.Second
 	const maxFights = 20
+	// devilMaxConsecutiveTeamFailures 连续多少个怪物队伍战斗失败后结束该关卡。
+	// 按用户约定「挑战副本需 N 次失败才退出」，避免把整张队伍列表都打一遍。
+	const devilMaxConsecutiveTeamFailures = 3
 
 	return scheduler.NewBaseRoutine(
 		"devil_expedition",
@@ -305,9 +308,12 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 					_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
 					continue
 				}
-				// 按队伍逐个尝试：当前队伍战斗失败后切换到下一个队伍，全部失败才结束。
+				// 按队伍逐个尝试：当前队伍战斗失败后切换到下一个队伍。
+				// 连续 3 个队伍都失败说明当前关卡今天已打不过，直接结束该关卡，
+				// 避免把整个队伍列表（可能十几个）逐个打一遍。
 				teamIdx := 0
 				fights := 0
+				consecutiveFailures := 0
 				for fights < maxFights && ctx.Err() == nil && teamIdx < len(teams) {
 					teamID := teams[teamIdx]
 					pos := devilTeamPos(missionType, teamID)
@@ -328,12 +334,21 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 						break
 					}
 					if fightCode != protocol.DevilResultSuccess {
+						consecutiveFailures++
 						slog.Info("魔界远征队伍战斗结束", "role_id", session.RoleID(),
 							"mission", name, "team_id", teamID, "fights", fights,
+							"consecutive_failures", consecutiveFailures,
 							"result", fightCode, "result_text", protocol.DevilResultText(fightCode))
+						if consecutiveFailures >= devilMaxConsecutiveTeamFailures {
+							slog.Info("魔界远征连续多个队伍战斗失败，结束该关卡",
+								"role_id", session.RoleID(), "mission", name,
+								"consecutive_failures", consecutiveFailures)
+							break
+						}
 						teamIdx++
 						continue
 					}
+					consecutiveFailures = 0
 					fights++
 					slog.Info("魔界远征战斗成功", "role_id", session.RoleID(),
 						"mission", name, "fights", fights, "team_id", teamID)

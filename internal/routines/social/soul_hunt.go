@@ -88,7 +88,9 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 					return scheduler.HandleSilentDrop(session, "soul_hunt", 3,
 						10*time.Minute, "灵域猎妖关卡面板无回包")
 				}
-				scheduler.ResetSilentDrops(session, "soul_hunt")
+				// 关卡面板成功不代表挑战动作可用（当日次数耗尽时服务端可能只丢 669/5）。
+				// 计数只在挑战请求真正回包后清零，否则每轮都会被面板成功重置，
+				// 永远达不到 3 次熔断阈值（与飞升灌注/万古神墟同类缺陷）。
 				if code, pErr := protocol.ParseSoulHuntResult(challengeResp.Payload); pErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "灵域猎妖关卡面板解析失败")
 				} else if code != protocol.SoulHuntSuccess {

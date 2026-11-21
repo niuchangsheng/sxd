@@ -2011,36 +2011,66 @@ func NewXunXianRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			// 2. 依次挑战节点 (依据抓包 0xBC, 0xBD, 0xBE) 并领取节点宝箱 (Act 13)
-			nodes := []int32{0xBC, 0xBD, 0xBE}
-			var clearedCount int
+			// 2. 依次领取节点奖励 (Mod 466 Act 3 get_award) 并一键领取全部奖励 (Act 16)。
+			//    官方 Mod_SeekImmortalRoad_Base 中 Action 3 的响应为
+			//    [UByte result, [Int,Int] awards]，0=SUCCESS、6=已领取；
+			//    Action 13 是 fairyland_status（查询），不能当作领奖使用。
+			awards := []int32{0xBC, 0xBD, 0xBE}
+			var claimedCount int
+			consecutiveFailures := 0
 
-			for _, nID := range nodes {
-				chalPkt := protocol.BuildXunXianChallengePacket(nID, protocol.ActionIDXunXianGetProgress)
+			for _, awardID := range awards {
+				awPkt := protocol.BuildXunXianChallengePacket(awardID, protocol.ActionIDXunXianGetProgress)
 				cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
-				cResp, cErr := session.Call(cCtx, chalPkt, protocol.ActionIDXunXianChallenge)
+				cResp, cErr := session.Call(cCtx, awPkt, protocol.ActionIDXunXianChallenge)
 				cCancel()
 
-				if cErr == nil && cResp != nil {
-					// 领取节点宝箱 (Act 13)。奖励类请求必须解析回包，否则静默
-					// 丢弃时会出现「节点已挑战但资源没变化」且无从排查。
-					chestPkt := protocol.BuildXunXianClaimChestPacket(protocol.ActionIDXunXianChallenge)
-					chCtx, chCancel := context.WithTimeout(ctx, 8*time.Second)
-					chResp, chErr := session.Call(chCtx, chestPkt, protocol.ActionIDXunXianClaimChest)
-					chCancel()
-					switch {
-					case chErr != nil || chResp == nil || len(chResp.Payload) == 0:
-						slog.Warn("寻仙之路宝箱领取无回包", "role_id", session.RoleID(),
-							"node_id", nID, "err", chErr)
-					case chResp.Payload[0] != 0:
-						slog.Info("寻仙之路宝箱领取结果码非 0", "role_id", session.RoleID(),
-							"node_id", nID, "result", chResp.Payload[0])
+				if cErr != nil || cResp == nil || len(cResp.Payload) == 0 {
+					slog.Info("寻仙之路节点奖励无回包", "role_id", session.RoleID(),
+						"award_id", awardID, "err", cErr)
+					consecutiveFailures++
+				} else {
+					switch code := cResp.Payload[0]; code {
+					case protocol.XunXianResultSuccess:
+						claimedCount++
+						consecutiveFailures = 0
+						slog.Info("寻仙之路节点奖励领取成功", "role_id", session.RoleID(),
+							"award_id", awardID)
+					case protocol.XunXianResultIsGet:
+						consecutiveFailures = 0
+						slog.Info("寻仙之路节点奖励已领取", "role_id", session.RoleID(),
+							"award_id", awardID)
+					case protocol.XunXianResultItemPackFull:
+						return scheduler.ErrBagFull
+					default:
+						consecutiveFailures++
+						slog.Info("寻仙之路节点奖励领取未成功", "role_id", session.RoleID(),
+							"award_id", awardID, "result", code)
 					}
-					clearedCount++
+				}
+				if consecutiveFailures >= 3 {
+					slog.Info("寻仙之路连续多个节点失败，结束本轮",
+						"role_id", session.RoleID(), "consecutive_failures", consecutiveFailures)
+					break
 				}
 			}
 
-			slog.Info("寻仙之路节点挑战与宝箱领取完成", "role_id", session.RoleID(), "cleared_nodes", clearedCount)
+			// 一键领取剩余全部奖励 (466/16)，响应 [UByte result, [Int,Int]]。
+			onePkt := protocol.BuildXunXianOneClickAwardPacket(protocol.ActionIDXunXianChallenge)
+			oCtx, oCancel := context.WithTimeout(ctx, 8*time.Second)
+			oResp, oErr := session.Call(oCtx, onePkt, protocol.ActionIDXunXianOneClickAward)
+			oCancel()
+			if oErr != nil || oResp == nil || len(oResp.Payload) == 0 {
+				slog.Warn("寻仙之路一键领取无回包", "role_id", session.RoleID(), "err", oErr)
+			} else if code := oResp.Payload[0]; code != protocol.XunXianResultSuccess && code != protocol.XunXianResultIsGet {
+				if code == protocol.XunXianResultItemPackFull {
+					return scheduler.ErrBagFull
+				}
+				slog.Info("寻仙之路一键领取未成功", "role_id", session.RoleID(), "result", code)
+			}
+
+			slog.Info("寻仙之路节点奖励领取完成", "role_id", session.RoleID(),
+				"claimed_nodes", claimedCount)
 			return nil
 		},
 	)
@@ -2625,14 +2655,26 @@ func executeQuestCycle(
 
 				accPkt, _ := protocol.BuildAcceptQuestPacket(protocol.AcceptQuestRequest{QuestID: it.QuestID})
 				accCtx, accCancel := context.WithTimeout(ctx, 8*time.Second)
-				_, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
+				accResp, accErr := session.Call(accCtx, accPkt, protocol.ActionIDQuestAccept)
 				accCancel()
 
-				if accErr == nil {
+				// 回包解析铁律：accept_quest 回包为 UByte result，5=SUCCEED。
+				// 只有确认成功后才推进本地任务状态，避免「回包到达但接取失败」
+				// 导致后续任务链推进全部错位。
+				if accErr == nil && accResp != nil && len(accResp.Payload) > 0 && accResp.Payload[0] == protocol.QuestAcceptSucceed {
 					session.SetQuestState(questID, 0)
 					progressMade = true
 					slog.Info("成功接受任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 					time.Sleep(50 * time.Millisecond)
+				} else if accErr != nil {
+					slog.Info("接取任务无回包，保留待下次重试", "role_id", session.RoleID(),
+						"quest_id", it.QuestID, "title", title, "err", accErr)
+				} else if accResp == nil || len(accResp.Payload) == 0 {
+					slog.Warn("接取任务回包为空，保留待下次重试", "role_id", session.RoleID(),
+						"quest_id", it.QuestID, "title", title)
+				} else {
+					slog.Info("接取任务未成功", "role_id", session.RoleID(),
+						"quest_id", it.QuestID, "title", title, "result", accResp.Payload[0])
 				}
 			}
 		}
@@ -4346,11 +4388,20 @@ func challengeStoryMission(
 	boxCtx, boxCancel := context.WithTimeout(ctx, 8*time.Second)
 	boxResp, boxErr := session.Call(boxCtx, protocol.BuildMissionOpenBoxPacket(protocol.ActionIDMissionRank), protocol.ActionIDMissionOpenBox)
 	boxCancel()
-	if boxErr != nil || boxResp == nil {
+	if boxErr != nil || boxResp == nil || len(boxResp.Payload) == 0 {
 		if errSessionTerminated(ctx, boxErr) {
 			return false
 		}
 		slog.Warn("副本通关宝箱开启未收到有效响应", "role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name, "err", boxErr)
+		resetTownScene(session)
+		return false
+	}
+	// 回包解析铁律：open_box 首字节为结果码，0=成功。非成功时服务端不会掉落奖励，
+	// 若继续拾取并本地记账就会出现「任务显示通关但资源没变化」。
+	if boxResp.Payload[0] != 0 {
+		slog.Warn("副本通关宝箱开启失败，放弃本关记账",
+			"role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name,
+			"result", boxResp.Payload[0])
 		resetTownScene(session)
 		return false
 	}
@@ -4359,11 +4410,18 @@ func challengeStoryMission(
 	pickCtx, pickCancel := context.WithTimeout(ctx, 8*time.Second)
 	pickResp, pickErr := session.Call(pickCtx, protocol.BuildMissionPickupAwardPacket(protocol.ActionIDMissionOpenBox), protocol.ActionIDMissionPickupAward)
 	pickCancel()
-	if pickErr != nil || pickResp == nil {
+	if pickErr != nil || pickResp == nil || len(pickResp.Payload) == 0 {
 		if errSessionTerminated(ctx, pickErr) {
 			return false
 		}
 		slog.Warn("副本结算奖励拾取未收到有效响应", "role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name, "err", pickErr)
+		resetTownScene(session)
+		return false
+	}
+	if pickResp.Payload[0] != 0 {
+		slog.Warn("副本结算奖励拾取失败，放弃本关记账",
+			"role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name,
+			"result", pickResp.Payload[0])
 		resetTownScene(session)
 		return false
 	}

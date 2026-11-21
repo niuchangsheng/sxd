@@ -670,6 +670,9 @@ func BuildXunXianChallengePacket(nodeID int32, prevAct uint32) *Packet {
 }
 
 // BuildXunXianClaimChestPacket 构造领取寻仙之路通关宝箱封包 (Module 466, Action 13)。
+//
+// Deprecated: Action 13 官方为 fairyland_status（查询，不领奖）。领奖请用
+// BuildXunXianOneClickAwardPacket (Action 16)。
 func BuildXunXianClaimChestPacket(prevAct uint32) *Packet {
 	w := NewWriter()
 	if prevAct == 0 {
@@ -677,6 +680,16 @@ func BuildXunXianClaimChestPacket(prevAct uint32) *Packet {
 	}
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDXunXianClaimChest, w.Bytes())
+}
+
+// BuildXunXianOneClickAwardPacket 构造一键领取寻仙之路全部奖励封包 (Module 466, Action 16)。
+func BuildXunXianOneClickAwardPacket(prevAct uint32) *Packet {
+	w := NewWriter()
+	if prevAct == 0 {
+		prevAct = ActionIDXunXianChallenge
+	}
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDXunXianOneClickAward, w.Bytes())
 }
 
 // --------------------------------------------------------------------------------

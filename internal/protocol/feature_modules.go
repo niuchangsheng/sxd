@@ -160,7 +160,21 @@ const (
 	// ActionIDXunXianChallenge 挑战寻仙之路关卡节点 (Module 466, Action 3 -> 0x01D20003)
 	ActionIDXunXianChallenge uint32 = 0x01D20003
 	// ActionIDXunXianClaimChest 领取寻仙之路通关宝箱 (Module 466, Action 13 -> 0x01D2000D)
+	//
+	// Deprecated: 按 Main.swf 的 Mod_SeekImmortalRoad_Base，Action 13 实际是
+	// fairyland_status（查询仙界状态，无奖励）。保留常量仅为兼容旧引用。
 	ActionIDXunXianClaimChest uint32 = 0x01D2000D
+	// ActionIDXunXianOneClickAward 一键领取寻仙之路全部奖励 (Module 466, Action 16 -> 0x01D20010)
+	ActionIDXunXianOneClickAward uint32 = 0x01D20010
+
+	// XunXianResultSuccess 寻仙之路操作成功
+	XunXianResultSuccess uint8 = 0
+	// XunXianResultFailed 寻仙之路操作失败
+	XunXianResultFailed uint8 = 4
+	// XunXianResultIsGet 奖励已领取
+	XunXianResultIsGet uint8 = 6
+	// XunXianResultItemPackFull 背包已满
+	XunXianResultItemPackFull uint8 = 8
 
 	// ActionIDDemonTowerPanel 查询锁妖塔主面板 (Module 705, Action 0 -> 0x02C10000)
 	ActionIDDemonTowerPanel uint32 = 0x02C10000

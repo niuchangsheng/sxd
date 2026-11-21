@@ -86,3 +86,39 @@ func TestPartnerGuessRoutine_StartPackFullWithFullBagReturnsBagFull(t *testing.T
 		t.Fatalf("背包无空格时应返回 ErrBagFull, got %v", err)
 	}
 }
+
+// TestPartnerGuessRoutine_ScrapeFailureStops 验证刮图回包返回失败码时立即停止刮图，
+// 不再按剩余次数空转，并继续进入作答环节。
+func TestPartnerGuessRoutine_ScrapeFailureStops(t *testing.T) {
+	var scrapeCalls, guessCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDGuessPartnerInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildGuessPartnerInfoResultPacket(5))
+		case protocol.ActionIDGuessPartnerStart:
+			_ = protocol.WritePacket(conn, protocol.BuildGuessPartnerStartResultPacket(protocol.GuessPartnerRound{
+				Result:            protocol.GuessPartnerResultSuccess,
+				RemainScrapeTimes: 3,
+				RemainGuessTimes:  1,
+				RoleIDs:           []int32{101, 102},
+			}))
+		case protocol.ActionIDGuessPartnerScrape:
+			scrapeCalls.Add(1)
+			// 失败码：2=ERROR，服务端未继续消耗刮图次数。
+			_ = protocol.WritePacket(conn, protocol.BuildGuessPartnerScrapeResultPacket(protocol.GuessPartnerResultError, 3))
+		case protocol.ActionIDGuessPartnerGuess:
+			guessCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildGuessPartnerGuessResultPacket(protocol.GuessPartnerResultWrong, 0, 0, 0))
+		}
+	})
+
+	if err := NewPartnerGuessRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("partner guess: %v", err)
+	}
+	if got := scrapeCalls.Load(); got != 1 {
+		t.Fatalf("刮图失败后应立即停止, scrape calls = %d", got)
+	}
+	if got := guessCalls.Load(); got != 1 {
+		t.Fatalf("刮图失败后仍应进入作答, guess calls = %d", got)
+	}
+}

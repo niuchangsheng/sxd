@@ -91,7 +91,6 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 							"chapter_id", chapterID)
 						break
 					}
-					scheduler.ResetSilentDrops(session, "wuliang_jiehai")
 					chapter, cErr := protocol.ParseEraInfiniteChapter(chapterResp.Payload)
 					if cErr != nil {
 						slog.Warn("解析无量劫海章节面板失败，本轮跳过", "role_id", session.RoleID(), "err", cErr)
@@ -120,8 +119,12 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 					fightResp := call(protocol.BuildEraInfiniteFightPacket(level),
 						protocol.ActionIDEraInfiniteFight, fightTimeout)
 					if fightResp == nil {
-						return scheduler.NewCooldown(10*time.Minute, "无量劫海挑战无回包")
+						// 章节面板正常但挑战动作被静默丢弃：按连续丢包退避，
+						// 避免每 10 分钟重试一次直到天亮。计数只在挑战真正回包时清零。
+						return scheduler.HandleSilentDrop(session, "wuliang_jiehai", 3,
+							10*time.Minute, "无量劫海挑战无回包")
 					}
+					scheduler.ResetSilentDrops(session, "wuliang_jiehai")
 					res, fErr := protocol.ParseEraInfiniteFightResult(fightResp.Payload)
 					if fErr != nil {
 						return scheduler.NewCooldown(10*time.Minute, "无量劫海挑战回包解析失败")

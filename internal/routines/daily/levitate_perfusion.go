@@ -66,9 +66,11 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 				// 因此面板无回包时仍尝试一次 357/1，以结果码为准。
 				slog.Info("飞升信息面板无回包，直接尝试灌注一次（以结果码判断状态）",
 					"role_id", session.RoleID())
-			} else {
-				scheduler.ResetSilentDrops(session, "levitate_perfusion")
 			}
+			// 注意：面板 357/0 回包成功不代表灌注动作 357/1 可用。早期实现在这里
+			// ResetSilentDrops，导致「面板正常、灌注被静默丢弃」时连续丢包计数每轮
+			// 都被清零，永远达不到熔断阈值（2026-11-21 线上 30 分钟一轮空转）。
+			// 计数只在灌注请求真正得到回包后清零。
 
 			perfused := 0
 			for perfused < maxLevitatePerfusions && ctx.Err() == nil {

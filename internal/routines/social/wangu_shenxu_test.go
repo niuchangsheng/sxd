@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
@@ -184,6 +185,49 @@ func TestWanguShenxuRoutine_HasWorshippedIsSuccess(t *testing.T) {
 	}
 	if n := scheduler.SilentDropCount(sess, "wangu_shenxu"); n != 0 {
 		t.Fatalf("已膜拜不应累计丢包计数, got %d", n)
+	}
+}
+
+// TestWanguShenxuRoutine_PanelOKWorshipDroppedAccumulates 验证主面板 840/0 正常回包、
+// 但膜拜 840/1 被静默丢弃时，连续丢包计数不会被面板成功清零：
+// 第 3 轮必须熔断到每日重置，而不是无限按 1 小时重试。
+func TestWanguShenxuRoutine_PanelOKWorshipDroppedAccumulates(t *testing.T) {
+	panel := buildWanguShenxuPanelPayload([]protocol.WanguShenxuPlayer{
+		{Type: 3, Season: 15, PlayerID: 259239},
+	}, 0)
+
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		if pkt.ActionID == protocol.ActionIDWanguShenxuMainInfo {
+			_ = protocol.WritePacket(conn, protocol.NewPacket(
+				protocol.ActionIDWanguShenxuMainInfo, panel))
+		}
+		// 840/1 膜拜静默丢弃：不回包。
+	})
+	defer sess.Close()
+	scheduler.ResetSilentDrops(sess, "wangu_shenxu")
+
+	routine := NewWanguShenxuRoutine()
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		lastErr = routine.Execute(context.Background(), sess, nil)
+		if lastErr == nil {
+			t.Fatalf("第 %d 轮膜拜静默丢包应返回冷却错误", i+1)
+		}
+	}
+	if n := scheduler.SilentDropCount(sess, "wangu_shenxu"); n < 3 {
+		t.Fatalf("面板成功不应清零膜拜丢包计数, got %d", n)
+	}
+	var cd *scheduler.CooldownError
+	if !errors.As(lastErr, &cd) {
+		t.Fatalf("达到阈值后应返回 CooldownError, got %v", lastErr)
+	}
+	// HandleSilentDrop 到阈值后挂起至 min(次日 00:05, 6 小时)。
+	exp := scheduler.NextDailyReset(time.Now())
+	if cap := time.Now().Add(6 * time.Hour); exp.After(cap) {
+		exp = cap
+	}
+	if d := cd.Until.Sub(exp); d > time.Minute || d < -time.Minute {
+		t.Fatalf("熔断唤醒时间 = %s, want %s", cd.Until, exp)
 	}
 }
 

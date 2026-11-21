@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -668,7 +669,8 @@ func TestDungeonSweep_QuestCycleCompleteFlow(t *testing.T) {
 			recordEvent("accept_quest")
 			// 接取后，NPC 处不再提供该任务
 			questOffered.Store(false)
-			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x00}))
+			// accept_quest 成功码为 5 (SUCCEED)，0 是失败码。
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{protocol.QuestAcceptSucceed}))
 			return true
 
 		case protocol.ActionIDPracticeStart:
@@ -2777,5 +2779,88 @@ func TestDungeonSweep_HeroMission_MultiTown(t *testing.T) {
 	}
 	if !seen[4] || !seen[7] {
 		t.Fatalf("期望扫荡城镇 4 与 7, 实际 %v", startedTowns)
+	}
+}
+
+// TestDungeonSweep_AcceptQuestFailureDoesNotAdvance 验证 accept_quest 返回失败码 (0)
+// 时不得把任务写入本地进行中状态，也不得推进后续关卡挑战与交付。
+func TestDungeonSweep_AcceptQuestFailureDoesNotAdvance(t *testing.T) {
+	sess, srvConn := createTestSession(t, 50)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	sess.UpdatePlayerState(func(ps *client.PlayerState) {
+		ps.TownID = 22
+		ps.Level = 35
+	})
+
+	repo := &mockQuestDungeonRepo{
+		townNPCs: map[int][]int{22: {48}},
+		quests: map[int]*dictionary.Quest{
+			145: {
+				ID: 145, Type: 2, Title: "蚕丝",
+				BeginNPCID: 48, EndNPCID: 48,
+				MissionID: 88, AwardExp: 5000, AwardCoins: 20000,
+			},
+		},
+	}
+
+	var events []string
+	var eventsMu sync.Mutex
+	recordEvent := func(evt string) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, evt)
+	}
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDQuestGetNPCQuests:
+			w := protocol.NewWriter()
+			// 始终提供一个可接任务，模拟接取失败后任务仍然待接。
+			w.WriteUint16(1)
+			w.WriteInt32(145)
+			w.WriteUint8(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestGetNPCQuests, w.Bytes()))
+			return true
+		case protocol.ActionIDQuestAccept:
+			recordEvent("accept_quest")
+			// 失败码：0 != SUCCEED(5)。
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionIDQuestAccept, []byte{0x00}))
+			return true
+		case protocol.ActionIDPracticeStart,
+			protocol.ActionIDQuestComplete,
+			protocol.ActionIDMissionPlotEnter:
+			recordEvent("unexpected_" + strconv.FormatUint(uint64(pkt.ActionID), 16))
+			return false
+		}
+		return false
+	})
+
+	routine := dungeon.NewDungeonSweepRoutine(repo, dungeon.SweepConfig{
+		Pipeline: []string{"push_side"},
+	})
+	if err := routine.Execute(context.Background(), sess, nil); err != nil &&
+		!errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("任务循环执行失败: %v", err)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	sawAccept := false
+	for _, evt := range events {
+		if evt == "accept_quest" {
+			sawAccept = true
+			continue
+		}
+		if strings.HasPrefix(evt, "unexpected_") {
+			t.Fatalf("接取失败后不应继续推进任务流程, 实际调用: %s (events=%v)", evt, events)
+		}
+	}
+	if !sawAccept {
+		t.Fatalf("应至少尝试一次接取任务, events=%v", events)
+	}
+	if _, ok := sess.GetQuests()[145]; ok {
+		t.Fatalf("接取失败时不得写入本地进行中任务, quests=%v", sess.GetQuests())
 	}
 }

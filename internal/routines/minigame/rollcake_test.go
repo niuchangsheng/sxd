@@ -4,7 +4,14 @@
 // @since 2026-11-02
 package minigame
 
-import "testing"
+import (
+	"context"
+	"net"
+	"sync/atomic"
+	"testing"
+
+	"sxd-pie-ng/internal/protocol"
+)
 
 func TestShouldRerollRollCake(t *testing.T) {
 	cases := []struct {
@@ -58,5 +65,36 @@ func TestAllRollCakeJi(t *testing.T) {
 	}
 	if allRollCakeJi(nil) {
 		t.Error("空骰子不应判定为全吉")
+	}
+}
+
+// TestRollCakeRoutine_AwardFailureStops 验证补领回包结果码非成功时，
+// 不得继续查询次数/投掷（否则会掩盖「奖励没到账却继续推进」）。
+func TestRollCakeRoutine_AwardFailureStops(t *testing.T) {
+	var countCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDRollCakeGetState:
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.RollCakeCodeHaveRecord)
+			w.WriteInt8(3)  // type
+			w.WriteInt32(0) // reroll_ingot
+			for i := 0; i < 6; i++ {
+				w.WriteInt8(4)
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDRollCakeGetAward:
+			// 回包到达但领奖失败。
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.RollCakeCodeFailure}))
+		case protocol.ActionIDRollCakeGetCount:
+			countCalls.Add(1)
+		}
+	})
+
+	if err := NewLuckyStarRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("rollcake: %v", err)
+	}
+	if got := countCalls.Load(); got != 0 {
+		t.Fatalf("补领失败后不应继续查询次数, count calls = %d", got)
 	}
 }

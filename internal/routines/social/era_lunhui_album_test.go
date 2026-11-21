@@ -2,11 +2,14 @@ package social
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/scheduler"
 )
 
 func TestEraLunHuiAlbumRoutine_ClaimsUnclaimed(t *testing.T) {
@@ -47,6 +50,53 @@ func TestEraLunHuiAlbumRoutine_ClaimsUnclaimed(t *testing.T) {
 	}
 	if claimCalls.Load() != 2 {
 		t.Fatalf("应只对两个未领取任务发起领取, calls = %d", claimCalls.Load())
+	}
+}
+
+// TestEraLunHuiAlbumRoutine_TaskListOKClaimDroppedBacksOff 验证任务列表 882/1 正常回包、
+// 但领奖 882/2 被静默丢弃时，连续丢包计数不会被列表成功清零：
+// 连续 3 轮后挂起到每日重置。
+func TestEraLunHuiAlbumRoutine_TaskListOKClaimDroppedBacksOff(t *testing.T) {
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDEraLunHuiPanel:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDEraLunHuiRedDotStatus:
+			w := protocol.NewWriter().WriteUint8(0).WriteUint16(1)
+			w.WriteInt32(1).WriteInt32(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDEraLunHuiTaskInfo:
+			_ = protocol.WritePacket(conn, protocol.BuildEraLunHuiTasksResultPacket(
+				[]protocol.EraLunHuiTask{{ID: 101, State: 10, Claimed: 0}}, 1))
+		case protocol.ActionIDEraLunHuiGetTask:
+			// 静默丢弃：不回包。
+		}
+	})
+	defer sess.Close()
+	scheduler.ResetSilentDrops(sess, "era_lunhui_album")
+
+	routine := NewEraLunHuiAlbumRoutine()
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		lastErr = routine.Execute(context.Background(), sess, nil)
+		if lastErr == nil {
+			t.Fatalf("第 %d 轮领奖无回包应返回冷却错误", i+1)
+		}
+	}
+	if n := scheduler.SilentDropCount(sess, "era_lunhui_album"); n < 3 {
+		t.Fatalf("任务列表成功不应清零领奖丢包计数, got %d", n)
+	}
+	var cd *scheduler.CooldownError
+	if !errors.As(lastErr, &cd) {
+		t.Fatalf("达到阈值后应返回 CooldownError, got %v", lastErr)
+	}
+	// HandleSilentDrop 到阈值后挂起至 min(次日 00:05, 6 小时)。
+	exp := scheduler.NextDailyReset(time.Now())
+	if cap := time.Now().Add(6 * time.Hour); exp.After(cap) {
+		exp = cap
+	}
+	if d := cd.Until.Sub(exp); d > time.Minute || d < -time.Minute {
+		t.Fatalf("熔断唤醒时间 = %s, want %s", cd.Until, exp)
 	}
 }
 

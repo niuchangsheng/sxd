@@ -104,7 +104,9 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 					return scheduler.HandleSilentDrop(session, "era_lunhui_album", 3,
 						time.Hour, "轮回图录任务列表无回包")
 				}
-				scheduler.ResetSilentDrops(session, "era_lunhui_album")
+				// 任务列表成功不代表领奖动作可用：这里不 ResetSilentDrops，
+				// 否则「列表正常、领奖被静默丢弃」时每轮计数都被清零，
+				// 永远达不到熔断阈值。计数只在领奖真正回包后清零。
 				tasks, err := protocol.ParseEraLunHuiTasks(infoResp.Payload)
 				if err != nil {
 					slog.Warn("解析轮回图录任务列表失败", "role_id", session.RoleID(),
@@ -123,8 +125,12 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 					resp := call(protocol.BuildEraLunHuiGetTaskPacket(t.ID),
 						protocol.ActionIDEraLunHuiGetTask)
 					if resp == nil {
-						return scheduler.NewCooldown(10*time.Minute, "轮回图录领取无回包")
+						// 按日状态结束后领奖请求会被静默丢弃：连续 3 次挂起，
+						// 避免每 10 分钟空转。
+						return scheduler.HandleSilentDrop(session, "era_lunhui_album", 3,
+							time.Hour, "轮回图录领取无回包")
 					}
+					scheduler.ResetSilentDrops(session, "era_lunhui_album")
 					code, cErr := protocol.ParseEraLunHuiResult(resp.Payload)
 					if cErr != nil {
 						continue

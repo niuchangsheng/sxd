@@ -252,3 +252,67 @@ func TestDevilMaterialCapped(t *testing.T) {
 		t.Fatal("炼化 20/20 应判定达上限")
 	}
 }
+
+// TestDevilExpeditionRoutine_StopsAfterConsecutiveTeamFailures 验证连续 3 个队伍
+// 战斗失败后结束该关卡，而不是把整张队伍列表逐个打一遍。
+func TestDevilExpeditionRoutine_StopsAfterConsecutiveTeamFailures(t *testing.T) {
+	var fightCalls, quitCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetFunctions:
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(
+				[]int32{protocol.FunctionIDDevilExpedition}))
+		case protocol.ActionIDDevilActivityStatus:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DevilActivityOpen}))
+		case protocol.ActionIDDevilMatchPanel:
+			_ = protocol.WritePacket(conn, protocol.BuildDevilMatchPanelResultPacket(devilPanel(
+				0, 0, []protocol.DevilSoul{{RoleID: 486, WeekMaxSoul: 20}})))
+		case protocol.ActionIDDevilStartExpeditionSingle:
+			typeID := pkt.Payload[0]
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DevilResultSuccess}))
+			if typeID == protocol.DevilMissionYinYang {
+				w := protocol.NewWriter()
+				w.WriteInt32(6).WriteInt32(144).WriteInt32(1)
+				_ = protocol.WritePacket(conn, protocol.NewPacket(
+					protocol.ActionIDDevilNotifyEnterMission, w.Bytes()))
+			}
+		case protocol.ActionIDDevilEnterTown:
+			w := protocol.NewWriter().WriteUint8(protocol.DevilResultSuccess).WriteInt32(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDDevilGetPlayers:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, protocol.NewWriter().WriteUint16(0).Bytes()))
+		case protocol.ActionIDDevilGetMissionDataM6:
+			// 5 个怪物队伍，全部战斗失败。
+			_ = protocol.WritePacket(conn, protocol.BuildDevilMissionDataResultPacket(
+				protocol.DevilMissionYinYang, protocol.DevilResultSuccess,
+				[]int32{1, 2, 3, 4, 5},
+				[]protocol.DevilRefine{{Got: 0, CurrentBout: 0, NeedBout: 2, Week: 0, WeekMax: 20}}))
+		case protocol.ActionIDDevilGetMissionDataM5, protocol.ActionIDDevilGetMissionDataM7:
+			_ = protocol.WritePacket(conn, protocol.BuildDevilMissionDataResultPacket(
+				protocol.DevilMissionMonsterGod, protocol.DevilResultSuccess, nil, nil))
+		case protocol.ActionIDDevilMoveTo:
+			// 单向通知，不回包。
+		case protocol.ActionIDDevilFightMonsterM6:
+			fightCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DevilResultFailed}))
+		case protocol.ActionIDDevilQuit:
+			quitCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DevilResultSuccess}))
+		case protocol.ActionIDDevilRejectBuyBox, protocol.ActionIDDevilCloseMatchPanel,
+			protocol.ActionIDDevilGetSkipWarInfo, protocol.ActionIDDevilGetDeployInfo,
+			protocol.ActionIDDevilGetTeamStatus:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DevilResultSuccess}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewDevilExpeditionRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("devil expedition: %v", err)
+	}
+	if got := fightCalls.Load(); got != 3 {
+		t.Fatalf("连续 3 个队伍失败后应停止, fight calls = %d", got)
+	}
+	if quitCalls.Load() == 0 {
+		t.Fatal("结束该伙伴挑战后应退出远征")
+	}
+}
