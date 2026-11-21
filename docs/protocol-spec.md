@@ -1169,17 +1169,23 @@ Int left_day, Int mount_count, Int title_count, Int cur_level
 
 | Action | ActionID | 方法 | 请求 | 回包 |
 | :--- | :--- | :--- | :--- | :--- |
-| 232/30 | `0x00E8001E` | `get_link_fate_box` | `Uint32 prev_act` | `[[Int item_id, Int count], ...]` |
-| 528/1 | `0x02100001` | `set_setting` | `Byte setting, Byte value`（裸 2 字节） | `UByte result` |
-| 232/34 | `0x00E80022` | `one_key_open_box` | `Int item_id, Int value, Uint32 prev_act` | `UByte result, ...` |
+| 232/30 | `0x00E8001E` | `get_link_fate_box` | `[]` + PrevAct 尾链 | `[[Int item_id, Int count], Short, Short, Short]` |
+| 528/1 | `0x02100001` | `set_setting` | `Byte setting, Byte value` + PrevAct 尾链 | `UByte result` |
+| 232/34 | `0x00E80022` | `one_key_open_box` | `Int item_id, Int autoMergeQuality` + PrevAct 尾链 | `UByte result, [Int,[Short,Short]]` |
 
-> **线上结论（2026-11-14 s1）**：
+> **结论（2026-11-21 抓包 + 反编译对齐，详见
+> [research/jieyuan-box-open-capture.md](./research/jieyuan-box-open-capture.md)）**：
 >
-> - 528/1 是玩家设置 `set_setting`，开箱前固定发送 `[0x07 0x04]`
->   （设置项 7 `JieYuanBaoXiangHeCheng` = 合成品质 4）。裸 2 字节稳定返回 0；
->   追加 4 字节 PrevAct 的 6 字节载荷会被服务端静默丢弃。
+> - 所有请求的末尾 4 字节都是 `DataBase.netCall` 的 `tmpBuff` 链：**上一条发送
+>   的请求**的 `[Module,Action]`，与最后收包无关。528/1、232/34 会校验该链，
+>   错位即静默丢弃。
+> - 528/1 设置项 7（合成品质）为 4；其尾链必须等于紧邻的上一条请求。若列表后
+>   插入了背包查询 2/41，尾链应为 `0x00020029` 而非 `0x00E8001E`。裸 2 字节
+>   虽返回 `0`，但不建立有效上下文，随后的 232/34 仍会被丢弃。
+> - 232/34 第二参数是自动合成档位（抓包中恒为 4），不是数量；一次请求最多连开
+>   10 个同型宝箱，库存不足按剩余结算。成功码为 `5`。
 > - 功能 140（LinkFateBox）未开放时，232/30 仍返回背包中的宝箱，但 232/34
->   任何载荷形态都会被静默丢弃。自动化先查功能开放状态，未开放直接跳过。
+>   会被服务端静默丢弃。
 
 ### 4.28 Module 637 (0x027D): 周末狂欢礼
 

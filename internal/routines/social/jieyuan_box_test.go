@@ -12,11 +12,17 @@ import (
 )
 
 // TestJieYuanBoxRoutine_SendsBatchOpenRequest 验证官方抓包链路：
-// 232/30 列表 -> 528/1 上下文握手 [0x0704, PrevAct] -> 232/34 开箱 [item, count, PrevAct=528/1]
-// -> 232/30 库存核对。
+// 232/30 列表 -> 2/41 背包查询 -> 528/1 上下文握手 [0x0704, PrevAct=2/41]
+// -> 232/34 开箱 [item, autoMerge, PrevAct=528/1] -> 232/30 库存核对。
+//
+// 528/1 与 232/34 的 PrevAct 必须等于「上一条发送的请求」：开箱前的背包查询
+// 会让锚点从 232/30 变成 2/41，固定写 232/30 会被服务端静默丢弃（2026-11-21 线上复现）。
 func TestJieYuanBoxRoutine_SendsBatchOpenRequest(t *testing.T) {
 	var listCalls, ctxCalls, openCalls atomic.Int32
+	var lastAction uint32
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		prev := lastAction
+		lastAction = pkt.ActionID
 		switch pkt.ActionID {
 		case protocol.ActionIDPlayerGetFunctions:
 			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(
@@ -32,13 +38,23 @@ func TestJieYuanBoxRoutine_SendsBatchOpenRequest(t *testing.T) {
 				w.WriteUint16(0)
 			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDItemGetPackList:
+			// 容量 60、0 件、0 空格位：保证开箱前背包检查可通过。
+			w := protocol.NewWriter()
+			w.WriteInt16(60) // 主背包总格位容量 (int16)
+			w.WriteInt32(0)  // 已用空格数量
+			w.WriteUint16(0) // 物品条数
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDJieYuanBoxOpenContext:
 			ctxCalls.Add(1)
-			// 抓包中官方 528/1 为 [0x07 0x04][PrevAct]；会话层用最后收包覆盖尾部。
-			// 兜底裸 2 字节版本也接受。
-			got := hex.EncodeToString(pkt.Payload)
-			if got != "0704" && !(len(pkt.Payload) == 6 && got[:4] == "0704") {
-				t.Errorf("528/1 设置载荷 = %s, want 0704 或 0704+PrevAct", got)
+			if len(pkt.Payload) != 6 {
+				t.Errorf("528/1 载荷长度 = %d, want 6 (0704+PrevAct)", len(pkt.Payload))
+			}
+			if got := hex.EncodeToString(pkt.Payload[:2]); got != "0704" {
+				t.Errorf("528/1 设置项 = %s, want 0704", got)
+			}
+			if got := binary.BigEndian.Uint32(pkt.Payload[2:6]); got != prev {
+				t.Errorf("528/1 PrevAct = 0x%08X, want 上一条发送动作 0x%08X（背包查询后不得固定 232/30）", got, prev)
 			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.JieYuanOpenContextResultOK}))
 		case protocol.ActionIDJieYuanBoxOpen:
@@ -49,8 +65,8 @@ func TestJieYuanBoxRoutine_SendsBatchOpenRequest(t *testing.T) {
 				if q := int32(binary.BigEndian.Uint32(pkt.Payload[4:8])); q != protocol.JieYuanBoxAutoMergeQuality {
 					t.Errorf("开箱第二参数 = %d, want 自动合成档位 %d", q, protocol.JieYuanBoxAutoMergeQuality)
 				}
-				if got := binary.BigEndian.Uint32(pkt.Payload[8:12]); got != protocol.ActionIDJieYuanBoxOpenContext {
-					t.Errorf("开箱 PrevAct = 0x%08X, want 0x%08X", got, protocol.ActionIDJieYuanBoxOpenContext)
+				if got := binary.BigEndian.Uint32(pkt.Payload[8:12]); got != prev {
+					t.Errorf("开箱 PrevAct = 0x%08X, want 上一条发送动作 0x%08X", got, prev)
 				}
 			}
 			// 官方抓包回包解压后首字节为成功码 5。
@@ -92,6 +108,12 @@ func TestJieYuanBoxRoutine_StopsOnOpenFailureCode(t *testing.T) {
 				w.WriteInt32(2)
 			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDItemGetPackList:
+			w := protocol.NewWriter()
+			w.WriteInt16(60) // 主背包总格位容量 (int16)
+			w.WriteInt32(0)  // 已用空格数量
+			w.WriteUint16(0) // 物品条数
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDJieYuanBoxOpenContext:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.JieYuanOpenContextResultOK}))
 		case protocol.ActionIDJieYuanBoxOpen:
@@ -126,6 +148,12 @@ func TestJieYuanBoxRoutine_StopsOnContextReject(t *testing.T) {
 			w.WriteUint16(1)
 			w.WriteInt32(protocol.ItemJieYuanBoxCommon)
 			w.WriteInt32(2)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDItemGetPackList:
+			w := protocol.NewWriter()
+			w.WriteInt16(60) // 主背包总格位容量 (int16)
+			w.WriteInt32(0)  // 已用空格数量
+			w.WriteUint16(0) // 物品条数
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
 		case protocol.ActionIDJieYuanBoxOpenContext:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0x01}))

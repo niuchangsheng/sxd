@@ -37,15 +37,7 @@ func DefaultJieYuanBoxConfig() JieYuanBoxConfig {
 // jieYuanOpenWithQuality 执行 528/1 上下文握手 + 232/34 开箱，返回开箱回包。
 // 仅用于「换自动合成档位」的变体探测，正常开箱路径仍内联在例程中。
 func jieYuanOpenWithQuality(ctx context.Context, session *client.RoleSession, itemID, quality int32) (*protocol.Packet, error) {
-	callCtx := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-		c, cancel := context.WithTimeout(ctx, 8*time.Second)
-		defer cancel()
-		return session.Call(c, pkt, act)
-	}
-	ctxResp, err := callCtx(protocol.BuildJieYuanBoxOpenContextPacket(), protocol.ActionIDJieYuanBoxOpenContext)
-	if err != nil || ctxResp == nil {
-		ctxResp, err = callCtx(protocol.BuildJieYuanBoxOpenContextBarePacket(), protocol.ActionIDJieYuanBoxOpenContext)
-	}
+	ctxResp, err := callJieYuanContext(ctx, session)
 	if err != nil || ctxResp == nil {
 		return nil, err
 	}
@@ -55,8 +47,31 @@ func jieYuanOpenWithQuality(ctx context.Context, session *client.RoleSession, it
 		}
 		return nil, fmt.Errorf("528/1 握手被拒绝: result=%d", code)
 	}
-	return callCtx(protocol.BuildJieYuanBoxOpenPacket(itemID, quality, protocol.ActionIDJieYuanBoxOpenContext),
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	return session.Call(c, protocol.BuildJieYuanBoxOpenPacket(itemID, quality),
 		protocol.ActionIDJieYuanBoxOpen)
+}
+
+// callJieYuanContext 发送 528/1 上下文握手。
+//
+// 528/1 尾部的 PrevAct 必须等于「上一条发送的请求」，由会话层在写入瞬间填充
+// （见 protocol.BuildJieYuanBoxOpenContextPacket）。链路正确时服务端回 result=0；
+// 若首次仍无回包（例如链路被并发心跳推进），重试一次即可用最新锚点重新握手。
+// 不能用裸 2 字节兜底：服务端虽回 0，但上下文不成立，随后的 232/34 仍被丢弃。
+func callJieYuanContext(ctx context.Context, session *client.RoleSession) (*protocol.Packet, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		c, cancel := context.WithTimeout(ctx, 8*time.Second)
+		resp, err := session.Call(c, protocol.BuildJieYuanBoxOpenContextPacket(),
+			protocol.ActionIDJieYuanBoxOpenContext)
+		cancel()
+		if err == nil && resp != nil {
+			return resp, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // fetchJieYuanPack 查询背包列表（用于开箱前确认空格）。
@@ -221,20 +236,9 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					batchCount++
 
 					// 每次 232/34 开箱前先发送 528/1 set_setting [0x07 0x04]。
-					// 抓包中官方 528/1 带 PrevAct（上一条 232/30），优先按抓包发送；
-					// 若被丢弃则退回裸 2 字节（2026-11-14 实测裸载荷可返回 0）。
-					ctxResp, cErr := func() (*protocol.Packet, error) {
-						cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
-						defer cCancel()
-						return session.Call(cCtx, protocol.BuildJieYuanBoxOpenContextPacket(),
-							protocol.ActionIDJieYuanBoxOpenContext)
-					}()
-					if cErr != nil || ctxResp == nil {
-						cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
-						ctxResp, cErr = session.Call(cCtx, protocol.BuildJieYuanBoxOpenContextBarePacket(),
-							protocol.ActionIDJieYuanBoxOpenContext)
-						cCancel()
-					}
+					// 其尾部 PrevAct 由会话层链到「上一条发送的请求」；开箱前若插入过
+					// 背包查询 (2/41)，锚点会是 2/41 而不是列表 232/30。
+					ctxResp, cErr := callJieYuanContext(ctx, session)
 					if cErr != nil || ctxResp == nil {
 						slog.Info("结缘宝箱开箱设置 528/1 无回包，稍后重试",
 							"role_id", session.RoleID(), "err", cErr)
@@ -254,8 +258,9 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					}
 
 					// 232/34 的第二参数是自动合成档位（不是数量），见 protocol.BuildJieYuanBoxOpenPacket。
+					// 尾部 PrevAct 由会话层填充为紧邻的 528/1。
 					openPkt := protocol.BuildJieYuanBoxOpenPacket(box.ItemID,
-						protocol.JieYuanBoxAutoMergeQuality, protocol.ActionIDJieYuanBoxOpenContext)
+						protocol.JieYuanBoxAutoMergeQuality)
 					oCtx, oCancel := context.WithTimeout(ctx, 8*time.Second)
 					openResp, oErr := session.Call(oCtx, openPkt, protocol.ActionIDJieYuanBoxOpen)
 					oCancel()

@@ -1997,13 +1997,24 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 
 	if p != nil {
 		mod := p.ActionID >> 16
-		// PrevAct 链以「最后收到的包」为锚点（与服务端一致）；会话尚未收到任何
+		if p.PrevActFromLastSent {
+			// 官方客户端的所有请求都在包尾追加「上一条发送的 [Module,Action]」
+			// (DataBase.netCall tmpBuff 链)。结缘 528/1/232/34 校验该链：链路错位
+			// 时服务端静默丢弃。这里在 writeMu 内取最后发送动作，与心跳发送互斥。
+			if anchor := s.lastActionID.Load(); anchor != 0 && len(p.Payload) >= 4 {
+				cloned := make([]byte, len(p.Payload))
+				copy(cloned, p.Payload)
+				binary.BigEndian.PutUint32(cloned[len(cloned)-4:], anchor)
+				p = &protocol.Packet{ActionID: p.ActionID, Payload: cloned, PrevActFromLastSent: true}
+			}
+		}
+		// PrevAct 链以「最后收到的包」为锚点；会话尚未收到任何
 		// 包时退回最后发送动作，保证登录早期请求也有合法前序。
 		prev := s.lastRxActionID.Load()
 		if prev == 0 {
 			prev = s.lastActionID.Load()
 		}
-		if prev != 0 {
+		if !p.PrevActFromLastSent && prev != 0 {
 			if p.ActionID == protocol.ActionIDItemGetPackList && len(p.Payload) == 0 {
 				cloned := make([]byte, len(p.Payload)+4)
 				copy(cloned, p.Payload)

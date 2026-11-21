@@ -48,6 +48,11 @@ type Packet struct {
 	Payload []byte
 	// HasPrevAct 标记载荷末尾 4 字节是否为动态前序动作号 (PrevAct)
 	HasPrevAct bool
+	// PrevActFromLastSent 标记载荷末尾 4 字节应在发送时由会话层填充为
+	// 「本端最后发送的业务动作号」。官方客户端 DataBase.netCall 的 tmpBuff
+	// 链就是这么生成的（见 docs/research/jieyuan-box-open-capture.md）；
+	// 与 HasPrevAct（按最后收包填充）互斥，同时为真时以本字段为准。
+	PrevActFromLastSent bool
 }
 
 // NewPacket 创建一个初始化好的 Packet 实例。

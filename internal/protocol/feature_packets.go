@@ -299,42 +299,38 @@ const JieYuanBoxAutoMergeQuality int32 = 4
 
 // BuildJieYuanBoxOpenContextPacket 构造结缘宝箱开箱前置设置包 (Module 528, Action 1)。
 //
-// 抓包 /tmp/jieyuan.pcapng 中官方请求为 [0x07 0x04][PrevAct=232/30]。
-// 这里显式写入 232/30 且不置 HasPrevAct：服务端把 528/1 当作 232/34 的上下文
-// 令牌，期间若插入心跳/推送，用「最后收包」覆盖会破坏链路（2026-11-15 实测
-// 232/34 的 PrevAct 被推送覆盖后静默丢弃）。
+// 抓包 /tmp/jieyuan2.pcapng 中官方请求为 [0x07 0x04][PrevAct=上一条发送的请求]，
+// 例如列表之后为 232/30。服务端把 528/1 当作 232/34 的上下文令牌，并校验这 4 字节
+// 尾链；只要中间插入任何别的请求（如开箱前的背包查询 2/41），固定写 232/30 就会
+// 错位，6 字节 528/1 与其后的 232/34 都会被静默丢弃（2026-11-21 实测）。裸 2 字节
+// 虽能拿到 result=0，但不会建立有效上下文，随后开箱仍被丢弃。
+//
+// 因此这里只写入占位 PrevAct，置 PrevActFromLastSent，由会话层在发送瞬间填充
+// 「上一条发送的动作号」，与官方 DataBase.netCall 的 tmpBuff 链一致。
 func BuildJieYuanBoxOpenContextPacket() *Packet {
 	w := NewWriter()
 	w.WriteUint8(0x07)
 	w.WriteUint8(0x04)
-	w.WriteUint32(ActionIDJieYuanBoxList)
-	return NewPacket(ActionIDJieYuanBoxOpenContext, w.Bytes())
-}
-
-// BuildJieYuanBoxOpenContextBarePacket 构造裸 2 字节的 528/1 兜底包。
-func BuildJieYuanBoxOpenContextBarePacket() *Packet {
-	w := NewWriter()
-	w.WriteUint8(0x07)
-	w.WriteUint8(0x04)
-	return NewPacket(ActionIDJieYuanBoxOpenContext, w.Bytes())
+	w.WriteUint32(0) // 占位，发送时由会话层填充为上一条发送动作
+	pkt := NewPacket(ActionIDJieYuanBoxOpenContext, w.Bytes())
+	pkt.PrevActFromLastSent = true
+	return pkt
 }
 
 // BuildJieYuanBoxOpenPacket 构造开启结缘宝箱请求封包 (Module 232, Action 34)。
 //
-// 官方客户端 LinkFateBoxView.onOpenBox 传入的是 [box_item_id, autoMergeQuality]，
-// 不是数量：抓包 /tmp/jieyuan.pcapng 中为 [3938, 4]，4 正是当时的自动合成档位。
-// 每次请求开 1 个宝箱；PrevAct 必须显式固定为紧邻的 528/1 上下文令牌
-// (0x02100001)，且不置 HasPrevAct —— 否则会话层会用最后收包（可能是心跳/
-// 推送）覆盖，服务端随即静默丢弃开箱请求（2026-11-15 recent_rx 实测）。
-func BuildJieYuanBoxOpenPacket(itemID int32, autoMergeQuality int32, prevAct uint32) *Packet {
+// 官方客户端 LinkFateBoxView.tenOpen 传入的是 [box_item_id, autoMergeQuality]，
+// 不是数量：抓包 /tmp/jieyuan2.pcapng 中恒为 [item, 4]，4 正是自动合成档位；
+// 一次请求最多消耗 10 个该箱型（服务端按 10 连开），库存不足时按剩余数量结算。
+// 末尾 PrevAct 同样由会话层填充为上一条发送动作（紧邻的 528/1）。
+func BuildJieYuanBoxOpenPacket(itemID int32, autoMergeQuality int32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(itemID)
 	w.WriteInt32(autoMergeQuality)
-	if prevAct == 0 {
-		prevAct = ActionIDJieYuanBoxOpenContext
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDJieYuanBoxOpen, w.Bytes())
+	w.WriteUint32(0) // 占位，发送时由会话层填充为上一条发送动作
+	pkt := NewPacket(ActionIDJieYuanBoxOpen, w.Bytes())
+	pkt.PrevActFromLastSent = true
+	return pkt
 }
 
 // ParseJieYuanOpenContextResult 解析 528/1 前置上下文握手回包。
