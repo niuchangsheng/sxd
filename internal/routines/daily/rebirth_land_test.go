@@ -2,9 +2,11 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
@@ -490,5 +492,35 @@ func TestRebirthLandRoutine_QuickAutoOnlyRemaining(t *testing.T) {
 	}
 	if got := quickCalls.Load(); got != 1 {
 		t.Fatalf("剩余 1 次时 852/8 调用 = %d, want 1", got)
+	}
+}
+
+// TestRebirthLandRoutine_QuickAutoSilentDropBacksOff 验证 852/8 被静默丢弃时
+// 按连续丢包退避，而不是 return nil 等到下一个 cron 时段。
+func TestRebirthLandRoutine_QuickAutoSilentDropBacksOff(t *testing.T) {
+	reward := []protocol.EraRebirthReward{{ItemID: 10992, Num: 285120}}
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDEraRebirthLandPanel:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				eraPanelPayload(0, 0)))
+		case protocol.ActionIDEraRebirthLandAutoProfit:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				eraProfitPayload(protocol.EraRebirthResultSuccess, 87105, reward)))
+		case protocol.ActionIDEraRebirthLandQuickAuto:
+			// 静默丢弃：不回包。
+		}
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := NewRebirthLandRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("快速挂机无回包应返回 CooldownError, got %v", err)
+	}
+	if got := scheduler.SilentDropCount(sess, "rebirth_land_quick"); got < 1 {
+		t.Fatalf("应记录轮回净地快速挂机静默丢包，got %d", got)
 	}
 }

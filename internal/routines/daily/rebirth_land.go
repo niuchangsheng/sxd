@@ -442,8 +442,9 @@ func runAltarProfitAndQuickAuto(
 	// 2. 领取渡业台挂机收益 (852/9)。
 	if resp := call(protocol.BuildEraRebirthLandAutoProfitPrevActPacket(session.LastActionID()),
 		protocol.ActionIDEraRebirthLandAutoProfit); resp == nil {
-		slog.Info("轮回净地挂机收益无回包，跳过快速挂机", "role_id", session.RoleID())
-		return nil
+		slog.Info("轮回净地挂机收益无回包，按连续丢包退避", "role_id", session.RoleID())
+		return scheduler.HandleSilentDrop(session, "rebirth_land_profit", 3,
+			30*time.Minute, "轮回净地挂机收益无回包")
 	} else if profit, err := protocol.ParseEraRebirthAutoProfit(resp.Payload); err != nil {
 		slog.Warn("解析轮回净地挂机收益失败", "role_id", session.RoleID(), "err", err)
 	} else {
@@ -502,10 +503,12 @@ func runQuickAuto(
 		resp := call(protocol.BuildEraRebirthLandQuickAutoPacket(session.LastActionID()),
 			protocol.ActionIDEraRebirthLandQuickAuto)
 		if resp == nil {
-			slog.Info("轮回净地快速挂机无回包", "role_id", session.RoleID(),
+			slog.Info("轮回净地快速挂机无回包，按连续丢包退避", "role_id", session.RoleID(),
 				"times", i+1)
-			return nil
+			return scheduler.HandleSilentDrop(session, "rebirth_land_quick", 3,
+				30*time.Minute, "轮回净地快速挂机无回包")
 		}
+		scheduler.ResetSilentDrops(session, "rebirth_land_quick")
 		res, err := protocol.ParseEraRebirthFreeBackResult(resp.Payload)
 		if err != nil {
 			slog.Warn("解析轮回净地快速挂机回包失败", "role_id", session.RoleID(), "err", err)
@@ -544,8 +547,9 @@ func runQuickAuto(
 		panelResp := call(protocol.BuildEraRebirthLandPanelPrevActPacket(session.LastActionID()),
 			protocol.ActionIDEraRebirthLandPanel)
 		if panelResp == nil {
-			slog.Warn("快速挂机后刷新面板无回包，停止后续快速挂机", "role_id", session.RoleID())
-			return nil
+			slog.Warn("快速挂机后刷新面板无回包，按连续丢包退避", "role_id", session.RoleID())
+			return scheduler.HandleSilentDrop(session, "rebirth_land_quick", 3,
+				30*time.Minute, "快速挂机后刷新面板无回包")
 		}
 		panel, pErr := protocol.ParseEraRebirthLandPanel(panelResp.Payload)
 		if pErr != nil {
