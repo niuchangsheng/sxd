@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
@@ -249,5 +250,62 @@ func TestPickFaxiangPrayAward(t *testing.T) {
 	}
 	if got := pickFaxiangPrayAward(nil); got != 0 {
 		t.Fatalf("empty pick = %d, want 0", got)
+	}
+}
+
+// TestRunFaxiangMo_PanelSilentDropBacksOff 验证守护魔兽面板被静默丢弃时
+// 返回连续丢包退避，而不是 return nil 等到下一个 cron 时段。
+func TestRunFaxiangMo_PanelSilentDropBacksOff(t *testing.T) {
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		// 守护魔兽面板静默丢弃：不回包。
+	})
+	defer sess.Close()
+
+	call := func(pkt *protocol.Packet, act uint32, name string) *protocol.Packet {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		resp, _ := sess.Call(ctx, pkt, act)
+		return resp
+	}
+	err := runFaxiangMo(sess, call)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("面板无回包应返回 CooldownError, got %v", err)
+	}
+	if got := scheduler.SilentDropCount(sess, "faxiang_mo"); got < 1 {
+		t.Fatalf("应记录守护魔兽静默丢包，got %d", got)
+	}
+}
+
+// TestRunFaxiangMo_ChallengeCDUsesNextFightTime 验证挑战返回冷却后重新查询面板，
+// 并按 next_can_fight_time 精确唤醒。
+func TestRunFaxiangMo_ChallengeCDUsesNextFightTime(t *testing.T) {
+	next := int32(time.Now().Add(5 * time.Minute).Unix())
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFaxiangExtraMoInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				faxiangMoInfoPayload(1, 0, next, 0, 282, 97)))
+		case protocol.ActionIDFaxiangExtraMoChallenge:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.FaxiangHasChallenge}))
+		}
+	})
+	defer sess.Close()
+
+	call := func(pkt *protocol.Packet, act uint32, name string) *protocol.Packet {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		resp, _ := sess.Call(ctx, pkt, act)
+		return resp
+	}
+	err := runFaxiangMo(sess, call)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("挑战冷却应返回 CooldownError, got %v", err)
+	}
+	want := time.Unix(int64(next), 0).Add(time.Minute)
+	if d := cd.Until.Sub(want); d > 5*time.Second || d < -5*time.Second {
+		t.Fatalf("唤醒时间 = %s, want %s", cd.Until, want)
 	}
 }

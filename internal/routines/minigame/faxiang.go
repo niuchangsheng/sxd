@@ -331,13 +331,14 @@ func runFaxiangFo(session *client.RoleSession, call faxiangCall) (bool, error) {
 func runFaxiangMo(session *client.RoleSession, call faxiangCall) error {
 	moResp := call(protocol.BuildFaxiangExtraMoInfoPacket(), protocol.ActionIDFaxiangExtraMoInfo, "守护魔兽面板")
 	if moResp == nil {
-		slog.Info("法相守护魔兽面板无回包", "role_id", session.RoleID())
-		return nil
+		// 面板被静默丢弃时不能 return nil：ScheduleCron 会等到下一个 cron 时段。
+		return scheduler.HandleSilentDrop(session, "faxiang_mo", 3,
+			30*time.Minute, "法相守护魔兽面板无回包")
 	}
 	mo, mErr := protocol.ParseFaxiangExtraMoInfo(moResp.Payload)
 	if mErr != nil {
 		slog.Warn("法相守护魔兽面板解析失败", "role_id", session.RoleID(), "err", mErr)
-		return nil
+		return scheduler.NewCooldown(10*time.Minute, "法相守护魔兽面板解析失败")
 	}
 	slog.Info("法相守护魔兽面板",
 		"role_id", session.RoleID(), "level", mo.Level, "exp", mo.CurExp,
@@ -351,24 +352,37 @@ func runFaxiangMo(session *client.RoleSession, call faxiangCall) error {
 	challengeResp := call(protocol.BuildFaxiangExtraMoChallengePacket(),
 		protocol.ActionIDFaxiangExtraMoChallenge, "守护魔兽挑战")
 	if challengeResp == nil {
-		slog.Info("法相守护魔兽挑战无回包", "role_id", session.RoleID())
-		return nil
+		return scheduler.HandleSilentDrop(session, "faxiang_mo", 3,
+			30*time.Minute, "法相守护魔兽挑战无回包")
 	}
 	res, rErr := protocol.ParseFaxiangExtraMoChallengeResult(challengeResp.Payload)
 	if rErr != nil {
 		slog.Warn("法相守护魔兽挑战回包解析失败", "role_id", session.RoleID(), "err", rErr)
-		return nil
+		return scheduler.NewCooldown(10*time.Minute, "法相守护魔兽挑战回包解析失败")
 	}
 	switch res.Result {
 	case protocol.FaxiangSuccess:
+		// 只有业务动作真正成功才清零连续丢包计数。
+		scheduler.ResetSilentDrops(session, "faxiang_mo")
 		slog.Info("法相守护魔兽挑战完成",
 			"role_id", session.RoleID(), "kill_num", res.KillNum)
 	case protocol.FaxiangHasChallenge, protocol.FaxiangTimeLimit, protocol.FaxiangFailCD:
-		slog.Info("法相守护魔兽挑战冷却中",
+		slog.Info("法相守护魔兽挑战冷却中，重新查询下次可挑战时间",
 			"role_id", session.RoleID(), "result", res.Result,
 			"result_text", protocol.FaxiangResultText(res.Result))
+		// 挑战回包不含冷却时间，重新查询面板读取 next_can_fight_time。
+		if refreshed := call(protocol.BuildFaxiangExtraMoInfoPacket(),
+			protocol.ActionIDFaxiangExtraMoInfo, "守护魔兽面板"); refreshed != nil {
+			if mo2, err := protocol.ParseFaxiangExtraMoInfo(refreshed.Payload); err == nil {
+				if cooldown := faxiangMoCooldown(mo2.NextCanFightTime); cooldown != nil {
+					return cooldown
+				}
+			}
+		}
+		return scheduler.NewCooldown(30*time.Minute, "法相守护魔兽挑战冷却中")
 	case protocol.FaxiangFunctionNoOpen:
-		slog.Info("法相守护魔兽未开放", "role_id", session.RoleID())
+		slog.Info("法相守护魔兽未开放，2 小时后再试", "role_id", session.RoleID())
+		return scheduler.NewCooldown(2*time.Hour, "法相守护魔兽未开放")
 	default:
 		slog.Info("法相守护魔兽挑战未成功",
 			"role_id", session.RoleID(), "result", res.Result,
