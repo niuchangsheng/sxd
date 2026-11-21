@@ -167,31 +167,11 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 				"max_batch_size", maxBatch,
 			)
 
-			// 0. 开箱会产出奖励，先确认背包空格。
-			//
-			// 线上 2/41 的 empty 字段在物品数变化时仍恒为 0（47/50 件都报 0），
-			// 因此以「容量 - 已用格位」判断空格；满仓交给背包清理后再开，避免
-			// 「无回包且库存不变」把箱型错误标记 6 小时跳过。
-			//
-			// 顺序要点：2/41 必须放在 232/30 之前。官方抓包 (/tmp/jieyuan2.pcapng)
-			// 中 232/30 之后紧接 528/1，528/1 的 PrevAct 必须是 232/30；若在两者
-			// 之间插入 2/41，本服会直接断开连接（2026-11-22 02:07/02:36 两次
-			// 528/1 前 EOF）。
-			if pack, pErr := fetchJieYuanPack(ctx, session); pErr == nil && pack != nil {
-				freeSlots := int(pack.PackCapacity) - len(pack.PackItems)
-				slog.Info("结缘宝箱开箱前背包状态", "role_id", session.RoleID(),
-					"capacity", pack.PackCapacity, "pack_items", len(pack.PackItems),
-					"free_slots", freeSlots, "empty_grids", pack.PackEmptyGrids)
-				if freeSlots <= 0 {
-					slog.Info("结缘宝箱开箱前背包已满，等待背包清理后再开", "role_id", session.RoleID())
-					// 背包腾挪靠扫荡物/装备制作卷出售，间隔不固定；2 分钟轮询可尽快
-					// 抓住出现的空格（每次仅一次 2/41 查询，成本可忽略）。
-					return scheduler.NewCooldown(2*time.Minute, "结缘宝箱背包已满")
-				}
-			} else if pErr != nil {
-				slog.Info("结缘宝箱开箱前查询背包无回包，继续按原流程尝试",
-					"role_id", session.RoleID(), "err", pErr)
-			}
+			// 注意：开箱前不要插入 2/41 背包查询。2026-11-22 实机对照
+			// /tmp/jieyuan2.pcapng：官方链路是 232/30 -> 528/1 -> 232/34，
+			// 中间没有任何其他请求；在列表之后插入 2/41 会让 528/1 直接 EOF，
+			// 在列表之前插入则 528/1 被静默丢弃。背包空格只在开箱无回包时
+			// 才补查（见下方失败分支），不干扰结缘上下文。
 
 			// 1. 查询背包持有的结缘宝箱列表 (Mod 232, Act 30)
 			queryPkt := protocol.BuildJieYuanBoxListPacket(protocol.ActionIDTownEnter)
@@ -324,6 +304,18 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 							} else {
 								slog.Info("结缘宝箱 0 档重试无回包",
 									"role_id", session.RoleID(), "item_id", box.ItemID, "err", altErr)
+							}
+						}
+						// 先排除背包已满：满仓时服务端同样静默丢弃开箱，不能把箱型误标
+						// 6 小时跳过。2/41 放在 232/34 失败之后查询，不会影响 528/1
+						// 的结缘上下文。
+						if pack, pErr := fetchJieYuanPack(ctx, session); pErr == nil && pack != nil {
+							freeSlots := int(pack.PackCapacity) - len(pack.PackItems)
+							if freeSlots <= 0 {
+								slog.Info("结缘宝箱开箱无回包且背包已满，等待背包清理后再开",
+									"role_id", session.RoleID(),
+									"capacity", pack.PackCapacity, "pack_items", len(pack.PackItems))
+								return scheduler.ErrBagFull
 							}
 						}
 						// 库存不变：该箱型可能本身需要元宝/其他条件（如高级/至尊箱），
