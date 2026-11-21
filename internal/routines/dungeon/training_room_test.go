@@ -2,6 +2,7 @@ package dungeon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"reflect"
@@ -366,6 +367,9 @@ type fakeStPracticeRoomAPI struct {
 	sitResults map[seatKey]uint8
 	robResults map[seatKey]uint8
 
+	robCD    *protocol.StPracticeRoomRobCD
+	robCDErr error
+
 	calls []string
 }
 
@@ -493,6 +497,17 @@ func (f *fakeStPracticeRoomAPI) RobStPracticeRoomSeat(_ context.Context, quality
 	return protocol.StPracticeRoomSuccess, nil
 }
 
+func (f *fakeStPracticeRoomAPI) GetStPracticeRoomRobCD(context.Context) (*protocol.StPracticeRoomRobCD, error) {
+	f.record("rob_cd")
+	if f.robCDErr != nil {
+		return nil, f.robCDErr
+	}
+	if f.robCD != nil {
+		return f.robCD, nil
+	}
+	return &protocol.StPracticeRoomRobCD{}, nil
+}
+
 // TestRunStPracticeRoom_ListDropStillClaims 验证房间列表被静默丢弃时仍然领取经验，
 // 保证「每日经验必须领取」不因查询失败而丢失。
 func TestRunStPracticeRoom_ListDropStillClaims(t *testing.T) {
@@ -583,5 +598,41 @@ func TestTrainingRoomRoutine_FunctionClosedSkips(t *testing.T) {
 	}
 	if got := nonFunctionCalls.Load(); got != 0 {
 		t.Fatalf("功能未开放时不应建立跨服会话或发业务请求, 实际 %d 次", got)
+	}
+}
+
+// TestRunStPracticeRoom_RobCDUsesServerSeconds 验证争夺返回 CD_TIME 时
+// 查询服务端剩余冷却秒数并精确唤醒，而不是等固定 60 分钟周期。
+func TestRunStPracticeRoom_RobCDUsesServerSeconds(t *testing.T) {
+	api := newFakeStPracticeRoomAPI()
+	api.lists = []*protocol.StPracticeRoomList{{
+		Rooms: []protocol.StPracticeRoomEntry{
+			{Quality: 1, Count: 6},
+			{Quality: 5, Count: 12},
+			{Quality: 100, Count: 1},
+		},
+		InPracticeFlag: protocol.StPracticeRoomYes,
+		Quality:        100,
+	}}
+	api.infos[5] = &protocol.StPracticeRoomInfo{
+		Seats:       []protocol.StPracticeRoomSeat{{SeatSeq: 0, AttackPower: 100}},
+		RoomQuality: 5,
+	}
+	api.leaveResults = []uint8{protocol.StPracticeRoomSuccess}
+	api.claimResults = []*protocol.StPracticeRoomExpResult{{Result: protocol.StPracticeRoomSuccess}}
+	api.robResults[seatKey{5, 0}] = protocol.StPracticeRoomCDTime
+	api.robCD = &protocol.StPracticeRoomRobCD{CD: 120}
+
+	cfg := TrainingRoomConfig{AllowRobSeat: true, MaxRobAttempts: 1}
+	err := runStPracticeRoomMaintenance(context.Background(), api, cfg)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("争夺冷却应返回 CooldownError, got %v", err)
+	}
+	if !api.hasCall("rob_cd") {
+		t.Fatalf("应查询服务端争夺冷却, 调用序列: %v", api.calls)
+	}
+	if d := time.Until(cd.Until); d < 115*time.Second || d > 125*time.Second {
+		t.Fatalf("唤醒时间应约为 121 秒后, 实际 %s", d)
 	}
 }

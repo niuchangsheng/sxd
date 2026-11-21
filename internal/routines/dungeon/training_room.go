@@ -49,6 +49,8 @@ type stPracticeRoomAPI interface {
 	GetStPracticeRoomSeatStatus(ctx context.Context, quality, seat uint8) (uint8, error)
 	SitDownStPracticeRoom(ctx context.Context, quality, seat uint8) (uint8, error)
 	RobStPracticeRoomSeat(ctx context.Context, quality, seat uint8) (uint8, error)
+	// GetStPracticeRoomRobCD 查询争夺冷却剩余秒数与清冷却元宝价格。
+	GetStPracticeRoomRobCD(ctx context.Context) (*protocol.StPracticeRoomRobCD, error)
 }
 
 // NewTrainingRoomRoutine 构造仙界练功房普通/高级场挂机收益维护任务。
@@ -226,7 +228,13 @@ func runStPracticeRoomMaintenance(ctx context.Context, api stPracticeRoomAPI, cf
 
 	// 7. 目标为争夺房间时先发起争夺; 失败后回落到空闲候选或普通练功场。
 	if target.rob {
-		if tryRobStPracticeRoomSeats(ctx, api, target.quality, target.seats, cfg.MaxRobAttempts) {
+		robOK, robErr := tryRobStPracticeRoomSeats(ctx, api, target.quality, target.seats, cfg.MaxRobAttempts)
+		if robErr != nil {
+			// 服务端明确返回冷却：按冷却剩余秒数精确唤醒，而不是等到
+			// ScheduleLoop 的固定 60 分钟周期。
+			return robErr
+		}
+		if robOK {
 			slog.Info("仙界练功房争夺席位成功", "quality", target.quality)
 			return nil
 		}
@@ -333,7 +341,10 @@ func claimStPracticeRoomExp(ctx context.Context, api stPracticeRoomAPI, quality 
 }
 
 // tryRobStPracticeRoomSeats 依次争夺候选席位, 每次争夺后重新查询房间状态确认归属。
-func tryRobStPracticeRoomSeats(ctx context.Context, api stPracticeRoomAPI, quality uint8, seats []uint8, maxAttempts int) bool {
+//
+// 返回 (是否成功, 冷却错误)。冷却错误只在服务端明确返回 CD_TIME 时产生，
+// 由调用方转换为 scheduler.CooldownError，按剩余秒数精确唤醒。
+func tryRobStPracticeRoomSeats(ctx context.Context, api stPracticeRoomAPI, quality uint8, seats []uint8, maxAttempts int) (bool, error) {
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
@@ -345,44 +356,57 @@ func tryRobStPracticeRoomSeats(ctx context.Context, api stPracticeRoomAPI, quali
 		result, err := api.RobStPracticeRoomSeat(ctx, quality, seat)
 		if err != nil {
 			slog.Warn("争夺仙界练功房席位失败", "quality", quality, "seat", seat, "error", err)
-			return false
+			return false, nil
 		}
 		switch result {
 		case protocol.StPracticeRoomSuccess:
 			// 争夺回包携带完整战报, 首字节只表示战斗已受理;
 			// 必须重新查询房间状态才能确认席位是否真正到手。
 			if stPracticeRoomSeatAcquired(ctx, api, quality) {
-				return true
+				return true, nil
 			}
 			slog.Info("仙界练功房争夺战未取得席位", "quality", quality, "seat", seat, "attempt", i+1)
 		case protocol.StPracticeRoomNoWar:
 			// 目标席位在争夺前已空出, 直接入座。
 			sitResult, sitErr := api.SitDownStPracticeRoom(ctx, quality, seat)
 			if sitErr == nil && (sitResult == protocol.StPracticeRoomSuccess || sitResult == protocol.StPracticeRoomAlreadySatDown) {
-				return true
+				return true, nil
 			}
 			slog.Info("仙界练功房目标席位已空出但入座失败", "quality", quality, "seat", seat, "result", sitResult)
 		case protocol.StPracticeRoomRobTimeUsedUp:
 			slog.Info("仙界练功房今日争夺次数已用完", "quality", quality, "seat", seat)
-			return false
+			return false, nil
 		case protocol.StPracticeRoomCDTime:
-			slog.Info("仙界练功房争夺冷却中", "quality", quality, "seat", seat)
-			return false
+			slog.Info("仙界练功房争夺冷却中，查询剩余冷却秒数", "quality", quality, "seat", seat)
+			return false, stPracticeRoomRobCooldown(ctx, api)
 		case protocol.StPracticeRoomNoEnoughIngot:
 			slog.Info("仙界练功房争夺需要元宝，自动化不主动消耗", "quality", quality, "seat", seat)
-			return false
+			return false, nil
 		case protocol.StPracticeRoomFunctionNoOpen:
 			slog.Info("仙界练功房功能未开放", "quality", quality, "seat", seat)
-			return false
+			return false, nil
 		case protocol.StPracticeRoomExpNotGotten:
 			slog.Warn("仙界练功房仍有未领取经验，无法争夺席位", "quality", quality, "seat", seat)
-			return false
+			return false, nil
 		default:
 			slog.Warn("争夺仙界练功房席位返回业务失败", "quality", quality, "seat", seat, "result", result)
-			return false
+			return false, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+// stPracticeRoomRobCooldown 将服务端 CD 剩余秒数转换为精确的冷却唤醒时间。
+// 查询失败时回退 5 分钟短冷却，避免固定 60 分钟周期空等。
+func stPracticeRoomRobCooldown(ctx context.Context, api stPracticeRoomAPI) error {
+	if api != nil {
+		if cd, err := api.GetStPracticeRoomRobCD(ctx); err == nil && cd != nil && cd.CD > 0 {
+			until := time.Now().Add(time.Duration(cd.CD) * time.Second).Add(time.Second)
+			slog.Info("仙界练功房争夺冷却结束时间", "cd_seconds", cd.CD, "wake_at", until)
+			return scheduler.NewCooldownUntil(until, "仙界练功房争夺冷却中")
+		}
+	}
+	return scheduler.NewCooldown(5*time.Minute, "仙界练功房争夺冷却中")
 }
 
 // stPracticeRoomSeatAcquired 重新查询房间列表, 判断角色是否已进入目标品质房间。
