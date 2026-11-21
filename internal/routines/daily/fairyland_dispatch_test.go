@@ -131,3 +131,31 @@ func TestNextFairylandWeeklyReset(t *testing.T) {
 		t.Fatalf("05:05 后应等到次日 05:05, got %v want %v", got, want)
 	}
 }
+
+// TestFairylandDispatchRoutine_DispatchSilentDropBacksOff 验证派遣被静默丢弃时
+// 不再 return nil，而是按连续丢包退避，剩余订单稍后继续派遣。
+func TestFairylandDispatchRoutine_DispatchSilentDropBacksOff(t *testing.T) {
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFairylandMainPanel:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.FairylandSuccess, 0}))
+		case protocol.ActionIDFairylandTaskPanel:
+			w := protocol.NewWriter().WriteUint8(protocol.FairylandSuccess).WriteUint16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDFairylandDispatch:
+			// 静默丢弃：不回包。
+		}
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := NewFairylandDispatchRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("派遣无回包应返回 CooldownError, got %v", err)
+	}
+	if got := scheduler.SilentDropCount(sess, "fairyland_dispatch"); got < 1 {
+		t.Fatalf("应记录宠物仙域静默丢包，got %d", got)
+	}
+}

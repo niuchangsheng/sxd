@@ -100,11 +100,19 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 				}
 				dResp := call(protocol.BuildFairylandDispatchPacket(orderID), protocol.ActionIDFairylandDispatch)
 				if dResp == nil {
-					return nil
+					// 派遣被静默丢弃时不能 return nil：未派遣的订单要等到下一个
+					// cron 时段才会重试。按连续丢包退避后继续消费剩余订单。
+					slog.Info("宠物仙域游历派遣无回包，按连续丢包退避",
+						"role_id", session.RoleID(), "order_id", orderID)
+					return scheduler.HandleSilentDrop(session, "fairyland_dispatch", 3,
+						30*time.Minute, "宠物仙域游历派遣无回包")
 				}
+				scheduler.ResetSilentDrops(session, "fairyland_dispatch")
 				dCode, dErr := protocol.ParseActionFirstByte(dResp.Payload, "宠物仙域游历")
 				if dErr != nil {
-					return nil
+					slog.Warn("宠物仙域游历回包解析失败", "role_id", session.RoleID(),
+						"order_id", orderID, "err", dErr)
+					return scheduler.NewCooldown(10*time.Minute, "宠物仙域游历回包解析失败")
 				}
 				switch dCode {
 				case protocol.FairylandSuccess:
