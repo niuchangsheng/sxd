@@ -245,16 +245,21 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 				chCancel()
 
 				if err != nil || chRespPkt == nil {
-					slog.Info("本服竞技场挑战指令已发送但未收到结算回包",
+					// 结算回包丢失时不能 return nil：剩余挑战次数要等到下一个
+					// cron 时段才会继续消耗。按连续丢包退避后重新拉面板核对。
+					slog.Info("本服竞技场挑战结算无回包，按连续丢包退避",
 						"role_id", session.RoleID(),
 						"target_rank", target.Rank,
 					)
-					return nil
+					return scheduler.HandleSilentDrop(session, "arena", 3,
+						10*time.Minute, "本服竞技场挑战结算无回包")
 				}
+				scheduler.ResetSilentDrops(session, "arena")
 
 				chRes, err := protocol.ParseArenaChallengeResult(chRespPkt.Payload)
 				if err != nil {
-					return fmt.Errorf("解析竞技场挑战结算失败: %w", err)
+					slog.Warn("解析竞技场挑战结算失败，稍后重试", "role_id", session.RoleID(), "err", err)
+					return scheduler.NewCooldown(10*time.Minute, "竞技场挑战结算解析失败")
 				}
 				if !chRes.Success {
 					// 冷却拦截: 等待服务端下发的冷却时长后重试 (上限 3 次)

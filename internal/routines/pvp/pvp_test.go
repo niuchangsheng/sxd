@@ -975,3 +975,38 @@ func TestWorldPkCDDuration(t *testing.T) {
 		t.Fatalf("超长倒计时应截断到预算, wait = %v", got)
 	}
 }
+
+// TestArenaRoutine_ChallengeSilentDropBacksOff 验证本服竞技场挑战结算回包丢失时
+// 不再 return nil（剩余挑战次数被丢到下一个 cron 时段），而是按连续丢包退避。
+func TestArenaRoutine_ChallengeSilentDropBacksOff(t *testing.T) {
+	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDArenaGetTimes:
+			resp, _ := protocol.BuildArenaGetTimesResultPacket(3)
+			_ = protocol.WritePacket(conn, resp)
+		case protocol.ActionIDArenaOpenPanel:
+			resp, _ := protocol.BuildArenaPanelResultPacket(protocol.ArenaPanelResult{
+				MyRank:               100,
+				RemainChallengeTimes: 3,
+				Opponents: []protocol.ArenaOpponent{
+					{Rank: 90, PlayerID: 1001, RoleID: 1, Name: "低级对手", Level: 10},
+				},
+			})
+			_ = protocol.WritePacket(conn, resp)
+		case protocol.ActionIDArenaChallenge:
+			// 静默丢弃：不回结算包。
+		}
+	})
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := NewArenaRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("挑战结算无回包应返回 CooldownError, got %v", err)
+	}
+	if got := scheduler.SilentDropCount(sess, "arena"); got < 1 {
+		t.Fatalf("应记录竞技场静默丢包，got %d", got)
+	}
+}
