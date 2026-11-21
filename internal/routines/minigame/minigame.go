@@ -507,8 +507,11 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildGuessPartnerInfoPacket(), protocol.ActionIDGuessPartnerInfo)
 			iCancel()
 			if err != nil {
-				slog.Info("伙伴猜猜看功能不可用，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				// 次数查询被静默丢弃时不能 return nil：要等到下一个 cron 时段。
+				slog.Info("伙伴猜猜看次数查询无回包，按连续丢包退避",
+					"role_id", session.RoleID(), "err", err)
+				return scheduler.HandleSilentDrop(session, "partner_guess", 3,
+					30*time.Minute, "伙伴猜猜看次数查询无回包")
 			}
 			times, err := protocol.ParseGuessPartnerInfoResult(infoResp.Payload)
 			if err != nil {
@@ -528,8 +531,10 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 				startResp, sErr := session.Call(sCtx, protocol.BuildGuessPartnerStartPacket(), protocol.ActionIDGuessPartnerStart)
 				sCancel()
 				if sErr != nil {
-					slog.Info("伙伴猜猜看开局无应答", "role_id", session.RoleID(), "err", sErr)
-					break
+					slog.Info("伙伴猜猜看开局无应答，按连续丢包退避",
+						"role_id", session.RoleID(), "err", sErr)
+					return scheduler.HandleSilentDrop(session, "partner_guess", 3,
+						10*time.Minute, "伙伴猜猜看开局无应答")
 				}
 				rd, pErr := protocol.ParseGuessPartnerStartResult(startResp.Payload)
 				if pErr != nil {
@@ -578,8 +583,10 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 				gResp, gErr := session.Call(gCtx, protocol.BuildGuessPartnerGuessPacket(rd.RoleIDs[0]), protocol.ActionIDGuessPartnerGuess)
 				gCancel()
 				if gErr != nil {
-					slog.Info("伙伴猜猜看作答无应答", "role_id", session.RoleID(), "err", gErr)
-					break
+					slog.Info("伙伴猜猜看作答无应答，按连续丢包退避",
+						"role_id", session.RoleID(), "err", gErr)
+					return scheduler.HandleSilentDrop(session, "partner_guess", 3,
+						10*time.Minute, "伙伴猜猜看作答无应答")
 				}
 				gr, gpErr := protocol.ParseGuessPartnerGuessResult(gResp.Payload)
 				if gpErr != nil {
@@ -589,6 +596,7 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 				switch gr.Result {
 				case protocol.GuessPartnerResultRight:
 					right++
+					scheduler.ResetSilentDrops(session, "partner_guess")
 					slog.Info("伙伴猜猜看猜对", "role_id", session.RoleID(), "role_id_guess", rd.RoleIDs[0],
 						"item_id", gr.Award.ItemID, "count", gr.Award.Count)
 					return nil // 猜对即完成本日轮次
