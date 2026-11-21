@@ -17,6 +17,10 @@ import (
 // maxSaWorldTowerFights 单轮最多挑战次数。
 const maxSaWorldTowerFights = 5
 
+// saWorldTowerFailureThreshold 连续多少座幻魔塔战斗失败后结束本轮。
+// 按用户要求「挑战副本需 N 次失败才退出」，不再第一次失败就放弃。
+const saWorldTowerFailureThreshold = 3
+
 // NewSaWorldTowerRoutine 构造全网幻魔塔挑战任务。
 func NewSaWorldTowerRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 15 * time.Second
@@ -70,31 +74,63 @@ func NewSaWorldTowerRoutine() scheduler.ActivityRoutine {
 			}
 
 			fights := 0
+			failures := 0
 			for _, towerID := range towerIDs {
 				if ctx.Err() != nil || fights >= maxSaWorldTowerFights {
 					return nil
 				}
 				fightResp := call(protocol.BuildSaWorldTowerFightPacket(towerID), protocol.ActionIDSaWorldTowerFight)
 				if fightResp == nil {
-					return nil
+					// 静默丢包时不能 return nil，剩余塔要等到下一个 cron 时段。
+					slog.Info("全网幻魔塔挑战无回包，按连续丢包退避",
+						"role_id", session.RoleID(), "tower_id", towerID)
+					return scheduler.HandleSilentDrop(session, "sa_world_tower", 3,
+						30*time.Minute, "全网幻魔塔挑战无回包")
 				}
+				scheduler.ResetSilentDrops(session, "sa_world_tower")
 				code, err := protocol.ParseActionFirstByte(fightResp.Payload, "全网幻魔塔挑战")
 				if err != nil {
-					return nil
+					slog.Warn("全网幻魔塔挑战回包解析失败", "role_id", session.RoleID(),
+						"tower_id", towerID, "err", err)
+					return scheduler.NewCooldown(10*time.Minute, "全网幻魔塔挑战回包解析失败")
 				}
 				switch code {
 				case protocol.SaWorldTowerSuccess:
 					fights++
+					failures = 0
 					slog.Info("全网幻魔塔挑战成功", "role_id", session.RoleID(), "tower_id", towerID)
-				case protocol.SaWorldTowerNoTime, protocol.SaWorldTowerCDTime,
-					protocol.SaWorldTowerFuncNoOpen, protocol.SaWorldTowerErrorID,
-					protocol.SaWorldTowerFailure, protocol.SaWorldTowerNoIngot:
-					slog.Info("全网幻魔塔挑战结束", "role_id", session.RoleID(),
-						"tower_id", towerID, "result", code,
-						"result_text", protocol.SaWorldTowerResultText(code))
+				case protocol.SaWorldTowerCDTime:
+					// 服务端未在回包中给出剩余秒数，30 分钟后重试。
+					slog.Info("全网幻魔塔挑战冷却中，30 分钟后再试",
+						"role_id", session.RoleID(), "tower_id", towerID)
+					return scheduler.NewCooldown(30*time.Minute, "全网幻魔塔挑战冷却中")
+				case protocol.SaWorldTowerNoTime:
+					slog.Info("全网幻魔塔今日挑战次数已用尽", "role_id", session.RoleID(), "tower_id", towerID)
+					return scheduler.ErrAttemptsExhausted
+				case protocol.SaWorldTowerFuncNoOpen:
+					slog.Info("全网幻魔塔未开放，2 小时后再试",
+						"role_id", session.RoleID(), "tower_id", towerID)
+					return scheduler.NewCooldown(2*time.Hour, "全网幻魔塔未开放")
+				case protocol.SaWorldTowerErrorID:
+					slog.Info("全网幻魔塔关卡 ID 无效，尝试下一座",
+						"role_id", session.RoleID(), "tower_id", towerID)
+					continue
+				case protocol.SaWorldTowerFailure:
+					failures++
+					if failures >= saWorldTowerFailureThreshold {
+						slog.Info("全网幻魔塔连续多座战斗失败，结束本轮",
+							"role_id", session.RoleID(), "failures", failures)
+						return nil
+					}
+					slog.Info("全网幻魔塔挑战失败，继续尝试下一座",
+						"role_id", session.RoleID(), "tower_id", towerID, "failures", failures)
+					continue
+				case protocol.SaWorldTowerNoIngot:
+					slog.Info("全网幻魔塔需要元宝，自动化不主动消耗",
+						"role_id", session.RoleID(), "tower_id", towerID)
 					return nil
 				default:
-					slog.Info("全网幻魔塔挑战未成功", "role_id", session.RoleID(),
+					slog.Info("全网幻魔塔挑战未成功，结束本轮", "role_id", session.RoleID(),
 						"tower_id", towerID, "result", code,
 						"result_text", protocol.SaWorldTowerResultText(code))
 					return nil
