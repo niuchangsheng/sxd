@@ -99,7 +99,8 @@ func NewWeekendEventRoutine() scheduler.ActivityRoutine {
 			}
 			active, err := protocol.ParseFirstByteResult(activeResp.Payload, "水果机")
 			if err != nil {
-				return nil
+				slog.Warn("周末水果机状态解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "周末水果机状态解析失败")
 			}
 			if active != protocol.SundayFruitResultYes {
 				slog.Info("周末水果机未开启，稍后重试", "role_id", session.RoleID(), "status", active)
@@ -114,23 +115,31 @@ func NewWeekendEventRoutine() scheduler.ActivityRoutine {
 				}
 				resp := call(protocol.BuildSundayFruitDrawPacket(), protocol.ActionIDSundayFruitDraw)
 				if resp == nil {
-					return nil
+					// 静默丢包时不能 return nil：剩余免费次数要等到下一个 cron
+					// 时段才会继续消耗。按连续丢包退避后重试。
+					slog.Info("周末水果机抽奖无回包，按连续丢包退避",
+						"role_id", session.RoleID(), "draws", draws)
+					return scheduler.HandleSilentDrop(session, "weekend_event", 3,
+						10*time.Minute, "周末水果机抽奖无回包")
 				}
+				scheduler.ResetSilentDrops(session, "weekend_event")
 				code, err := protocol.ParseFirstByteResult(resp.Payload, "水果机")
 				if err != nil {
-					return nil
+					slog.Warn("周末水果机抽奖回包解析失败，稍后重试",
+						"role_id", session.RoleID(), "err", err)
+					return scheduler.NewCooldown(10*time.Minute, "周末水果机抽奖回包解析失败")
 				}
 				switch code {
 				case protocol.SundayFruitResultSuccess:
 					slog.Info("周末水果机抽奖成功", "role_id", session.RoleID(), "draw", draws+1)
 				case protocol.SundayFruitResultTimeUsed:
 					slog.Info("周末水果机免费次数已用尽", "role_id", session.RoleID(), "draws", draws)
-					return nil
+					return scheduler.ErrAttemptsExhausted
 				case protocol.SundayFruitResultPackFull:
 					return scheduler.ErrBagFull
 				case protocol.SundayFruitResultActiveNotOpen:
-					slog.Info("周末水果机未开放", "role_id", session.RoleID())
-					return nil
+					slog.Info("周末水果机未开放，2 小时后再试", "role_id", session.RoleID())
+					return scheduler.NewCooldown(2*time.Hour, "周末水果机未开放")
 				default:
 					slog.Info("周末水果机抽奖未成功", "role_id", session.RoleID(), "result", code)
 					return nil
