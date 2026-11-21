@@ -5,11 +5,38 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/routines/dungeon"
 	"sxd-pie-ng/internal/scheduler"
 )
+
+// TestTongTianTowerRoutine_PanelSilentDropBacksOff 验证面板被服务端静默丢弃时
+// 不再 return nil（Cron 会推迟到下一个时段），而是按连续丢包退避。
+func TestTongTianTowerRoutine_PanelSilentDropBacksOff(t *testing.T) {
+	sess, srvConn := createTestSession(t, 5000)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		if pkt.ActionID == protocol.ActionIDTongTianTowerPanel {
+			return true // 静默丢弃：不回包
+		}
+		return false
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := dungeon.NewTongTianTowerRoutine().Execute(ctx, sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("面板无回包应返回 CooldownError, got %v", err)
+	}
+	if got := scheduler.SilentDropCount(sess, "tong_tian_tower"); got < 1 {
+		t.Fatalf("应记录通天塔静默丢包，got %d", got)
+	}
+}
 
 func TestTongTianTowerRoutine_BagFullBranchesToCircuitBreaker(t *testing.T) {
 	sess, srvConn := createTestSession(t, 5000)

@@ -27,6 +27,9 @@ const (
 	tongTianTowerCDMaxWait      = 10 * time.Second
 )
 
+// errTongTianTowerNoResponse 标记通天塔请求被服务端静默丢弃（无回包）。
+var errTongTianTowerNoResponse = errors.New("通天塔请求无回包")
+
 // NewTongTianTowerRoutine 构造通天塔自动挑战任务。
 //
 // 协议依据官方 com.protocols.Mod_TongTianTower_Base 与 com.datas.TongTianTowerData:
@@ -71,16 +74,25 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 					return nil, err
 				}
 				if resp == nil {
-					return nil, errors.New("通天塔面板无回包")
+					return nil, errTongTianTowerNoResponse
 				}
 				return protocol.ParseTongTianTowerPanelResult(resp.Payload)
 			}
 
 			panel, err := fetchPanel()
 			if err != nil {
-				slog.Info("通天塔功能不可用或未开放，跳过", "role_id", session.RoleID(), "err", err)
-				return nil
+				// 面板被静默丢弃时不能返回 nil：ScheduleCron 会把它当成成功，
+				// 整座塔要到下一个 cron 时段才会再试。按连续丢包退避。
+				if errors.Is(err, errTongTianTowerNoResponse) || errors.Is(err, context.DeadlineExceeded) {
+					slog.Info("通天塔面板无回包，按连续丢包退避",
+						"role_id", session.RoleID(), "err", err)
+					return scheduler.HandleSilentDrop(session, "tong_tian_tower", 3,
+						30*time.Minute, "通天塔面板无回包")
+				}
+				slog.Warn("通天塔面板解析失败", "role_id", session.RoleID(), "err", err)
+				return scheduler.NewCooldown(10*time.Minute, "通天塔面板解析失败")
 			}
+			scheduler.ResetSilentDrops(session, "tong_tian_tower")
 			slog.Info("通天塔面板",
 				"role_id", session.RoleID(),
 				"heaven", panel.Heaven,
@@ -159,11 +171,17 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(cCtx, protocol.BuildTongTianTowerChallengePacket(teams), protocol.ActionIDTongTianTowerChallenge)
 				cancel()
 				if cErr != nil {
+					if errors.Is(cErr, context.DeadlineExceeded) {
+						return scheduler.HandleSilentDrop(session, "tong_tian_tower", 3,
+							30*time.Minute, "通天塔挑战无回包")
+					}
 					return fmt.Errorf("通天塔挑战请求失败: %w", cErr)
 				}
 				if resp == nil {
-					return errors.New("通天塔挑战无回包")
+					return scheduler.HandleSilentDrop(session, "tong_tian_tower", 3,
+						30*time.Minute, "通天塔挑战无回包")
 				}
+				scheduler.ResetSilentDrops(session, "tong_tian_tower")
 				result, pErr := protocol.ParseTongTianTowerChallengeResult(resp.Payload)
 				if pErr != nil {
 					return fmt.Errorf("解析通天塔挑战回包失败: %w", pErr)
