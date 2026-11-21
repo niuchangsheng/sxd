@@ -125,6 +125,14 @@ func fetchJieYuanBoxCount(ctx context.Context, session *client.RoleSession, item
 	return 0, true
 }
 
+// jieyuanPriority 结缘开箱调度优先级：高于天帝宝库(200)，登录后第一批执行。
+//
+// 2026-11-22 实测：同一账号用 probe 新登录后立即执行
+// 232/30 -> 528/1 -> 232/34 成功（3938 15->5）；而日常批次数分钟后才执行时，
+// 528/1 载荷与抓包完全一致仍被服务端静默丢弃。因此 528/1 上下文对会话时长/
+// 前序请求敏感，必须尽早执行；同时 232/30 之前不能插入 0/6 等功能探测请求。
+const jieyuanPriority scheduler.RoutinePriority = 250
+
 func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 	cfg := DefaultJieYuanBoxConfig()
 	if len(cfgs) > 0 {
@@ -139,7 +147,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 		"jieyuan_box",
 		"social",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		jieyuanPriority,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -148,19 +156,9 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 功能未开放时 232/30 仍会返回背包宝箱，但 232/34 开箱会被服务端
-			// 静默丢弃（2026-11-14 s1 实测：功能 140 未开放，所有开箱载荷均无回包）。
-			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDLinkFate); fErr != nil {
-				slog.Info("结缘宝箱功能开放状态查询失败，本轮跳过",
-					"role_id", session.RoleID(), "err", fErr)
-				return scheduler.NewCooldown(30*time.Minute, "结缘宝箱功能状态查询失败")
-			} else if !open {
-				// 功能列表并非对所有区服/账号都下发 140（2026-11-18 用户反馈 s1
-				// 仍需开箱）。只记 INFO 继续尝试；开箱有无回包/库存是否变化由
-				// 下方核对逻辑按箱型退避 6 小时，不会热循环。
-				slog.Info("功能列表未包含结缘(140)，仍尝试开箱",
-					"role_id", session.RoleID(), "function_id", protocol.FunctionIDLinkFate)
-			}
+			// 不在列表前做功能开放(0/6)探测：官方抓包中登录后第一个结缘请求就是
+			// 232/30，任何前置业务请求都会改变 528/1 的上下文并在本服被静默丢弃
+			// （2026-11-22 实测）。功能未开放时列表为空，下方直接返回。
 
 			slog.Info("正在执行结缘任务: 结缘宝箱自动开启 (每批最多10个，严格排除传说宝箱)",
 				"role_id", session.RoleID(),
