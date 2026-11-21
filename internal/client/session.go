@@ -48,6 +48,8 @@ const (
 	credentialRefreshFailureThreshold = 3
 	// roleSelectionRetryInterval 服务端要求选角时的低频复查间隔。
 	roleSelectionRetryInterval = 10 * time.Minute
+	// sessionReleaseWait 登录握手超时后的最小等待，给网关释放旧会话留出时间。
+	sessionReleaseWait = 20 * time.Second
 )
 
 const (
@@ -2266,6 +2268,20 @@ func (s *RoleSession) runLoop() {
 	}
 }
 
+// reconnectWait 在指数退避基础上，针对「登录握手超时」给出更长的等待。
+//
+// 网关在旧会话未释放时仍会接受 TCP 连接，但对 login 请求 15 秒内不回包；
+// 2026-11-22 实测断线后立即重连会连续触发 3~4 次握手超时（每次 15 秒），
+// 既拖慢恢复又增加登录频次。这里对握手超时至少等待 sessionReleaseWait，
+// 让服务端先释放旧会话，再发起下一次登录。
+func reconnectWait(err error, attempt int, base time.Duration) time.Duration {
+	wait := nextReconnectDelay(attempt, base)
+	if errors.Is(err, context.DeadlineExceeded) && wait < sessionReleaseWait {
+		wait = sessionReleaseWait
+	}
+	return wait
+}
+
 // nextReconnectDelay 计算第 attempt 次连续重连失败后的等待时长。
 //
 // base 为配置的 ReconnectInterval；前置指数退避（×1/2/4/8/16），
@@ -2360,7 +2376,7 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 	// 前 10 次重试上限 30 秒（网关短暂抖动/跨服切换常见）；
 	// 连续 10 次以上仍失败时说明不是瞬时故障（例如服务端持续拒绝握手、
 	// 风控限流），把上限拉到 5 分钟，避免每 30 秒反复登录触发更强风控。
-	waitDuration := nextReconnectDelay(s.reconnectAttempts, s.cfg.ReconnectInterval)
+	waitDuration := reconnectWait(err, s.reconnectAttempts, s.cfg.ReconnectInterval)
 	// 服务端要求选择/创建角色：这是需要用户人工处理的状态，30 秒重试毫无意义，
 	// 固定按 10 分钟低频复查（用户可能在官方客户端选好角色后自动恢复）。
 	if errors.Is(err, ErrRoleSelectionRequired) {

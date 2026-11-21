@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"io"
 	"testing"
 	"time"
@@ -80,5 +81,20 @@ func TestShouldRefreshCredentials(t *testing.T) {
 	s.markCredentialRefreshed()
 	if s.shouldRefreshCredentials() {
 		t.Fatal("刚换票成功后不应再次换票")
+	}
+}
+
+// TestReconnectWait_HandshakeTimeout 验证登录握手超时后至少等待旧会话释放窗口，
+// 避免断线后立刻重连导致连续多次 15 秒握手超时。
+func TestReconnectWait_HandshakeTimeout(t *testing.T) {
+	if got := reconnectWait(context.DeadlineExceeded, 1, 2*time.Second); got != sessionReleaseWait {
+		t.Fatalf("握手超时首次重连应等待 %s, got %s", sessionReleaseWait, got)
+	}
+	if got := reconnectWait(io.EOF, 1, 2*time.Second); got != 2*time.Second {
+		t.Fatalf("普通 EOF 首次重连应保持 2s, got %s", got)
+	}
+	// 指数退避已超过释放窗口时保持原值。
+	if got := reconnectWait(context.DeadlineExceeded, 5, 2*time.Second); got != 30*time.Second {
+		t.Fatalf("长退避不应被缩短, got %s", got)
 	}
 }
