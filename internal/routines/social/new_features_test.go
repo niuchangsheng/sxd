@@ -13,6 +13,12 @@ import (
 )
 
 func newSocialMockSession(t *testing.T, handler func(net.Conn, *protocol.Packet)) *client.RoleSession {
+	return newSocialMockSessionWithItemNum(t, 100, handler)
+}
+
+// newSocialMockSessionWithItemNum 与 newSocialMockSession 相同，但固定返回
+// 2/107 道具数量查询结果（默认 100），供需要预检道具数量的用例覆盖。
+func newSocialMockSessionWithItemNum(t *testing.T, itemNum int32, handler func(net.Conn, *protocol.Packet)) *client.RoleSession {
 	t.Helper()
 	serverConn, clientConn := net.Pipe()
 	t.Cleanup(func() {
@@ -24,6 +30,11 @@ func newSocialMockSession(t *testing.T, handler func(net.Conn, *protocol.Packet)
 			pkt, err := protocol.ReadPacket(serverConn)
 			if err != nil {
 				return
+			}
+			if pkt.ActionID == protocol.ActionIDItemGetTheItemNum {
+				w := protocol.NewWriter().WriteInt32(itemNum)
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+				continue
 			}
 			handler(serverConn, pkt)
 		}

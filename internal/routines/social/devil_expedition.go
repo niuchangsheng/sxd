@@ -30,6 +30,13 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
+// devilTumoLingItemID 屠魔令道具编号 (Pieb.db item.id=6192)。
+const devilTumoLingItemID int32 = 6192
+
+// devilTumoLingCost 每次 start_expedition_single 消耗的屠魔令数量。
+// 用户 2026-11-22 确认线上为 10（静态表描述为 5，以线上为准）。
+const devilTumoLingCost int32 = 10
+
 // devilMissionTownFallback 当服务端未推送 notify_enter_mission 时的已知城镇映射。
 var devilMissionTownFallback = map[uint8]int32{
 	protocol.DevilMissionYinYang: 144,
@@ -180,6 +187,24 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 			if panel.TumoLingNum <= 0 {
 				slog.Info("魔界远征屠魔令为 0，跳过所有伙伴挑战", "role_id", session.RoleID())
 				return scheduler.NewCooldown(time.Hour, "魔界远征屠魔令不足")
+			}
+
+			// 屠魔令预检：每次 429/63 固定消耗 10 个，背包不足时服务端直接
+			// 静默丢包，10 秒超时只会白占一轮（2026-11-22 10:32 实测）。
+			// 面板的 tumoling_num 不是背包数量（docs/research/mojie-expedition-recon.md），
+			// 必须用 2/107 查询道具 6192 的真实持有量。
+			tumoLing, tErr := session.GetItemNum(ctx, devilTumoLingItemID)
+			if tErr != nil {
+				slog.Info("魔界远征屠魔令数量查询无回包，稍后重试",
+					"role_id", session.RoleID(), "err", tErr)
+				return scheduler.NewCooldown(30*time.Minute, "魔界远征屠魔令数量无回包")
+			}
+			slog.Info("魔界远征屠魔令数量", "role_id", session.RoleID(),
+				"have", tumoLing, "need", devilTumoLingCost)
+			if tumoLing < devilTumoLingCost {
+				slog.Info("魔界远征屠魔令不足，跳过全部伙伴挑战",
+					"role_id", session.RoleID(), "have", tumoLing, "need", devilTumoLingCost)
+				return scheduler.NewCooldown(2*time.Hour, "魔界远征屠魔令不足")
 			}
 
 			// 服务端在 start_expedition_single 后推送 notify_enter_mission。

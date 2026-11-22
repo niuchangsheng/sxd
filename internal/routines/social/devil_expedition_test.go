@@ -316,3 +316,34 @@ func TestDevilExpeditionRoutine_StopsAfterConsecutiveTeamFailures(t *testing.T) 
 		t.Fatal("结束该伙伴挑战后应退出远征")
 	}
 }
+
+// TestDevilExpeditionRoutine_InsufficientBagTumoling 验证开始前用 2/107 查询
+// 背包屠魔令数量，少于 10 个时直接冷却，不发送必然被静默丢弃的 429/63。
+func TestDevilExpeditionRoutine_InsufficientBagTumoling(t *testing.T) {
+	var startCalls atomic.Int32
+	sess := newSocialMockSessionWithItemNum(t, 9, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPlayerGetFunctions:
+			_ = protocol.WritePacket(conn, protocol.BuildPlayerFunctionsResultPacket(
+				[]int32{protocol.FunctionIDDevilExpedition}))
+		case protocol.ActionIDDevilActivityStatus:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DevilActivityOpen}))
+		case protocol.ActionIDDevilMatchPanel:
+			_ = protocol.WritePacket(conn, protocol.BuildDevilMatchPanelResultPacket(devilPanel(
+				0, 0, []protocol.DevilSoul{{RoleID: 486, WeekMaxSoul: 20}})))
+		case protocol.ActionIDDevilStartExpeditionSingle:
+			startCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.DevilResultSuccess}))
+		}
+	})
+	defer sess.Close()
+
+	err := NewDevilExpeditionRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("屠魔令不足应返回 CooldownError, got %v", err)
+	}
+	if startCalls.Load() != 0 {
+		t.Fatalf("屠魔令不足时不得发送 start 请求, start calls = %d", startCalls.Load())
+	}
+}
