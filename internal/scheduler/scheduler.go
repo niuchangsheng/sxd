@@ -182,6 +182,13 @@ func (s *RoleScheduler) runLoop() {
 
 		// 执行任务并捕获业务语义异常
 		execErr := item.routine.Execute(s.ctx, s.session, s.jitter)
+		// 例程内部可能把「断线」当成普通查询失败而 return nil（例如
+		// IsFunctionOpen 报 session is not active 后直接跳过），Cron 任务就会
+		// 直接等到次日。这里统一兜底：返回 nil 但会话已不在激活态，按断线
+		// 处理，5 分钟后重连重试。
+		if execErr == nil && s.session != nil && s.session.State() != client.StateActive {
+			execErr = client.ErrNotConnected
+		}
 
 		item.lastRun = time.Now()
 		item.runCount++

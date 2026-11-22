@@ -1897,8 +1897,12 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 			}
 			deploy := masterPracticeFetchDeploy(call)
 			if deploy == nil {
-				slog.Info("宗师修行布阵信息不可用，跳过", "role_id", session.RoleID())
-				return nil
+				if session.State() != client.StateActive {
+					return client.ErrNotConnected
+				}
+				// 布阵面板被静默丢弃时不要直接等到次日，10 分钟后重试。
+				slog.Info("宗师修行布阵信息不可用，10 分钟后重试", "role_id", session.RoleID())
+				return scheduler.NewCooldown(10*time.Minute, "宗师修行布阵信息不可用")
 			}
 			_, currentJob, hasMain := masterPracticeProtagonistJob(deploy, cfg.DictRepo)
 			if !hasMain {
