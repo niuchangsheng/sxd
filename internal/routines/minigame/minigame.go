@@ -2704,10 +2704,12 @@ func classifyMasterPracticeChallengeResult(code uint8) (masterPracticeChallengeO
 // AwardSelectorFunc 允许注入自定义交互选择器（例如命令行交互、Web交互回调或自动化测试桩）。
 type AwardSelectorFunc func(ctx context.Context, pool *protocol.TreasureHousePool, dict dictionary.Repository) ([]protocol.TreasureAwardSelect, error)
 
-// treasureHousePriority 天帝宝库调度优先级：高于孩子日常 (120) 与 PriorityHigh (100)。
-// Act 4 set_use_free_flag 会严格校验城镇/战场上下文，服务端在前置状态被污染时会
-// 静默丢弃该请求；因此宝库必须排在本轮所有场景/队伍类玩法之前执行。
-const treasureHousePriority scheduler.RoutinePriority = 200
+// treasureHousePriority 天帝宝库调度优先级。
+// Act 4 set_use_free_flag 会严格校验城镇/战场上下文，服务端在前置状态被污染
+// （试炼建队、副本战斗、跨服战斗等）时会静默丢弃该请求；因此宝库必须排在
+// 本轮所有场景/队伍类玩法之前执行。2026-11-22 实测优先级 200 时仍被推图
+// (300)/结缘(250) 抢先，导致 Act 4 失败；提升到 450，登录后第一个执行。
+const treasureHousePriority scheduler.RoutinePriority = 450
 
 // 天帝宝库非交互模式选奖策略。
 const (
