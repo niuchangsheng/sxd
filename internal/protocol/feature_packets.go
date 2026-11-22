@@ -1425,13 +1425,14 @@ func BuildTreasureHouseMainPanelPacket(prevAct uint32) *Packet {
 
 // BuildTreasureHouseUseFreeFlagPacket 构造设置优先使用免费次数封包 (Module 594, Action 4)。
 //
-// 官方请求参数为 [Byte flag]，但 DataBase.netCall 封包统一在包尾追加 4 字节
-// PrevAct。2026-11-14 曾尝试 [Int flag][PrevAct] (8 字节) 失败；2026-11-22
-// 确认正确形态是 [Byte flag][4B PrevAct] (5 字节)，与 357/0、853 等模块一致。
+// Main.swf 协议定义 request 为 [Int flag]。DataBase.netCall 再在包尾追加 4 字节
+// PrevAct，因此正确载荷是 8 字节。2026-11-14 的 8 字节尝试失败是当时 PrevAct
+// 链使用了「最后收包」锚点所致（与 357/0、853 同一根因）；链修复后此处恢复
+// 官方 [Int flag][4B PrevAct] 形态。
 func BuildTreasureHouseUseFreeFlagPacket(flag int32, prevAct uint32) *Packet {
 	_ = prevAct
 	w := NewWriter()
-	w.WriteUint8(uint8(flag))
+	w.WriteInt32(flag)
 	w.WriteUint32(0) // PrevAct 占位，由会话层覆盖
 	pkt := NewPacket(ActionIDTreasureHouseSetUseFreeFlag, w.Bytes())
 	pkt.PrevActFromLastSent = true
