@@ -108,3 +108,41 @@ func NewBagCleanupRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 		},
 	)
 }
+
+// sellEquipmentScrollsAfterEliteSweep 精英副本扫荡结束后的兜底出售：
+// 卖出背包内所有装备制作卷 (TypeID=1002、名称含「制作卷」、无元宝价值)。
+// 仅在 ncs/qq 的 s0 服务器生效；网络/解析失败只记录日志，不影响扫荡结果。
+func sellEquipmentScrollsAfterEliteSweep(ctx context.Context, session *client.RoleSession, dictRepo dictionary.Repository) {
+	if session == nil || dictRepo == nil {
+		return
+	}
+	if !strings.HasPrefix(session.RoleID(), "s0-") {
+		return
+	}
+	pack, err := fetchPackItemList(ctx, session)
+	if err != nil || pack == nil {
+		slog.Warn("精英扫荡后出售装备制作卷：拉取背包失败",
+			"role_id", session.RoleID(), "err", err)
+		return
+	}
+	sold := 0
+	for _, it := range pack.PackItems {
+		dItem, dErr := dictRepo.GetItem(int(it.ItemID))
+		if dErr != nil || dItem == nil {
+			continue
+		}
+		if dItem.TypeID != eliteSweepStackItemTypeID || dItem.Ingot > 0 {
+			continue
+		}
+		if !strings.Contains(dItem.Name, "制作卷") {
+			continue
+		}
+		if ok, _ := sellPackItem(ctx, session, it); ok {
+			sold++
+		}
+	}
+	if sold > 0 {
+		slog.Info("精英副本扫荡结束，已出售装备制作卷",
+			"role_id", session.RoleID(), "sold", sold)
+	}
+}

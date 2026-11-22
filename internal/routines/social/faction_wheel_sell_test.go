@@ -23,7 +23,7 @@ type wheelMockOptions struct {
 }
 
 // wheelSellMock 搭建帮派转盘 mock：两次抽奖 (1 品丹药制作卷 382 + 非卷轴 1002)，
-// 背包中同时存在 382/383/1002，用于验证仅卖出转盘抽到的低阶卷轴。
+// 背包中同时存在 382/383/1002，用于验证卖出背包内所有 1-5 品丹药卷轴。
 func wheelSellMock(t *testing.T, opt wheelMockOptions) (*client.RoleSession, func() []int16, func() int32) {
 	t.Helper()
 	serverConn, clientConn := net.Pipe()
@@ -93,7 +93,7 @@ func wheelSellMock(t *testing.T, opt wheelMockOptions) (*client.RoleSession, fun
 	}()
 
 	sess := client.NewRoleSession(client.SessionConfig{
-		RoleID:     "role_wheel_sell",
+		RoleID:     "s0-role_wheel_sell",
 		RoleName:   "转盘出售测试",
 		ServerAddr: "wheel-sell-pipe",
 		Dialer:     func(ctx context.Context, network, addr string) (net.Conn, error) { return clientConn, nil },
@@ -129,8 +129,8 @@ func wheelSellMock(t *testing.T, opt wheelMockOptions) (*client.RoleSession, fun
 		}
 }
 
-// TestFactionLuckyWheelRoutine_SellsLowPillScrolls 验证转盘抽到 1-5 品丹药制作卷后
-// 会查询背包并只卖出对应卷轴 (不误卖未抽到的卷轴或其他道具)。
+// TestFactionLuckyWheelRoutine_SellsLowPillScrolls 验证转盘结束后
+// 在 s0 卖出背包内所有 1-5 品丹药制作卷 (382/383)。
 func TestFactionLuckyWheelRoutine_SellsLowPillScrolls(t *testing.T) {
 	sess, sold, packQueries := wheelSellMock(t, wheelMockOptions{})
 
@@ -144,8 +144,8 @@ func TestFactionLuckyWheelRoutine_SellsLowPillScrolls(t *testing.T) {
 		t.Fatalf("应查询背包 1 次, 实际 %d 次", got)
 	}
 	grids := sold()
-	if len(grids) != 1 || grids[0] != 7 {
-		t.Fatalf("应只卖出格位 7 (道具 382), 实际 %v", grids)
+	if len(grids) != 2 || grids[0] != 7 || grids[1] != 8 {
+		t.Fatalf("应卖出格位 7/8 (道具 382/383), 实际 %v", grids)
 	}
 }
 
@@ -189,8 +189,8 @@ func TestFactionLuckyWheelRoutine_SellAfterSpinDrop(t *testing.T) {
 		t.Fatalf("抽奖中断后仍应查询背包 1 次, 实际 %d 次", got)
 	}
 	grids := sold()
-	if len(grids) != 1 || grids[0] != 7 {
-		t.Fatalf("抽奖中断后仍应卖出格位 7, 实际 %v", grids)
+	if len(grids) != 2 || grids[0] != 7 || grids[1] != 8 {
+		t.Fatalf("抽奖中断后仍应卖出格位 7/8, 实际 %v", grids)
 	}
 }
 
@@ -204,7 +204,7 @@ func TestFactionLuckyWheelRoutine_SellRejected(t *testing.T) {
 	if err := NewFactionLuckyWheelRoutine().Execute(execCtx, sess, nil); err != nil {
 		t.Fatalf("出售被拒不应导致例程失败: %v", err)
 	}
-	if grids := sold(); len(grids) != 1 || grids[0] != 7 {
-		t.Fatalf("应尝试卖出格位 7, 实际 %v", grids)
+	if grids := sold(); len(grids) != 2 || grids[0] != 7 || grids[1] != 8 {
+		t.Fatalf("应尝试卖出格位 7/8, 实际 %v", grids)
 	}
 }

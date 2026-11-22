@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -934,8 +935,9 @@ func NewFactionLuckyWheelRoutine(cfgs ...FactionLuckyWheelConfig) scheduler.Acti
 			}
 
 			slog.Info("帮派转盘抽奖完成", "role_id", session.RoleID(), "spins", spins, "remain_rosefinch", remain)
-			if cfg.SellLowPillScrolls && len(lowPillScrolls) > 0 {
-				sellLowPillScrolls(ctx, session, lowPillScrolls)
+			if cfg.SellLowPillScrolls {
+				// 大循环兜底：转盘消耗青龙令后，在 s0 卖出背包内所有 1-5 品丹药制作卷。
+				sellLowPillScrolls(ctx, session)
 			}
 			return nil
 		},
@@ -945,7 +947,11 @@ func NewFactionLuckyWheelRoutine(cfgs ...FactionLuckyWheelConfig) scheduler.Acti
 // sellLowPillScrolls 查询主背包并卖出本轮转盘抽到的 1-5 品丹药制作卷。
 //
 // 出售仅回收铜钱，不消耗元宝；网络/解析失败只记录日志，不影响转盘结果。
-func sellLowPillScrolls(ctx context.Context, session *client.RoleSession, itemIDs map[int32]struct{}) {
+func sellLowPillScrolls(ctx context.Context, session *client.RoleSession) {
+	// 只在 ncs/qq 的 s0 服务器生效；s1 不动背包。
+	if !strings.HasPrefix(session.RoleID(), "s0-") {
+		return
+	}
 	packCtx, packCancel := context.WithTimeout(ctx, 8*time.Second)
 	packResp, packErr := session.Call(packCtx, protocol.BuildGetPackItemListPacket(), protocol.ActionIDItemGetPackList)
 	packCancel()
@@ -963,7 +969,7 @@ func sellLowPillScrolls(ctx context.Context, session *client.RoleSession, itemID
 
 	sold := 0
 	for _, it := range pack.PackItems {
-		if _, ok := itemIDs[it.ItemID]; !ok {
+		if _, ok := lowPillScrollItemIDs[it.ItemID]; !ok {
 			continue
 		}
 		if it.GridID <= 0 || it.GridID > 32767 {
@@ -997,7 +1003,7 @@ func sellLowPillScrolls(ctx context.Context, session *client.RoleSession, itemID
 			"role_id", session.RoleID(), "item_id", it.ItemID, "grid_id", it.GridID)
 	}
 	slog.Info("帮派转盘低阶丹药卷轴出售完成",
-		"role_id", session.RoleID(), "sold", sold, "item_kinds", len(itemIDs))
+		"role_id", session.RoleID(), "sold", sold, "item_kinds", len(lowPillScrollItemIDs))
 }
 
 // luckyWheelResultText 返回帮派转盘结果码的中文说明。
