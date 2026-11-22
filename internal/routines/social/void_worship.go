@@ -28,7 +28,8 @@ func NewVoidWorshipRoutine() scheduler.ActivityRoutine {
 		"void_worship",
 		"social",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 虚空/大神榜在长会话后段易被静默丢弃，登录后尽早执行。
+		scheduler.RoutinePriority(330),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
