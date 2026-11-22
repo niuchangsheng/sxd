@@ -945,3 +945,49 @@ func TestRoleSession_BeelzebubTrialsAutoChallengeAll_FiltersClearedBosses(t *tes
 		}
 	}
 }
+
+func TestBeelzebubTrialsExitTeam_FailureResultCode(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			if pkt.ActionID == protocol.ActionIDBeelzebubTrialsExitTeam {
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(
+					protocol.ActionIDBeelzebubTrialsExitTeam,
+					[]byte{protocol.BeelzebubTrialsFailed},
+				))
+			}
+		}
+	}()
+
+	s := NewRoleSession(SessionConfig{
+		ServerAddr: "sandbox",
+		RoleID:     "1002",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *RoleSession) error { return nil },
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("session start failed: %v", err)
+	}
+	defer s.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for s.State() != StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if err := s.BeelzebubTrialsExitTeam(ctx); err == nil {
+		t.Fatal("expected error when exit_team returns non-success result code")
+	}
+}

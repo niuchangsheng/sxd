@@ -10,6 +10,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -40,15 +41,17 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行社交任务: 神仙收藏册", "role_id", session.RoleID())
 
+			caller := kit.NewCaller(ctx, session, 5*time.Second)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
+				return caller.Call(pkt, act)
 			}
 
 			// 1. 声望档位奖励。
 			resp, err := call(protocol.BuildCollectionBookletsPopularityInfoPacket(), protocol.ActionIDCollectionBookletsPopularityInfo)
 			if err != nil || resp == nil {
+				if abort, ok := kit.IsAbortErr(err); ok {
+					return abort
+				}
 				slog.Info("神仙收藏册功能不可用或未开放，稍后重试", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(30*time.Minute, "神仙收藏册声望面板无回包")
 			}

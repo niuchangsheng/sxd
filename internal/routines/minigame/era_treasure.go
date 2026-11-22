@@ -8,6 +8,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -27,10 +28,9 @@ func NewEraTreasureRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("纪元秘藏协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -40,6 +40,9 @@ func NewEraTreasureRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildEraTreasurePanelPacket(), protocol.ActionIDEraTreasurePanel)
 			if panelResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				// 面板无回包通常是活动未开启/不在赛季；定时重试而不是等 24 小时。
 				slog.Info("纪元秘藏面板无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "纪元秘藏面板无回包")
@@ -48,6 +51,9 @@ func NewEraTreasureRoutine() scheduler.ActivityRoutine {
 
 			oneKeyResp := call(protocol.BuildEraTreasureOneKeyPacket(), protocol.ActionIDEraTreasureOneKey)
 			if oneKeyResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return scheduler.NewCooldown(30*time.Minute, "纪元秘藏一键领取无回包")
 			}
 			code, err := protocol.ParseEraTreasureResult(oneKeyResp.Payload)

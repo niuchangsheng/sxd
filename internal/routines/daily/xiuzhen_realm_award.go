@@ -19,6 +19,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -42,7 +43,7 @@ func NewXiuZhenRealmAwardRoutine() scheduler.ActivityRoutine {
 		"daily",
 		scheduler.ScheduleCron,
 		// 与其他礼包类任务一样，登录后优先执行，避免长会话后段被静默丢弃。
-		scheduler.RoutinePriority(365),
+		scheduler.PhasePriority(scheduler.PhaseEarlyBattle, 15),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -51,8 +52,9 @@ func NewXiuZhenRealmAwardRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				resp, err := session.CallWithPrevActResync(ctx, callTimeout, pkt, act)
+				resp, err := caller.CallResync(pkt, act)
 				if err != nil {
 					slog.Info("修真境界协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err,
@@ -69,6 +71,8 @@ func NewXiuZhenRealmAwardRoutine() scheduler.ActivityRoutine {
 					slog.Info("修真境界主面板", "role_id", session.RoleID(),
 						"result", code, "result_text", protocol.XiuZhenRealmResultText(code))
 				}
+			} else if abort := caller.AbortErr(); abort != nil {
+				return abort
 			} else if session.State() != client.StateActive {
 				return client.ErrNotConnected
 			}
@@ -76,13 +80,16 @@ func NewXiuZhenRealmAwardRoutine() scheduler.ActivityRoutine {
 			resp := call(protocol.BuildXiuZhenRealmExtraAwardPacket(),
 				protocol.ActionIDXiuZhenRealmExtraAward)
 			if resp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				if session.State() != client.StateActive {
 					return client.ErrNotConnected
 				}
-				return scheduler.HandleSilentDrop(session, "xiuzhen_realm_award", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "xiuzhen_realm_award", 3,
 					30*time.Minute, "修真境界礼包领取无回包")
 			}
-			scheduler.ResetSilentDrops(session, "xiuzhen_realm_award")
+			scheduler.ResetSilentDropsCtx(ctx, session, "xiuzhen_realm_award")
 
 			res, err := protocol.ParseXiuZhenRealmResult(resp.Payload)
 			if err != nil {

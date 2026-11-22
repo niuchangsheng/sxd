@@ -12,6 +12,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -30,13 +31,10 @@ const (
 	// 2026-11-20 实机：连续快速培养约 2 次后服务端即静默丢弃（剩 18/12 次
 	// 未用完）。按人工点击节奏留出间隔可显著降低被限流的概率。
 	petAnimalFeedInterval = 600 * time.Millisecond
-	// petAnimalPriority 叶公好龙调度优先级。
-	//
-	// 2026-11-07 线上实测：Module 48 在角色经过副本/农场等场景切换后再查询会
-	// 被服务端静默丢弃 (8s 超时)，而在登录后较早的主服城镇会话中可正常返回面板。
-	// 因此将其排在孩子日常 (120) 之前、天帝宝库 (200) 之后尽早执行。
-	petAnimalPriority scheduler.RoutinePriority = 130
 )
+
+// petAnimalPriority 叶公好龙调度优先级：高优日常阶段，排在孩子日常之前尽早执行。
+var petAnimalPriority = scheduler.PhasePriority(scheduler.PhaseHighPriority, 30)
 
 // NewPetAnimalRoutine 构造叶公好龙普通培养任务。
 //
@@ -72,6 +70,9 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDPetAnimal)
 			if fErr != nil {
+				if abortErr, ok := kit.IsAbortErr(fErr); ok {
+					return abortErr
+				}
 				slog.Info("叶公好龙功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			}
@@ -80,27 +81,22 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			caller := kit.NewCaller(ctx, session, petAnimalCallTimeout)
 			// tryInfoOnce 发送一次面板请求，不打印重复的无回包日志。
 			tryInfoOnce := func(pkt *protocol.Packet) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, petAnimalCallTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, protocol.ActionIDPetAnimalInfo)
-				if err != nil {
-					return nil
-				}
-				return resp
+				return caller.TryCall(pkt, protocol.ActionIDPetAnimalInfo)
 			}
 			fetchInfo := func() *protocol.PetAnimalInfo {
 				playerID := session.PlayerID()
 				resp := tryInfoOnce(protocol.BuildPetAnimalInfoPacket(playerID, session.LastActionID()))
-				if resp == nil {
+				if resp == nil && caller.AbortErr() == nil {
 					// Module 48 对会话上下文敏感：先用功能开放查询重置动作链，
 					// 再重试带 PrevAct 请求，最后退回无 PrevAct 裸载荷。
 					if _, err := session.CheckFunctionOpen(ctx, protocol.FunctionIDPetAnimal); err == nil {
 						resp = tryInfoOnce(protocol.BuildPetAnimalInfoPacket(playerID, session.LastActionID()))
 					}
 				}
-				if resp == nil {
+				if resp == nil && caller.AbortErr() == nil {
 					resp = tryInfoOnce(protocol.BuildPetAnimalInfoPacketBare(playerID))
 				}
 				if resp == nil {
@@ -117,9 +113,12 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 
 			info := fetchInfo()
 			if info == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				// 面板被静默丢弃通常意味着当日状态已结束/动作链失效；连续 3 次后
 				// 挂起到下一次每日重置，避免每 10 分钟无限空转。
-				return scheduler.HandleSilentDrop(session, "pet_animal", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "pet_animal", 3,
 					10*time.Minute, "叶公好龙面板无回包")
 			}
 			// 注意：面板成功不代表培养动作可用，此处不清零丢包计数；
@@ -157,26 +156,34 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 				// Module 48 对 PrevAct 链敏感：首次无回包时按「最后收到的包」
 				// 重同步重试一次，避免一次丢包就把剩余培养次数拖到下一轮
 				// （2026-11-18 s1 实测多次因单次丢包提前中止）。
-				resp, _ := session.CallWithPrevActResync(ctx, petAnimalCallTimeout,
+				resp, callErr := caller.CallResync(
 					protocol.BuildPetAnimalFeedPacket(protocol.PetAnimalFeedTypeCoin, session.LastActionID()),
 					protocol.ActionIDPetAnimalFeed)
+				if abortErr, ok := kit.IsAbortErr(callErr); ok {
+					return abortErr
+				}
 				if resp == nil {
 					// Module 48 在上下文链失效时会连续丢弃培养请求；先发一次
 					// 功能开放查询（0/69）重置动作链，再重试一次（与面板查询
 					// 的恢复手段一致）。
 					if _, fErr := session.CheckFunctionOpen(ctx, protocol.FunctionIDPetAnimal); fErr == nil {
-						resp, _ = session.CallWithPrevActResync(ctx, petAnimalCallTimeout,
+						resp, callErr = caller.CallResync(
 							protocol.BuildPetAnimalFeedPacket(protocol.PetAnimalFeedTypeCoin, session.LastActionID()),
 							protocol.ActionIDPetAnimalFeed)
+						if abortErr, ok := kit.IsAbortErr(callErr); ok {
+							return abortErr
+						}
+					} else if abortErr, ok := kit.IsAbortErr(fErr); ok {
+						return abortErr
 					}
 				}
 				if resp == nil {
 					slog.Info("叶公好龙培养无回包，本轮中止并保留剩余次数",
 						"role_id", session.RoleID(), "remaining", remaining)
-					return scheduler.HandleSilentDrop(session, "pet_animal", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "pet_animal", 3,
 						10*time.Minute, "叶公好龙培养无回包")
 				}
-				scheduler.ResetSilentDrops(session, "pet_animal")
+				scheduler.ResetSilentDropsCtx(ctx, session, "pet_animal")
 				res, err := protocol.ParsePetAnimalFeedResult(resp.Payload)
 				if err != nil {
 					slog.Warn("解析叶公好龙培养回包失败", "role_id", session.RoleID(), "err", err)

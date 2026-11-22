@@ -18,6 +18,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -46,7 +47,7 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 		scheduler.ScheduleCron,
 		// 与无量劫海/飞升同理：长会话后段 851/5 更容易被静默丢弃，
 		// 登录后优先完成。
-		scheduler.RoutinePriority(370),
+		scheduler.PhasePriority(scheduler.PhaseEarlyBattle, 20),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -55,8 +56,9 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				resp, err := session.CallWithPrevActResync(ctx, callTimeout, pkt, act)
+				resp, err := caller.CallResync(pkt, act)
 				if err != nil {
 					slog.Info("修真境界协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -115,12 +117,15 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 				resp := call(protocol.BuildEraRebirthAttrUseTimeItemPacket(it.ItemID, it.Num),
 					protocol.ActionIDEraRebirthAttrUseTimeItem)
 				if resp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					// 道具不可用/当日状态结束后服务端会静默丢弃 851/5；
 					// 连续 3 次挂起到次日重置，避免每 30 分钟空等。
-					return scheduler.HandleSilentDrop(session, "era_rebirth_attr_gift", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "era_rebirth_attr_gift", 3,
 						30*time.Minute, "修真境界道具使用无回包")
 				}
-				scheduler.ResetSilentDrops(session, "era_rebirth_attr_gift")
+				scheduler.ResetSilentDropsCtx(ctx, session, "era_rebirth_attr_gift")
 				code, pErr := protocol.ParseEraRebirthAttrUseResult(resp.Payload)
 				if pErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "修真境界道具回包解析失败")

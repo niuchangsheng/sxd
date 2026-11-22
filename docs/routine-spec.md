@@ -111,6 +111,16 @@ stateDiagram-v2
 - 每次与服务端发起核心交互前，必须穿透调用 `jitter.Wait(ctx)`。
 - 在 `configs/config.yaml` 中配置抖动区间（默认 `min: 1.0s, max: 3.0s`），利用泊松或高斯分布生成不可预测的操作间隔。
 
+### 2.4 玩法工程原语与横切中间件
+- **语义化优先级阶段**：所有 Routine 优先级必须使用 `scheduler.Priority*` 或 `scheduler.PhasePriority(phase, offset)`（`PhaseCleanup` / `PhaseStandard` / `PhaseHighPriority` / `PhaseEarlyWindow` / `PhaseCoreLoop` / `PhaseEarlyBattle` / `PhaseTownSensitive` / `PhaseSystem`），禁止直接填写魔数 `scheduler.RoutinePriority(NNN)`。
+- **声明式生命周期选项**：战斗或跨场景结束后需要回城的玩法，统一在 `scheduler.NewBaseRoutine(...)` 末尾声明 `scheduler.WithReturnToTown()`，不再手写 `defer session.ReturnToTown(...)`；需原生功能门禁或自定义静默丢包阈值的玩法可使用 `scheduler.WithFunctionID(...)` 与 `scheduler.WithSilentDropPolicy(...)`。
+- **调度器隔离丢包计数**：玩法记录/清零静默丢包必须使用上下文感知接口 `scheduler.HandleSilentDropCtx` / `ResetSilentDropsCtx` / `NoteSilentDropCtx` / `SilentDropCountCtx`，由所属 `RoleScheduler` 的独立 `DropTracker` 承载，避免全局单例互相污染。
+- **统一调用与休眠原语（`internal/routines/kit`）**：
+  - 玩法内统一使用 `kit.NewCaller(ctx, session, timeout)`（或 `kit.Call` / `kit.CallResync`），遇 `nil`/错误时通过 `caller.AbortErr()` 或 `kit.IsAbortErr(err)` 立即向上透传断线与取消事件，不得手写吞错局部 `call` 闭包。
+  - 所有短暂停顿必须使用可中断的 `kit.Sleep(ctx, d)`，禁止在玩法中使用裸 `time.Sleep`。
+  - 单元测试可使用 `kit.WithTimeoutOverride(ctx, d)` 压缩静默丢包超时，避免测试长时干等。
+- **统一 PrevAct 链语义**：封包尾部 4 字节前序动作由 `protocol.PrevActMode`（`PrevActNone` / `PrevActAutoBusiness` / `PrevActExplicit`）显式声明，由 `client.PrevActChain` 统一管理锚点、链污染回退与重同步重试。
+
 ---
 
 ## 三、 六大核心玩法子系统实战规范

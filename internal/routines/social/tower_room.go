@@ -21,6 +21,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -100,10 +101,9 @@ func NewTowerRoomRoutine() scheduler.ActivityRoutine {
 				return scheduler.NewCooldown(delay, "全服伏魔塔非开放日")
 			}
 
+			caller := kit.NewCaller(ctx, session, towerRoomCallTimeout)
 			call := func(pkt *protocol.Packet) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, towerRoomCallTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, pkt.ActionID)
+				resp, err := caller.Call(pkt, pkt.ActionID)
 				if err != nil {
 					slog.Info("全服伏魔塔请求无回包", "role_id", session.RoleID(),
 						"action", pkt.ActionID, "err", err)
@@ -117,15 +117,20 @@ func NewTowerRoomRoutine() scheduler.ActivityRoutine {
 			if openResp != nil {
 				slog.Info("全服伏魔塔入口面板", "role_id", session.RoleID(),
 					"payload_len", len(openResp.Payload))
+			} else if abort := caller.AbortErr(); abort != nil {
+				return abort
 			}
 
 			if ctx.Err() != nil {
-				return nil
+				return ctx.Err()
 			}
 
 			// 2. 创建房间
 			createResp := call(protocol.BuildTowerRoomCreatePacket(session.LastActionID()))
 			if createResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(15*time.Minute, "全服伏魔塔创建房间无回包")
 			}
 			createRes, err := protocol.ParseTowerRoomCreateResult(createResp.Payload)

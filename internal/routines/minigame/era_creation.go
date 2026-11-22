@@ -12,6 +12,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -35,16 +36,18 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEraCreationRealm); fErr != nil {
+				if abortErr, ok := kit.IsAbortErr(fErr); ok {
+					return abortErr
+				}
 				slog.Info("造化秘境功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			} else if !open {
 				slog.Info("造化秘境功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDEraCreationRealm)
 				return nil
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("造化秘境协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -54,6 +57,9 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildEraCreationPanelPacket(), protocol.ActionIDEraCreationPanel)
 			if panelResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return scheduler.NewCooldown(time.Hour, "造化秘境面板无回包")
 			}
 			panelCode, err := protocol.ParseActionFirstByte(panelResp.Payload, "造化秘境面板")
@@ -70,6 +76,9 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 			// 1. 先探索，获得可挑战事件。
 			exploreResp := call(protocol.BuildEraCreationExplorePacket(), protocol.ActionIDEraCreationExplore)
 			if exploreResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return scheduler.NewCooldown(time.Hour, "造化秘境探索无回包")
 			}
 			explore, err := protocol.ParseEraCreationExplore(exploreResp.Payload)
@@ -96,6 +105,9 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 			// 2. 查询可挑战事件。
 			eventResp := call(protocol.BuildEraCreationFightEventPacket(), protocol.ActionIDEraCreationFightEvent)
 			if eventResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return scheduler.NewCooldown(time.Hour, "造化秘境事件无回包")
 			}
 			events, err := protocol.ParseEraCreationFightEvent(eventResp.Payload)
@@ -118,11 +130,14 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 				}
 				fightResp := call(protocol.BuildEraCreationFightPacket(eventID), protocol.ActionIDEraCreationFight)
 				if fightResp == nil {
+					if abortErr := caller.AbortErr(); abortErr != nil {
+						return abortErr
+					}
 					// 当日次数结束后服务端会静默丢弃挑战：连续 3 次挂起（最长 6 小时）。
-					return scheduler.HandleSilentDrop(session, "era_creation", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "era_creation", 3,
 						time.Hour, "造化秘境挑战无回包")
 				}
-				scheduler.ResetSilentDrops(session, "era_creation")
+				scheduler.ResetSilentDropsCtx(ctx, session, "era_creation")
 				fights++
 				code, fErr := protocol.ParseActionFirstByte(fightResp.Payload, "造化秘境挑战")
 				if fErr != nil {

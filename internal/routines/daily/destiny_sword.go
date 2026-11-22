@@ -10,6 +10,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -46,6 +47,9 @@ func NewDestinySwordRoutine() scheduler.ActivityRoutine {
 			// 先查功能开放列表；未开放时不再发送会被静默丢弃的飞剑面板请求。
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDDestinySword)
 			if fErr != nil {
+				if abort, ok := kit.IsAbortErr(fErr); ok {
+					return abort
+				}
 				slog.Info("飞剑功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			}
@@ -54,14 +58,16 @@ func NewDestinySwordRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			caller := kit.NewCaller(ctx, session, 5*time.Second)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
+				return caller.Call(pkt, act)
 			}
 
 			resp, err := call(protocol.BuildDestinySwordPanelPacket(), protocol.ActionIDDestinySwordPanel)
 			if err != nil || resp == nil {
+				if abort, ok := kit.IsAbortErr(err); ok {
+					return abort
+				}
 				slog.Info("飞剑功能不可用或未开放，稍后重试", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(30*time.Minute, "飞剑面板无回包")
 			}

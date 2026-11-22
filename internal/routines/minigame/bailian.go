@@ -12,6 +12,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -32,16 +33,18 @@ func NewBaiLianRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDBaiLianQianKun); fErr != nil {
+				if abortErr, ok := kit.IsAbortErr(fErr); ok {
+					return abortErr
+				}
 				slog.Info("百炼乾坤功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			} else if !open {
 				slog.Info("百炼乾坤功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDBaiLianQianKun)
 				return nil
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("百炼乾坤协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -56,6 +59,9 @@ func NewBaiLianRoutine() scheduler.ActivityRoutine {
 				}
 				infoResp := call(protocol.BuildBaiLianInfoPacket(two), baiLianInfoAction(two))
 				if infoResp == nil {
+					if abortErr := caller.AbortErr(); abortErr != nil {
+						return abortErr
+					}
 					continue
 				}
 				info, err := protocol.ParseBaiLianInfo(infoResp.Payload, two)
@@ -68,6 +74,9 @@ func NewBaiLianRoutine() scheduler.ActivityRoutine {
 
 				keyResp := call(protocol.BuildBaiLianOneKeyPacket(two), baiLianKeyAction(two))
 				if keyResp == nil {
+					if abortErr := caller.AbortErr(); abortErr != nil {
+						return abortErr
+					}
 					continue
 				}
 				code, err := protocol.ParseActionFirstByte(keyResp.Payload, name)

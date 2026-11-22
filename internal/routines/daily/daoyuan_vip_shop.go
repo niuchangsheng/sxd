@@ -12,6 +12,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -44,10 +45,9 @@ func NewDaoyuanVipShopRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(s *client.RoleSession, pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := s.Call(cCtx, pkt, act)
+				resp, err := caller.CallOn(s, pkt, act)
 				if err != nil {
 					slog.Info("道缘商店协议无回包", "role_id", s.RoleID(), "action", act, "err", err)
 					return nil

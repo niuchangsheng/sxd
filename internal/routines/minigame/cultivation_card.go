@@ -13,6 +13,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -37,10 +38,9 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("神仙卡牌协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -52,6 +52,9 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 			//    严格只购买铜钱结算 (cost_item_id=1747) 且余额足够的条目，绝不碰元宝档。
 			shopResp := call(protocol.BuildCultivationCardShopInfoPacket(), protocol.ActionIDCultivationShopInfo)
 			if shopResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return nil
 			}
 			items, extra, err := protocol.ParseCultivationCardShop(shopResp.Payload)
@@ -84,7 +87,11 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 				} else {
 					buyResp := call(protocol.BuildCultivationCardBuyShopPacket(chosen.ID),
 						protocol.ActionIDCultivationBuyShop)
-					if buyResp != nil {
+					if buyResp == nil {
+						if abortErr := caller.AbortErr(); abortErr != nil {
+							return abortErr
+						}
+					} else {
 						code, bErr := protocol.ParseActionFirstByte(buyResp.Payload, "神仙卡牌购买")
 						if bErr == nil {
 							slog.Info("神仙卡牌商城购买结果", "role_id", session.RoleID(),
@@ -98,6 +105,11 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 			// 2. 打开我的卡包。
 			opened := 0
 			bagResp := call(protocol.BuildCultivationCardBagInfoPacket(), protocol.ActionIDCultivationBagInfo)
+			if bagResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
+			}
 			if bagResp != nil {
 				bags, bErr := protocol.ParseCultivationCardBags(bagResp.Payload)
 				if bErr != nil {
@@ -116,6 +128,9 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 						openResp := call(protocol.BuildCultivationCardOpenBagPacket(bag.ItemID, 1),
 							protocol.ActionIDCultivationOpenBag)
 						if openResp == nil {
+							if abortErr := caller.AbortErr(); abortErr != nil {
+								return abortErr
+							}
 							return nil
 						}
 						code, oErr := protocol.ParseActionFirstByte(openResp.Payload, "神仙卡牌开卡包")
@@ -160,6 +175,9 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 				}
 				taskResp := call(protocol.BuildCultivationCardTaskInfoPacket(group), protocol.ActionIDCultivationTaskInfo)
 				if taskResp == nil {
+					if abortErr := caller.AbortErr(); abortErr != nil {
+						return abortErr
+					}
 					taskDrops++
 					continue
 				}
@@ -181,6 +199,9 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 					awardResp := call(protocol.BuildCultivationCardTaskAwardPacket(task.TaskID),
 						protocol.ActionIDCultivationTaskAward)
 					if awardResp == nil {
+						if abortErr := caller.AbortErr(); abortErr != nil {
+							return abortErr
+						}
 						goto done
 					}
 					code, aErr := protocol.ParseActionFirstByte(awardResp.Payload, "神仙卡牌任务奖励")

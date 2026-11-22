@@ -12,6 +12,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -74,6 +75,9 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 			// 功能未开放时服务端会静默丢弃 Module 38 请求，先用 Action 6 缓存判定。
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDRollCake)
 			if fErr != nil {
+				if abortErr, ok := kit.IsAbortErr(fErr); ok {
+					return abortErr
+				}
 				slog.Info("吉星高照功能开放状态查询失败，跳过",
 					"role_id", session.RoleID(), "err", fErr)
 				return nil
@@ -84,10 +88,9 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 				return nil
 			}
 
+			caller := kit.NewCaller(ctx, session, rollCakeCallTimeout)
 			call := func(pkt *protocol.Packet, actionID uint32) ([]byte, error) {
-				callCtx, cancel := context.WithTimeout(ctx, rollCakeCallTimeout)
-				defer cancel()
-				resp, err := session.Call(callCtx, pkt, actionID)
+				resp, err := caller.Call(pkt, actionID)
 				if err != nil {
 					return nil, err
 				}
@@ -102,6 +105,9 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 			// 1. 查询是否存在上次未领取的投掷记录，存在则先补领，避免阻塞本次投掷。
 			statePayload, err := call(protocol.BuildRollCakeGetStatePacket(prevAct), protocol.ActionIDRollCakeGetState)
 			if err != nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				// 服务端静默丢弃或断线重连都表现为无回包，本轮跳过。
 				slog.Info("查询吉星高照未领取记录无回包，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
@@ -116,6 +122,9 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 			if state.Msg == protocol.RollCakeCodeHaveRecord {
 				awardPayload, aErr := call(protocol.BuildRollCakeGetAwardPacket(prevAct), protocol.ActionIDRollCakeGetAward)
 				if aErr != nil {
+					if abortErr, ok := kit.IsAbortErr(aErr); ok {
+						return abortErr
+					}
 					slog.Warn("补领上次吉星高照奖励失败", "role_id", session.RoleID(), "err", aErr)
 					return nil
 				}
@@ -141,6 +150,9 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 			// 2. 查询今日剩余投掷次数与免费改运次数。
 			countPayload, err := call(protocol.BuildRollCakeGetCountPacket(prevAct), protocol.ActionIDRollCakeGetCount)
 			if err != nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				slog.Warn("查询吉星高照剩余次数失败", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
@@ -176,6 +188,9 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 				beforeRemain := remain
 				rollPayload, err := call(protocol.BuildRollCakeRollPacket(prevAct), protocol.ActionIDRollCakeRoll)
 				if err != nil {
+					if abortErr, ok := kit.IsAbortErr(err); ok {
+						return abortErr
+					}
 					slog.Info("吉星高照投掷未收到回包", "role_id", session.RoleID(), "err", err)
 					return nil
 				}
@@ -206,6 +221,9 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 
 						rrPayload, err := call(protocol.BuildRollCakeRerollPacket(prevAct), protocol.ActionIDRollCakeReroll)
 						if err != nil {
+							if abortErr, ok := kit.IsAbortErr(err); ok {
+								return abortErr
+							}
 							slog.Info("吉星高照逆天改运未收到回包", "role_id", session.RoleID(), "err", err)
 							return nil
 						}
@@ -245,6 +263,9 @@ func NewLuckyStarRoutine(cfgs ...LuckyStarConfig) scheduler.ActivityRoutine {
 				// 领取本次投掷奖励，未领奖会阻塞下一次投掷。
 				awardPayload, err := call(protocol.BuildRollCakeGetAwardPacket(prevAct), protocol.ActionIDRollCakeGetAward)
 				if err != nil {
+					if abortErr, ok := kit.IsAbortErr(err); ok {
+						return abortErr
+					}
 					slog.Info("吉星高照领取奖励未收到回包", "role_id", session.RoleID(), "err", err)
 					return nil
 				}

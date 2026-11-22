@@ -56,9 +56,10 @@ jobs:
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
           cache: true
-      - name: Go 测试与构建
+      - name: Go 静态检查、测试与构建
         run: |
-          go test -v ./...
+          go vet ./...
+          go test -race ./...
           go build -v ./...

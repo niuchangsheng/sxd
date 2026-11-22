@@ -16,6 +16,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -47,8 +48,9 @@ func NewLandContractRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
+			caller := kit.NewCaller(ctx, session, callTimeout)
+			call := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
+				resp, err := caller.CallResync(pkt, act, timeout...)
 				if err != nil {
 					slog.Info("灵契之地协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -58,8 +60,11 @@ func NewLandContractRoutine() scheduler.ActivityRoutine {
 			}
 
 			panelResp := call(protocol.BuildLandContractPanelPacket(),
-				protocol.ActionIDLandContractPanel, callTimeout)
+				protocol.ActionIDLandContractPanel)
 			if panelResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "灵契之地面板无回包")
 			}
 			panel, err := protocol.ParseLandContractPanel(panelResp.Payload)
@@ -76,6 +81,9 @@ func NewLandContractRoutine() scheduler.ActivityRoutine {
 				fightResp := call(protocol.BuildLandContractFightPacket(),
 					protocol.ActionIDLandContractFight, fightTimeout)
 				if fightResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					return scheduler.NewCooldown(10*time.Minute, "灵契之地挑战无回包")
 				}
 				code, fErr := protocol.ParseLandContractResult(fightResp.Payload)

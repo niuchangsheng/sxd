@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -82,13 +83,14 @@ func TestLevitatePerfusionRoutine_InfoNoResponse(t *testing.T) {
 	})
 	defer sess.Close()
 
-	err := NewLevitatePerfusionRoutine().Execute(context.Background(), sess, nil)
+	ctx := kit.WithTimeoutOverride(context.Background(), 150*time.Millisecond)
+	err := NewLevitatePerfusionRoutine().Execute(ctx, sess, nil)
 	if err == nil {
 		t.Fatal("灌注也无回包时应进入冷却")
 	}
-	// 面板 357/0 无回包不再阻断链路：仍要尝试一次 357/1 以结果码为准。
-	if perfCalls.Load() != 1 {
-		t.Fatalf("面板无回包时仍应尝试一次灌注, calls = %d", perfCalls.Load())
+	// 面板 357/0 无回包不再阻断链路：仍要尝试一轮 357/1（含最多 1 次 PrevAct 重同步重试）。
+	if got := perfCalls.Load(); got < 1 || got > 2 {
+		t.Fatalf("面板无回包时仍应尝试一次灌注(含重同步最多2包), calls = %d", got)
 	}
 }
 
@@ -109,9 +111,10 @@ func TestLevitatePerfusionRoutine_InfoOKButPerfusionDroppedBacksOff(t *testing.T
 	defer sess.Close()
 
 	routine := NewLevitatePerfusionRoutine()
+	ctx := kit.WithTimeoutOverride(context.Background(), 150*time.Millisecond)
 	var lastErr error
 	for i := 0; i < 3; i++ {
-		lastErr = routine.Execute(context.Background(), sess, nil)
+		lastErr = routine.Execute(ctx, sess, nil)
 		if lastErr == nil {
 			t.Fatalf("第 %d 轮灌注无回包应返回冷却错误", i+1)
 		}

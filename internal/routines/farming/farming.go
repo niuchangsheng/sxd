@@ -18,6 +18,7 @@ import (
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/dictionary"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -1643,10 +1644,9 @@ func NewCrystalMineRoutine() scheduler.ActivityRoutine {
 // runCrystalMine 在仙界跨服会话上执行矿山查询、进入、领取与抢夺。
 func runCrystalMine(ctx context.Context, session *client.RoleSession) error {
 	const callTimeout = 8 * time.Second
+	caller := kit.NewCaller(ctx, session, callTimeout)
 	call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-		cCtx, cCancel := context.WithTimeout(ctx, callTimeout)
-		defer cCancel()
-		resp, err := session.Call(cCtx, pkt, act)
+		resp, err := caller.Call(pkt, act)
 		if err != nil {
 			slog.Info("仙界矿山协议无回包", "role_id", session.RoleID(),
 				"action", act, "err", err)
@@ -1657,6 +1657,9 @@ func runCrystalMine(ctx context.Context, session *client.RoleSession) error {
 
 	infoResp := call(protocol.BuildStMineInfoPacket(), protocol.ActionIDStMineInfo)
 	if infoResp == nil {
+		if abort := caller.AbortErr(); abort != nil {
+			return abort
+		}
 		return scheduler.NewCooldown(30*time.Minute, "仙界矿山信息无回包")
 	}
 	info, err := protocol.ParseStMineInfoResult(infoResp.Payload)
@@ -1728,7 +1731,21 @@ func runCrystalMine(ctx context.Context, session *client.RoleSession) error {
 	defer func() {
 		lCtx, lCancel := context.WithTimeout(ctx, callTimeout)
 		defer lCancel()
-		_, _ = session.Call(lCtx, protocol.BuildStMineLeavePacket(), protocol.ActionIDStMineLeave)
+		leaveResp, lErr := session.Call(lCtx, protocol.BuildStMineLeavePacket(), protocol.ActionIDStMineLeave)
+		if lErr != nil {
+			slog.Debug("离开仙界矿山面板失败", "role_id", session.RoleID(), "err", lErr)
+			return
+		}
+		if leaveResp == nil {
+			slog.Debug("离开仙界矿山面板回包为空", "role_id", session.RoleID())
+			return
+		}
+		if code, pErr := protocol.ParseStMineActionResult(leaveResp.Payload); pErr != nil {
+			slog.Warn("解析离开仙界矿山回包失败", "role_id", session.RoleID(), "err", pErr)
+		} else if code != protocol.StMineResultSuccess {
+			slog.Warn("离开仙界矿山返回非成功结果码", "role_id", session.RoleID(),
+				"result", code, "result_text", protocol.StMineResultText(code))
+		}
 	}()
 	slog.Info("进入仙界矿山",
 		"role_id", session.RoleID(),
@@ -1856,7 +1873,6 @@ func runCrystalMine(ctx context.Context, session *client.RoleSession) error {
 			"result", robCode, "result_text", protocol.StMineResultText(robCode))
 		return scheduler.NewCooldown(30*time.Minute, "仙界矿山抢夺未成功")
 	}
-	return nil
 }
 
 // pickStMineMountain 选择要进入的矿脉：优先有空位的最高等级矿脉，
@@ -2183,7 +2199,6 @@ func runSpiritPoolCore(
 		slog.Warn("粗铁淬炼返回未知结果码", attrs...)
 		return fmt.Errorf("粗铁%s返回未知结果码 %d", targetName, result.Result)
 	}
-	return nil
 }
 
 // NewGourdRealmRoutine 构造壶中界炼丹与灵气合成任务。
@@ -2461,19 +2476,11 @@ func tryLegacyCoinTreePlanting(
 		return 0, 0
 	}
 
-	call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-		cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-		defer cancel()
-		resp, err := session.Call(cCtx, pkt, act)
-		if err != nil || resp == nil {
-			return nil
-		}
-		return resp
-	}
+	caller := kit.NewCaller(ctx, session, callTimeout)
 
-	infoResp := call(protocol.BuildFarmCoinTreeInfoPacket(), protocol.ActionIDFarmCoinTreeInfo)
+	infoResp := caller.TryCall(protocol.BuildFarmCoinTreeInfoPacket(), protocol.ActionIDFarmCoinTreeInfo)
 	if infoResp == nil {
-		slog.Debug("摇钱树次数查询无回包，跳过旧版播种", "role_id", session.RoleID())
+		slog.Debug("摇钱树次数查询无回包，跳过旧版播种", "role_id", session.RoleID(), "err", caller.LastErr())
 		return 0, 0
 	}
 	info, pErr := protocol.ParseFarmCoinTreeInfo(infoResp.Payload)
@@ -2488,9 +2495,9 @@ func tryLegacyCoinTreePlanting(
 		return 0, 0
 	}
 
-	rolesResp := call(protocol.BuildFarmRoleListPacket(), protocol.ActionIDFarmRoleList)
+	rolesResp := caller.TryCall(protocol.BuildFarmRoleListPacket(), protocol.ActionIDFarmRoleList)
 	if rolesResp == nil {
-		slog.Debug("旧版伙伴列表无回包，跳过旧版播种", "role_id", session.RoleID())
+		slog.Debug("旧版伙伴列表无回包，跳过旧版播种", "role_id", session.RoleID(), "err", caller.LastErr())
 		return 0, 0
 	}
 	roles, rErr := protocol.ParseFarmRoleIDs(rolesResp.Payload)
@@ -2502,9 +2509,12 @@ func tryLegacyCoinTreePlanting(
 	// 找一个能种摇钱树的伙伴 (check_role_state == PASS)。
 	var chosen int32
 	for _, roleID := range roles {
-		checkResp := call(protocol.BuildFarmCheckRoleStatePacket(roleID, protocol.FarmHerbTypeCoin),
+		checkResp := caller.TryCall(protocol.BuildFarmCheckRoleStatePacket(roleID, protocol.FarmHerbTypeCoin),
 			protocol.ActionIDFarmCheckRoleState)
 		if checkResp == nil {
+			if caller.AbortErr() != nil {
+				return 0, 0
+			}
 			continue
 		}
 		code, cErr := protocol.ParseFarmCheckRoleStateResult(checkResp.Payload)
@@ -2523,9 +2533,12 @@ func tryLegacyCoinTreePlanting(
 		if remaining <= 0 {
 			break
 		}
-		plantResp := call(protocol.BuildFarmPlantHerbsPacket(landID, chosen, protocol.FarmHerbTypeCoin, 5),
+		plantResp := caller.TryCall(protocol.BuildFarmPlantHerbsPacket(landID, chosen, protocol.FarmHerbTypeCoin, 5),
 			protocol.ActionIDFarmPlantHerbs)
 		if plantResp == nil {
+			if caller.AbortErr() != nil {
+				break
+			}
 			// 服务端对该账号恒定丢弃 13/5：退避 6 小时，避免每轮药园空等。
 			until := time.Now().Add(6 * time.Hour).Unix()
 			blockFarmLegacyPlant(session.RoleID(), until)

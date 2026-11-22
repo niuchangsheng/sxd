@@ -23,6 +23,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -153,10 +154,9 @@ func NewFaxiangRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, faxiangCallTimeout)
 			call := func(pkt *protocol.Packet, act uint32, name string) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, faxiangCallTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("法相协议无回包", "role_id", session.RoleID(), "name", name, "action", act, "err", err)
 					return nil
@@ -168,16 +168,25 @@ func NewFaxiangRoutine() scheduler.ActivityRoutine {
 			// 主面板无回包不阻塞后续子面板：部分会话状态下子面板仍可独立查询。
 			if panelResp := call(protocol.BuildFaxiangGetPanelInfoPacket(),
 				protocol.ActionIDFaxiangGetPanelInfo, "法相主面板"); panelResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				slog.Info("法相主面板无回包，继续尝试子面板", "role_id", session.RoleID())
 			} else {
 				slog.Info("法相主面板已加载", "role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
 			}
 
 			pendingRefine, foErr := runFaxiangFo(session, call)
+			if abortErr := caller.AbortErr(); abortErr != nil {
+				return abortErr
+			}
 			if errors.Is(foErr, scheduler.ErrBagFull) {
 				return foErr
 			}
-			moErr := runFaxiangMo(session, call)
+			moErr := runFaxiangMo(ctx, session, call)
+			if abortErr := caller.AbortErr(); abortErr != nil {
+				return abortErr
+			}
 			if errors.Is(moErr, scheduler.ErrBagFull) {
 				return moErr
 			}
@@ -328,11 +337,11 @@ func runFaxiangFo(session *client.RoleSession, call faxiangCall) (bool, error) {
 
 // runFaxiangMo 执行守护魔兽面板查询与免费挑战。挑战冷却/失败只记录日志，
 // 不购买次数、不消耗元宝。
-func runFaxiangMo(session *client.RoleSession, call faxiangCall) error {
+func runFaxiangMo(ctx context.Context, session *client.RoleSession, call faxiangCall) error {
 	moResp := call(protocol.BuildFaxiangExtraMoInfoPacket(), protocol.ActionIDFaxiangExtraMoInfo, "守护魔兽面板")
 	if moResp == nil {
 		// 面板被静默丢弃时不能 return nil：ScheduleCron 会等到下一个 cron 时段。
-		return scheduler.HandleSilentDrop(session, "faxiang_mo", 3,
+		return scheduler.HandleSilentDropCtx(ctx, session, "faxiang_mo", 3,
 			30*time.Minute, "法相守护魔兽面板无回包")
 	}
 	mo, mErr := protocol.ParseFaxiangExtraMoInfo(moResp.Payload)
@@ -352,7 +361,7 @@ func runFaxiangMo(session *client.RoleSession, call faxiangCall) error {
 	challengeResp := call(protocol.BuildFaxiangExtraMoChallengePacket(),
 		protocol.ActionIDFaxiangExtraMoChallenge, "守护魔兽挑战")
 	if challengeResp == nil {
-		return scheduler.HandleSilentDrop(session, "faxiang_mo", 3,
+		return scheduler.HandleSilentDropCtx(ctx, session, "faxiang_mo", 3,
 			30*time.Minute, "法相守护魔兽挑战无回包")
 	}
 	res, rErr := protocol.ParseFaxiangExtraMoChallengeResult(challengeResp.Payload)
@@ -363,7 +372,7 @@ func runFaxiangMo(session *client.RoleSession, call faxiangCall) error {
 	switch res.Result {
 	case protocol.FaxiangSuccess:
 		// 只有业务动作真正成功才清零连续丢包计数。
-		scheduler.ResetSilentDrops(session, "faxiang_mo")
+		scheduler.ResetSilentDropsCtx(ctx, session, "faxiang_mo")
 		slog.Info("法相守护魔兽挑战完成",
 			"role_id", session.RoleID(), "kill_num", res.KillNum)
 	case protocol.FaxiangHasChallenge, protocol.FaxiangTimeLimit, protocol.FaxiangFailCD:

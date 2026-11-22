@@ -27,6 +27,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -113,7 +114,7 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 		scheduler.ScheduleCron,
 		// 与无量劫海同理：飞升面板/灌注在长会话后段更容易被服务端静默丢弃，
 		// 登录后优先执行。
-		scheduler.RoutinePriority(390),
+		scheduler.PhasePriority(scheduler.PhaseEarlyBattle, 40),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -122,8 +123,9 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				resp, err := session.CallWithPrevActResync(ctx, callTimeout, pkt, act)
+				resp, err := caller.CallResync(pkt, act)
 				if err != nil {
 					slog.Info("飞升灌注协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err,
@@ -165,10 +167,13 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 				}
 				resp := call(protocol.BuildLevitatePacket(typ, flag), protocol.ActionIDLevitate)
 				if resp == nil {
-					return scheduler.HandleSilentDrop(session, "levitate_perfusion", 3,
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
+					return scheduler.HandleSilentDropCtx(ctx, session, "levitate_perfusion", 3,
 						30*time.Minute, "飞升动作无回包")
 				}
-				scheduler.ResetSilentDrops(session, "levitate_perfusion")
+				scheduler.ResetSilentDropsCtx(ctx, session, "levitate_perfusion")
 				res, err := protocol.ParseLevitateActionResult(resp.Payload)
 				if err != nil {
 					return scheduler.NewCooldown(10*time.Minute, "飞升回包解析失败")
@@ -247,10 +252,13 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 				perfResp := call(protocol.BuildLevitatePerfusionPacket(typ),
 					protocol.ActionIDLevitatePerfusion)
 				if perfResp == nil {
-					return scheduler.HandleSilentDrop(session, "levitate_perfusion", 3,
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
+					return scheduler.HandleSilentDropCtx(ctx, session, "levitate_perfusion", 3,
 						30*time.Minute, "飞升灌注无回包")
 				}
-				scheduler.ResetSilentDrops(session, "levitate_perfusion")
+				scheduler.ResetSilentDropsCtx(ctx, session, "levitate_perfusion")
 				res, err := protocol.ParseLevitatePerfusionResult(perfResp.Payload)
 				if err != nil {
 					return scheduler.NewCooldown(10*time.Minute, "飞升灌注回包解析失败")

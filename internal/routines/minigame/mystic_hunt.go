@@ -18,6 +18,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -41,19 +42,14 @@ func NewMysticHuntRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, timeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
-				if err != nil {
-					return nil
-				}
-				return resp
-			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 
 			// 1. 活跃度任务 73 已完成则跳过。
-			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo, callTimeout)
+			actResp := caller.TryCall(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				slog.Info("仙幽猎境: 查询每日活跃度失败，跳过", "role_id", session.RoleID())
 				return nil
 			}
@@ -67,8 +63,11 @@ func NewMysticHuntRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 2. 入口开放检查 (按活动时段开放，关闭时后续请求会被静默丢弃)。
-			openResp := call(protocol.BuildMysticHuntEntrancePacket(), protocol.ActionIDMysticHuntEntranceOpen, callTimeout)
+			openResp := caller.TryCall(protocol.BuildMysticHuntEntrancePacket(), protocol.ActionIDMysticHuntEntranceOpen)
 			if openResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				slog.Info("仙幽猎境入口状态无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(10*time.Minute, "仙幽猎境入口状态无回包")
 			}
@@ -82,8 +81,11 @@ func NewMysticHuntRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 3. 进入猎境 (免费)。
-			enterResp := call(protocol.BuildMysticHuntEnterPacket(), protocol.ActionIDMysticHuntEnter, 15*time.Second)
+			enterResp := caller.TryCall(protocol.BuildMysticHuntEnterPacket(), protocol.ActionIDMysticHuntEnter, 15*time.Second)
 			if enterResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				slog.Info("仙幽猎境进入无回包，跳过", "role_id", session.RoleID())
 				return nil
 			}

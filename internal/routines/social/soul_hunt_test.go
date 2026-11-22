@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -70,9 +71,10 @@ func TestSoulHuntRoutine_ChallengePanelOKFightDroppedBacksOff(t *testing.T) {
 	scheduler.ResetSilentDrops(sess, "soul_hunt")
 
 	routine := NewSoulHuntRoutine()
+	ctx := kit.WithTimeoutOverride(context.Background(), 150*time.Millisecond)
 	var lastErr error
 	for i := 0; i < 3; i++ {
-		lastErr = routine.Execute(context.Background(), sess, nil)
+		lastErr = routine.Execute(ctx, sess, nil)
 		if lastErr == nil {
 			t.Fatalf("第 %d 轮挑战无回包应返回冷却错误", i+1)
 		}

@@ -12,6 +12,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -45,10 +46,9 @@ func NewXiuDanRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("修为丹协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -59,6 +59,9 @@ func NewXiuDanRoutine() scheduler.ActivityRoutine {
 
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("查询每日活跃度失败，跳过服用修为丹", "role_id", session.RoleID())
 				return nil
 			}
@@ -74,6 +77,9 @@ func NewXiuDanRoutine() scheduler.ActivityRoutine {
 
 			packResp := call(protocol.BuildGetPackItemListPacket(), protocol.ActionIDItemGetPackList)
 			if packResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("查询背包失败，跳过服用修为丹", "role_id", session.RoleID())
 				return nil
 			}

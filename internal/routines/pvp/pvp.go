@@ -15,6 +15,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -251,10 +252,10 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 						"role_id", session.RoleID(),
 						"target_rank", target.Rank,
 					)
-					return scheduler.HandleSilentDrop(session, "arena", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "arena", 3,
 						10*time.Minute, "本服竞技场挑战结算无回包")
 				}
-				scheduler.ResetSilentDrops(session, "arena")
+				scheduler.ResetSilentDropsCtx(ctx, session, "arena")
 
 				chRes, err := protocol.ParseArenaChallengeResult(chRespPkt.Payload)
 				if err != nil {
@@ -455,10 +456,9 @@ func runStArenaChallenge(ctx context.Context, session *client.RoleSession, jitte
 	}
 	defer cross.Close()
 
+	crossCaller := kit.NewCaller(crossCtx, cross, 10*time.Second)
 	call := func(pkt *protocol.Packet, expectedAct uint32, d time.Duration) (*protocol.Packet, error) {
-		cCtx, cCancel := context.WithTimeout(crossCtx, d)
-		defer cCancel()
-		return cross.Call(cCtx, pkt, expectedAct)
+		return crossCaller.Call(pkt, expectedAct, d)
 	}
 
 	panel, err := loadStArenaPanel(call)
@@ -851,10 +851,9 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行对抗任务: 劫镖", "role_id", session.RoleID())
 
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("劫镖协议无回包", "role_id", session.RoleID(),
 						"action", fmt.Sprintf("0x%08X", act), "err", err)
@@ -866,6 +865,9 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 			// 1. 读取劫镖面板状态。
 			infoResp := call(protocol.BuildCaravanGetDetailPacket(session.LastActionID()), protocol.ActionIDCaravanGetDetail)
 			if infoResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("劫镖功能不可用或未开放，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "劫镖面板无回包")
 			}
@@ -1000,7 +1002,7 @@ func NewWorldBossRoutine() scheduler.ActivityRoutine {
 				if errors.Is(err, context.DeadlineExceeded) {
 					// 5 分钟巡检下，列表查询被静默丢弃会变成每小时 12 次空请求；
 					// 连续丢包按静默丢包机制退避（首次 10 分钟，连续 3 次挂起到重置）。
-					return scheduler.HandleSilentDrop(session, "world_boss", 3, 10*time.Minute, "世界Boss列表无回包")
+					return scheduler.HandleSilentDropCtx(ctx, session, "world_boss", 3, 10*time.Minute, "世界Boss列表无回包")
 				}
 				return fmt.Errorf("查询世界Boss列表失败: %w", err)
 			}
@@ -1101,10 +1103,9 @@ var openLadderRewardSession = func(ctx context.Context, s *client.RoleSession) (
 
 func claimCrossServerLadderRewards(ctx context.Context, session *client.RoleSession) error {
 	const callTimeout = 3 * time.Second
+	caller := kit.NewCaller(ctx, session, callTimeout)
 	call := func(s *client.RoleSession, pkt *protocol.Packet, act uint32) *protocol.Packet {
-		cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-		defer cancel()
-		resp, err := s.Call(cCtx, pkt, act)
+		resp, err := caller.CallOn(s, pkt, act)
 		if err != nil {
 			slog.Info("跨服PK奖励协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 			return nil

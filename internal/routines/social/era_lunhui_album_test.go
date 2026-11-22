@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -76,9 +77,10 @@ func TestEraLunHuiAlbumRoutine_TaskListOKClaimDroppedBacksOff(t *testing.T) {
 	scheduler.ResetSilentDrops(sess, "era_lunhui_album")
 
 	routine := NewEraLunHuiAlbumRoutine()
+	ctx := kit.WithTimeoutOverride(context.Background(), 150*time.Millisecond)
 	var lastErr error
 	for i := 0; i < 3; i++ {
-		lastErr = routine.Execute(context.Background(), sess, nil)
+		lastErr = routine.Execute(ctx, sess, nil)
 		if lastErr == nil {
 			t.Fatalf("第 %d 轮领奖无回包应返回冷却错误", i+1)
 		}

@@ -13,6 +13,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -37,12 +38,10 @@ func NewPartnerLinkBoxRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
-					// 重连/服务端静默丢弃均表现为无回包；缘魂宝箱为低优先级福利，直接跳过本轮。
 					slog.Info("缘魂宝箱协议无回包，跳过本轮", "role_id", session.RoleID(),
 						"action", act, "err", err)
 					return nil
@@ -52,6 +51,9 @@ func NewPartnerLinkBoxRoutine() scheduler.ActivityRoutine {
 
 			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("查询每日活跃度失败，稍后重试缘魂宝箱", "role_id", session.RoleID())
 				return scheduler.NewCooldown(10*time.Minute, "缘魂宝箱活跃度查询无回包")
 			}

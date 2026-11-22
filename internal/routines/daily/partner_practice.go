@@ -13,6 +13,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -33,16 +34,18 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDPartnerPractice); fErr != nil {
+				if abort, ok := kit.IsAbortErr(fErr); ok {
+					return abort
+				}
 				slog.Info("幻境修炼功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			} else if !open {
 				slog.Info("幻境修炼功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDPartnerPractice)
 				return nil
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("幻境修炼协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -52,6 +55,9 @@ func NewPartnerPracticeRoutine() scheduler.ActivityRoutine {
 
 			infoResp := call(protocol.BuildPartnerPracticeInfoPacket(), protocol.ActionIDPartnerPracticeInfo)
 			if infoResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("幻境修炼面板无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "幻境修炼面板无回包")
 			}

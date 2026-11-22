@@ -10,6 +10,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -58,6 +59,9 @@ func newQiMenMiracleRoutine() scheduler.ActivityRoutine {
 			}
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDMiracleFighters)
 			if fErr != nil {
+				if abort, ok := kit.IsAbortErr(fErr); ok {
+					return abort
+				}
 				slog.Info("奇门遁甲功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			}
@@ -69,10 +73,9 @@ func newQiMenMiracleRoutine() scheduler.ActivityRoutine {
 			slog.Info("正在执行玩法任务: 奇门遁甲一/二修炼与突破", "role_id", session.RoleID())
 			qimenPveChallenge(ctx, session)
 
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("奇门遁甲协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -83,8 +86,11 @@ func newQiMenMiracleRoutine() scheduler.ActivityRoutine {
 
 			for _, ids := range []miracleFightersIDs{miracleFightersOneIDs, miracleFightersTwoIDs} {
 				runMiracleFightersModule(ctx, session, call, ids)
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				if ctx.Err() != nil {
-					return nil
+					return ctx.Err()
 				}
 			}
 			return nil

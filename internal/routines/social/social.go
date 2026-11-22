@@ -16,6 +16,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -76,8 +77,9 @@ func callJieYuanContext(ctx context.Context, session *client.RoleSession) (*prot
 			pkt.PrevActFromLastSent = false
 			if anchor != 0 && len(pkt.Payload) >= 6 {
 				binary.BigEndian.PutUint32(pkt.Payload[2:6], anchor)
+				pkt.PrevActMode = protocol.PrevActExplicit
 			} else {
-				pkt.HasPrevAct = true
+				pkt.PrevActMode = protocol.PrevActAutoBusiness
 			}
 		}
 		c, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -132,7 +134,7 @@ func fetchJieYuanBoxCount(ctx context.Context, session *client.RoleSession, item
 // 232/30 -> 528/1 -> 232/34 成功（3938 15->5）；而日常批次数分钟后才执行时，
 // 528/1 载荷与抓包完全一致仍被服务端静默丢弃。因此 528/1 上下文对会话时长/
 // 前序请求敏感，必须尽早执行；同时 232/30 之前不能插入 0/6 等功能探测请求。
-const jieyuanPriority scheduler.RoutinePriority = 250
+var jieyuanPriority = scheduler.PhasePriority(scheduler.PhaseEarlyWindow, 50)
 
 func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 	cfg := DefaultJieYuanBoxConfig()
@@ -277,7 +279,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 								"before", remaining, "after", afterCount,
 								"err", oErr)
 							remaining = afterCount
-							time.Sleep(50 * time.Millisecond)
+							kit.Sleep(ctx, 50 * time.Millisecond)
 							continue
 						}
 						// 变体探测：普通结缘宝箱 (3937) 在 autoMergeQuality=4 下长期被
@@ -297,7 +299,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 								if altOK && altAfter < remaining {
 									totalOpened += int(remaining - altAfter)
 									remaining = altAfter
-									time.Sleep(50 * time.Millisecond)
+									kit.Sleep(ctx, 50 * time.Millisecond)
 									continue
 								}
 							} else {
@@ -395,7 +397,7 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					totalOpened += int(openedNow)
 					remaining = afterCount
 
-					time.Sleep(50 * time.Millisecond)
+					kit.Sleep(ctx, 50 * time.Millisecond)
 				}
 
 				slog.Info("结缘宝箱批次处理完成",

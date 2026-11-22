@@ -15,6 +15,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -41,6 +42,9 @@ func NewEraYanjieRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEraYanJie); fErr != nil {
+				if abortErr, ok := kit.IsAbortErr(fErr); ok {
+					return abortErr
+				}
 				slog.Info("纪元湮劫功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			} else if !open {
@@ -48,19 +52,14 @@ func NewEraYanjieRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, timeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
-				if err != nil {
-					return nil
-				}
-				return resp
-			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 
 			// 1. 活跃度任务 71 已完成则跳过，避免重复推进关卡。
-			actResp := call(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo, callTimeout)
+			actResp := caller.TryCall(protocol.BuildGameAssistantInfoPacket(), protocol.ActionIDGameAssistantInfo)
 			if actResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				slog.Info("纪元湮劫: 查询每日活跃度失败，跳过", "role_id", session.RoleID())
 				return nil
 			}
@@ -74,9 +73,12 @@ func NewEraYanjieRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 2. 主面板: 读取当前已通关关卡进度。
-			mainResp := call(protocol.BuildEraYanjiePanelPacket(session.LastActionID()),
-				protocol.ActionIDEraYanjiePanel, callTimeout)
+			mainResp := caller.TryCall(protocol.BuildEraYanjiePanelPacket(session.LastActionID()),
+				protocol.ActionIDEraYanjiePanel)
 			if mainResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				// 主面板被静默丢弃通常意味着活动未开启/不在赛季，稍后重试。
 				slog.Info("纪元湮劫: 主面板无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "纪元湮劫主面板无回包")
@@ -103,9 +105,12 @@ func NewEraYanjieRoutine() scheduler.ActivityRoutine {
 				if level <= 0 {
 					continue
 				}
-				fightResp := call(protocol.BuildEraYanjieFightPacket(level, eraYanjieDeployType, 1, session.LastActionID()),
+				fightResp := caller.TryCall(protocol.BuildEraYanjieFightPacket(level, eraYanjieDeployType, 1, session.LastActionID()),
 					protocol.ActionIDEraYanjieFight, 20*time.Second)
 				if fightResp == nil {
+					if abortErr := caller.AbortErr(); abortErr != nil {
+						return abortErr
+					}
 					slog.Info("纪元湮劫战斗无回包，稍后重试", "role_id", session.RoleID(), "level", level)
 					return scheduler.NewCooldown(10*time.Minute, "纪元湮劫战斗无回包")
 				}

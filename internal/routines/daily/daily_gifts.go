@@ -11,6 +11,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -55,10 +56,9 @@ func NewDailyGiftsRoutine() scheduler.ActivityRoutine {
 			slog.Info("正在执行日常任务: 每日免费礼包", "role_id", session.RoleID())
 
 			responded := 0
+			caller := kit.NewCaller(ctx, session, 5*time.Second)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err == nil && resp != nil {
 					responded++
 				}

@@ -267,7 +267,7 @@ func TestRunFaxiangMo_PanelSilentDropBacksOff(t *testing.T) {
 		resp, _ := sess.Call(ctx, pkt, act)
 		return resp
 	}
-	err := runFaxiangMo(sess, call)
+	err := runFaxiangMo(context.Background(), sess, call)
 	var cd *scheduler.CooldownError
 	if !errors.As(err, &cd) {
 		t.Fatalf("面板无回包应返回 CooldownError, got %v", err)
@@ -299,7 +299,7 @@ func TestRunFaxiangMo_ChallengeCDUsesNextFightTime(t *testing.T) {
 		resp, _ := sess.Call(ctx, pkt, act)
 		return resp
 	}
-	err := runFaxiangMo(sess, call)
+	err := runFaxiangMo(context.Background(), sess, call)
 	var cd *scheduler.CooldownError
 	if !errors.As(err, &cd) {
 		t.Fatalf("挑战冷却应返回 CooldownError, got %v", err)

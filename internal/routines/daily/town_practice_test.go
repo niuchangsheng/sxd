@@ -3,6 +3,7 @@ package daily_test
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,8 +68,8 @@ func TestTownPracticeRoutine_ExecutionFlow(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	cancelReceived := false
-	signReceived := false
+	var cancelReceived atomic.Bool
+	var signReceived atomic.Bool
 
 	go func() {
 		for {
@@ -78,10 +79,10 @@ func TestTownPracticeRoutine_ExecutionFlow(t *testing.T) {
 			}
 			switch pkt.ActionID {
 			case protocol.ActionIDPlayerCancelPractice:
-				cancelReceived = true
+				cancelReceived.Store(true)
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDPlayerCancelPractice, []byte{}))
 			case protocol.ActionIDPlayerSignFinishedPractice:
-				signReceived = true
+				signReceived.Store(true)
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDPlayerSignFinishedPractice, []byte{}))
 			}
 		}
@@ -130,10 +131,10 @@ func TestTownPracticeRoutine_ExecutionFlow(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	if !cancelReceived {
+	if !cancelReceived.Load() {
 		t.Errorf("expected cancel_practice packet to be sent")
 	}
-	if !signReceived {
+	if !signReceived.Load() {
 		t.Errorf("expected sign_finished_practice packet to be sent")
 	}
 }

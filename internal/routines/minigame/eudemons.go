@@ -10,6 +10,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -40,6 +41,9 @@ func NewEudemonsRoutine() scheduler.ActivityRoutine {
 			// 幻兽经脉属于山海幻兽玩法，先查功能开放列表，未开放时不发送业务请求。
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEudemons)
 			if fErr != nil {
+				if abortErr, ok := kit.IsAbortErr(fErr); ok {
+					return abortErr
+				}
 				slog.Info("幻兽功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			}
@@ -48,14 +52,13 @@ func NewEudemonsRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
-			}
+			caller := kit.NewCaller(ctx, session, 5*time.Second)
 
-			resp, err := call(protocol.BuildEudemonsPanelPacket(), protocol.ActionIDEudemonsPanel)
+			resp, err := caller.Call(protocol.BuildEudemonsPanelPacket(), protocol.ActionIDEudemonsPanel)
 			if err != nil || resp == nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				slog.Info("幻兽功能不可用或未开放，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
@@ -87,11 +90,14 @@ func NewEudemonsRoutine() scheduler.ActivityRoutine {
 				if err := ctx.Err(); err != nil {
 					return nil
 				}
-				aResp, aErr := call(
+				aResp, aErr := caller.Call(
 					protocol.BuildEudemonsActivateMeridiansPacket(meridian.ID),
 					protocol.ActionIDEudemonsActivateMeridians,
 				)
 				if aErr != nil || aResp == nil {
+					if abortErr, ok := kit.IsAbortErr(aErr); ok {
+						return abortErr
+					}
 					slog.Info("激活幻兽经脉无回包", "role_id", session.RoleID(), "meridian_id", meridian.ID, "err", aErr)
 					return nil
 				}

@@ -17,6 +17,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -48,10 +49,9 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("炼宝炉协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -61,6 +61,9 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildRefineFurnacePanelPacket(), protocol.ActionIDRefineFurnacePanel)
 			if panelResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("炼宝炉面板无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "炼宝炉面板无回包")
 			}
@@ -92,10 +95,14 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 						slog.Info("炼宝炉领奖未成功", "role_id", session.RoleID(), "result", code)
 					}
 				}
+			} else if abort := caller.AbortErr(); abort != nil {
+				return abort
 			}
 
 			// 面板后立刻发包会被静默丢弃，先节流再继续。
-			time.Sleep(refineFurnacePacing)
+			if !kit.Sleep(ctx, refineFurnacePacing) {
+				return ctx.Err()
+			}
 
 			// 2. 铜钱不足时不开炉：每批 20,000,000 铜钱。服务端对连续开炉有限流，
 			// 反复试探会被静默丢弃，因此直接按余额计算可负担批数。
@@ -108,13 +115,11 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 3. 选择一种数量 >=500 的元气，按可负担批数开炉。
-			// 官方流程先 select_type 再 select_air；实测 select_air(道具 ID)
-			// 会直接更新面板 selected 字段，因此这里按道具 ID 选择即可。
 			const maxStartAttempts = 2
 			starts := 0
 			for _, m := range panel.Materials {
 				if ctx.Err() != nil {
-					return nil
+					return ctx.Err()
 				}
 				if starts >= maxStartAttempts {
 					break
@@ -134,8 +139,13 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 
 				selResp := call(protocol.BuildRefineFurnaceAirPacket(m.ItemID), protocol.ActionIDRefineFurnaceAir)
 				if selResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					// 该材料可能未解锁/请求被丢弃，继续尝试下一种材料。
-					time.Sleep(refineFurnacePacing)
+					if !kit.Sleep(ctx, refineFurnacePacing) {
+						return ctx.Err()
+					}
 					continue
 				}
 				selCode, selErr := protocol.ParseFirstByteResult(selResp.Payload, "炼宝炉选择元气")
@@ -145,14 +155,21 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 				if selCode != protocol.RefineFurnaceSuccess {
 					slog.Info("炼宝炉选择元气未成功", "role_id", session.RoleID(),
 						"item_id", m.ItemID, "result", selCode)
-					time.Sleep(refineFurnacePacing)
+					if !kit.Sleep(ctx, refineFurnacePacing) {
+						return ctx.Err()
+					}
 					continue
 				}
 
-				time.Sleep(refineFurnacePacing)
+				if !kit.Sleep(ctx, refineFurnacePacing) {
+					return ctx.Err()
+				}
 				starts++
 				startResp := call(protocol.BuildRefineFurnaceStartPacket(batches), protocol.ActionIDRefineFurnaceStart)
 				if startResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					slog.Info("炼宝炉开炉无回包，稍后重试", "role_id", session.RoleID())
 					return scheduler.NewCooldown(30*time.Minute, "炼宝炉开炉无回包")
 				}
@@ -185,7 +202,9 @@ func NewRefinePotRoutine() scheduler.ActivityRoutine {
 					slog.Info("炼宝炉炼制未成功", "role_id", session.RoleID(),
 						"item_id", m.ItemID, "result", startCode)
 				}
-				time.Sleep(refineFurnacePacing)
+				if !kit.Sleep(ctx, refineFurnacePacing) {
+					return ctx.Err()
+				}
 			}
 			slog.Info("炼宝炉本轮无可炼制材料", "role_id", session.RoleID())
 			return nil

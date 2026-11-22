@@ -8,6 +8,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -30,10 +31,9 @@ func NewWeekendEventRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("周末活动协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -92,9 +92,15 @@ func NewWeekendEventRoutine() scheduler.ActivityRoutine {
 			}
 
 		fruit:
+			if abort := caller.AbortErr(); abort != nil {
+				return abort
+			}
 			// 2. 周末水果机：仅免费次数。
 			activeResp := call(protocol.BuildSundayFruitActivePacket(), protocol.ActionIDSundayFruitActive)
 			if activeResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "周末水果机状态无回包")
 			}
 			active, err := protocol.ParseFirstByteResult(activeResp.Payload, "水果机")
@@ -108,21 +114,24 @@ func NewWeekendEventRoutine() scheduler.ActivityRoutine {
 			}
 			if infoResp := call(protocol.BuildSundayFruitInfoPacket(), protocol.ActionIDSundayFruitInfo); infoResp != nil {
 				slog.Info("周末水果机面板", "role_id", session.RoleID(), "payload_len", len(infoResp.Payload))
+			} else if abort := caller.AbortErr(); abort != nil {
+				return abort
 			}
 			for draws := 0; draws < maxSundayFruitDraws; draws++ {
 				if ctx.Err() != nil {
-					return nil
+					return ctx.Err()
 				}
 				resp := call(protocol.BuildSundayFruitDrawPacket(), protocol.ActionIDSundayFruitDraw)
 				if resp == nil {
-					// 静默丢包时不能 return nil：剩余免费次数要等到下一个 cron
-					// 时段才会继续消耗。按连续丢包退避后重试。
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					slog.Info("周末水果机抽奖无回包，按连续丢包退避",
 						"role_id", session.RoleID(), "draws", draws)
-					return scheduler.HandleSilentDrop(session, "weekend_event", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "weekend_event", 3,
 						10*time.Minute, "周末水果机抽奖无回包")
 				}
-				scheduler.ResetSilentDrops(session, "weekend_event")
+				scheduler.ResetSilentDropsCtx(ctx, session, "weekend_event")
 				code, err := protocol.ParseFirstByteResult(resp.Payload, "水果机")
 				if err != nil {
 					slog.Warn("周末水果机抽奖回包解析失败，稍后重试",

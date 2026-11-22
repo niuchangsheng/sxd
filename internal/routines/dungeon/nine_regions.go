@@ -17,6 +17,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -64,10 +65,9 @@ func NewNineRegionsRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行副本任务: 九空无界挑战", "role_id", session.RoleID())
 
+			caller := kit.NewCaller(ctx, session, nineRegionsCallTimeout)
 			call := func(pkt *protocol.Packet, actionID uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, timeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, actionID)
+				resp, err := caller.Call(pkt, actionID, timeout)
 				if err != nil {
 					slog.Info("九空无界协议无回包，跳过本轮",
 						"role_id", session.RoleID(), "action", actionID, "err", err)
@@ -88,16 +88,14 @@ func NewNineRegionsRoutine() scheduler.ActivityRoutine {
 				return panel
 			}
 			sleep := func(d time.Duration) bool {
-				select {
-				case <-ctx.Done():
-					return false
-				case <-time.After(d):
-					return true
-				}
+				return kit.Sleep(ctx, d)
 			}
 
 			panel := fetchPanel()
 			if panel == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("九空无界功能不可用或未开放，跳过", "role_id", session.RoleID())
 				return nil
 			}

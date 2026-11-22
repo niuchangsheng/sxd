@@ -12,6 +12,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -58,6 +60,9 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDLunHuiJingDi); fErr != nil {
+				if abort, ok := kit.IsAbortErr(fErr); ok {
+					return abort
+				}
 				slog.Info("轮回净地功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			} else if !open {
@@ -65,12 +70,10 @@ func NewRebirthLandRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
-					// 会话断开或服务端静默丢弃均表现为无回包，跳过本轮即可。
 					slog.Info("轮回净地协议无回包，跳过", "role_id", session.RoleID(),
 						"action", act, "err", err)
 					return nil
@@ -235,10 +238,9 @@ func RunRebirthAltarOnLogin(ctx context.Context, session *client.RoleSession) {
 		return
 	}
 	const callTimeout = 8 * time.Second
+	caller := kit.NewCaller(ctx, session, callTimeout)
 	call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-		cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-		defer cancel()
-		resp, err := session.Call(cCtx, pkt, act)
+		resp, err := caller.Call(pkt, act)
 		if err != nil {
 			// 会话正在重连时请求根本没有发出，不计为服务端静默丢包。
 			if session.State() != client.StateActive {
@@ -332,9 +334,19 @@ func runAltarDraws(
 	var poolResp *protocol.Packet
 	{
 		cCtx, cCancel := context.WithTimeout(ctx, 8*time.Second)
-		poolResp, _ = session.Call(cCtx, protocol.BuildEraRebirthLandPoolPanelPrevActPacket(anchor),
+		var poolErr error
+		poolResp, poolErr = session.Call(cCtx, protocol.BuildEraRebirthLandPoolPanelPrevActPacket(anchor),
 			protocol.ActionIDEraRebirthLandPoolPanel)
 		cCancel()
+		if poolErr != nil {
+			if errors.Is(poolErr, client.ErrNotConnected) || errors.Is(poolErr, client.ErrSessionClosed) {
+				return 0, client.ErrNotConnected
+			}
+			if errors.Is(poolErr, context.Canceled) {
+				return 0, poolErr
+			}
+			slog.Debug("轮回净地渡业仙池面板未回包（忽略并继续抽取）", "role_id", session.RoleID(), "err", poolErr)
+		}
 	}
 	if poolResp != nil {
 		r := protocol.NewReader(poolResp.Payload)
@@ -354,7 +366,7 @@ func runAltarDraws(
 	draws := 0
 	var drawCooldown error
 	// 面板与抽取之间、连续抽取之间节流，避免服务端频率限制导致静默丢包。
-	time.Sleep(500 * time.Millisecond)
+	kit.Sleep(ctx, 500*time.Millisecond)
 	for draws < maxAltarDrawsPerRun && ctx.Err() == nil {
 		drawPkt := protocol.BuildEraRebirthLandDrawPacket(0, session.LastActionID())
 		slog.Info("轮回净地渡业台抽取请求", "role_id", session.RoleID(), "draws", draws,
@@ -390,7 +402,7 @@ func runAltarDraws(
 		slog.Info("渡业台抽取成功", "role_id", session.RoleID(),
 			"draws", draws, "first", res.First, "second", res.Second)
 		// 连续抽取之间节流，避免触发服务端频率限制。
-		time.Sleep(700 * time.Millisecond)
+		kit.Sleep(ctx, 700*time.Millisecond)
 	}
 	if ingotsAfter := session.GetPlayerState().Ingots; ingotsAfter != ingotsBefore {
 		slog.Error("渡业台抽取导致元宝变化，疑似协议漂移，立即熔断",
@@ -443,7 +455,7 @@ func runAltarProfitAndQuickAuto(
 	if resp := call(protocol.BuildEraRebirthLandAutoProfitPrevActPacket(session.LastActionID()),
 		protocol.ActionIDEraRebirthLandAutoProfit); resp == nil {
 		slog.Info("轮回净地挂机收益无回包，按连续丢包退避", "role_id", session.RoleID())
-		return scheduler.HandleSilentDrop(session, "rebirth_land_profit", 3,
+		return scheduler.HandleSilentDropCtx(ctx, session, "rebirth_land_profit", 3,
 			30*time.Minute, "轮回净地挂机收益无回包")
 	} else if profit, err := protocol.ParseEraRebirthAutoProfit(resp.Payload); err != nil {
 		slog.Warn("解析轮回净地挂机收益失败", "role_id", session.RoleID(), "err", err)
@@ -505,10 +517,10 @@ func runQuickAuto(
 		if resp == nil {
 			slog.Info("轮回净地快速挂机无回包，按连续丢包退避", "role_id", session.RoleID(),
 				"times", i+1)
-			return scheduler.HandleSilentDrop(session, "rebirth_land_quick", 3,
+			return scheduler.HandleSilentDropCtx(ctx, session, "rebirth_land_quick", 3,
 				30*time.Minute, "轮回净地快速挂机无回包")
 		}
-		scheduler.ResetSilentDrops(session, "rebirth_land_quick")
+		scheduler.ResetSilentDropsCtx(ctx, session, "rebirth_land_quick")
 		res, err := protocol.ParseEraRebirthFreeBackResult(resp.Payload)
 		if err != nil {
 			slog.Warn("解析轮回净地快速挂机回包失败", "role_id", session.RoleID(), "err", err)
@@ -548,7 +560,7 @@ func runQuickAuto(
 			protocol.ActionIDEraRebirthLandPanel)
 		if panelResp == nil {
 			slog.Warn("快速挂机后刷新面板无回包，按连续丢包退避", "role_id", session.RoleID())
-			return scheduler.HandleSilentDrop(session, "rebirth_land_quick", 3,
+			return scheduler.HandleSilentDropCtx(ctx, session, "rebirth_land_quick", 3,
 				30*time.Minute, "快速挂机后刷新面板无回包")
 		}
 		panel, pErr := protocol.ParseEraRebirthLandPanel(panelResp.Payload)

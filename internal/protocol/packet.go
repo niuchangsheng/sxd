@@ -40,19 +40,48 @@ func SplitActionID(actionID uint32) (module uint16, action uint16) {
 	return uint16(actionID >> 16), uint16(actionID & 0xFFFF)
 }
 
+// PrevActMode 声明封包载荷末尾 4 字节前序动作号 (PrevAct) 的填充策略。
+// 用于统一取代早期分散的 HasPrevAct / PrevActFromLastSent 双布尔标记。
+type PrevActMode uint8
+
+const (
+	// PrevActNone 不启用会话层自动尾链管理（零值默认）。
+	PrevActNone PrevActMode = iota
+	// PrevActAutoBusiness 发送时由会话层以当前业务尾链锚点
+	// (lastBusinessActionID，链失步时回退到 lastAckActionID) 填充载荷末尾 4 字节；
+	// 心跳 (0/75) 不参与业务尾链。
+	PrevActAutoBusiness
+	// PrevActExplicit 载荷末尾 4 字节已由调用方显式指定，会话层严禁覆盖。
+	PrevActExplicit
+)
+
 // Packet 代表神仙道私有二进制协议数据封包。
 type Packet struct {
 	// ActionID 业务动作指令编号 (大端序 uint32: [Module uint16][Action uint16])
 	ActionID uint32
 	// Payload 封包承载的应用层数据载荷 (已透明解压)
 	Payload []byte
-	// HasPrevAct 标记载荷末尾 4 字节是否为动态前序动作号 (PrevAct)
+	// PrevActMode 声明载荷末尾 4 字节 PrevAct 的会话层处理策略。
+	// 非零时优先于旧布尔标记 HasPrevAct / PrevActFromLastSent。
+	PrevActMode PrevActMode
+	// HasPrevAct 兼容旧标记：等价于 PrevActAutoBusiness。新代码请优先使用 PrevActMode。
 	HasPrevAct bool
-	// PrevActFromLastSent 标记载荷末尾 4 字节应在发送时由会话层填充为
-	// 「本端最后发送的业务动作号」。官方客户端 DataBase.netCall 的 tmpBuff
-	// 链就是这么生成的（见 docs/research/jieyuan-box-open-capture.md）；
-	// 与 HasPrevAct（按最后收包填充）互斥，同时为真时以本字段为准。
+	// PrevActFromLastSent 兼容旧标记：等价于 PrevActAutoBusiness。新代码请优先使用 PrevActMode。
 	PrevActFromLastSent bool
+}
+
+// EffectivePrevActMode 返回封包实际生效的 PrevAct 策略。
+func (p *Packet) EffectivePrevActMode() PrevActMode {
+	if p == nil {
+		return PrevActNone
+	}
+	if p.PrevActMode != PrevActNone {
+		return p.PrevActMode
+	}
+	if p.PrevActFromLastSent || p.HasPrevAct {
+		return PrevActAutoBusiness
+	}
+	return PrevActNone
 }
 
 // NewPacket 创建一个初始化好的 Packet 实例。
@@ -63,6 +92,30 @@ func NewPacket(actionID uint32, payload []byte) *Packet {
 	return &Packet{
 		ActionID: actionID,
 		Payload:  payload,
+	}
+}
+
+// NewPacketWithAutoPrevAct 构造由会话层在发送瞬间自动填充业务 PrevAct 尾链的封包。
+// 载荷由 args 与 4 字节占位尾链组成。
+func NewPacketWithAutoPrevAct(actionID uint32, args []byte) *Packet {
+	buf := make([]byte, len(args)+4)
+	copy(buf, args)
+	return &Packet{
+		ActionID:    actionID,
+		Payload:     buf,
+		PrevActMode: PrevActAutoBusiness,
+	}
+}
+
+// NewPacketWithExplicitPrevAct 构造携带显式 PrevAct 尾链的封包；会话层不会覆盖末尾 4 字节。
+func NewPacketWithExplicitPrevAct(actionID uint32, args []byte, prevAct uint32) *Packet {
+	buf := make([]byte, len(args)+4)
+	copy(buf, args)
+	binary.BigEndian.PutUint32(buf[len(args):], prevAct)
+	return &Packet{
+		ActionID:    actionID,
+		Payload:     buf,
+		PrevActMode: PrevActExplicit,
 	}
 }
 

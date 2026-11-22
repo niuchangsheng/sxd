@@ -16,6 +16,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -34,7 +35,7 @@ const (
 // 线上实测：同一会话调用过活跃度面板 (Mod 0 Act 42) 后，Module 312/315 的
 // 子面板请求会被服务端静默丢弃。因此孩子任务必须排在所有会读取活跃度的
 // 例程之前；天帝宝库 Act 4 对城镇上下文更敏感，使用 200 排在最前，孩子使用 120。
-const childrenPriority scheduler.RoutinePriority = 120
+var childrenPriority = scheduler.PhasePriority(scheduler.PhaseHighPriority, 20)
 
 // NewChildrenDailyRoutine 构造孩子每日学习与任务奖励领取任务。
 //
@@ -63,10 +64,9 @@ func NewChildrenDailyRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			caller := kit.NewCaller(ctx, session, headerTimeout)
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, timeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act, timeout)
 				if err != nil {
 					slog.Info("孩子协议无回包", "role_id", session.RoleID(),
 						"action", act, "timeout", timeout, "err", err)
@@ -78,6 +78,9 @@ func NewChildrenDailyRoutine() scheduler.ActivityRoutine {
 			// 1. 读取孩子主面板，获取孩子 role_id。
 			infoResp := call(protocol.BuildChildrenInfoPacket(), protocol.ActionIDChildrenInfo, headerTimeout)
 			if infoResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("孩子功能不可用或未开放，跳过", "role_id", session.RoleID())
 				return nil
 			}
@@ -103,7 +106,9 @@ func NewChildrenDailyRoutine() scheduler.ActivityRoutine {
 
 			// 线上实测：孩子子面板请求紧跟主面板连续发送时会被静默丢弃，
 			// 间隔一小段时间可稳定收到回包。
-			time.Sleep(300 * time.Millisecond)
+			if !kit.Sleep(ctx, 300*time.Millisecond) {
+				return ctx.Err()
+			}
 
 			for i, childID := range children.ChildIDs {
 				if i >= maxChildrenPerRun || ctx.Err() != nil {

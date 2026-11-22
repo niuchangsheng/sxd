@@ -11,6 +11,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -89,15 +90,17 @@ func NewSaintPracticeRoutine() scheduler.ActivityRoutine {
 			}
 			defer sa.Close()
 
+			saCaller := kit.NewCaller(ctx, sa, 8*time.Second)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-				defer cancel()
-				return sa.Call(cCtx, pkt, act)
+				return saCaller.Call(pkt, act)
 			}
 
 			// 3. 查询免费修炼房。
 			freeResp, err := call(protocol.BuildSaPracticeRoomFreeInfoPacket(), protocol.ActionIDSaPracticeRoomGetFreeInfo)
 			if err != nil || freeResp == nil {
+				if abort, ok := kit.IsAbortErr(err); ok {
+					return abort
+				}
 				slog.Info("圣域修炼房不可用，稍后重试", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(30*time.Minute, "圣域修炼房信息无回包")
 			}

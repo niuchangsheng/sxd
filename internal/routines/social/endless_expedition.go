@@ -17,6 +17,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -34,7 +35,7 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 		"social",
 		scheduler.ScheduleCron,
 		// 无尽洞天在长会话后段实测会被批量静默丢弃，登录后优先执行。
-		scheduler.RoutinePriority(360),
+		scheduler.PhasePriority(scheduler.PhaseEarlyBattle, 10),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -43,15 +44,9 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 挑战结束后回到城镇：797/22、797/23 在战斗上下文中会被静默丢弃，
-			// 而本玩法战斗冷却 45 秒后会立即重试，必须在两轮之间复位城镇场景。
-			defer func() {
-				if ctx.Err() == nil && session.ReturnToTown(ctx, 5*time.Second) {
-					slog.Info("无尽洞天结束，已返回城镇场景", "role_id", session.RoleID())
-				}
-			}()
-			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
+			caller := kit.NewCaller(ctx, session, callTimeout)
+			resyncCall := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
+				resp, err := caller.CallResync(pkt, act, timeout...)
 				if err != nil {
 					slog.Info("无尽洞天协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -60,9 +55,12 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
-			stateResp := call(protocol.BuildEndlessActivityStatePacket(),
-				protocol.ActionIDEndlessActivityState, callTimeout)
+			stateResp := resyncCall(protocol.BuildEndlessActivityStatePacket(),
+				protocol.ActionIDEndlessActivityState)
 			if stateResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "无尽洞天状态无回包")
 			}
 			state, sErr := protocol.ParseEndlessActivityState(stateResp.Payload)
@@ -71,9 +69,12 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("无尽洞天活动状态", "role_id", session.RoleID(), "state", state)
 
-			panelResp := call(protocol.BuildEndlessPanelPacket(),
-				protocol.ActionIDEndlessPanel, callTimeout)
+			panelResp := resyncCall(protocol.BuildEndlessPanelPacket(),
+				protocol.ActionIDEndlessPanel)
 			if panelResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "无尽洞天面板无回包")
 			}
 			panel, pErr := protocol.ParseEndlessPanel(panelResp.Payload)
@@ -98,13 +99,11 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 			challenges := 0
 			for challenges < maxEndlessChallenges && ctx.Err() == nil {
 				// 禁选列表仅为客户端展示所需，实测该请求在多数状态下会被
-				// 服务端静默丢弃；更严重的是，丢弃后下一条 797/22 会以被丢
-				// 请求作为 PrevAct 尾链而级联超时。自动化不需要禁选数据，
-				// 直接跳过该请求，避免污染后续挑战链路。
+				// 服务端静默丢弃；直接跳过该请求，避免污染后续挑战链路。
 				// 怪物队伍信息同样用于客户端展示，部分时段会被静默丢弃；
 				// 无回包时仍尝试直接挑战，由 797/23 的结果决定。
-				if infoResp := call(protocol.BuildEndlessMonsterTeamInfoPacket(layer),
-					protocol.ActionIDEndlessMonsterTeamInfo, callTimeout); infoResp != nil {
+				if infoResp := resyncCall(protocol.BuildEndlessMonsterTeamInfoPacket(layer),
+					protocol.ActionIDEndlessMonsterTeamInfo); infoResp != nil {
 					if code, iErr := protocol.ParseEndlessResult(infoResp.Payload); iErr != nil {
 						slog.Warn("无尽洞天怪物队伍解析失败", "role_id", session.RoleID(), "err", iErr)
 					} else if code != protocol.EndlessSuccess {
@@ -112,17 +111,22 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 							"layer", layer, "result", code, "result_text", protocol.EndlessResultText(code))
 						return nil
 					}
+				} else if abort := caller.AbortErr(); abort != nil {
+					return abort
 				}
 
-				fightResp := call(protocol.BuildEndlessChallengePacket(layer),
+				fightResp := resyncCall(protocol.BuildEndlessChallengePacket(layer),
 					protocol.ActionIDEndlessChallenge, fightTimeout)
 				if fightResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					// 服务端在当日次数/状态耗尽后会静默丢弃挑战请求：连续 3 次无回包
 					// 即挂起到次日重置，避免整晚每小时空等。
-					return scheduler.HandleSilentDrop(session, "endless_expedition", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "endless_expedition", 3,
 						time.Hour, "无尽洞天挑战无回包")
 				}
-				scheduler.ResetSilentDrops(session, "endless_expedition")
+				scheduler.ResetSilentDropsCtx(ctx, session, "endless_expedition")
 				code, fErr := protocol.ParseEndlessResult(fightResp.Payload)
 				if fErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "无尽洞天挑战回包解析失败")
@@ -147,9 +151,12 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 					"layer", layer, "challenges", challenges)
 
 				// 重新拉面板，服务端推进层数后继续。
-				refresh := call(protocol.BuildEndlessPanelPacket(),
-					protocol.ActionIDEndlessPanel, callTimeout)
+				refresh := resyncCall(protocol.BuildEndlessPanelPacket(),
+					protocol.ActionIDEndlessPanel)
 				if refresh == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					return nil
 				}
 				next, rErr := protocol.ParseEndlessPanel(refresh.Payload)
@@ -157,8 +164,6 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 					return nil
 				}
 				if next.Layer() == layer {
-					// 层数未推进说明本层尚未清空（或仍需继续战斗），继续挑战同一层；
-					// 次数/体力耗尽时服务端会返回非成功码，由上面的分支结束。
 					slog.Info("无尽洞天本层继续挑战", "role_id", session.RoleID(),
 						"layer", layer, "challenges", challenges)
 					continue
@@ -170,5 +175,6 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 			slog.Info("无尽洞天本轮完成", "role_id", session.RoleID(), "challenges", challenges)
 			return nil
 		},
+		scheduler.WithReturnToTown(),
 	)
 }

@@ -27,6 +27,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -120,7 +121,7 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 		scheduler.ScheduleCron,
 		// 魔界远征 2/107 屠魔令查询与 429/63 在长会话后段易被静默丢弃，
 		// 登录后优先完成。
-		scheduler.RoutinePriority(380),
+		scheduler.PhasePriority(scheduler.PhaseEarlyBattle, 30),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -129,14 +130,11 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 战斗结束后回到城镇，避免战斗上下文影响后续玩法。
-			defer func() {
-				if ctx.Err() == nil && session.ReturnToTown(ctx, 5*time.Second) {
-					slog.Info("魔界远征结束，已返回城镇场景", "role_id", session.RoleID())
-				}
-			}()
 
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDDevilExpedition); fErr != nil {
+				if abort, ok := kit.IsAbortErr(fErr); ok {
+					return abort
+				}
 				slog.Info("魔界远征功能开放状态查询失败，本轮跳过",
 					"role_id", session.RoleID(), "err", fErr)
 				return nil
@@ -146,8 +144,9 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
-			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
+			caller := kit.NewCaller(ctx, session, callTimeout)
+			resyncCall := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
+				resp, err := caller.CallResync(pkt, act, timeout...)
 				if err != nil {
 					slog.Info("魔界远征协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -156,9 +155,12 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				return resp
 			}
 
-			statusResp := call(protocol.BuildDevilActivityStatusPacket(),
-				protocol.ActionIDDevilActivityStatus, callTimeout)
+			statusResp := resyncCall(protocol.BuildDevilActivityStatusPacket(),
+				protocol.ActionIDDevilActivityStatus)
 			if statusResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "魔界远征状态无回包")
 			}
 			status, err := protocol.ParseDevilActivityStatus(statusResp.Payload)
@@ -172,9 +174,12 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				return scheduler.NewCooldown(time.Until(wake), "魔界远征未开放")
 			}
 
-			panelResp := call(protocol.BuildDevilMatchPanelPacket(),
-				protocol.ActionIDDevilMatchPanel, callTimeout)
+			panelResp := resyncCall(protocol.BuildDevilMatchPanelPacket(),
+				protocol.ActionIDDevilMatchPanel)
 			if panelResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "魔界远征面板无回包")
 			}
 			panel, err := protocol.ParseDevilMatchPanel(panelResp.Payload)
@@ -203,6 +208,9 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 			// 必须用 2/107 查询道具 6192 的真实持有量。
 			tumoLing, tErr := session.GetItemNum(ctx, devilTumoLingItemID)
 			if tErr != nil {
+				if abort, ok := kit.IsAbortErr(tErr); ok {
+					return abort
+				}
 				slog.Info("魔界远征屠魔令数量查询无回包，稍后重试",
 					"role_id", session.RoleID(), "err", tErr)
 				return scheduler.NewCooldown(30*time.Minute, "魔界远征屠魔令数量无回包")
@@ -238,9 +246,12 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				entryState.entry = devilEntryMissionTown{}
 				entryState.mu.Unlock()
 
-				startResp := call(protocol.BuildDevilStartSinglePacket(missionType),
-					protocol.ActionIDDevilStartExpeditionSingle, callTimeout)
+				startResp := resyncCall(protocol.BuildDevilStartSinglePacket(missionType),
+					protocol.ActionIDDevilStartExpeditionSingle)
 				if startResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					slog.Info("魔界远征开始无回包，结束本轮", "role_id", session.RoleID(), "mission", name)
 					// 实测该阶段对上下文极敏感，10 分钟重试会持续丢包；改为 1 小时低频探测。
 					return scheduler.NewCooldown(time.Hour, "魔界远征开始无回包")
@@ -274,10 +285,8 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 					if town != 0 {
 						break
 					}
-					select {
-					case <-ctx.Done():
-						return nil
-					case <-time.After(100 * time.Millisecond):
+					if !kit.Sleep(ctx, 100*time.Millisecond) {
+						return ctx.Err()
 					}
 				}
 				entryState.mu.Lock()
@@ -289,61 +298,65 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				if town == 0 {
 					slog.Info("魔界远征未获得关卡城镇，跳过该伙伴挑战",
 						"role_id", session.RoleID(), "mission", name)
-					_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
+					_ = resyncCall(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit)
 					continue
 				}
 
 				// 与抓包一致的进入序列。
-				_ = call(protocol.BuildDevilCloseMatchPanelPacket(), protocol.ActionIDDevilCloseMatchPanel, callTimeout)
-				_ = call(protocol.BuildDevilGetSkipWarInfoPacket(), protocol.ActionIDDevilGetSkipWarInfo, callTimeout)
-				enterResp := call(protocol.BuildDevilEnterTownPacket(town), protocol.ActionIDDevilEnterTown, callTimeout)
+				_ = resyncCall(protocol.BuildDevilCloseMatchPanelPacket(), protocol.ActionIDDevilCloseMatchPanel)
+				_ = resyncCall(protocol.BuildDevilGetSkipWarInfoPacket(), protocol.ActionIDDevilGetSkipWarInfo)
+				enterResp := resyncCall(protocol.BuildDevilEnterTownPacket(town), protocol.ActionIDDevilEnterTown)
 				if enterResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					return scheduler.NewCooldown(10*time.Minute, "魔界远征进入城镇无回包")
 				}
 				if enterCode, e := protocol.ParseDevilResult(enterResp.Payload); e != nil || enterCode != protocol.DevilResultSuccess {
 					slog.Info("魔界远征进入城镇未成功", "role_id", session.RoleID(),
 						"mission", name, "town", town, "result", enterCode)
-					_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
+					_ = resyncCall(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit)
 					continue
 				}
-				_ = call(protocol.BuildDevilGetPlayersPacket(), protocol.ActionIDDevilGetPlayers, callTimeout)
+				_ = resyncCall(protocol.BuildDevilGetPlayersPacket(), protocol.ActionIDDevilGetPlayers)
 
-				dataResp := call(protocol.BuildDevilGetMissionDataPacket(missionType),
-					protocol.DevilMissionDataAction(missionType), callTimeout)
+				dataResp := resyncCall(protocol.BuildDevilGetMissionDataPacket(missionType),
+					protocol.DevilMissionDataAction(missionType))
 				if dataResp == nil {
-					_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
+					_ = resyncCall(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit)
 					return scheduler.NewCooldown(10*time.Minute, "魔界远征关卡数据无回包")
 				}
 				data, dErr := protocol.ParseDevilMissionData(missionType, dataResp.Payload)
 				if dErr != nil {
 					slog.Warn("解析魔界远征关卡数据失败", "role_id", session.RoleID(),
 						"mission", name, "err", dErr)
-					_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
+					_ = resyncCall(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit)
 					continue
 				}
 				if data.Result != protocol.DevilResultSuccess {
 					slog.Info("魔界远征关卡数据未成功", "role_id", session.RoleID(),
 						"mission", name, "result", data.Result)
-					_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
+					_ = resyncCall(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit)
 					continue
 				}
 				if devilRefinesCapped(data.Refines) {
 					slog.Info("魔界远征本周材料已达上限，放弃本次挑战",
 						"role_id", session.RoleID(), "mission", name, "refines", data.Refines)
-					_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
+					_ = resyncCall(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit)
 					continue
 				}
-				_ = call(protocol.BuildDevilRejectBuyBoxPacket(), protocol.ActionIDDevilRejectBuyBox, callTimeout)
+				_ = resyncCall(protocol.BuildDevilRejectBuyBoxPacket(), protocol.ActionIDDevilRejectBuyBox)
 
 				teams := devilSortedTeams(data.TeamIDs)
 				if len(teams) == 0 {
 					slog.Info("魔界远征没有可挑战的怪物队伍", "role_id", session.RoleID(), "mission", name)
-					_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
+					_ = resyncCall(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit)
 					continue
 				}
 				// 按队伍逐个尝试：当前队伍战斗失败后切换到下一个队伍。
-				// 连续 3 个队伍都失败说明当前关卡今天已打不过，直接结束该关卡，
-				// 避免把整个队伍列表（可能十几个）逐个打一遍。
 				teamIdx := 0
 				fights := 0
 				consecutiveFailures := 0
@@ -355,9 +368,12 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 						slog.Info("魔界远征移动发送失败", "role_id", session.RoleID(), "err", sendErr)
 						break
 					}
-					fightResp := call(protocol.BuildDevilFightMonsterPacket(missionType, teamID),
+					fightResp := resyncCall(protocol.BuildDevilFightMonsterPacket(missionType, teamID),
 						protocol.DevilFightAction(missionType), fightTimeout)
 					if fightResp == nil {
+						if abort := caller.AbortErr(); abort != nil {
+							return abort
+						}
 						slog.Info("魔界远征战斗无回包，结束该伙伴挑战",
 							"role_id", session.RoleID(), "mission", name)
 						break
@@ -387,9 +403,12 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 						"mission", name, "fights", fights, "team_id", teamID)
 
 					// 每场战斗后复查本周材料上限。
-					refresh := call(protocol.BuildDevilGetMissionDataPacket(missionType),
-						protocol.DevilMissionDataAction(missionType), callTimeout)
+					refresh := resyncCall(protocol.BuildDevilGetMissionDataPacket(missionType),
+						protocol.DevilMissionDataAction(missionType))
 					if refresh == nil {
+						if abort := caller.AbortErr(); abort != nil {
+							return abort
+						}
 						break
 					}
 					refreshed, rErr := protocol.ParseDevilMissionData(missionType, refresh.Payload)
@@ -402,13 +421,14 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 						break
 					}
 				}
-				_ = call(protocol.BuildDevilGetDeployInfoPacket(), protocol.ActionIDDevilGetDeployInfo, callTimeout)
-				_ = call(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit, callTimeout)
+				_ = resyncCall(protocol.BuildDevilGetDeployInfoPacket(), protocol.ActionIDDevilGetDeployInfo)
+				_ = resyncCall(protocol.BuildDevilQuitPacket(), protocol.ActionIDDevilQuit)
 				slog.Info("魔界远征该伙伴挑战完成", "role_id", session.RoleID(),
 					"mission", name, "fights", fights)
 			}
 			return nil
 		},
+		scheduler.WithReturnToTown(),
 	)
 }
 

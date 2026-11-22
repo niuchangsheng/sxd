@@ -13,6 +13,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -74,18 +75,12 @@ func NewNpcFriendshipRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行社交任务: NPC 结交", "role_id", session.RoleID())
 
+			caller := kit.NewCaller(ctx, session, 5*time.Second)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
+				return caller.Call(pkt, act)
 			}
 			sleep := func() bool {
-				select {
-				case <-ctx.Done():
-					return false
-				case <-time.After(npcFriendshipActionSleep):
-					return true
-				}
+				return kit.Sleep(ctx, npcFriendshipActionSleep)
 			}
 			fetchDropped := false
 			fetch := func() *protocol.NpcFriendshipSnapshot {

@@ -11,6 +11,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -30,10 +31,9 @@ func NewThreeWorldRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("三界修炼协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -42,7 +42,6 @@ func NewThreeWorldRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 1. 三界总状态（入口可能只在跨服会话可达，失败不阻断人界修炼）。
-			// 实测 sub=4 表示 IDLE，此时应开始人界修炼。
 			threeWorldSub := int32(-1)
 			if statusResp := call(protocol.BuildThreeWorldStatusPacket(), protocol.ActionIDThreeWorldStatus); statusResp != nil {
 				st, err := protocol.ParseThreeWorldStatus(statusResp.Payload)
@@ -53,11 +52,16 @@ func NewThreeWorldRoutine() scheduler.ActivityRoutine {
 					slog.Info("三界修炼状态", "role_id", session.RoleID(),
 						"state", st.State, "sub", st.Sub, "values", []int32{st.V1, st.V2, st.V3})
 				}
+			} else if abort := caller.AbortErr(); abort != nil {
+				return abort
 			}
 
 			// 2. 人界修炼状态。
 			infoResp := call(protocol.BuildHumanWorldPracticePacket(), protocol.ActionIDHumanWorldPractice)
 			if infoResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("人界修炼面板无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "人界修炼面板无回包")
 			}

@@ -13,6 +13,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -32,12 +33,10 @@ const (
 	// 线上实测摘取后 CD 仅 2 秒；超过该上限说明服务端处于异常长冷却，
 	// 直接结束本轮，交由下一次定点唤醒继续。
 	maxGetPeachWarCDWait = 15 * time.Second
-	// getPeachPriority 摘仙桃调度优先级。
-	//
-	// 召唤仙桃对应每日活跃度任务 64，需要在长耗时日常任务之前尽早完成，
-	// 并与叶公好龙一致避开后续场景切换可能造成的模块请求丢弃。
-	getPeachPriority scheduler.RoutinePriority = 130
 )
+
+// getPeachPriority 摘仙桃调度优先级：高优日常阶段，尽早完成活跃度任务 64。
+var getPeachPriority = scheduler.PhasePriority(scheduler.PhaseHighPriority, 30)
 
 // NewGetPeachRoutine 构造每日摘仙桃任务。
 //
@@ -71,6 +70,9 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDGetPeach)
 			if fErr != nil {
+				if abortErr, ok := kit.IsAbortErr(fErr); ok {
+					return abortErr
+				}
 				slog.Info("摘仙桃功能开放状态查询失败，跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			}
@@ -79,10 +81,9 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			caller := kit.NewCaller(ctx, session, getPeachCallTimeout)
 			call := func(pkt *protocol.Packet, actionID uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, timeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, actionID)
+				resp, err := caller.Call(pkt, actionID, timeout)
 				if err != nil {
 					slog.Info("摘仙桃协议无回包，跳过本轮",
 						"role_id", session.RoleID(), "action", actionID, "err", err)
@@ -157,17 +158,20 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 					// 冷却查询为只读诊断，瞬时超时重试一次，避免单次丢包刷日志。
 					var resp *protocol.Packet
 					for attempt := 0; attempt < 2; attempt++ {
-						cCtx, cancel := context.WithTimeout(ctx, getPeachWarCDQueryTimeout)
-						r, err := session.Call(cCtx, protocol.BuildPlayerGetWarCdTimePacket(
+						r, err := caller.Call(protocol.BuildPlayerGetWarCdTimePacket(
 							protocol.WarCdTypePeach, session.LastActionID()),
-							protocol.ActionIDPlayerGetWarCdTime)
-						cancel()
+							protocol.ActionIDPlayerGetWarCdTime, getPeachWarCDQueryTimeout)
 						if err == nil && r != nil {
 							resp = r
 							break
 						}
+						if _, abort := kit.IsAbortErr(err); abort {
+							return -1
+						}
 						if attempt == 0 {
-							time.Sleep(500 * time.Millisecond)
+							if !kit.Sleep(ctx, 500*time.Millisecond) {
+								return -1
+							}
 						}
 					}
 					if resp == nil {
@@ -233,6 +237,9 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 
 			panel := fetchPanel()
 			if panel == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return nil
 			}
 			slog.Info("摘仙桃面板",
@@ -245,12 +252,18 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 
 			// 1. 先摘取已召唤的仙桃，避免占用召唤位。
 			harvested, _ := harvestAll(panel)
+			if abortErr := caller.AbortErr(); abortErr != nil {
+				return abortErr
+			}
 			if harvested > 0 {
 				slog.Info("摘仙桃已处理存量", "role_id", session.RoleID(), "harvested", harvested)
 			}
 
 			// 2. 重新读取面板与玩家信息，确认召唤资格。
 			if panel = fetchPanel(); panel == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return nil
 			}
 			if !panel.CanCall {
@@ -262,6 +275,9 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 				}
 			}
 			if panel == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return nil
 			}
 			if !panel.CanCall {
@@ -270,6 +286,9 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 			}
 			player := fetchPlayer()
 			if player == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return nil
 			}
 			slog.Info("摘仙桃玩家信息",
@@ -295,6 +314,9 @@ func NewGetPeachRoutine() scheduler.ActivityRoutine {
 				resp := call(protocol.BuildGetPeachCallPacket(),
 					protocol.ActionIDGetPeachCall, getPeachCallTimeout)
 				if resp == nil {
+					if abortErr := caller.AbortErr(); abortErr != nil {
+						return abortErr
+					}
 					return nil
 				}
 				res, err := protocol.ParseGetPeachCallResult(resp.Payload)

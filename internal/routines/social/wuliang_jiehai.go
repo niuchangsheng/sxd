@@ -27,6 +27,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -81,10 +82,8 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 		"wuliang_jiehai",
 		"social",
 		scheduler.ScheduleCron,
-		// 新会话早期的请求成功率明显更高：实测同一账号在长时间运行的会话中
-		// 后段 853/2/853/4 会被静默丢弃，而登录后立即执行则全部正常。
-		// 因此无量劫海排在推图/宝库等批量任务之前，登录后优先完成。
-		scheduler.RoutinePriority(400),
+		// 新会话早期的请求成功率明显更高，登录后优先完成。
+		scheduler.PhasePriority(scheduler.PhaseEarlyBattle, 50),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -93,17 +92,12 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 战斗结束后回到城镇，避免战斗上下文影响后续 797/3、882 等玩法。
-			defer func() {
-				if ctx.Err() == nil && session.ReturnToTown(ctx, 5*time.Second) {
-					slog.Info("无量劫海结束，已返回城镇场景", "role_id", session.RoleID())
-				}
-			}()
 			st := session.GetPlayerState()
 			slog.Info("无量劫海会话状态", "role_id", session.RoleID(),
 				"town_id", st.TownID, "town_map_id", st.TownMapID, "level", st.Level)
-			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
+			caller := kit.NewCaller(ctx, session, callTimeout)
+			resyncCall := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
+				resp, err := caller.CallResync(pkt, act, timeout...)
 				if err != nil {
 					slog.Info("无量劫海协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err,
@@ -120,12 +114,18 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				}
 			}
 
-			_ = call(protocol.BuildEraInfiniteSeasonPacket(),
-				protocol.ActionIDEraInfiniteSeason, callTimeout)
-			panelResp := call(protocol.BuildEraInfinitePanelPacket(),
-				protocol.ActionIDEraInfinitePanel, callTimeout)
+			_ = resyncCall(protocol.BuildEraInfiniteSeasonPacket(),
+				protocol.ActionIDEraInfiniteSeason)
+			if abort := caller.AbortErr(); abort != nil {
+				return abort
+			}
+			panelResp := resyncCall(protocol.BuildEraInfinitePanelPacket(),
+				protocol.ActionIDEraInfinitePanel)
 			if panelResp == nil {
-				return scheduler.HandleSilentDrop(session, "wuliang_jiehai", 3,
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
+				return scheduler.HandleSilentDropCtx(ctx, session, "wuliang_jiehai", 3,
 					30*time.Minute, "无量劫海面板无回包")
 			}
 			panel, pErr := protocol.ParseEraInfinitePanel(panelResp.Payload)
@@ -171,9 +171,12 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 					// 面板若被静默丢弃，退回 mission_level+1 推断。
 					// 853/1 与 853/2 连发会被服务端限流丢弃，先拟人间隔。
 					wuliangPause(ctx, 400*time.Millisecond)
-					chapterResp := call(protocol.BuildEraInfiniteChapterPacket(chapter),
-						protocol.ActionIDEraInfiniteChapter, callTimeout)
+					chapterResp := resyncCall(protocol.BuildEraInfiniteChapterPacket(chapter),
+						protocol.ActionIDEraInfiniteChapter)
 					if chapterResp == nil {
+						if abort := caller.AbortErr(); abort != nil {
+							return abort
+						}
 						slog.Info("无量劫海章节面板无回包，使用 mission_level+1 推断关卡",
 							"role_id", session.RoleID(), "chapter_id", chapter, "now_level", target)
 					} else if ch, cErr := protocol.ParseEraInfiniteChapter(chapterResp.Payload); cErr != nil {
@@ -199,8 +202,8 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				if !deployReady {
 					deployReady = true
 					wuliangPause(ctx, 300*time.Millisecond)
-					if resp := call(protocol.BuildEraInfiniteDeployTypeSeqPacket(),
-						protocol.ActionIDEraInfiniteDeployTypeSeq, callTimeout); resp != nil {
+					if resp := resyncCall(protocol.BuildEraInfiniteDeployTypeSeqPacket(),
+						protocol.ActionIDEraInfiniteDeployTypeSeq); resp != nil {
 						ids, dErr := protocol.ParseEraInfiniteDeployTypeSeq(resp.Payload)
 						if dErr != nil {
 							slog.Info("解析无量劫海布阵序列失败，使用服务端默认布阵",
@@ -210,6 +213,8 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 						}
 						slog.Info("无量劫海布阵序列", "role_id", session.RoleID(),
 							"deploy_ids", ids, "selected", deployID)
+					} else if abort := caller.AbortErr(); abort != nil {
+						return abort
 					}
 					if deployID != 0 {
 						send(protocol.BuildEraInfiniteSuperDeployListPacket(deployID), "854/1 deploy")
@@ -226,15 +231,18 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 					"last_business", fmt.Sprintf("0x%08X", session.LastBusinessActionID()),
 					"last_sent", fmt.Sprintf("0x%08X", session.LastActionID()),
 					"last_rx", fmt.Sprintf("0x%08X", session.LastRxActionID()))
-				fightResp := call(protocol.BuildEraInfiniteFightPacket(target),
+				fightResp := resyncCall(protocol.BuildEraInfiniteFightPacket(target),
 					protocol.ActionIDEraInfiniteFight, fightTimeout)
 				if fightResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					// 前置动作正常但挑战被静默丢弃：按连续丢包退避，
 					// 计数只在挑战真正回包时清零。
-					return scheduler.HandleSilentDrop(session, "wuliang_jiehai", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "wuliang_jiehai", 3,
 						10*time.Minute, "无量劫海挑战无回包")
 				}
-				scheduler.ResetSilentDrops(session, "wuliang_jiehai")
+				scheduler.ResetSilentDropsCtx(ctx, session, "wuliang_jiehai")
 				res, fErr := protocol.ParseEraInfiniteFightResult(fightResp.Payload)
 				if fErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "无量劫海挑战回包解析失败")
@@ -277,5 +285,6 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				"next_level", target)
 			return nil
 		},
+		scheduler.WithReturnToTown(),
 	)
 }

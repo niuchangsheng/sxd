@@ -17,6 +17,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -39,9 +40,8 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 		"wuxing_tiangong",
 		"minigame",
 		scheduler.ScheduleCron,
-		// 453/3 一键挑战同样严格校验城镇/战场上下文：实测排在无量劫海
-		// (400) 等战斗之后时会被静默丢弃。排在宝库(450)之后、所有战斗之前。
-		scheduler.RoutinePriority(445),
+		// 453/3 一键挑战同样严格校验城镇/战场上下文：排在宝库(450)之后、所有战斗之前。
+		scheduler.PhasePriority(scheduler.PhaseTownSensitive, 25),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -50,35 +50,26 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 挑战结束后回到城镇，避免战斗上下文影响后续玩法。
-			defer func() {
-				if ctx.Err() == nil && session.ReturnToTown(ctx, 5*time.Second) {
-					slog.Info("五行天宫结束，已返回城镇场景", "role_id", session.RoleID())
-				}
-			}()
 
-			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, timeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
-				if err != nil {
-					return nil
-				}
-				return resp
-			}
+			caller := kit.NewCaller(ctx, session, wuxingCallTimeout)
 
 			slog.Info("正在执行五行天宫挑战", "role_id", session.RoleID())
 
 			// 1. 分类面板（诊断）。
-			if resp := call(protocol.BuildWuxingPanel10Packet(session.LastActionID()),
-				protocol.ActionIDWuxingPanel10, wuxingCallTimeout); resp != nil {
+			if resp := caller.TryCall(protocol.BuildWuxingPanel10Packet(session.LastActionID()),
+				protocol.ActionIDWuxingPanel10); resp != nil {
 				slog.Info("五行天宫分类面板", "role_id", session.RoleID(), "payload_len", len(resp.Payload))
+			} else if abort := caller.AbortErr(); abort != nil {
+				return abort
 			}
 
 			// 2. 主面板。
-			panelResp := call(protocol.BuildWuxingPanelPacket(session.LastActionID()),
-				protocol.ActionIDWuxingPanel, wuxingCallTimeout)
+			panelResp := caller.TryCall(protocol.BuildWuxingPanelPacket(session.LastActionID()),
+				protocol.ActionIDWuxingPanel)
 			if panelResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("五行天宫主面板无回包，结束本轮", "role_id", session.RoleID())
 				return nil
 			}
@@ -106,23 +97,29 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 			// 3. 一键挑战；失败关卡按 N 轮重试后退出（挑战副本 N 次失败才退出）。
 			failedRounds := 0
 			for {
-				fightResp := call(protocol.BuildWuxingFightPacket(protocol.WuxingFightModeAll, session.LastActionID()),
+				fightResp := caller.TryCall(protocol.BuildWuxingFightPacket(protocol.WuxingFightModeAll, session.LastActionID()),
 					protocol.ActionIDWuxingFight, 30*time.Second)
 				if fightResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					// 一键挑战被静默丢弃时 10 分钟重试只会持续空等 30 秒；改为 1 小时低频探测。
 					slog.Info("五行天宫一键挑战无回包，1 小时后再试", "role_id", session.RoleID())
 					return scheduler.NewCooldown(time.Hour, "五行天宫一键挑战无回包")
 				}
-				scheduler.ResetSilentDrops(session, "wuxing_tiangong")
+				scheduler.ResetSilentDropsCtx(ctx, session, "wuxing_tiangong")
 				slog.Info("五行天宫一键挑战已执行",
 					"role_id", session.RoleID(), "report_len", len(fightResp.Payload), "round", failedRounds+1)
 
 				// 4. 刷新面板；统计本轮失败关卡。
-				afterResp := call(protocol.BuildWuxingPanelPacket(session.LastActionID()),
-					protocol.ActionIDWuxingPanel, wuxingCallTimeout)
+				afterResp := caller.TryCall(protocol.BuildWuxingPanelPacket(session.LastActionID()),
+					protocol.ActionIDWuxingPanel)
 				if afterResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					slog.Info("五行天宫挑战后面板无回包，按连续丢包退避", "role_id", session.RoleID())
-					return scheduler.HandleSilentDrop(session, "wuxing_tiangong", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "wuxing_tiangong", 3,
 						30*time.Minute, "五行天宫挑战后面板无回包")
 				}
 				after, aErr := protocol.ParseWuxingPanel(afterResp.Payload)
@@ -153,12 +150,11 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 				}
 				slog.Info("五行天宫仍有待挑战关卡，重试一键挑战",
 					"role_id", session.RoleID(), "failed_rounds", failedRounds, "pending_stages", pending)
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-time.After(2 * time.Second):
+				if !kit.Sleep(ctx, 2*time.Second) {
+					return ctx.Err()
 				}
 			}
 		},
+		scheduler.WithReturnToTown(),
 	)
 }

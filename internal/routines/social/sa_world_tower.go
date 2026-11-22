@@ -11,6 +11,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -37,10 +38,9 @@ func NewSaWorldTowerRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("全网幻魔塔协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -50,6 +50,9 @@ func NewSaWorldTowerRoutine() scheduler.ActivityRoutine {
 
 			openResp := call(protocol.BuildSaWorldTowerOpenPacket(), protocol.ActionIDSaWorldTowerOpen)
 			if openResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("全网幻魔塔开放状态无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "全网幻魔塔开放状态无回包")
 			}
@@ -71,6 +74,8 @@ func NewSaWorldTowerRoutine() scheduler.ActivityRoutine {
 				} else if pErr != nil {
 					slog.Warn("全网幻魔塔面板解析失败", "role_id", session.RoleID(), "err", pErr)
 				}
+			} else if abort := caller.AbortErr(); abort != nil {
+				return abort
 			}
 
 			fights := 0
@@ -81,13 +86,16 @@ func NewSaWorldTowerRoutine() scheduler.ActivityRoutine {
 				}
 				fightResp := call(protocol.BuildSaWorldTowerFightPacket(towerID), protocol.ActionIDSaWorldTowerFight)
 				if fightResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					// 静默丢包时不能 return nil，剩余塔要等到下一个 cron 时段。
 					slog.Info("全网幻魔塔挑战无回包，按连续丢包退避",
 						"role_id", session.RoleID(), "tower_id", towerID)
-					return scheduler.HandleSilentDrop(session, "sa_world_tower", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "sa_world_tower", 3,
 						30*time.Minute, "全网幻魔塔挑战无回包")
 				}
-				scheduler.ResetSilentDrops(session, "sa_world_tower")
+				scheduler.ResetSilentDropsCtx(ctx, session, "sa_world_tower")
 				code, err := protocol.ParseActionFirstByte(fightResp.Payload, "全网幻魔塔挑战")
 				if err != nil {
 					slog.Warn("全网幻魔塔挑战回包解析失败", "role_id", session.RoleID(),

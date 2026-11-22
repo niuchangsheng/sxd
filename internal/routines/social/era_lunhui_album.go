@@ -19,6 +19,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -36,7 +37,7 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 		"social",
 		scheduler.ScheduleCron,
 		// 轮回图录在长会话后段实测会被批量静默丢弃，登录后优先执行。
-		scheduler.RoutinePriority(355),
+		scheduler.PhasePriority(scheduler.PhaseEarlyBattle, 5),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -45,8 +46,9 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				resp, err := session.CallWithPrevActResync(ctx, callTimeout, pkt, act)
+				resp, err := caller.CallResync(pkt, act)
 				if err != nil {
 					slog.Info("轮回图录协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -57,6 +59,9 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildEraLunHuiPanelPacket(), protocol.ActionIDEraLunHuiPanel)
 			if panelResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "轮回图录面板无回包")
 			}
 			if code, err := protocol.ParseEraLunHuiResult(panelResp.Payload); err != nil {
@@ -70,6 +75,9 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 			redResp := call(protocol.BuildEraLunHuiRedDotStatusPacket(),
 				protocol.ActionIDEraLunHuiRedDotStatus)
 			if redResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("轮回图录可领取状态无回包，本轮跳过", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "轮回图录可领取状态无回包")
 			}
@@ -101,13 +109,13 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 				infoResp := call(protocol.BuildEraLunHuiTaskInfoPacket(tab),
 					protocol.ActionIDEraLunHuiTaskInfo)
 				if infoResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					// 按日状态结束后 882/1 会被静默丢弃：连续 3 次挂起（最长 6 小时）。
-					return scheduler.HandleSilentDrop(session, "era_lunhui_album", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "era_lunhui_album", 3,
 						time.Hour, "轮回图录任务列表无回包")
 				}
-				// 任务列表成功不代表领奖动作可用：这里不 ResetSilentDrops，
-				// 否则「列表正常、领奖被静默丢弃」时每轮计数都被清零，
-				// 永远达不到熔断阈值。计数只在领奖真正回包后清零。
 				tasks, err := protocol.ParseEraLunHuiTasks(infoResp.Payload)
 				if err != nil {
 					slog.Warn("解析轮回图录任务列表失败", "role_id", session.RoleID(),
@@ -126,12 +134,13 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 					resp := call(protocol.BuildEraLunHuiGetTaskPacket(t.ID),
 						protocol.ActionIDEraLunHuiGetTask)
 					if resp == nil {
-						// 按日状态结束后领奖请求会被静默丢弃：连续 3 次挂起，
-						// 避免每 10 分钟空转。
-						return scheduler.HandleSilentDrop(session, "era_lunhui_album", 3,
+						if abort := caller.AbortErr(); abort != nil {
+							return abort
+						}
+						return scheduler.HandleSilentDropCtx(ctx, session, "era_lunhui_album", 3,
 							time.Hour, "轮回图录领取无回包")
 					}
-					scheduler.ResetSilentDrops(session, "era_lunhui_album")
+					scheduler.ResetSilentDropsCtx(ctx, session, "era_lunhui_album")
 					code, cErr := protocol.ParseEraLunHuiResult(resp.Payload)
 					if cErr != nil {
 						continue

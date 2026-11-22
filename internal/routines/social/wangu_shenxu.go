@@ -19,6 +19,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -39,10 +40,9 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, pkt.ActionID)
+				resp, err := caller.Call(pkt, pkt.ActionID)
 				if err != nil {
 					slog.Info("万古神墟协议无回包",
 						"role_id", session.RoleID(), "action", pkt.ActionID, "err", err)
@@ -54,7 +54,10 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 			// 1. 主面板：确认活动开放状态与今日可膜拜对象。
 			panelResp := call(protocol.BuildWanguShenxuMainInfoPacket())
 			if panelResp == nil {
-				return scheduler.HandleSilentDrop(session, routineID, 3, time.Hour, "万古神墟面板无回包")
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
+				return scheduler.HandleSilentDropCtx(ctx, session, routineID, 3, time.Hour, "万古神墟面板无回包")
 			}
 			panel, err := protocol.ParseWanguShenxuPanel(panelResp.Payload)
 			if err != nil {
@@ -64,12 +67,8 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 			if panel.Result != protocol.WanguShenxuResultSuccess {
 				slog.Info("万古神墟当前不可用", "role_id", session.RoleID(),
 					"result", panel.Result, "result_text", protocol.WanguShenxuResultText(panel.Result))
-				return scheduler.HandleSilentDrop(session, routineID, 3, time.Hour, "万古神墟未开放")
+				return scheduler.HandleSilentDropCtx(ctx, session, routineID, 3, time.Hour, "万古神墟未开放")
 			}
-			// 面板成功不代表膜拜动作可用：此处不能 ResetSilentDrops，
-			// 否则「面板正常、膜拜被静默丢弃」时连续丢包计数每轮被清零，
-			// 永远达不到 3 次熔断阈值（与飞升灌注同类缺陷）。计数只在
-			// 膜拜/领奖真正成功时清零。
 			targets := make([]protocol.WanguShenxuPlayer, 0, len(panel.Players))
 			for _, p := range panel.Players {
 				// player_id=0 为空神像位，无法膜拜。
@@ -87,7 +86,10 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 			for i, target := range targets {
 				resp := call(protocol.BuildWanguShenxuWorshipPacket(target.Type))
 				if resp == nil {
-					return scheduler.HandleSilentDrop(session, routineID, 3, time.Hour, "万古神墟膜拜无回包")
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
+					return scheduler.HandleSilentDropCtx(ctx, session, routineID, 3, time.Hour, "万古神墟膜拜无回包")
 				}
 				got, pErr := protocol.ParseWanguShenxuWorshipResult(resp.Payload)
 				if pErr != nil {
@@ -99,13 +101,11 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 				switch got.Result {
 				case protocol.WanguShenxuResultSuccess:
 					worshipped++
-					scheduler.ResetSilentDrops(session, routineID)
+					scheduler.ResetSilentDropsCtx(ctx, session, routineID)
 					slog.Info("万古神墟膜拜成功",
 						"role_id", session.RoleID(), "type", target.Type,
 						"nickname", target.Nickname, "server", target.ServerName,
 						"target_ingot", got.Ingot)
-					// 官方客户端每次成功后都会重新拉取主面板；实机连续快速膜拜
-					// 第 3 个神像会被服务端静默丢弃，这里同样刷新并注入抖动间隔。
 					if i < len(targets)-1 {
 						if refresh := call(protocol.BuildWanguShenxuMainInfoPacket()); refresh != nil {
 							if refreshed, rErr := protocol.ParseWanguShenxuPanel(refresh.Payload); rErr != nil {
@@ -113,6 +113,8 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 							} else if refreshed.Result == protocol.WanguShenxuResultSuccess {
 								panel = refreshed
 							}
+						} else if abort := caller.AbortErr(); abort != nil {
+							return abort
 						}
 						if jitter != nil {
 							_ = jitter.Wait(ctx)
@@ -124,7 +126,7 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 				case protocol.WanguShenxuResultFuncNotOpen:
 					slog.Info("万古神墟功能未开放，稍后重试",
 						"role_id", session.RoleID(), "type", target.Type)
-					return scheduler.HandleSilentDrop(session, routineID, 3, time.Hour, "万古神墟功能未开放")
+					return scheduler.HandleSilentDropCtx(ctx, session, routineID, 3, time.Hour, "万古神墟功能未开放")
 				default:
 					failed++
 					slog.Info("万古神墟膜拜未成功",
@@ -137,7 +139,10 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 			if panel.CanGetCoin > 0 {
 				resp := call(protocol.BuildWanguShenxuGetAwardPacket())
 				if resp == nil {
-					return scheduler.HandleSilentDrop(session, routineID, 3, time.Hour, "万古神墟领奖无回包")
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
+					return scheduler.HandleSilentDropCtx(ctx, session, routineID, 3, time.Hour, "万古神墟领奖无回包")
 				}
 				got, pErr := protocol.ParseWanguShenxuAwardResult(resp.Payload)
 				if pErr != nil {
@@ -145,7 +150,7 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 				} else {
 					switch got.Result {
 					case protocol.WanguShenxuResultSuccess:
-						scheduler.ResetSilentDrops(session, routineID)
+						scheduler.ResetSilentDropsCtx(ctx, session, routineID)
 						slog.Info("万古神墟领取铜钱奖励成功",
 							"role_id", session.RoleID(), "coin", got.Coin)
 					case protocol.WanguShenxuResultNotAward:
@@ -159,7 +164,7 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 
 			// 有可膜拜对象但全部失败时才进入丢包退避，避免每轮重复请求。
 			if len(targets) > 0 && worshipped == 0 && failed == len(targets) {
-				return scheduler.HandleSilentDrop(session, routineID, 3, time.Hour, "万古神墟膜拜全部失败")
+				return scheduler.HandleSilentDropCtx(ctx, session, routineID, 3, time.Hour, "万古神墟膜拜全部失败")
 			}
 			return nil
 		},

@@ -18,6 +18,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -29,7 +30,7 @@ func NewVoidWorshipRoutine() scheduler.ActivityRoutine {
 		"social",
 		scheduler.ScheduleCron,
 		// 虚空/大神榜在长会话后段易被静默丢弃，登录后尽早执行。
-		scheduler.RoutinePriority(330),
+		scheduler.PhasePriority(scheduler.PhaseCoreLoop, 30),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -38,10 +39,9 @@ func NewVoidWorshipRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("虚空协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -76,6 +76,9 @@ func NewVoidWorshipRoutine() scheduler.ActivityRoutine {
 						attempts++
 						resp := call(protocol.BuildStVoidLikePacket(member.StUID), protocol.ActionIDStVoidLike)
 						if resp == nil {
+							if abort := caller.AbortErr(); abort != nil {
+								return abort
+							}
 							break
 						}
 						got, lErr := protocol.ParseStVoidLikeResult(resp.Payload)
@@ -102,15 +105,18 @@ func NewVoidWorshipRoutine() scheduler.ActivityRoutine {
 						}
 					}
 				}
+			} else if abort := caller.AbortErr(); abort != nil {
+				return abort
 			} else {
 				slog.Info("仙界虚空主面板无回包，回退大神榜膜拜", "role_id", session.RoleID())
 			}
 
 			// 2. 兜底：大神榜 500/1 worship。
-			cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-			resp, err := session.Call(cCtx, protocol.BuildGodRankWorshipPacket(), protocol.ActionIDGodRankWorship)
-			cancel()
+			resp, err := caller.Call(protocol.BuildGodRankWorshipPacket(), protocol.ActionIDGodRankWorship)
 			if err != nil || resp == nil {
+				if abort, ok := kit.IsAbortErr(err); ok {
+					return abort
+				}
 				slog.Info("大神榜膜拜无回包，稍后重试", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(30*time.Minute, "大神榜膜拜无回包")
 			}

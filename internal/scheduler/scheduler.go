@@ -40,9 +40,11 @@ type RoleScheduler struct {
 	roleID  string
 	session *client.RoleSession
 	jitter  *Jitter
+	drops   *DropTracker
 
 	items   []*scheduledItem
 	itemsMu sync.RWMutex
+	wakeCh  chan struct{}
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -60,22 +62,41 @@ func NewRoleScheduler(roleID string, session *client.RoleSession, jitter *Jitter
 		roleID:  roleID,
 		session: session,
 		jitter:  jitter,
+		drops:   NewDropTracker(),
 		items:   make([]*scheduledItem, 0),
+		wakeCh:  make(chan struct{}, 1),
+	}
+}
+
+// DropTracker 返回该角色调度器私有的连续静默丢包计数器。
+func (s *RoleScheduler) DropTracker() *DropTracker {
+	return s.drops
+}
+
+func (s *RoleScheduler) notifyWake() {
+	select {
+	case s.wakeCh <- struct{}{}:
+	default:
 	}
 }
 
 // SetRoutineEnabled 动态启用或禁用特定任务。
 func (s *RoleScheduler) SetRoutineEnabled(name string, enabled bool) bool {
 	s.itemsMu.Lock()
-	defer s.itemsMu.Unlock()
-
+	found := false
 	for _, it := range s.items {
 		if it.routine.Name() == name {
 			it.disabled = !enabled
-			return true
+			found = true
+			break
 		}
 	}
-	return false
+	s.itemsMu.Unlock()
+
+	if found && enabled {
+		s.notifyWake()
+	}
+	return found
 }
 
 // Register 注册一个日常活动任务到调度队列。
@@ -85,13 +106,14 @@ func (s *RoleScheduler) Register(routine ActivityRoutine) error {
 	}
 
 	s.itemsMu.Lock()
-	defer s.itemsMu.Unlock()
-
 	item := &scheduledItem{
 		routine: routine,
 		nextRun: time.Now(), // 注册后立即进入就绪候选
 	}
 	s.items = append(s.items, item)
+	s.itemsMu.Unlock()
+
+	s.notifyWake()
 	return nil
 }
 
@@ -141,7 +163,7 @@ func (s *RoleScheduler) runLoop() {
 		default:
 		}
 
-		item := s.pickNextReadyItem()
+		item, wait := s.pickNextReadyOrWait()
 		if item == nil {
 			if !idleLogged {
 				idleLogged = true
@@ -149,11 +171,34 @@ func (s *RoleScheduler) runLoop() {
 					"role_id", s.roleID,
 				)
 			}
-			// 当前无就绪任务，轻度休眠后继续探查
+			// 事件驱动待机：按最近到期时间精准休眠，收到 Register/TriggerBatch/Enable 信号立即唤醒。
+			if wait < 0 {
+				select {
+				case <-s.ctx.Done():
+					return
+				case <-s.wakeCh:
+					continue
+				}
+			}
+			timer := time.NewTimer(wait)
 			select {
 			case <-s.ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 				return
-			case <-time.After(10 * time.Millisecond):
+			case <-s.wakeCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				continue
+			case <-timer.C:
 				continue
 			}
 		}
@@ -161,10 +206,15 @@ func (s *RoleScheduler) runLoop() {
 
 		// 零假动作铁律：会话未处于 StateActive 激活态时严禁触发业务 Routine
 		if s.session != nil && s.session.State() != client.StateActive {
+			timer := time.NewTimer(200 * time.Millisecond)
 			select {
 			case <-s.ctx.Done():
+				timer.Stop()
 				return
-			case <-time.After(200 * time.Millisecond):
+			case <-s.wakeCh:
+				timer.Stop()
+				continue
+			case <-timer.C:
 				continue
 			}
 		}
@@ -174,14 +224,16 @@ func (s *RoleScheduler) runLoop() {
 			return
 		}
 
+		routineName := item.routine.Name()
 		slog.Debug("开始执行日常任务",
 			"role_id", s.roleID,
-			"routine", item.routine.Name(),
+			"routine", routineName,
 			"priority", item.routine.Priority(),
 		)
 
-		// 执行任务并捕获业务语义异常
-		execErr := item.routine.Execute(s.ctx, s.session, s.jitter)
+		// 注入当前调度器隔离的 DropTracker，避免不同调度器/测试间的静默丢包计数串扰。
+		execCtx := WithDropTracker(s.ctx, s.drops)
+		execErr := item.routine.Execute(execCtx, s.session, s.jitter)
 		// 例程内部可能把「断线」当成普通查询失败而 return nil（例如
 		// IsFunctionOpen 报 session is not active 后直接跳过），Cron 任务就会
 		// 直接等到次日。这里统一兜底：返回 nil 但会话已不在激活态，按断线
@@ -190,10 +242,11 @@ func (s *RoleScheduler) runLoop() {
 			execErr = client.ErrNotConnected
 		}
 
-		item.lastRun = time.Now()
+		now := time.Now()
+		s.itemsMu.Lock()
+		item.lastRun = now
 		item.runCount++
 
-		s.itemsMu.Lock()
 		cooldownScheduled := false
 		coolingScheduled := false
 		retrySoon := false
@@ -207,84 +260,114 @@ func (s *RoleScheduler) runLoop() {
 				cooldownScheduled = true
 				slog.Info("任务进入定时等待，将在指定时间后唤醒",
 					"role_id", s.roleID,
-					"routine", item.routine.Name(),
+					"routine", routineName,
 					"wake_at", cdErr.Until,
 					"reason", cdErr.Reason,
 				)
 			} else if errors.Is(execErr, ErrAttemptsExhausted) {
 				// 次数耗尽：挂起至次日凌晨 00:00:10
-				tomorrow := time.Now().AddDate(0, 0, 1)
+				tomorrow := now.AddDate(0, 0, 1)
 				midnight := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 10, 0, tomorrow.Location())
 				item.coolingUntil = midnight
 				item.holdUntil = midnight
 				coolingScheduled = true
 				slog.Info("日常任务次数耗尽，进入智能熔断挂起",
 					"role_id", s.roleID,
-					"routine", item.routine.Name(),
+					"routine", routineName,
 					"cooling_until", midnight,
 				)
 			} else if errors.Is(execErr, ErrStaminaDepleted) {
 				// 体力不足：挂起 30 分钟
-				item.coolingUntil = time.Now().Add(30 * time.Minute)
+				item.coolingUntil = now.Add(30 * time.Minute)
 				item.holdUntil = item.coolingUntil
 				coolingScheduled = true
 				slog.Info("体力耗尽，进入智能熔断挂起",
 					"role_id", s.roleID,
-					"routine", item.routine.Name(),
+					"routine", routineName,
 					"cooling_until", item.coolingUntil,
 				)
-			} else if errors.Is(execErr, client.ErrNotConnected) {
+			} else if errors.Is(execErr, client.ErrNotConnected) || errors.Is(execErr, client.ErrSessionClosed) {
 				// 执行中途断线：本轮确实没做完（可能还有剩余次数），
-				// 若按 Cron 推迟到下一次定点唤醒（2~4 小时）会长期漏做。
 				// 会话恢复后 5 分钟即重试；调度器在重连期间本身也不会拉起任务。
 				retrySoon = true
 				slog.Info("会话重连中，任务本轮跳过并稍后重试",
 					"role_id", s.roleID,
-					"routine", item.routine.Name(),
+					"routine", routineName,
 					"retry_in", sessionLostRetryInterval,
 				)
 			} else if errors.Is(execErr, context.DeadlineExceeded) {
-				// 超时多数源于服务端对不满足条件请求的静默丢弃。Cron 例程若
-				// 直接当作「本轮跳过」，剩余业务要等到下一个 cron 时段（可能
-				// 数小时）；统一给 30 分钟短重试，连续丢包由 Routine 内部的
-				// dropbackoff 计数熔断。
-				item.coolingUntil = time.Now().Add(30 * time.Minute)
-				item.holdUntil = item.coolingUntil
-				coolingScheduled = true
-				slog.Info("任务请求超时/被服务端静默丢弃，30 分钟后重试",
-					"role_id", s.roleID,
-					"routine", item.routine.Name(),
-					"cooling_until", item.coolingUntil,
-					"error", execErr,
-				)
+				// 会话非激活导致的超时属于网络中断而非服务端静默丢包，不计入丢包熔断。
+				if s.session != nil && s.session.State() != client.StateActive {
+					retrySoon = true
+					slog.Info("会话断开期间任务超时，转为短重试",
+						"role_id", s.roleID,
+						"routine", routineName,
+						"retry_in", sessionLostRetryInterval,
+					)
+				} else {
+					threshold, retry := defaultSilentDropThreshold, defaultSilentDropRetry
+					if lr, ok := item.routine.(LifecycleRoutine); ok {
+						if t, r := lr.SilentDropPolicy(); t > 0 || r > 0 {
+							if t > 0 {
+								threshold = t
+							}
+							if r > 0 {
+								retry = r
+							}
+						}
+					}
+					n := s.drops.Note(s.roleID, routineName)
+					until, escalated := s.drops.BackoffUntil(now, n, threshold, retry)
+					item.coolingUntil = until
+					item.holdUntil = until
+					coolingScheduled = true
+					if escalated {
+						slog.Info("任务连续静默丢包达到阈值，进入长熔断挂起",
+							"role_id", s.roleID,
+							"routine", routineName,
+							"consecutive_drops", n,
+							"cooling_until", until,
+							"error", execErr,
+						)
+					} else {
+						slog.Info("任务请求超时/被服务端静默丢弃，稍后短重试",
+							"role_id", s.roleID,
+							"routine", routineName,
+							"consecutive_drops", n,
+							"cooling_until", until,
+							"error", execErr,
+						)
+					}
+				}
 			} else if errors.Is(execErr, ErrConditionNotMet) {
 				// 等级/资源/功能条件不满足属于正常业务分支，不应记为执行异常。
 				slog.Info("任务前置条件不满足，本轮跳过",
 					"role_id", s.roleID,
-					"routine", item.routine.Name(),
+					"routine", routineName,
 					"error", execErr,
 				)
 			} else if errors.Is(execErr, ErrBagFull) {
 				// 背包已满：挂起 10 分钟
-				item.coolingUntil = time.Now().Add(10 * time.Minute)
+				item.coolingUntil = now.Add(10 * time.Minute)
 				item.holdUntil = item.coolingUntil
 				coolingScheduled = true
 				slog.Info("背包已满，日常任务休眠待命",
 					"role_id", s.roleID,
-					"routine", item.routine.Name(),
+					"routine", routineName,
 					"cooling_until", item.coolingUntil,
 				)
 			} else {
 				slog.Warn("日常任务执行异常",
 					"role_id", s.roleID,
-					"routine", item.routine.Name(),
+					"routine", routineName,
 					"error", execErr,
 				)
 			}
 		}
 		if execErr == nil {
-			// 本次执行成功：清除语义冷却，恢复常规调度（下次批量唤醒可正常拉起）。
+			// 本次执行成功：清除语义冷却与调度器级连续丢包计数，恢复常规调度。
 			item.holdUntil = time.Time{}
+			s.drops.Reset(s.roleID, routineName)
 		}
 
 		// 处理执行周期更新或单次任务移除
@@ -295,18 +378,16 @@ func (s *RoleScheduler) runLoop() {
 		if cooldownScheduled {
 			// nextRun 已由 CooldownError.Until 指定，保留该唤醒时间。
 		} else if coolingScheduled {
-			// 体力/背包/次数熔断：冷却结束即重新就绪，而不是被 24h Cron 推迟一天
-			// （否则 coolingUntil 只有 10~30 分钟，实际却要等到次日批量唤醒）。
+			// 体力/背包/次数/静默丢包熔断：冷却结束即重新就绪，而不是被 24h Cron 推迟一天。
 			item.nextRun = item.coolingUntil
 		} else if retrySoon {
-			// 会话中途断线：本轮可能还有未消耗的次数，按短间隔重试，
-			// 不按 Cron/Interval 推迟到下一次唤醒。
-			item.nextRun = time.Now().Add(sessionLostRetryInterval)
+			// 会话中途断线：本轮可能还有未消耗的次数，按短间隔重试。
+			item.nextRun = now.Add(sessionLostRetryInterval)
 		} else if item.routine.Interval() > 0 {
-			item.nextRun = time.Now().Add(item.routine.Interval())
+			item.nextRun = now.Add(item.routine.Interval())
 		} else if isCron {
 			// 定点任务等待下一次 TriggerBatch 唤醒或次日重置
-			item.nextRun = time.Now().Add(24 * time.Hour)
+			item.nextRun = now.Add(24 * time.Hour)
 		} else {
 			s.removeItemLocked(item)
 		}
@@ -314,35 +395,49 @@ func (s *RoleScheduler) runLoop() {
 	}
 }
 
-func (s *RoleScheduler) pickNextReadyItem() *scheduledItem {
+// pickNextReadyOrWait 选出最高优先级的就绪任务；若当前无就绪任务，返回距离最近
+// 待唤醒任务的时间间隔（无启用的待执行任务时返回 -1）。
+func (s *RoleScheduler) pickNextReadyOrWait() (*scheduledItem, time.Duration) {
 	s.itemsMu.RLock()
 	defer s.itemsMu.RUnlock()
 
 	now := time.Now()
 	var candidates []*scheduledItem
+	var earliest time.Time
+
 	for _, it := range s.items {
 		if it.disabled {
 			continue
 		}
-		// 校验就绪时间与熔断冷却期
-		isReady := now.After(it.nextRun) || now.Equal(it.nextRun)
-		isCooled := it.coolingUntil.IsZero() || now.After(it.coolingUntil) || now.Equal(it.coolingUntil)
-
-		if isReady && isCooled {
+		readyAt := it.nextRun
+		if !it.coolingUntil.IsZero() && it.coolingUntil.After(readyAt) {
+			readyAt = it.coolingUntil
+		}
+		if !now.Before(readyAt) {
 			candidates = append(candidates, it)
+			continue
+		}
+		if earliest.IsZero() || readyAt.Before(earliest) {
+			earliest = readyAt
 		}
 	}
 
-	if len(candidates) == 0 {
-		return nil
+	if len(candidates) > 0 {
+		// 按优先级从大到小稳定排序 (高优先级优先执行，同优先级保持注册顺序)
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return candidates[i].routine.Priority() > candidates[j].routine.Priority()
+		})
+		return candidates[0], 0
 	}
 
-	// 按优先级从大到小排序 (高优先级优先执行)
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].routine.Priority() > candidates[j].routine.Priority()
-	})
-
-	return candidates[0]
+	if earliest.IsZero() {
+		return nil, -1
+	}
+	wait := earliest.Sub(now)
+	if wait <= 0 {
+		wait = time.Millisecond
+	}
+	return nil, wait
 }
 
 // TriggerBatch 唤醒指定调度类型的全部任务（例如定点 Cron 重置），重置其执行时钟与冷却状态。
@@ -352,7 +447,6 @@ func (s *RoleScheduler) pickNextReadyItem() *scheduledItem {
 // 到期后自动恢复正常批量调度。
 func (s *RoleScheduler) TriggerBatch(schedType ScheduleType) int {
 	s.itemsMu.Lock()
-	defer s.itemsMu.Unlock()
 
 	count := 0
 	now := time.Now()
@@ -377,6 +471,11 @@ func (s *RoleScheduler) TriggerBatch(schedType ScheduleType) int {
 		it.nextRun = now
 		it.coolingUntil = time.Time{} // 解除冷却
 		count++
+	}
+	s.itemsMu.Unlock()
+
+	if count > 0 {
+		s.notifyWake()
 	}
 	return count
 }

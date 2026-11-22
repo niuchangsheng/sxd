@@ -13,6 +13,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -35,10 +36,9 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("宠物仙域协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -108,14 +108,17 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 				}
 				dResp := call(protocol.BuildFairylandDispatchPacket(orderID), protocol.ActionIDFairylandDispatch)
 				if dResp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					// 派遣被静默丢弃时不能 return nil：未派遣的订单要等到下一个
 					// cron 时段才会重试。按连续丢包退避后继续消费剩余订单。
 					slog.Info("宠物仙域游历派遣无回包，按连续丢包退避",
 						"role_id", session.RoleID(), "order_id", orderID)
-					return scheduler.HandleSilentDrop(session, "fairyland_dispatch", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "fairyland_dispatch", 3,
 						30*time.Minute, "宠物仙域游历派遣无回包")
 				}
-				scheduler.ResetSilentDrops(session, "fairyland_dispatch")
+				scheduler.ResetSilentDropsCtx(ctx, session, "fairyland_dispatch")
 				dCode, dErr := protocol.ParseActionFirstByte(dResp.Payload, "宠物仙域游历")
 				if dErr != nil {
 					slog.Warn("宠物仙域游历回包解析失败", "role_id", session.RoleID(),

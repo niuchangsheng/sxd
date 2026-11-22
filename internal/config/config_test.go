@@ -169,19 +169,15 @@ func TestConfig_FactionWheelSellSwitch(t *testing.T) {
 	}
 }
 
-func TestConfig_LoadConfigYamlIfExists(t *testing.T) {
-	configPath := filepath.Join("..", "..", "configs", "config.yaml")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		t.Skip("configs/config.yaml does not exist, skipping")
-	}
-
+func TestConfig_LoadConfigExampleYaml(t *testing.T) {
+	configPath := filepath.Join("..", "..", "configs", "config.example.yaml")
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		t.Fatalf("Load configs/config.yaml failed: %v", err)
+		t.Fatalf("Load configs/config.example.yaml failed: %v", err)
 	}
 
 	if !cfg.Scheduler.Routines["beelzebub_trials"] {
-		t.Errorf("expected beelzebub_trials routine to be enabled in configs/config.yaml")
+		t.Errorf("expected beelzebub_trials routine to be enabled in configs/config.example.yaml")
 	}
 	if cfg.Scheduler.BeelzebubTrials.MinLevel != 0 {
 		t.Errorf("expected min_level 0, got %d", cfg.Scheduler.BeelzebubTrials.MinLevel)

@@ -11,6 +11,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -33,10 +34,9 @@ func NewFortuneBoxRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("奇缘宝藏协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -46,6 +46,9 @@ func NewFortuneBoxRoutine() scheduler.ActivityRoutine {
 
 			openResp := call(protocol.BuildFortuneBoxOpenPacket(), protocol.ActionIDFortuneBoxOpen)
 			if openResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				slog.Info("奇缘宝藏开放状态无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "奇缘宝藏开放状态无回包")
 			}
@@ -60,7 +63,11 @@ func NewFortuneBoxRoutine() scheduler.ActivityRoutine {
 			}
 
 			panelResp := call(protocol.BuildFortuneBoxPanelPacket(), protocol.ActionIDFortuneBoxPanel)
-			if panelResp != nil {
+			if panelResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
+			} else {
 				slog.Info("奇缘宝藏面板", "role_id", session.RoleID(), "payload_len", len(panelResp.Payload))
 			}
 
@@ -70,6 +77,9 @@ func NewFortuneBoxRoutine() scheduler.ActivityRoutine {
 				}
 				boxResp := call(protocol.BuildFortuneBoxOpenBoxPacket(boxID), protocol.ActionIDFortuneBoxOpenBox)
 				if boxResp == nil {
+					if abortErr := caller.AbortErr(); abortErr != nil {
+						return abortErr
+					}
 					return nil
 				}
 				code, err := protocol.ParseActionFirstByte(boxResp.Payload, "奇缘宝藏开启")

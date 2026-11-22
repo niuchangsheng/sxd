@@ -12,6 +12,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -67,9 +68,7 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 			}
 
 			fetchPanel := func() (*protocol.TongTianTowerPanel, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				resp, err := session.Call(cCtx, protocol.BuildTongTianTowerPanelPacket(), protocol.ActionIDTongTianTowerPanel)
+				resp, err := kit.Call(ctx, session, protocol.BuildTongTianTowerPanelPacket(), protocol.ActionIDTongTianTowerPanel, 5*time.Second)
 				if err != nil {
 					return nil, err
 				}
@@ -81,18 +80,21 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 
 			panel, err := fetchPanel()
 			if err != nil {
+				if abort, ok := kit.IsAbortErr(err); ok {
+					return abort
+				}
 				// 面板被静默丢弃时不能返回 nil：ScheduleCron 会把它当成成功，
 				// 整座塔要到下一个 cron 时段才会再试。按连续丢包退避。
 				if errors.Is(err, errTongTianTowerNoResponse) || errors.Is(err, context.DeadlineExceeded) {
 					slog.Info("通天塔面板无回包，按连续丢包退避",
 						"role_id", session.RoleID(), "err", err)
-					return scheduler.HandleSilentDrop(session, "tong_tian_tower", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "tong_tian_tower", 3,
 						30*time.Minute, "通天塔面板无回包")
 				}
 				slog.Warn("通天塔面板解析失败", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(10*time.Minute, "通天塔面板解析失败")
 			}
-			scheduler.ResetSilentDrops(session, "tong_tian_tower")
+			scheduler.ResetSilentDropsCtx(ctx, session, "tong_tian_tower")
 			slog.Info("通天塔面板",
 				"role_id", session.RoleID(),
 				"heaven", panel.Heaven,
@@ -167,21 +169,22 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 					TeamType:      protocol.TongTianTowerMainTeam,
 					MonsterTeamID: monsterTeamID,
 				}}
-				cCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				resp, cErr := session.Call(cCtx, protocol.BuildTongTianTowerChallengePacket(teams), protocol.ActionIDTongTianTowerChallenge)
-				cancel()
+				resp, cErr := kit.Call(ctx, session, protocol.BuildTongTianTowerChallengePacket(teams), protocol.ActionIDTongTianTowerChallenge, 15*time.Second)
 				if cErr != nil {
+					if abort, ok := kit.IsAbortErr(cErr); ok {
+						return abort
+					}
 					if errors.Is(cErr, context.DeadlineExceeded) {
-						return scheduler.HandleSilentDrop(session, "tong_tian_tower", 3,
+						return scheduler.HandleSilentDropCtx(ctx, session, "tong_tian_tower", 3,
 							30*time.Minute, "通天塔挑战无回包")
 					}
 					return fmt.Errorf("通天塔挑战请求失败: %w", cErr)
 				}
 				if resp == nil {
-					return scheduler.HandleSilentDrop(session, "tong_tian_tower", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "tong_tian_tower", 3,
 						30*time.Minute, "通天塔挑战无回包")
 				}
-				scheduler.ResetSilentDrops(session, "tong_tian_tower")
+				scheduler.ResetSilentDropsCtx(ctx, session, "tong_tian_tower")
 				result, pErr := protocol.ParseTongTianTowerChallengeResult(resp.Payload)
 				if pErr != nil {
 					return fmt.Errorf("解析通天塔挑战回包失败: %w", pErr)

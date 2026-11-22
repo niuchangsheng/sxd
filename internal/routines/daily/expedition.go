@@ -11,6 +11,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -31,16 +32,18 @@ func NewExpeditionRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDPartnerExpedition); fErr != nil {
+				if abort, ok := kit.IsAbortErr(fErr); ok {
+					return abort
+				}
 				slog.Info("远征任务功能开放状态查询失败，本轮跳过", "role_id", session.RoleID(), "err", fErr)
 				return nil
 			} else if !open {
 				slog.Info("远征任务功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDPartnerExpedition)
 				return nil
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("远征任务协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -50,6 +53,9 @@ func NewExpeditionRoutine() scheduler.ActivityRoutine {
 
 			infoResp := call(protocol.BuildExpeditionInfoPacket(), protocol.ActionIDExpeditionInfo)
 			if infoResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("远征任务面板无回包，稍后重试", "role_id", session.RoleID())
 				return scheduler.NewCooldown(30*time.Minute, "远征任务面板无回包")
 			}

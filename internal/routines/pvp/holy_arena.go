@@ -12,6 +12,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -72,10 +73,10 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 				// 状态查询被静默丢弃时不能 return nil，否则要等到下一个 cron 时段。
 				slog.Info("查询圣域状态无回包，按连续丢包退避",
 					"role_id", session.RoleID(), "err", sErr)
-				return scheduler.HandleSilentDrop(session, "holy_arena", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "holy_arena", 3,
 					30*time.Minute, "圣域状态查询无回包")
 			}
-			scheduler.ResetSilentDrops(session, "holy_arena")
+			scheduler.ResetSilentDropsCtx(ctx, session, "holy_arena")
 			status, sErr := protocol.ParseSaintAreaStatusResult(statusResp.Payload)
 			if sErr != nil {
 				slog.Warn("解析圣域状态失败，跳过圣域竞技场", "role_id", session.RoleID(), "err", sErr)
@@ -101,14 +102,10 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 				defer sa.Close()
 			}
 
-			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-				defer cancel()
-				return sa.Call(cCtx, pkt, act)
-			}
+			saCaller := kit.NewCaller(ctx, sa, 10*time.Second)
 
 			fetchInfo := func() (*protocol.SaArenaInfo, error) {
-				resp, err := call(protocol.BuildSaArenaGetInfoPacket(), protocol.ActionIDSaArenaGetInfo)
+				resp, err := saCaller.Call(protocol.BuildSaArenaGetInfoPacket(), protocol.ActionIDSaArenaGetInfo)
 				if err != nil {
 					return nil, err
 				}
@@ -120,16 +117,19 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 
 			info, err := fetchInfo()
 			if err != nil {
+				if abort, ok := kit.IsAbortErr(err); ok {
+					return abort
+				}
 				if errors.Is(err, errSaArenaNoResponse) || errors.Is(err, context.DeadlineExceeded) {
 					slog.Info("圣域竞技场面板无回包，按连续丢包退避",
 						"role_id", session.RoleID(), "err", err)
-					return scheduler.HandleSilentDrop(session, "holy_arena", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "holy_arena", 3,
 						30*time.Minute, "圣域竞技场面板无回包")
 				}
 				slog.Warn("圣域竞技场面板解析失败", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(10*time.Minute, "圣域竞技场面板解析失败")
 			}
-			scheduler.ResetSilentDrops(session, "holy_arena")
+			scheduler.ResetSilentDropsCtx(ctx, session, "holy_arena")
 			slog.Info("圣域竞技场面板",
 				"role_id", session.RoleID(),
 				"seats", len(info.Seats),
@@ -151,15 +151,18 @@ func NewHolyArenaRoutine() scheduler.ActivityRoutine {
 					slog.Info("圣域竞技场没有可抢占的席位", "role_id", session.RoleID())
 					return nil
 				}
-				resp, rErr := call(protocol.BuildSaArenaRobSeatPacket(seat.Seq), protocol.ActionIDSaArenaRobSeat)
+				resp, rErr := saCaller.Call(protocol.BuildSaArenaRobSeatPacket(seat.Seq), protocol.ActionIDSaArenaRobSeat)
 				if rErr != nil || resp == nil {
+					if abort, ok := kit.IsAbortErr(rErr); ok {
+						return abort
+					}
 					// 抢占被静默丢弃时剩余可用次数不能丢：按连续丢包退避后重试。
 					slog.Info("圣域竞技场抢占无回包，按连续丢包退避",
 						"role_id", session.RoleID(), "seq", seat.Seq, "err", rErr)
-					return scheduler.HandleSilentDrop(session, "holy_arena", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "holy_arena", 3,
 						10*time.Minute, "圣域竞技场抢占无回包")
 				}
-				scheduler.ResetSilentDrops(session, "holy_arena")
+				scheduler.ResetSilentDropsCtx(ctx, session, "holy_arena")
 				res, pErr := protocol.ParseSaArenaRobResult(resp.Payload)
 				if pErr != nil {
 					slog.Warn("解析圣域竞技场抢占回包失败", "role_id", session.RoleID(), "err", pErr)

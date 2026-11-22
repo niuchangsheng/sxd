@@ -82,7 +82,7 @@ func TestBusinessAnchor_RewindsToAckAfterDrop(t *testing.T) {
 	bCtx, bCancel := context.WithTimeout(ctx, 120*time.Millisecond)
 	_, _ = s.Call(bCtx, chainPkt(actB), actB)
 	bCancel()
-	if !s.chainDirty.Load() {
+	if !s.prevAct.IsDirty() {
 		t.Fatal("B 超时后应标记链失步")
 	}
 

@@ -19,6 +19,7 @@ import (
 	"sxd-pie-ng/internal/dictionary"
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/qa"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -507,10 +508,13 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildGuessPartnerInfoPacket(), protocol.ActionIDGuessPartnerInfo)
 			iCancel()
 			if err != nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				// 次数查询被静默丢弃时不能 return nil：要等到下一个 cron 时段。
 				slog.Info("伙伴猜猜看次数查询无回包，按连续丢包退避",
 					"role_id", session.RoleID(), "err", err)
-				return scheduler.HandleSilentDrop(session, "partner_guess", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "partner_guess", 3,
 					30*time.Minute, "伙伴猜猜看次数查询无回包")
 			}
 			times, err := protocol.ParseGuessPartnerInfoResult(infoResp.Payload)
@@ -531,9 +535,12 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 				startResp, sErr := session.Call(sCtx, protocol.BuildGuessPartnerStartPacket(), protocol.ActionIDGuessPartnerStart)
 				sCancel()
 				if sErr != nil {
+					if abortErr, ok := kit.IsAbortErr(sErr); ok {
+						return abortErr
+					}
 					slog.Info("伙伴猜猜看开局无应答，按连续丢包退避",
 						"role_id", session.RoleID(), "err", sErr)
-					return scheduler.HandleSilentDrop(session, "partner_guess", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "partner_guess", 3,
 						10*time.Minute, "伙伴猜猜看开局无应答")
 				}
 				rd, pErr := protocol.ParseGuessPartnerStartResult(startResp.Payload)
@@ -583,9 +590,12 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 				gResp, gErr := session.Call(gCtx, protocol.BuildGuessPartnerGuessPacket(rd.RoleIDs[0]), protocol.ActionIDGuessPartnerGuess)
 				gCancel()
 				if gErr != nil {
+					if abortErr, ok := kit.IsAbortErr(gErr); ok {
+						return abortErr
+					}
 					slog.Info("伙伴猜猜看作答无应答，按连续丢包退避",
 						"role_id", session.RoleID(), "err", gErr)
-					return scheduler.HandleSilentDrop(session, "partner_guess", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "partner_guess", 3,
 						10*time.Minute, "伙伴猜猜看作答无应答")
 				}
 				gr, gpErr := protocol.ParseGuessPartnerGuessResult(gResp.Payload)
@@ -596,7 +606,7 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 				switch gr.Result {
 				case protocol.GuessPartnerResultRight:
 					right++
-					scheduler.ResetSilentDrops(session, "partner_guess")
+					scheduler.ResetSilentDropsCtx(ctx, session, "partner_guess")
 					slog.Info("伙伴猜猜看猜对", "role_id", session.RoleID(), "role_id_guess", rd.RoleIDs[0],
 						"item_id", gr.Award.ItemID, "count", gr.Award.Count)
 					return nil // 猜对即完成本日轮次
@@ -702,9 +712,12 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 			hooksResp, err := session.Call(hCtx, protocol.BuildFishHooksPacket(), protocol.ActionIDFishHooks)
 			hCancel()
 			if err != nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				// 查询被静默丢弃时不能 return nil：要等到下一个 cron 时段。
 				slog.Info("查询鱼钩数量无回包，按连续丢包退避", "role_id", session.RoleID(), "err", err)
-				return scheduler.HandleSilentDrop(session, "fishing", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "fishing", 3,
 					10*time.Minute, "查询鱼钩数量无回包")
 			}
 			hooks, err := protocol.ParseFishHooksResult(hooksResp.Payload)
@@ -723,11 +736,14 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(fCtx, protocol.BuildFishDoPacket(), protocol.ActionIDFishDo)
 				fCancel()
 				if cErr != nil {
+					if abortErr, ok := kit.IsAbortErr(cErr); ok {
+						return abortErr
+					}
 					// 中途静默丢包不能 break + return nil：剩余鱼钩次数会被丢到
 					// 下一个 cron 时段。按连续丢包退避后继续。
 					slog.Info("钓鱼无应答，按连续丢包退避",
 						"role_id", session.RoleID(), "index", i+1, "err", cErr)
-					return scheduler.HandleSilentDrop(session, "fishing", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "fishing", 3,
 						10*time.Minute, "钓鱼无应答")
 				}
 				result, pErr := protocol.ParseFishDoResult(resp.Payload)
@@ -737,7 +753,7 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 				}
 				switch result.Result {
 				case protocol.FishResultSuccess:
-					scheduler.ResetSilentDrops(session, "fishing")
+					scheduler.ResetSilentDropsCtx(ctx, session, "fishing")
 					caught++
 					slog.Info("钓鱼成功",
 						"role_id", session.RoleID(),
@@ -800,14 +816,17 @@ func NewScratchCardRoutine() scheduler.ActivityRoutine {
 			infoResp, err := session.Call(iCtx, protocol.BuildScratchCardInfoPacket(), protocol.ActionIDScratchCardInfo)
 			iCancel()
 			if err != nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				// 状态查询被静默丢弃时不能返回普通 error：ScheduleCron 会等到
 				// 下一个 cron 时段。按连续丢包退避，恢复回包后计数自动清零。
 				slog.Info("刮刮卡状态查询无回包，按连续丢包退避",
 					"role_id", session.RoleID(), "err", err)
-				return scheduler.HandleSilentDrop(session, "scratch_card", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "scratch_card", 3,
 					30*time.Minute, "刮刮卡状态查询无回包")
 			}
-			scheduler.ResetSilentDrops(session, "scratch_card")
+			scheduler.ResetSilentDropsCtx(ctx, session, "scratch_card")
 			info, err := protocol.ParseScratchCardInfoResult(infoResp.Payload)
 			if err != nil {
 				return scheduler.NewCooldown(10*time.Minute, "刮刮卡状态解析失败")
@@ -844,14 +863,17 @@ func NewScratchCardRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(sCtx, protocol.BuildScratchCardShavePacket(), protocol.ActionIDScratchCardShave)
 				sCancel()
 				if cErr != nil {
+					if abortErr, ok := kit.IsAbortErr(cErr); ok {
+						return abortErr
+					}
 					// 中途静默丢包不能 break + return nil：剩余免费次数会被当成
 					// 已完成，直到下一个 cron 时段。按连续丢包退避后重试剩余次数。
 					slog.Info("刮卡无应答，按连续丢包退避",
 						"role_id", session.RoleID(), "index", i+1, "err", cErr)
-					return scheduler.HandleSilentDrop(session, "scratch_card_shave", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "scratch_card_shave", 3,
 						10*time.Minute, "刮卡无回包")
 				}
-				scheduler.ResetSilentDrops(session, "scratch_card_shave")
+				scheduler.ResetSilentDropsCtx(ctx, session, "scratch_card_shave")
 				result, pErr := protocol.ParseScratchCardShaveResult(resp.Payload)
 				if pErr != nil {
 					slog.Warn("解析刮卡回包失败", "role_id", session.RoleID(), "index", i+1, "err", pErr)
@@ -975,10 +997,13 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 				resp, cErr := session.Call(hCtx, protocol.BuildIceCaveHitPacket(slot.Ice, slot.IsIron), protocol.ActionIDIceCaveHit)
 				hCancel()
 				if cErr != nil {
+					if abortErr, ok := kit.IsAbortErr(cErr); ok {
+						return abortErr
+					}
 					// 中途静默丢包不能 break：剩余锤子会丢到下一个 cron 时段。
 					slog.Info("冰窟敲击无应答，按连续丢包退避",
 						"role_id", session.RoleID(), "ice", slot.Ice, "err", cErr)
-					return scheduler.HandleSilentDrop(session, "ice_cave", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "ice_cave", 3,
 						10*time.Minute, "冰窟敲击无应答")
 				}
 				result, pErr := protocol.ParseIceCaveHitResult(resp.Payload)
@@ -988,7 +1013,7 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 				}
 				switch result.Result {
 				case protocol.IceCaveResultSuccess:
-					scheduler.ResetSilentDrops(session, "ice_cave")
+					scheduler.ResetSilentDropsCtx(ctx, session, "ice_cave")
 					hits++
 					slog.Info("冰窟敲击成功", "role_id", session.RoleID(), "ice", slot.Ice, "awards", result.AwardItems)
 				case protocol.IceCaveResultCompleted:
@@ -1018,8 +1043,11 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 				gResp, gErr := session.Call(gCtx, protocol.BuildIceCaveGetGiftPacket(), protocol.ActionIDIceCaveGetGift)
 				gCancel()
 				if gErr != nil {
+					if abortErr, ok := kit.IsAbortErr(gErr); ok {
+						return abortErr
+					}
 					slog.Info("冰窟奖励兑换无应答，按连续丢包退避", "role_id", session.RoleID(), "err", gErr)
-					return scheduler.HandleSilentDrop(session, "ice_cave", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "ice_cave", 3,
 						10*time.Minute, "冰窟奖励兑换无应答")
 				}
 				result, pErr := protocol.ParseIceCaveGiftResult(gResp.Payload)
@@ -1107,9 +1135,12 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				qResp, qErr := session.Call(qCtx, protocol.BuildImperialExamStartPacket(), protocol.ActionIDImperialExamStart)
 				qCancel()
 				if qErr != nil {
+					if abortErr, ok := kit.IsAbortErr(qErr); ok {
+						return abortErr
+					}
 					slog.Info("金榜题名开始答题无应答，按连续丢包退避",
 						"role_id", session.RoleID(), "err", qErr)
-					return scheduler.HandleSilentDrop(session, "imperial_exam", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "imperial_exam", 3,
 						10*time.Minute, "金榜题名开始答题无应答")
 				}
 				q, pErr := protocol.ParseImperialExamQuestionResult(qResp.Payload)
@@ -1164,9 +1195,12 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				sResp, sErr := session.Call(sCtx, protocol.BuildImperialExamSubmitPacket(q.CurAnswerSeq, seq), protocol.ActionIDImperialExamSubmit)
 				sCancel()
 				if sErr != nil {
+					if abortErr, ok := kit.IsAbortErr(sErr); ok {
+						return abortErr
+					}
 					slog.Info("金榜题名提交答案无应答，按连续丢包退避",
 						"role_id", session.RoleID(), "err", sErr)
-					return scheduler.HandleSilentDrop(session, "imperial_exam", 3,
+					return scheduler.HandleSilentDropCtx(ctx, session, "imperial_exam", 3,
 						10*time.Minute, "金榜题名提交答案无应答")
 				}
 				sub, spErr := protocol.ParseImperialExamSubmitResult(sResp.Payload)
@@ -1191,7 +1225,7 @@ func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 				)
 				switch sub.Result {
 				case protocol.ImperialExamResultSuccess:
-					scheduler.ResetSilentDrops(session, "imperial_exam")
+					scheduler.ResetSilentDropsCtx(ctx, session, "imperial_exam")
 					// 继续下一题
 				case protocol.ImperialExamAnswerOver:
 					slog.Info("金榜题名今日答题已结束", "role_id", session.RoleID(), "answered", answered, "right", right, "wrong", wrong)
@@ -1402,9 +1436,12 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			chapResp, chapErr := session.Call(cCtx, chapPkt, protocol.ActionIDHuanshouInvadeChapter)
 			cCancel()
 			if chapErr != nil || chapResp == nil {
+				if abortErr, ok := kit.IsAbortErr(chapErr); ok {
+					return abortErr
+				}
 				slog.Info("山海幻兽入侵章节请求无回包，按连续丢包退避",
 					"role_id", session.RoleID(), "err", chapErr)
-				return scheduler.HandleSilentDrop(session, "huanshou_invade", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "huanshou_invade", 3,
 					10*time.Minute, "山海幻兽入侵章节无回包")
 			}
 
@@ -1413,9 +1450,12 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			chalResp, chalErr := session.Call(chCtx, chalPkt, protocol.ActionIDHuanshouInvadeChallenge)
 			chCancel()
 			if chalErr != nil || chalResp == nil {
+				if abortErr, ok := kit.IsAbortErr(chalErr); ok {
+					return abortErr
+				}
 				slog.Info("山海幻兽入侵挑战请求无回包，按连续丢包退避",
 					"role_id", session.RoleID(), "err", chalErr)
-				return scheduler.HandleSilentDrop(session, "huanshou_invade", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "huanshou_invade", 3,
 					10*time.Minute, "山海幻兽入侵挑战无回包")
 			}
 
@@ -1425,16 +1465,19 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 			sweepResp, sweepErr := session.Call(swCtx, sweepPkt, protocol.ActionIDHuanshouInvadeSweep)
 			swCancel()
 			if sweepErr != nil || sweepResp == nil {
+				if abortErr, ok := kit.IsAbortErr(sweepErr); ok {
+					return abortErr
+				}
 				// 扫荡是每日限次玩法，服务端对「当日次数已用完/资格不满足」会静默
 				// 丢弃请求。不能返回 nil（Cron 会等到次日才重试），也不能每 10 分钟
 				// 无限空转：按连续丢包退避，第 3 次起挂起至 min(次日 00:05, 6h)。
 				slog.Info("山海幻兽入侵扫荡请求无回包，按连续丢包退避",
 					"role_id", session.RoleID(), "err", sweepErr)
-				return scheduler.HandleSilentDrop(session, "huanshou_invade", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "huanshou_invade", 3,
 					10*time.Minute, "山海幻兽入侵扫荡无回包")
 			}
 			// 扫荡回包成功说明整条链路已经打通，清零章节/挑战/扫荡的连续丢包计数。
-			scheduler.ResetSilentDrops(session, "huanshou_invade")
+			scheduler.ResetSilentDropsCtx(ctx, session, "huanshou_invade")
 
 			// 4. 逐关扫荡入侵节点 (Mod 696, Act 4: 节点 1~8 依据抓包实采流)
 			prevAct := protocol.ActionIDHuanshouInvadeSweep
@@ -1446,12 +1489,17 @@ func NewHuanshouRoutine() scheduler.ActivityRoutine {
 				nResp, nErr := session.Call(nCtx, nodePkt, protocol.ActionIDHuanshouInvadeSettle)
 				nCancel()
 				if nErr != nil || nResp == nil {
+					if abortErr, ok := kit.IsAbortErr(nErr); ok {
+						return abortErr
+					}
 					nodeDrop++
 					break
 				}
 				clearedNodes++
 				prevAct = protocol.ActionIDHuanshouInvadeSettle
-				time.Sleep(30 * time.Millisecond)
+				if !kit.Sleep(ctx, 30*time.Millisecond) {
+					break
+				}
 			}
 
 			slog.Info("山海幻兽入侵扫荡轮次结束",
@@ -1860,15 +1908,17 @@ func NewMasterPracticeRoutine(cfgs ...MasterPracticeConfig) scheduler.ActivityRo
 			}
 			slog.Info("正在执行益智任务: 宗师修行试炼与境界突破", "role_id", session.RoleID())
 
+			caller := kit.NewCaller(ctx, session, 8*time.Second)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
+				return caller.Call(pkt, act)
 			}
 
 			// 1. 查询宗师修行主面板 (Mod 665, Act 1)
 			resp, err := call(protocol.BuildMasterPracticePanelPacket(protocol.ActionIDTownEnter), protocol.ActionIDMasterPracticePanel)
 			if err != nil || resp == nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				slog.Info("宗师修行功能未开放/不可用，稍后重试", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(30*time.Minute, "宗师修行面板无回包")
 			}
@@ -2713,7 +2763,7 @@ type AwardSelectorFunc func(ctx context.Context, pool *protocol.TreasureHousePoo
 // （试炼建队、副本战斗、跨服战斗等）时会静默丢弃该请求；因此宝库必须排在
 // 本轮所有场景/队伍类玩法之前执行。2026-11-22 实测优先级 200 时仍被推图
 // (300)/结缘(250) 抢先，导致 Act 4 失败；提升到 450，登录后第一个执行。
-const treasureHousePriority scheduler.RoutinePriority = 450
+var treasureHousePriority = scheduler.PhasePriority(scheduler.PhaseTownSensitive, 30)
 
 // 天帝宝库非交互模式选奖策略。
 const (
@@ -2997,10 +3047,9 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			if prevAct == 0 {
 				prevAct = protocol.ActionIDTownEnter
 			}
+			caller := kit.NewCaller(ctx, session, 8*time.Second)
 			call := func(pkt *protocol.Packet, action uint32, timeout time.Duration) *protocol.Packet {
-				cctx, ccancel := context.WithTimeout(ctx, timeout)
-				defer ccancel()
-				resp, cErr := session.Call(cctx, pkt, action)
+				resp, cErr := caller.Call(pkt, action, timeout)
 				if cErr != nil || resp == nil {
 					// 调用方会记录具体业务上下文，这里只保留 Debug 级诊断，避免重复 WARN。
 					slog.Debug("天帝宝库请求无回包",
@@ -3015,6 +3064,9 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			mainResp := call(protocol.BuildTreasureHouseMainPanelPacket(prevAct),
 				protocol.ActionIDTreasureHouseMainPanel, 8*time.Second)
 			if mainResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return nil
 			}
 			mainInfo, pErr := protocol.ParseTreasureHouseMainPanelResult(mainResp.Payload)
@@ -3084,6 +3136,9 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			flagResp := call(protocol.BuildTreasureHouseUseFreeFlagPacket(1, prevAct),
 				protocol.ActionIDTreasureHouseSetUseFreeFlag, 8*time.Second)
 			if flagResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				// 该请求对上下文极敏感，10 分钟一轮会持续丢包；改为 1 小时低频探测。
 				slog.Info("设置免费次数优先无回包，1 小时后再试（不消耗元宝）",
 					"role_id", session.RoleID())
@@ -3112,6 +3167,9 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			panelResp := call(protocol.BuildTreasureHouseInfoPacket(prevAct),
 				protocol.ActionIDTreasureHouseSelectPanel, 8*time.Second)
 			if panelResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return nil
 			}
 			panel, pErr := protocol.ParseTreasureHouseSelectPanelResult(panelResp.Payload)
@@ -3187,6 +3245,9 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 			selResp := call(protocol.BuildTreasureHouseSelectPacket(selectedAwards, prevAct),
 				protocol.ActionIDTreasureHouseSetAward, 8*time.Second)
 			if selResp == nil {
+				if abortErr := caller.AbortErr(); abortErr != nil {
+					return abortErr
+				}
 				return nil
 			}
 			code, cErr := protocol.ParseTreasureHouseResultCode(selResp.Payload)
@@ -3220,6 +3281,9 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				drawResp := call(protocol.BuildTreasureHouseDrawPacket(prevAct),
 					protocol.ActionIDTreasureHouseLottery, 8*time.Second)
 				if drawResp == nil {
+					if abortErr := caller.AbortErr(); abortErr != nil {
+						return abortErr
+					}
 					break
 				}
 				lottery, lErr := protocol.ParseTreasureHouseLotteryResult(drawResp.Payload)
@@ -3238,7 +3302,9 @@ func NewTreasureHouseRoutine(cfgs ...TreasureHouseConfig) scheduler.ActivityRout
 				slog.Info("天帝宝库抽奖成功",
 					"award_id", lottery.AwardID,
 					"draw_index", i+1)
-				time.Sleep(50 * time.Millisecond)
+				if !kit.Sleep(ctx, 50*time.Millisecond) {
+					break
+				}
 			}
 
 			// 7. 抽取结束后刷新主面板同步剩余钥匙与累计次数
@@ -4237,10 +4303,9 @@ func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
+				return caller.Call(pkt, act)
 			}
 
 			queryStatus := func() (uint8, error) {
@@ -4253,6 +4318,9 @@ func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
 
 			status, err := queryStatus()
 			if err != nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				slog.Info("点金石功能未开放/不可用，稍后重试", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(30*time.Minute, "点金石状态查询无回包")
 			}
@@ -4260,6 +4328,9 @@ func NewGoldenTouchStoneRoutine() scheduler.ActivityRoutine {
 			if status == protocol.GoldenTouchStoneStatusInit {
 				initResp, iErr := call(protocol.BuildGoldenTouchStoneInitPacket(), protocol.ActionIDGoldenTouchStoneInit)
 				if iErr != nil || initResp == nil || len(initResp.Payload) == 0 {
+					if abortErr, ok := kit.IsAbortErr(iErr); ok {
+						return abortErr
+					}
 					slog.Info("点金石初始化无应答，稍后重试", "role_id", session.RoleID(), "err", iErr)
 					return scheduler.NewCooldown(30*time.Minute, "点金石初始化无回包")
 				}
@@ -4366,6 +4437,9 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 			// 功能未开放时服务端会静默丢弃 Module 199 请求，先用 Action 6 缓存判定。
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDAwakeForbiddenBook)
 			if fErr != nil {
+				if abortErr, ok := kit.IsAbortErr(fErr); ok {
+					return abortErr
+				}
 				slog.Info("禁地之书功能开放状态查询失败，跳过",
 					"role_id", session.RoleID(), "err", fErr)
 				return nil
@@ -4376,10 +4450,9 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
+				return caller.Call(pkt, act)
 			}
 			fetchInfo := func() (*protocol.ForbiddenBookInfo, error) {
 				resp, err := call(protocol.BuildForbiddenBookInfoPacket(), protocol.ActionIDForbiddenBookInfo)
@@ -4391,6 +4464,9 @@ func NewForbiddenBookRoutine() scheduler.ActivityRoutine {
 
 			info, err := fetchInfo()
 			if err != nil || info == nil || len(info.Areas) == 0 {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				slog.Info("禁地之书功能未开放/无可用区域，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}

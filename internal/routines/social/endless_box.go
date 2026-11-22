@@ -15,6 +15,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -37,8 +38,9 @@ func NewEndlessBoxRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				resp, err := session.CallWithPrevActResync(ctx, callTimeout, pkt, act)
+				resp, err := caller.CallResync(pkt, act)
 				if err != nil {
 					slog.Info("无尽宝箱协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -49,6 +51,9 @@ func NewEndlessBoxRoutine() scheduler.ActivityRoutine {
 
 			actResp := call(protocol.BuildEndlessBoxActivityPacket(), protocol.ActionIDEndlessBoxActivity)
 			if actResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "无尽宝箱活动面板无回包")
 			}
 			act, aErr := protocol.ParseEndlessBoxActivity(actResp.Payload)
@@ -75,6 +80,9 @@ func NewEndlessBoxRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildEndlessBoxPanelPacket(), protocol.ActionIDEndlessBoxPanel)
 			if panelResp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "无尽宝箱面板无回包")
 			}
 			panel, pErr := protocol.ParseEndlessBoxPanel(panelResp.Payload)
@@ -100,6 +108,9 @@ func NewEndlessBoxRoutine() scheduler.ActivityRoutine {
 				resp := call(protocol.BuildEndlessBoxOpenPacket(box.Type, openType),
 					protocol.ActionIDEndlessBoxOpen)
 				if resp == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
 					return scheduler.NewCooldown(10*time.Minute, "无尽宝箱开箱无回包")
 				}
 				code, cErr := protocol.ParseEndlessBoxResult(resp.Payload)

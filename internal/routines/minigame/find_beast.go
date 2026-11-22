@@ -10,6 +10,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -41,14 +42,13 @@ func NewFindBeastRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行益智任务: 寻找异兽", "role_id", session.RoleID())
 
-			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, timeout)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
-			}
+			caller := kit.NewCaller(ctx, session, 5*time.Second)
 
-			resp, err := call(protocol.BuildSpaceFindOpenPacket(), protocol.ActionIDSpaceFindOpen, 5*time.Second)
+			resp, err := caller.Call(protocol.BuildSpaceFindOpenPacket(), protocol.ActionIDSpaceFindOpen)
 			if err != nil || resp == nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				slog.Info("寻找异兽功能不可用或未开放，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}
@@ -68,10 +68,12 @@ func NewFindBeastRoutine() scheduler.ActivityRoutine {
 
 			// 若上一次已寻找到道具但尚未领取，先领取。
 			if info.ItemID != 0 {
-				if getResp, gErr := call(protocol.BuildSpaceFindGetPacket(), protocol.ActionIDSpaceFindGet, 5*time.Second); gErr == nil && getResp != nil {
+				if getResp, gErr := caller.Call(protocol.BuildSpaceFindGetPacket(), protocol.ActionIDSpaceFindGet); gErr == nil && getResp != nil {
 					if got, pErr := protocol.ParseSpaceFindGetResult(getResp.Payload); pErr == nil {
 						slog.Info("寻找异兽补领上一次结果", "role_id", session.RoleID(), "result", got.Result, "goods", got.Goods)
 					}
+				} else if abortErr, ok := kit.IsAbortErr(gErr); ok {
+					return abortErr
 				}
 			}
 
@@ -89,8 +91,11 @@ func NewFindBeastRoutine() scheduler.ActivityRoutine {
 					return nil
 				}
 
-				doResp, dErr := call(protocol.BuildSpaceFindDoPacket(protocol.SpaceFindUseNormal), protocol.ActionIDSpaceFindDo, 5*time.Second)
+				doResp, dErr := caller.Call(protocol.BuildSpaceFindDoPacket(protocol.SpaceFindUseNormal), protocol.ActionIDSpaceFindDo)
 				if dErr != nil || doResp == nil {
+					if abortErr, ok := kit.IsAbortErr(dErr); ok {
+						return abortErr
+					}
 					slog.Info("寻找异兽请求无回包", "role_id", session.RoleID(), "err", dErr)
 					return nil
 				}
@@ -123,8 +128,11 @@ func NewFindBeastRoutine() scheduler.ActivityRoutine {
 				}
 
 				// 领取本次结果；成功后再继续下一次寻找。
-				getResp, gErr := call(protocol.BuildSpaceFindGetPacket(), protocol.ActionIDSpaceFindGet, 5*time.Second)
+				getResp, gErr := caller.Call(protocol.BuildSpaceFindGetPacket(), protocol.ActionIDSpaceFindGet)
 				if gErr != nil || getResp == nil {
+					if abortErr, ok := kit.IsAbortErr(gErr); ok {
+						return abortErr
+					}
 					slog.Info("领取寻找异兽结果无回包", "role_id", session.RoleID(), "err", gErr)
 					return nil
 				}

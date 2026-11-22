@@ -7,6 +7,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -23,6 +24,34 @@ const (
 	// PriorityHigh 高优先级任务 (如定时准点活动、时效性抢购)
 	PriorityHigh RoutinePriority = 100
 )
+
+// RoutinePhase 声明玩法的执行阶段，取代散落在各玩法中的魔法优先级数字。
+// 调度器按优先级从高到低依次执行各阶段；同阶段内可通过 PhasePriority 附带小幅偏移。
+type RoutinePhase RoutinePriority
+
+const (
+	// PhaseCleanup 后置整理、低优先级汇总类玩法 (10 档)
+	PhaseCleanup RoutinePhase = 10
+	// PhaseStandard 常规日常/巡检/非上下文敏感玩法 (50 档)
+	PhaseStandard RoutinePhase = 50
+	// PhaseHighPriority 高优日常玩法 (100 档，如孩子/摘仙桃/叶公好龙)
+	PhaseHighPriority RoutinePhase = 100
+	// PhaseEarlyWindow 登录早期敏感面板与道具玩法 (200 档，如结缘宝箱)
+	PhaseEarlyWindow RoutinePhase = 200
+	// PhaseCoreLoop 核心主线推图与高频活跃玩法 (300 档，如副本推图/虚空膜拜/神龙上供)
+	PhaseCoreLoop RoutinePhase = 300
+	// PhaseEarlyBattle 需在长会话污染前完成的早期挑战与高敏感日常 (350 档，如无量劫海/魔界远征/飞升/无尽洞天)
+	PhaseEarlyBattle RoutinePhase = 350
+	// PhaseTownSensitive 对城镇上下文高度敏感、须在所有战斗前执行的玩法 (420 档，如宝库/猎妖/五行天宫)
+	PhaseTownSensitive RoutinePhase = 420
+	// PhaseSystem 系统级维护任务，最高优先级 (500 档，如会话刷新)
+	PhaseSystem RoutinePhase = 500
+)
+
+// PhasePriority 计算「执行阶段 + 阶段内偏移」对应的调度优先级。
+func PhasePriority(phase RoutinePhase, offset int) RoutinePriority {
+	return RoutinePriority(phase) + RoutinePriority(offset)
+}
 
 // ScheduleType 标识任务调度触发模式。
 type ScheduleType int
@@ -113,6 +142,11 @@ type DetailedRoutine interface {
 	ScheduleType() ScheduleType
 }
 
+// LifecycleRoutine 扩展声明横切生命周期策略，供调度器统一执行静默丢包退避等治理。
+type LifecycleRoutine interface {
+	SilentDropPolicy() (threshold int, retry time.Duration)
+}
+
 // FuncRoutine 帮助快速构造基于闭包函数的日常活动任务实例。
 type FuncRoutine struct {
 	name     string
@@ -159,7 +193,41 @@ func (r *FuncRoutine) Execute(ctx context.Context, session *client.RoleSession, 
 	return r.fn(ctx, session, jitter)
 }
 
-// BaseRoutine 为所有具体玩法提供标准化基础骨架实现。
+const defaultReturnToTownTimeout = 5 * time.Second
+
+// RoutineOption 为 BaseRoutine 附加声明式横切生命周期能力。
+type RoutineOption func(*BaseRoutine)
+
+// WithReturnToTown 标记该玩法会进入战斗/活动场景；执行结束后由中间件自动调用
+// session.ReturnToTown 恢复城镇上下文，避免污染后续玩法。timeout 可省略（默认 5 秒）。
+func WithReturnToTown(timeout ...time.Duration) RoutineOption {
+	return func(b *BaseRoutine) {
+		b.returnToTown = true
+		if len(timeout) > 0 && timeout[0] > 0 {
+			b.returnToTownTimeout = timeout[0]
+		} else {
+			b.returnToTownTimeout = defaultReturnToTownTimeout
+		}
+	}
+}
+
+// WithFunctionID 声明该玩法对应的原生功能开放编号 (Mod_Player_Base.check_function_open)。
+// 若指定，中间件在执行业务逻辑前先探测该功能是否开放；未开放时直接返回 ErrConditionNotMet。
+func WithFunctionID(funcID int32) RoutineOption {
+	return func(b *BaseRoutine) {
+		b.functionID = funcID
+	}
+}
+
+// WithSilentDropPolicy 声明该玩法在返回 context.DeadlineExceeded 时的连续丢包退避策略。
+func WithSilentDropPolicy(threshold int, retry time.Duration) RoutineOption {
+	return func(b *BaseRoutine) {
+		b.dropThreshold = threshold
+		b.dropRetry = retry
+	}
+}
+
+// BaseRoutine 为所有具体玩法提供标准化基础骨架与横切生命周期中间件实现。
 type BaseRoutine struct {
 	id        string
 	domain    string
@@ -167,9 +235,15 @@ type BaseRoutine struct {
 	priority  RoutinePriority
 	interval  time.Duration
 	fn        func(ctx context.Context, session *client.RoleSession, jitter *Jitter) error
+
+	returnToTown        bool
+	returnToTownTimeout time.Duration
+	functionID          int32
+	dropThreshold       int
+	dropRetry           time.Duration
 }
 
-// NewBaseRoutine 构造新的标准化 BaseRoutine 实例。
+// NewBaseRoutine 构造新的标准化 BaseRoutine 实例，可选挂载横切生命周期选项。
 func NewBaseRoutine(
 	id string,
 	domain string,
@@ -177,8 +251,9 @@ func NewBaseRoutine(
 	priority RoutinePriority,
 	interval time.Duration,
 	fn func(ctx context.Context, session *client.RoleSession, jitter *Jitter) error,
+	opts ...RoutineOption,
 ) *BaseRoutine {
-	return &BaseRoutine{
+	b := &BaseRoutine{
 		id:        id,
 		domain:    domain,
 		schedType: schedType,
@@ -186,6 +261,12 @@ func NewBaseRoutine(
 		interval:  interval,
 		fn:        fn,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(b)
+		}
+	}
+	return b
 }
 
 // Name 返回玩法唯一标识符。
@@ -213,7 +294,22 @@ func (b *BaseRoutine) Interval() time.Duration {
 	return b.interval
 }
 
-// Execute 执行具体业务闭包逻辑。
+// NeedsReturnToTown 返回该玩法是否启用了结束后自动返回城镇中间件。
+func (b *BaseRoutine) NeedsReturnToTown() bool {
+	return b.returnToTown
+}
+
+// FunctionID 返回声明的功能开放编号（<= 0 表示未启用前置自动探测）。
+func (b *BaseRoutine) FunctionID() int32 {
+	return b.functionID
+}
+
+// SilentDropPolicy 返回声明的连续静默丢包退避策略（零值表示使用调度器默认策略）。
+func (b *BaseRoutine) SilentDropPolicy() (threshold int, retry time.Duration) {
+	return b.dropThreshold, b.dropRetry
+}
+
+// Execute 执行横切前置守卫、业务逻辑闭包与后置场景清理。
 func (b *BaseRoutine) Execute(ctx context.Context, session *client.RoleSession, jitter *Jitter) error {
 	if b.fn == nil {
 		return nil
@@ -225,5 +321,50 @@ func (b *BaseRoutine) Execute(ctx context.Context, session *client.RoleSession, 
 		// Cron/30 分钟循环要等下一个周期才重试；ErrNotConnected 走 5 分钟短重试。
 		return client.ErrNotConnected
 	}
+
+	// 横切前置守卫：原生功能开放探测 (Mod_Player_Base.check_function_open)
+	if b.functionID > 0 && session != nil {
+		open, err := session.CheckFunctionOpen(ctx, b.functionID)
+		if err != nil {
+			if errors.Is(err, client.ErrNotConnected) || errors.Is(err, client.ErrSessionClosed) {
+				return client.ErrNotConnected
+			}
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			slog.Warn("功能开放前置探测失败，本轮跳过",
+				"role_id", session.RoleID(),
+				"routine", b.id,
+				"function_id", b.functionID,
+				"err", err,
+			)
+			return err
+		}
+		if !open {
+			slog.Info("功能尚未开放，本轮跳过",
+				"role_id", session.RoleID(),
+				"routine", b.id,
+				"function_id", b.functionID,
+			)
+			return ErrConditionNotMet
+		}
+	}
+
+	// 横切后置清理：战斗/活动场景结束后统一返回城镇，防止污染后续玩法上下文。
+	if b.returnToTown && session != nil {
+		timeout := b.returnToTownTimeout
+		if timeout <= 0 {
+			timeout = defaultReturnToTownTimeout
+		}
+		defer func() {
+			if ctx.Err() == nil && session.State() == client.StateActive && session.ReturnToTown(ctx, timeout) {
+				slog.Info("玩法结束，已自动返回城镇场景",
+					"role_id", session.RoleID(),
+					"routine", b.id,
+				)
+			}
+		}()
+	}
+
 	return b.fn(ctx, session, jitter)
 }

@@ -14,6 +14,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -526,15 +527,17 @@ func NewGodBlessRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行日常任务: 天神赐福等级奖励领取", "role_id", session.RoleID())
 
+			caller := kit.NewCaller(ctx, session, 8*time.Second)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
+				return caller.Call(pkt, act)
 			}
 
 			// 1. 查询赐福状态 (Mod 328, Act 0)
 			infoResp, err := call(protocol.BuildGodWelfareInfoPacket(), protocol.ActionIDGodWelfareInfo)
 			if err != nil || infoResp == nil {
+				if abort, ok := kit.IsAbortErr(err); ok {
+					return abort
+				}
 				slog.Info("天神赐福功能未开放/无回包，跳过", "role_id", session.RoleID(), "err", err)
 				return nil
 			}

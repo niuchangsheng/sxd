@@ -10,6 +10,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -29,10 +30,9 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cCtx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				resp, err := session.Call(cCtx, pkt, act)
+				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("圣盟膜拜协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
 					return nil
@@ -47,9 +47,14 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 					slog.Info("圣盟膜拜面板", "role_id", session.RoleID(),
 						"payload_len", len(panelResp.Payload), "values", vals)
 				}
+			} else if abort := caller.AbortErr(); abort != nil {
+				return abort
 			}
 			resp := call(protocol.BuildSaUnionWorshipPacket(protocol.SaUnionWorshipUseCoin), protocol.ActionIDSaUnionWorship)
 			if resp == nil {
+				if abort := caller.AbortErr(); abort != nil {
+					return abort
+				}
 				return scheduler.NewCooldown(30*time.Minute, "圣盟膜拜无回包")
 			}
 			code, err := protocol.ParseSaUnionWorshipResult(resp.Payload)
@@ -59,21 +64,19 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 			}
 			switch code {
 			case protocol.SaUnionWorshipResultSuccess:
-				scheduler.ResetSilentDrops(session, "sa_union_worship")
+				scheduler.ResetSilentDropsCtx(ctx, session, "sa_union_worship")
 				slog.Info("圣盟膜拜成功", "role_id", session.RoleID())
 			case protocol.SaUnionWorshipResultPackFull:
 				return scheduler.ErrBagFull
 			case protocol.SaUnionWorshipResultJoinToday, protocol.SaUnionWorshipResultIsVoted,
 				protocol.SaUnionWorshipResultNoTime:
-				scheduler.ResetSilentDrops(session, "sa_union_worship")
+				scheduler.ResetSilentDropsCtx(ctx, session, "sa_union_worship")
 				slog.Info("圣盟膜拜今日已完成", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.SaUnionWorshipResultText(code))
 			default:
-				// 线上长期返回 8「失败」且 419/1 面板 11 个字段全为 0（活动未开放/
-				// 圣盟未分配），每小时重试没有意义：连续 3 次后挂起（最长 6 小时）。
 				slog.Info("圣盟膜拜未成功，稍后重试", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.SaUnionWorshipResultText(code))
-				return scheduler.HandleSilentDrop(session, "sa_union_worship", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "sa_union_worship", 3,
 					time.Hour, "圣盟膜拜失败")
 			}
 			return nil

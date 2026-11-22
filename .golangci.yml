@@ -1,0 +1,36 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - unused
+  settings:
+    govet:
+      enable-all: false
+      enable:
+        - unreachable
+        - copylocks
+        - printf
+        - atomic
+        - lostcancel
+    errcheck:
+      check-blank: false
+      exclude-functions:
+        - (*net.Conn).Close
+        - (net.Conn).Close
+        - (io.Closer).Close
+        - (*os.File).Close
+  exclusions:
+    paths:
+      - test/probes
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck

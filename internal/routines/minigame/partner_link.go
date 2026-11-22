@@ -10,6 +10,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -40,6 +41,9 @@ func NewPartnerLinkRoutine() scheduler.ActivityRoutine {
 			// 先查功能开放列表；未开放时不再发送会被静默丢弃的灵结面板请求。
 			open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDPartnerLink)
 			if fErr != nil {
+				if abortErr, ok := kit.IsAbortErr(fErr); ok {
+					return abortErr
+				}
 				slog.Info("灵结功能开放状态查询失败，稍后重试", "role_id", session.RoleID(), "err", fErr)
 				return scheduler.NewCooldown(30*time.Minute, "灵结功能开放状态无回包")
 			}
@@ -48,14 +52,13 @@ func NewPartnerLinkRoutine() scheduler.ActivityRoutine {
 				return scheduler.NewCooldown(2*time.Hour, "灵结功能未开放")
 			}
 
-			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
-				cCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				return session.Call(cCtx, pkt, act)
-			}
+			caller := kit.NewCaller(ctx, session, 5*time.Second)
 
-			resp, err := call(protocol.BuildPartnerLinkInfoPacket(), protocol.ActionIDPartnerLinkInfo)
+			resp, err := caller.Call(protocol.BuildPartnerLinkInfoPacket(), protocol.ActionIDPartnerLinkInfo)
 			if err != nil || resp == nil {
+				if abortErr, ok := kit.IsAbortErr(err); ok {
+					return abortErr
+				}
 				slog.Info("灵结功能不可用或未开放，稍后重试", "role_id", session.RoleID(), "err", err)
 				return scheduler.NewCooldown(30*time.Minute, "灵结面板无回包")
 			}
@@ -82,11 +85,14 @@ func NewPartnerLinkRoutine() scheduler.ActivityRoutine {
 				if err := ctx.Err(); err != nil {
 					return nil
 				}
-				aResp, aErr := call(
+				aResp, aErr := caller.Call(
 					protocol.BuildPartnerLinkActivatePacket(link.LinkTypeID),
 					protocol.ActionIDPartnerLinkActivate,
 				)
 				if aErr != nil || aResp == nil {
+					if abortErr, ok := kit.IsAbortErr(aErr); ok {
+						return abortErr
+					}
 					slog.Info("激活灵结无回包，稍后重试",
 						"role_id", session.RoleID(), "link_type_id", link.LinkTypeID, "err", aErr)
 					return scheduler.NewCooldown(time.Hour, "灵结激活无回包")

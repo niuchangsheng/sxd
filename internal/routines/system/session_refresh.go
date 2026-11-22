@@ -40,7 +40,7 @@ func NewSessionRefreshRoutine() scheduler.ActivityRoutine {
 		"system",
 		scheduler.ScheduleLoop,
 		// 高于推图/宝库：到期后优先在下一个调度空隙执行。
-		scheduler.RoutinePriority(500),
+		scheduler.PhasePriority(scheduler.PhaseSystem, 0),
 		sessionRefreshInterval,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {

@@ -9,6 +9,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -70,14 +71,21 @@ func claimSystemAwards(ctx context.Context, session *client.RoleSession) error {
 			break
 		}
 		// 每项之间保留拟人间隔，避免连发被网关限速。
-		time.Sleep(120 * time.Millisecond)
+		if !kit.Sleep(ctx, 120*time.Millisecond) {
+			break
+		}
 		claimResp, cErr := claim(award.ID)
 		if cErr != nil || claimResp == nil {
+			if abort, ok := kit.IsAbortErr(cErr); ok {
+				return abort
+			}
 			// 静默丢包会污染 PrevAct 链；回退到最近一次真实回包动作后重试一次。
 			if ack := session.LastAckActionID(); ack != 0 {
 				session.SetLastActionID(ack)
 			}
-			time.Sleep(200 * time.Millisecond)
+			if !kit.Sleep(ctx, 200*time.Millisecond) {
+				break
+			}
 			claimResp, cErr = claim(award.ID)
 		}
 		if cErr != nil || claimResp == nil {

@@ -24,6 +24,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -110,8 +111,9 @@ func tryStUnionIncenseOnSectSession(ctx context.Context, session *client.RoleSes
 	if sect != session {
 		defer sect.Close()
 	}
+	sectCaller := kit.NewCaller(ctx, sect, timeout)
 	call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-		resp, err := sect.CallWithPrevActResync(ctx, timeout, pkt, act)
+		resp, err := sectCaller.CallResync(pkt, act)
 		if err != nil {
 			slog.Info("仙盟城镇会话无回包", "role_id", session.RoleID(),
 				"action", fmt.Sprintf("0x%08X", act), "err", err)
@@ -145,7 +147,7 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 		"social",
 		scheduler.ScheduleCron,
 		// 仙盟上香/魔神在长会话后段实测会被批量静默丢弃，登录后优先执行。
-		scheduler.RoutinePriority(350),
+		scheduler.PhasePriority(scheduler.PhaseEarlyBattle, 0),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -163,8 +165,9 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			if cross != session {
 				defer cross.Close()
 			}
-			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
-				resp, err := cross.CallWithPrevActResync(ctx, timeout, pkt, act)
+			crossCaller := kit.NewCaller(ctx, cross, callTimeout)
+			call := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
+				resp, err := crossCaller.CallResync(pkt, act, timeout...)
 				if err != nil {
 					slog.Info("仙盟协议无回包", "role_id", session.RoleID(),
 						"action", act, "err", err)
@@ -174,10 +177,8 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 1. 仙盟上香（仅铜钱档）。抓包顺序：179/0 许愿树 → 179/10 神像 → 179/11 上香。
-			// 179/10、179/11 显式携带 PrevAct（179/0、179/10），避免心跳/推送插队
-			// 覆盖链路（与结缘宝箱 232/34 同一根因，2026-11-15 实测）。
-			_ = call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo, callTimeout)
-			if godResp := call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo, callTimeout); godResp != nil {
+			_ = call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo)
+			if godResp := call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo); godResp != nil {
 				head := godResp.Payload
 				if len(head) > 400 {
 					head = head[:400]
@@ -187,29 +188,23 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			}
 			var incenseResp *protocol.Packet
 			variant := "cross"
-			drops := scheduler.SilentDropCount(session, stUnionIncenseDropKey)
+			drops := scheduler.SilentDropCountCtx(ctx, session, stUnionIncenseDropKey)
 			incenseResp = call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
-				protocol.ActionIDStUnionGodIncense, callTimeout)
+				protocol.ActionIDStUnionGodIncense)
 			if incenseResp == nil && drops < maxStUnionIncenseSectTownTries {
-				// 城镇会话兜底只做前几次探测：2026-11-16 16:42 实测该会话下连
-				// 179/10 面板都被静默丢弃，长期重试只是每小时多花 30 秒。
-				// 保留最初两次探测，便于服务端会话策略变化时自动发现。
 				slog.Info("仙盟上香在跨服会话无回包，改在仙盟城镇会话重试",
 					"role_id", session.RoleID(), "consecutive", drops)
 				variant = "sect_town"
 				incenseResp = tryStUnionIncenseOnSectSession(ctx, session, callTimeout)
 			}
 			if incenseResp == nil {
-				// 上香（179/11）在当天已完成后会被服务端静默丢弃，但魔神挑战（337/1）
-				// 仍可正常进行：2026-11-15 15:48/16:13/16:24/16:36 实测在上香无回包后
-				// 挑战均成功。不能因为上香失败就放弃当天剩余挑战次数。
-				n := scheduler.NoteSilentDrop(session, stUnionIncenseDropKey)
+				n := scheduler.NoteSilentDropCtx(ctx, session, stUnionIncenseDropKey)
 				if n == 1 || n%24 == 0 {
 					slog.Warn("仙盟上香无回包，继续尝试魔神挑战", "role_id", session.RoleID(),
 						"consecutive", n, "last_variant", variant)
 				}
 			} else {
-				scheduler.ResetSilentDrops(session, stUnionIncenseDropKey)
+				scheduler.ResetSilentDropsCtx(ctx, session, stUnionIncenseDropKey)
 				if res, pErr := protocol.ParseStUnionIncenseResult(incenseResp.Payload); pErr != nil {
 					slog.Warn("仙盟上香回包解析失败", "role_id", session.RoleID(),
 						"variant", variant, "err", pErr,
@@ -225,9 +220,12 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 
 			// 2. 仙盟魔神挑战（券不足时可用道源购买；不消耗元宝）。
 			if infoResp := call(protocol.BuildStUnionTaskInfoPacket(),
-				protocol.ActionIDStUnionTaskInfo, callTimeout); infoResp == nil {
+				protocol.ActionIDStUnionTaskInfo); infoResp == nil {
+				if abort := crossCaller.AbortErr(); abort != nil {
+					return abort
+				}
 				slog.Info("仙盟魔神挑战面板无回包，稍后再试", "role_id", session.RoleID())
-				return scheduler.HandleSilentDrop(session, "st_union_ritual", 3,
+				return scheduler.HandleSilentDropCtx(ctx, session, "st_union_ritual", 3,
 					time.Hour, "仙盟魔神挑战面板无回包")
 			} else if info, iErr := protocol.ParseStUnionTaskInfo(infoResp.Payload); iErr == nil {
 				slog.Info("仙盟魔神挑战面板", "role_id", session.RoleID(),
@@ -242,21 +240,22 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 				fightResp := call(protocol.BuildStUnionTaskFightPacket(),
 					protocol.ActionIDStUnionTaskFight, fightTimeout)
 				if fightResp == nil {
-					return scheduler.HandleSilentDrop(session, "st_union_ritual", 3,
+					if abort := crossCaller.AbortErr(); abort != nil {
+						return abort
+					}
+					return scheduler.HandleSilentDropCtx(ctx, session, "st_union_ritual", 3,
 						time.Hour, "仙盟魔神挑战无回包")
 				}
-				scheduler.ResetSilentDrops(session, "st_union_ritual")
+				scheduler.ResetSilentDropsCtx(ctx, session, "st_union_ritual")
 				code, fErr := protocol.ParseStUnionResult(fightResp.Payload)
 				if fErr != nil {
 					return scheduler.NewCooldown(10*time.Minute, "仙盟魔神挑战回包解析失败")
 				}
 				if code == protocol.StUnionTaskNoTicket && buys < maxStUnionTicketBuys &&
 					!stUnionTicketBuyDisabled.Load() && !buyIneffectiveToday() {
-					// 用户确认：挑战券首次用道源购买。仍做元宝差值保护：
-					// 若观察到元宝减少，本进程内永久停止自动购买。
 					before := cross.GetPlayerState().Ingots
 					buyResp := call(protocol.BuildStUnionTaskBuyTicketPacket(),
-						protocol.ActionIDStUnionTaskBuyTicket, callTimeout)
+						protocol.ActionIDStUnionTaskBuyTicket)
 					after := cross.GetPlayerState().Ingots
 					if buyResp == nil {
 						slog.Info("仙盟购买挑战券无回包", "role_id", session.RoleID())

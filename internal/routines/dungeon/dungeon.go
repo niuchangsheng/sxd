@@ -20,6 +20,7 @@ import (
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/dictionary"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -102,11 +103,11 @@ func waitForReconnect(
 ) bool {
 	leaveDeadline := time.Now().Add(leaveGrace)
 	for state() == client.StateActive && time.Now().Before(leaveDeadline) && ctx.Err() == nil {
-		time.Sleep(50 * time.Millisecond)
+		kit.Sleep(ctx, 50 * time.Millisecond)
 	}
 	deadline := time.Now().Add(activeTimeout)
 	for state() != client.StateActive && time.Now().Before(deadline) && ctx.Err() == nil {
-		time.Sleep(300 * time.Millisecond)
+		kit.Sleep(ctx, 300 * time.Millisecond)
 	}
 	return state() == client.StateActive
 }
@@ -400,7 +401,7 @@ func sellNewPackItems(ctx context.Context, session *client.RoleSession, dictRepo
 	// 扫荡刚结束时服务端可能仍在结算，首个出售请求容易超时；短暂等待后重试一次。
 	var unresolved []protocol.ItemRecord
 	if len(pending) > 0 {
-		time.Sleep(500 * time.Millisecond)
+		kit.Sleep(ctx, 500 * time.Millisecond)
 		for _, it := range pending {
 			ok, retryable := sellPackItem(ctx, session, it)
 			if ok {
@@ -677,7 +678,7 @@ func sweepEliteMissionsWithoutTown(
 		// 网关偶发 EOF 重连；等待会话恢复，并用重连后的新动作号刷新锚点。
 		if session.State() != client.StateActive {
 			for i := 0; i < 30 && session.State() != client.StateActive; i++ {
-				time.Sleep(200 * time.Millisecond)
+				kit.Sleep(ctx, 200 * time.Millisecond)
 			}
 			if session.State() != client.StateActive {
 				slog.Info("会话未恢复，结束全局精英扫荡", "role_id", session.RoleID(), "swept", swept)
@@ -685,7 +686,7 @@ func sweepEliteMissionsWithoutTown(
 			}
 			// 重连后服务端场景/动作链需要短暂恢复时间。
 			failStreak = 0
-			time.Sleep(1500 * time.Millisecond)
+			kit.Sleep(ctx, 1500 * time.Millisecond)
 		}
 		if session.GetStamina() < 5 {
 			slog.Info("体力不足，结束全局精英扫荡",
@@ -872,7 +873,7 @@ func executeEliteMissionSweep(
 	// 先补发一次 0/75 心跳，把 PrevAct 链锚点恢复为心跳动作再开始扫荡。
 	if hb := protocol.BuildPlayerHeartbeatPacket(int32(session.LastActionID())); hb != nil {
 		if err := session.Send(hb); err == nil {
-			time.Sleep(80 * time.Millisecond)
+			kit.Sleep(ctx, 80 * time.Millisecond)
 		}
 	}
 	slog.Info("英雄副本多城镇扫荡",
@@ -906,7 +907,7 @@ func executeEliteMissionSweep(
 		}
 		if session.State() != client.StateActive {
 			for i := 0; i < 15 && session.State() != client.StateActive; i++ {
-				time.Sleep(200 * time.Millisecond)
+				kit.Sleep(ctx, 200 * time.Millisecond)
 			}
 			if session.State() != client.StateActive {
 				break
@@ -916,7 +917,7 @@ func executeEliteMissionSweep(
 		const maxTownAttempts = 2
 		for attempt := 0; attempt < maxTownAttempts; attempt++ {
 			if attempt > 0 {
-				time.Sleep(500 * time.Millisecond)
+				kit.Sleep(ctx, 500 * time.Millisecond)
 			}
 
 			list, listErr := fetchHeroMissionList(ctx, session, townID)
@@ -1003,7 +1004,7 @@ func executeEliteMissionSweep(
 						"sold", sold,
 						"retry", attempt+1,
 					)
-					time.Sleep(100 * time.Millisecond)
+					kit.Sleep(ctx, 100 * time.Millisecond)
 					continue
 				}
 				slog.Warn("背包已满且无法通过出售扫荡物腾出空间，暂停精英扫荡",
@@ -1185,7 +1186,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 		// 高于所有 Cron 玩法 (含天帝宝库 200)：魔王试炼 Mod 57、宝库 594 面板等
 		// 都会切换服务端会话上下文，导致随后的 enter_town/get_sections 被静默丢弃。
 		// 实测 2026-11-15：宝库先跑后，任务 564 的 enter_town/map 21 章节列表连续超时。
-		scheduler.RoutinePriority(300),
+		scheduler.PhasePriority(scheduler.PhaseCoreLoop, 0),
 		30*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -1293,7 +1294,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				if dictRepo != nil {
 					if session.State() != client.StateActive {
 						for i := 0; i < 15 && session.State() != client.StateActive; i++ {
-							time.Sleep(200 * time.Millisecond)
+							kit.Sleep(ctx, 200 * time.Millisecond)
 						}
 					}
 
@@ -1378,7 +1379,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			if shouldRunSweep {
 				// 任务推图可能停留在剧情副本场景；扫荡前复位城镇，避免 25/1 被静默丢弃。
 				if _, ok := enterQuestTownScene(ctx, session); ok {
-					time.Sleep(200 * time.Millisecond)
+					kit.Sleep(ctx, 200 * time.Millisecond)
 				}
 				// 扫荡仅消耗自然体力，不补充体力药
 				sweepHasStamina := func() bool {
@@ -1398,7 +1399,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				for _, step := range sweepPipeline {
 					if session.State() != client.StateActive {
 						for i := 0; i < 15 && session.State() != client.StateActive; i++ {
-							time.Sleep(200 * time.Millisecond)
+							kit.Sleep(ctx, 200 * time.Millisecond)
 						}
 					}
 					if !sweepHasStamina() {
@@ -1616,7 +1617,7 @@ func NewSixRealmsRoutine(cfgs ...SixRealmsConfig) scheduler.ActivityRoutine {
 					}
 
 					// 服务端连续战斗存在冷却保护 (对齐官方客户端 CommonConstant.DelayTimeToWar，需留足间隔)
-					time.Sleep(1500 * time.Millisecond)
+					kit.Sleep(ctx, 1500 * time.Millisecond)
 
 					slog.Info("正在挑战六道轮回塔关卡",
 						"role_id", session.RoleID(),
@@ -2555,7 +2556,7 @@ func executeQuestCycle(
 					*totalGainCoins += q.AwardCoins
 				}
 				progressMade = true
-				time.Sleep(50 * time.Millisecond)
+				kit.Sleep(ctx, 50 * time.Millisecond)
 			}
 		}
 
@@ -2634,7 +2635,7 @@ func executeQuestCycle(
 						*totalGainCoins += q.AwardCoins
 					}
 					progressMade = true
-					time.Sleep(50 * time.Millisecond)
+					kit.Sleep(ctx, 50 * time.Millisecond)
 					continue
 				}
 
@@ -2674,7 +2675,7 @@ func executeQuestCycle(
 					session.SetQuestState(questID, 0)
 					progressMade = true
 					slog.Info("成功接受任务", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
-					time.Sleep(50 * time.Millisecond)
+					kit.Sleep(ctx, 50 * time.Millisecond)
 				} else if accErr != nil {
 					slog.Info("接取任务无回包，保留待下次重试", "role_id", session.RoleID(),
 						"quest_id", it.QuestID, "title", title, "err", accErr)
@@ -2710,7 +2711,7 @@ func executeQuestCycle(
 				*totalGainExp += q.AwardExp
 				*totalGainCoins += q.AwardCoins
 				progressMade = true
-				time.Sleep(50 * time.Millisecond)
+				kit.Sleep(ctx, 50 * time.Millisecond)
 				continue
 			}
 
@@ -2763,7 +2764,7 @@ func executeQuestCycle(
 					*totalGainExp += q.AwardExp
 					*totalGainCoins += q.AwardCoins
 					slog.Info("任务达成并成功交付结算", "role_id", session.RoleID(), "quest_id", qid, "title", q.Title)
-					time.Sleep(50 * time.Millisecond)
+					kit.Sleep(ctx, 50 * time.Millisecond)
 				} else {
 					// 关卡进度已记账，但交付未确认：保留任务，下次同步后重试交付。
 					slog.Info("任务关卡推进成功但交付未确认，保留任务待下次同步",
@@ -3145,7 +3146,7 @@ func executeAuthoritativeQuestCycle(
 				slog.Info("任务达成并成功交付结算", "role_id", session.RoleID(), "quest_id", it.QuestID, "title", title)
 				completedAny = true
 				progressMade = true
-				time.Sleep(80 * time.Millisecond)
+				kit.Sleep(ctx, 80 * time.Millisecond)
 			}
 		}
 
@@ -3213,7 +3214,7 @@ func executeAuthoritativeQuestCycle(
 				acceptedAny = true
 				progressMade = true
 				activeCount++
-				time.Sleep(80 * time.Millisecond)
+				kit.Sleep(ctx, 80 * time.Millisecond)
 			} else {
 				if errSessionTerminated(ctx, accErr) {
 					slog.Info("会话已关闭，终止任务接取循环", "role_id", session.RoleID(), "quest_id", it.QuestID)
@@ -3315,7 +3316,7 @@ func executeAuthoritativeQuestCycle(
 					*totalGainCoins += q.AwardCoins
 					slog.Info("对话任务达成并成功交付结算", "role_id", session.RoleID(), "quest_id", q.ID, "title", q.Title)
 					progressMade = true
-					time.Sleep(80 * time.Millisecond)
+					kit.Sleep(ctx, 80 * time.Millisecond)
 				}
 				continue
 			}
@@ -4477,7 +4478,7 @@ func challengeStoryMission(
 	resetTownScene(session)
 
 	// 预留战斗冷却间隔，避免下一关卡首波战斗触发服务端 CD
-	time.Sleep(1200 * time.Millisecond)
+	kit.Sleep(ctx, 1200 * time.Millisecond)
 
 	remStamina, _ := session.ConsumeStamina(5)
 	*totalCostStamina += 5
