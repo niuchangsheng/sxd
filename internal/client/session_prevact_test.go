@@ -157,3 +157,70 @@ func TestSendUsesLastReceivedPushAsPrevAct(t *testing.T) {
 		t.Fatalf("PrevAct = 0x%08X, want 推送动作 0x%08X", got, pushAct)
 	}
 }
+
+// TestCallWithPrevActResync_FallsBackToPreSendAnchorWhenNoRx 验证重连后
+// lastRxActionID 为 0 时，重试锚点取「首次发送前的上一条发送动作」，
+// 而不是 LastAckActionID（可能是旧连接上其他模块的回包，如 429/4）。
+func TestCallWithPrevActResync_FallsBackToPreSendAnchorWhenNoRx(t *testing.T) {
+	const (
+		preSentAct uint32 = 0x00020029
+		targetAct  uint32 = 0x03550002
+	)
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	var targetCalls atomic.Int32
+	var retryPayload []byte
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(c2)
+			if err != nil {
+				return
+			}
+			if pkt.ActionID != targetAct {
+				continue
+			}
+			if targetCalls.Add(1) == 1 {
+				continue // 首次静默丢弃
+			}
+			retryPayload = append([]byte(nil), pkt.Payload...)
+			_ = protocol.WritePacket(c2, protocol.NewPacket(targetAct, []byte{0}))
+		}
+	}()
+
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID: "role-prevact-fallback", RoleName: "PrevAct 无收包兜底", ServerAddr: "prevact-fallback-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return c1, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sess.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// 模拟重连后尚未收到任何包：lastRx=0，上一条发送动作是握手/前序业务包。
+	sess.SetLastActionID(preSentAct)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req := &protocol.Packet{ActionID: targetAct, Payload: []byte{0, 0, 0, 1, 0, 0, 0, 0}, HasPrevAct: true}
+	resp, err := sess.CallWithPrevActResync(ctx, 200*time.Millisecond, req, targetAct)
+	if err != nil || resp == nil {
+		t.Fatalf("resync call failed: resp=%v err=%v", resp, err)
+	}
+	if len(retryPayload) != 8 {
+		t.Fatalf("retry payload len = %d, want 8", len(retryPayload))
+	}
+	got := uint32(retryPayload[4])<<24 | uint32(retryPayload[5])<<16 |
+		uint32(retryPayload[6])<<8 | uint32(retryPayload[7])
+	if got != preSentAct {
+		t.Fatalf("retry anchor = 0x%08X, want 上一条发送动作 0x%08X", got, preSentAct)
+	}
+}

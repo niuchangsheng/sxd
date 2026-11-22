@@ -663,6 +663,15 @@ var defaultCallTimeout = 30 * time.Second
 // 期间新到达的推送/回包刷新，而不是沿用超时前的旧值。显式锚点不置
 // HasPrevAct，避免被会话层再次改写。两次尝试各自使用独立的 timeout 上下文。
 func (s *RoleSession) CallWithPrevActResync(parent context.Context, timeout time.Duration, req *protocol.Packet, respActionID uint32) (*protocol.Packet, error) {
+	// 首次发送前快照锚点：重连后 lastRxActionID 会被清零，此时 Send 会用
+	// lastActionID（登录握手/上一条发送）作为尾链；重试必须沿用同一锚点，
+	// 不能退回 LastAckActionID —— 那可能是上一个模块在旧连接上的回包
+	// （2026-11-22 实测：魔界远征 429/4 被反复当作无量劫海/飞升/修真礼包的
+	// 重试锚点，导致连续静默丢包）。
+	fallbackAnchor := s.lastRxActionID.Load()
+	if fallbackAnchor == 0 {
+		fallbackAnchor = s.lastActionID.Load()
+	}
 	c1, cancel1 := context.WithTimeout(parent, timeout)
 	resp, err := s.Call(c1, req, respActionID)
 	cancel1()
@@ -674,7 +683,7 @@ func (s *RoleSession) CallWithPrevActResync(parent context.Context, timeout time
 	}
 	anchor := s.lastRxActionID.Load()
 	if anchor == 0 {
-		anchor = s.LastAckActionID()
+		anchor = fallbackAnchor
 	}
 	if anchor == 0 {
 		return nil, err
