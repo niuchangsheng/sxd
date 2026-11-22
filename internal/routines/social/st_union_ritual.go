@@ -144,7 +144,8 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 		"st_union_ritual",
 		"social",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 仙盟上香/魔神在长会话后段实测会被批量静默丢弃，登录后优先执行。
+		scheduler.RoutinePriority(350),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {

@@ -33,7 +33,8 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 		"endless_expedition",
 		"social",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 无尽洞天在长会话后段实测会被批量静默丢弃，登录后优先执行。
+		scheduler.RoutinePriority(360),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {

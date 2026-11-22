@@ -27,7 +27,8 @@ func NewDragonballOfferRoutine() scheduler.ActivityRoutine {
 		"dragonball_offer",
 		"daily",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 神龙上供在长会话后段实测会被批量静默丢弃，登录后优先执行。
+		scheduler.RoutinePriority(345),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {

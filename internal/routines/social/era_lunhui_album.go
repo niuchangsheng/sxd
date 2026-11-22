@@ -35,7 +35,8 @@ func NewEraLunHuiAlbumRoutine() scheduler.ActivityRoutine {
 		"era_lunhui_album",
 		"social",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 轮回图录在长会话后段实测会被批量静默丢弃，登录后优先执行。
+		scheduler.RoutinePriority(355),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
