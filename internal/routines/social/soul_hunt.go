@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -22,6 +23,35 @@ import (
 
 // maxSoulHuntBattles 单轮最多挑战次数（防止异常循环）。
 const maxSoulHuntBattles = 8
+
+// nextSoulHuntActivityTime 根据主面板 step_pairs 推算下一轮开放时间。
+//
+// 抓包实测 step_pairs 为 [轮次ID, 时间戳] 成对出现，每对是「本轮结束/下一轮
+// 开始」（如 2026-11-22 23:59:30、2026-11-23 00:00:00）。取未来最近的两个
+// 时间戳中的后一个作为下一轮开始时刻；只有一个时取该时刻。
+func nextSoulHuntActivityTime(panel *protocol.SoulHuntMainPanel, now time.Time) time.Time {
+	if panel == nil {
+		return time.Time{}
+	}
+	var times []time.Time
+	for _, p := range panel.StepPairs {
+		if p[1] <= 0 {
+			continue
+		}
+		t := time.Unix(int64(p[1]), 0)
+		if t.After(now) {
+			times = append(times, t)
+		}
+	}
+	if len(times) == 0 {
+		return time.Time{}
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+	if len(times) >= 2 {
+		return times[1]
+	}
+	return times[0]
+}
 
 // NewSoulHuntRoutine 构造灵域猎妖挑战任务。
 func NewSoulHuntRoutine() scheduler.ActivityRoutine {
@@ -127,6 +157,16 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 					return scheduler.NewCooldown(10*time.Minute, "灵域猎妖挑战回包解析失败")
 				}
 				if code != protocol.SoulHuntSuccess {
+					if code == protocol.SoulHuntNoChallengeTime {
+						if next := nextSoulHuntActivityTime(panel, time.Now()); !next.IsZero() {
+							slog.Info("灵域猎妖挑战次数不足，按下一轮开放时间唤醒",
+								"role_id", session.RoleID(), "step", step, "fights", fights,
+								"next_open", next.Format(time.RFC3339))
+							return scheduler.NewCooldownUntil(next, "灵域猎妖挑战次数不足")
+						}
+						return scheduler.NewCooldownUntil(scheduler.NextDailyReset(time.Now()),
+							"灵域猎妖挑战次数不足，等待次日重置")
+					}
 					slog.Info("灵域猎妖挑战结束", "role_id", session.RoleID(),
 						"step", step, "fights", fights,
 						"result", code, "result_text", protocol.SoulHuntResultText(code))

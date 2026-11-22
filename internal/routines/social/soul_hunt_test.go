@@ -38,8 +38,11 @@ func TestSoulHuntRoutine_FightsUntilNoTimes(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewSoulHuntRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("soul hunt: %v", err)
+	// 次数不足时按下一轮开放/次日重置唤醒，而不是直接返回 nil。
+	err := NewSoulHuntRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("次数不足应返回 CooldownError, got %v", err)
 	}
 	if fightCalls.Load() != 3 {
 		t.Fatalf("应在第 3 次返回次数不足时停止, fight calls = %d", fightCalls.Load())
