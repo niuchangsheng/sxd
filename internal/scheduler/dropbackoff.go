@@ -66,6 +66,12 @@ func NextDailyReset(now time.Time) time.Time {
 //   - 未达阈值：按 retry 重试（且不超过每日重置时刻）；
 //   - 达到阈值：挂起到次日 00:05，避免整晚反复请求必被丢弃的玩法。
 func HandleSilentDrop(session *client.RoleSession, routine string, threshold int, retry time.Duration, reason string) error {
+	// 会话已断开时，请求超时不是「服务端静默丢包」，而是网络中断。此时不应
+	// 累计丢包次数或进入长冷却，交给调度器的 ErrNotConnected 分支 5 分钟后
+	// 重连重试（2026-11-22 实测：断线期间无尽洞天被误判为静默丢包而挂起 30 分钟）。
+	if session == nil || session.State() != client.StateActive {
+		return client.ErrNotConnected
+	}
 	if threshold <= 0 {
 		threshold = 3
 	}
