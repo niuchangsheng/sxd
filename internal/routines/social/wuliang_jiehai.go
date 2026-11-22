@@ -81,7 +81,10 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 		"wuliang_jiehai",
 		"social",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 新会话早期的请求成功率明显更高：实测同一账号在长时间运行的会话中
+		// 后段 853/2/853/4 会被静默丢弃，而登录后立即执行则全部正常。
+		// 因此无量劫海排在推图/宝库等批量任务之前，登录后优先完成。
+		scheduler.RoutinePriority(400),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {

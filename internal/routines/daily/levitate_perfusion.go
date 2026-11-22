@@ -111,7 +111,9 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 		"levitate_perfusion",
 		"daily",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 与无量劫海同理：飞升面板/灌注在长会话后段更容易被服务端静默丢弃，
+		// 登录后优先执行。
+		scheduler.RoutinePriority(390),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
