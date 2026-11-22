@@ -736,11 +736,10 @@ Action 6 只下发**当前角色已开放**的功能条目（客户端 `Function
 复现探针：`test/probes/probe_treasure_seq_live.go`（`-beelzebub` 复现 Act 4 被静默丢弃，
 `-variant 4` 验证提前发送 Act 4 的成功顺序）。
 
-**天帝宝库自选奖励元数据（2026-11-06 校正）**：`select_panel` 只下发档位 quality
-与奖励 id，奖励 id → 实际道具/数量/档位品质/官方展示 sort 必须查官方
-`com.assist.server.source.TreasureHouseTypeData.objHouseAward`（49 条，id 1~51）。
-仓库内 `Pieb.db.wishpoolaward` 为老版本数据（仅 35 条、缺 36~51，且 id→道具映射
-与现行客户端不一致，例如 id 12 在库中为鸿蒙紫气、官方表为血魂石），不得用于奖励解析。
+**天帝宝库自选奖励元数据（已收口至 `data/gamedata.db :: wishpoolaward`）**：`select_panel` 只下发档位 quality
+与奖励 id，奖励 id → 实际道具/数量/档位品质/官方展示 sort/功能开放 ID 统一从
+`data/gamedata.db :: wishpoolaward`（由 `scripts/rebuild_dict.py` 从官方
+`com.assist.server.source.TreasureHouseTypeData.objHouseAward` 提取的 49 条记录，id 1~51）查询。
 非交互模式按「道具品质 > 自选包/稀有材料/货币/宝石包/令牌 > 数量 > 官方 sort」
 自动选奖，并先用 `get_player_function` 的开放集合过滤所属功能未开放的奖励
 （`FuncID != 0` 且不在开放集合时跳过；整档均未开放则按稀有度兜底）。

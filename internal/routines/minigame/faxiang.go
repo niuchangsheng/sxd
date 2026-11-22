@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"sxd-pie-ng/internal/client"
+	"sxd-pie-ng/internal/dictionary"
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
@@ -34,51 +35,36 @@ const faxiangCallTimeout = 15 * time.Second
 // 一次消耗 2000–6000 道缘。
 const faxiangMaxAutoDaoYuan int32 = 1000
 
-// faxiangPrayAward 炼化奖励配置，来源 MainRoleFaXiangType.extraPrayAwardList。
-type faxiangPrayAward struct {
-	costDaoYuan int32
-	addExp      int32
-}
-
-var faxiangPrayAwards = map[int32]faxiangPrayAward{
-	1:  {costDaoYuan: 1000, addExp: 760},
-	2:  {costDaoYuan: 700, addExp: 280},
-	3:  {costDaoYuan: 600, addExp: 208},
-	4:  {costDaoYuan: 400, addExp: 120},
-	5:  {costDaoYuan: 400, addExp: 172},
-	6:  {costDaoYuan: 500, addExp: 72},
-	8:  {costDaoYuan: 400, addExp: 72},
-	9:  {costDaoYuan: 600, addExp: 88},
-	12: {costDaoYuan: 2000, addExp: 152},
-	14: {costDaoYuan: 500, addExp: 88},
-	15: {costDaoYuan: 100, addExp: 760},
-	16: {costDaoYuan: 5000, addExp: 584},
-	17: {costDaoYuan: 6000, addExp: 752},
-	18: {costDaoYuan: 3000, addExp: 920},
-}
-
 // pickFaxiangPrayAward 在祈愿返回的奖励中挑选单位道缘熟练度最高者。
+// 奖励参数统一从 data/gamedata.db :: faxiang_pray_award 查询；
 // 仅考虑已知且 cost_dao_yuan <= faxiangMaxAutoDaoYuan 的奖励；全部未知时
 // 按原始顺序兜底，全部已知但均超上限时返回 0。
 func pickFaxiangPrayAward(ids []int32) int32 {
 	if len(ids) == 0 {
 		return 0
 	}
+	repo := dictionary.Default()
 	best := ids[0]
 	bestRate := float64(0)
 	known := false
 	affordable := false
 	for _, id := range ids {
-		award, ok := faxiangPrayAwards[id]
-		if !ok {
+		if repo == nil {
+			continue
+		}
+		award, err := repo.GetFaxiangPrayAward(id)
+		if err != nil || award == nil {
 			continue
 		}
 		known = true
-		if award.costDaoYuan > faxiangMaxAutoDaoYuan {
+		if award.CostDaoYuan > faxiangMaxAutoDaoYuan {
 			continue
 		}
 		affordable = true
-		rate := float64(award.addExp) / float64(award.costDaoYuan)
+		rate := float64(award.AddExp)
+		if award.CostDaoYuan > 0 {
+			rate = float64(award.AddExp) / float64(award.CostDaoYuan)
+		}
 		if rate > bestRate {
 			bestRate = rate
 			best = id
@@ -306,10 +292,16 @@ func runFaxiangFo(session *client.RoleSession, call faxiangCall) (bool, error) {
 		}
 		switch chosen.Result {
 		case protocol.FaxiangSuccess:
-			award := faxiangPrayAwards[pick]
+			var costDaoYuan, addExp int32
+			if repo := dictionary.Default(); repo != nil {
+				if award, err := repo.GetFaxiangPrayAward(pick); err == nil && award != nil {
+					costDaoYuan = award.CostDaoYuan
+					addExp = award.AddExp
+				}
+			}
 			slog.Info("法相已选择奖励并开始炼化",
 				"role_id", session.RoleID(), "award_id", pick,
-				"cost_dao_yuan", award.costDaoYuan, "add_exp", award.addExp,
+				"cost_dao_yuan", costDaoYuan, "add_exp", addExp,
 				"refine_finish_time", chosen.RefineFinishTime)
 			return true, faxiangRefineCooldown(chosen.RefineFinishTime)
 		case protocol.FaxiangNotEnoughDaoYuan:

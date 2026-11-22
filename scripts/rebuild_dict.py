@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""从官方 2026 客户端 SWF (Main.swf + templet.swf) 全自动反编译提取并重建 data/Pieb.db 核心静态表。
+"""从官方客户端 SWF (Main.swf + templet.swf) 从零反编译提取并构建全新 data/gamedata.db。
 
 用法:
-    # 使用已下载的 2026112001 缓存重建 data/Pieb.db
+    # 使用已下载的 2026112001 缓存从零构建 data/gamedata.db
     python3 scripts/rebuild_dict.py --ver 2026112001 --diff r395-01 --skip-fetch
 
-    # 从官方 CDN 拉取最新版本并重建 data/Pieb.db
+    # 从官方 CDN 拉取最新版本并从零构建 data/gamedata.db
     python3 scripts/rebuild_dict.py --ver 2026112001 --diff r395-01
 
 零外部依赖（仅使用 Python 标准库），内建 AVM2 DoABC 静态常量池与 cinit 字节码求值器，
-重建 internal/dictionary/repository.go 实际使用的全部 6 张核心表：
-  1. item           <- templet.swf :: com.assist.server.source.ItemTypeData.Items
-  2. roletype       <- Main.swf    :: com.assist.server.RoleType.Roles
-  3. Missions       <- templet.swf :: MissionTypeData.{Missions,Sections} + MissionMonsterTypeData.missionMonsterTeamList
-  4. Quests         <- templet.swf :: com.assist.server.source.QuestTypeData.Quests
-  5. NPCposition    <- templet.swf :: TownTypeData.Towns + Main.swf :: TownNPCType.List + NPCType.List
-  6. wishpoolaward  <- Main.swf    :: com.assist.server.source.TreasureHouseTypeData.awardList
+从零生成 35 张官方静态数据表（10 张核心运行表 + 25 张官方 SWF 扩展表）与 _rebuild_meta。
 """
 
 import argparse
@@ -573,113 +567,517 @@ def rebuild_sqlite(db_path: str, swf_dir: str, cur_ver: str):
         npc_pos_map[tn_id] = (tn_id, town_id, npc_id, npc_name, 0, 0)
     npc_rows = sorted(npc_pos_map.values(), key=lambda r: r[0])
 
-    # 6. wishpoolaward (天帝宝库自选大奖表 TreasureHouseTypeData.awardList)
-    th_awards = mabc.eval_cinit("com.assist.server.source.TreasureHouseTypeData")["awardList"]
+    # 6. wishpoolaward (天帝宝库自选大奖表 TreasureHouseTypeData.objHouseAward)
+    th_data = mabc.eval_cinit("com.assist.server.source.TreasureHouseTypeData")
+    th_obj = th_data.get("objHouseAward") or {}
     wish_rows = []
-    for entry in th_awards:
+    for k, entry in th_obj.items():
         if not isinstance(entry, dict):
             continue
         wish_rows.append((
-            safe_int(entry.get("id")),
+            safe_int(entry.get("id", k)),
             safe_int(entry.get("item_id")),
             safe_int(entry.get("item_num")),
+            safe_int(entry.get("quality")),
+            safe_int(entry.get("sort")),
+            safe_int(entry.get("award_type")),
+            safe_int(entry.get("func_id")),
         ))
     wish_rows.sort(key=lambda r: r[0])
 
-    # 写入 SQLite（单事务原子替换这 6 张核心表，保留其他历史表）
-    con = sqlite3.connect(db_path)
-    old_counts = {}
-    for tbl in ("item", "roletype", "Missions", "Quests", "NPCposition", "wishpoolaward"):
-        try:
-            old_counts[tbl] = con.execute(f'SELECT count(*) FROM "{tbl}"').fetchone()[0]
-        except Exception:
-            old_counts[tbl] = 0
+    # 7. NPCQuest (NPC 结交每日问答 NpcFriendShipType.QuestList)
+    # 答案编码对齐 protocol.NpcFriendshipResultAnswerA(13)/B(14)/C(15)，-1 永不选取
+    raw_npc_quests = mabc.eval_cinit("com.assist.server.NpcFriendShipType").get("QuestList", [])
+    npc_quest_rows = []
+    for q in raw_npc_quests:
+        if not isinstance(q, dict):
+            continue
+        aa, ab, ac = safe_int(q.get("award_a")), safe_int(q.get("award_b")), safe_int(q.get("award_c"))
+        candidates = [(13, aa), (14, ab), (15, ac)]
+        best_ans, best_award = 0, -1
+        for ans_code, aw in candidates:
+            if aw > best_award:
+                best_award = aw
+                best_ans = ans_code
+        npc_quest_rows.append((
+            safe_int(q.get("id")),
+            safe_str(q.get("question")),
+            safe_str(q.get("answer_a")),
+            safe_str(q.get("answer_b")),
+            safe_str(q.get("answer_c")),
+            aa, ab, ac,
+            best_ans, best_award,
+        ))
+    npc_quest_rows.sort(key=lambda r: r[0])
+
+    # 8. beelzebub_boss (魔王试炼 Boss 表 BeelzeBubTrialsBossType.Bosses)
+    raw_bb = mabc.eval_cinit("com.assist.server.BeelzeBubTrialsBossType").get("Bosses", {})
+    beelzebub_rows = []
+    for k, arr in raw_bb.items():
+        if not isinstance(arr, list) or len(arr) < 16:
+            continue
+        beelzebub_rows.append((
+            safe_int(k),
+            safe_str(arr[0]),
+            safe_str(arr[1]),
+            safe_int(arr[4]),
+            safe_int(arr[15]),
+            safe_int(arr[10]),
+        ))
+    beelzebub_rows.sort(key=lambda r: r[0])
+
+    # 9. faxiang_pray_award (主角法相造物佛手祈愿炼化奖励 MainRoleFaXiangType.extraPrayAwardList)
+    raw_fx = mabc.eval_cinit("com.assist.server.MainRoleFaXiangType").get("extraPrayAwardList", [])
+    faxiang_rows = []
+    for e in raw_fx:
+        if not isinstance(e, dict):
+            continue
+        faxiang_rows.append((
+            safe_int(e.get("id")),
+            safe_int(e.get("level")),
+            safe_int(e.get("item_id")),
+            safe_int(e.get("item_count")),
+            safe_int(e.get("cost_dao_yuan")),
+            safe_int(e.get("cost_time")),
+            safe_int(e.get("add_exp")),
+        ))
+    faxiang_rows.sort(key=lambda r: r[0])
+
+    # 10. functions (功能开放字典 FunctionTypeData.List)
+    raw_funcs = tabc.eval_cinit("com.assist.server.source.FunctionTypeData").get("List", {})
+    function_rows = []
+    for k, arr in raw_funcs.items():
+        if not isinstance(arr, list) or len(arr) < 3:
+            continue
+        function_rows.append((
+            safe_int(k),
+            safe_str(arr[0]),
+            safe_int(arr[1]),
+            safe_str(arr[2]),
+            safe_str(arr[3]) if len(arr) > 3 else "",
+        ))
+    function_rows.sort(key=lambda r: r[0])
+
+    # ===== 官方 SWF 扩展静态表 (25 张，覆盖所有存在于官方 SWF 的游戏字典) =====
+
+    # 11. ActivityArray
+    act_rows = [
+        (safe_int(e.get("id")), safe_str(e.get("sign")), safe_str(e.get("name")))
+        for e in mabc.eval_cinit("com.assist.server.source.ActivityTemplate").get("ActivityArray", [])
+        if isinstance(e, dict)
+    ]
+    act_rows.sort(key=lambda r: r[0])
+
+    # 12. ChallengeType
+    challenge_rows = [
+        (safe_int(a[0]), safe_str(a[2]), safe_str(a[3]) if len(a) > 3 else "")
+        for a in mabc.eval_cinit("com.assist.server.StChallengeType").get("MissionMonsterTeamSpecialPattern", [])
+        if isinstance(a, list) and len(a) >= 3
+    ]
+    challenge_rows.sort(key=lambda r: r[0])
+
+    # 13-14. DragonBall & DragonBallResource
+    db_cinit = mabc.eval_cinit("com.assist.server.DragonBallType")
+    dragonball_rows = [
+        (
+            safe_int(a[0]), safe_int(a[1]), safe_int(a[2]), safe_str(a[3]),
+            safe_str(a[4]), safe_int(a[5]), safe_int(a[6]), safe_int(a[7]),
+        )
+        for a in db_cinit.get("DragonBall", [])
+        if isinstance(a, list) and len(a) >= 8
+    ]
+    dragonball_rows.sort(key=lambda r: r[0])
+    dragonball_res_rows = [
+        (safe_int(a[0]), safe_str(a[1]), safe_str(a[2]), safe_str(a[3]) if len(a) > 3 else "")
+        for a in db_cinit.get("DragonBallResource", [])
+        if isinstance(a, list) and len(a) >= 3
+    ]
+    dragonball_res_rows.sort(key=lambda r: r[0])
+
+    # 15. FiveElementsEquip
+    five_elem_rows = [
+        (safe_int(a[0]), safe_str(a[2]), safe_int(a[3]), safe_int(a[4]), safe_int(a[5]), safe_int(a[6]))
+        for a in mabc.eval_cinit("com.assist.server.FiveElementsType").get("ElementEquipList", [])
+        if isinstance(a, list) and len(a) >= 7
+    ]
+    five_elem_rows.sort(key=lambda r: r[0])
+
+    # 16. Furinkazan
+    furin_rows = [
+        (safe_int(e.get("id")), safe_int(e.get("type")), safe_int(e.get("begin_mission")), safe_int(e.get("end_mission")))
+        for e in mabc.eval_cinit("com.assist.server.FurinkazanType").get("missionLineList", [])
+        if isinstance(e, dict)
+    ]
+    furin_rows.sort(key=lambda r: r[0])
+
+    # 17. IdentifyTreasureaward
+    id_treasure_rows = [
+        (safe_int(e.get("id")), safe_int(e.get("level")), safe_int(e.get("award_id")))
+        for e in mabc.eval_cinit("com.assist.server.source.IdentifyTreasureTypeData").get("awardList", [])
+        if isinstance(e, dict)
+    ]
+    id_treasure_rows.sort(key=lambda r: r[0])
+
+    # 18. ImmortalFantasy
+    immortal_rows = [
+        (
+            safe_int(a[0]), safe_int(a[1]), safe_int(a[2]), safe_int(a[3]),
+            safe_int(a[4]), safe_int(a[5]), safe_int(a[6]), safe_int(a[7]),
+            safe_int(a[8]), safe_int(a[9]), safe_int(a[10]),
+        )
+        for a in mabc.eval_cinit("com.assist.server.ImmortalFantasyType").get("immortalFantasyStage", [])
+        if isinstance(a, list) and len(a) >= 11
+    ]
+    immortal_rows.sort(key=lambda r: (r[0], r[1]))
+
+    # 19. Mapkey (城镇地图索引)
+    mapkey_rows = [
+        (safe_str(tarr[0]), safe_int(tk), safe_str(tarr[1]))
+        for tk, tarr in raw_towns.items()
+        if isinstance(tarr, list) and len(tarr) >= 2
+    ]
+    mapkey_rows.sort(key=lambda r: r[1])
+
+    # 20. MascotBefall (按 id 去重，官方 MascotBefallArr 按等级展开了多条同名 buff)
+    mascot_seen = {}
+    for a in mabc.eval_cinit("com.assist.server.MascotBefallType").get("MascotBefallArr", []):
+        if isinstance(a, list) and len(a) >= 3:
+            mid = safe_int(a[0])
+            if mid not in mascot_seen:
+                mascot_seen[mid] = (mid, safe_str(a[2]))
+    mascot_rows = sorted(mascot_seen.values(), key=lambda r: r[0])
+
+    # 21. PartnerExpeditionmission
+    partner_exp_rows = [
+        (
+            safe_int(e.get("id")), safe_str(e.get("mission_name")), safe_str(e.get("describe")),
+            safe_int(e.get("during_time")), safe_int(e.get("award_num")),
+            safe_int(e.get("item_id")), safe_int(e.get("item_num")),
+            safe_int(e.get("extra_mission_type")), safe_int(e.get("extra_mission_type2")),
+            safe_int(e.get("extra_award_num")), safe_int(e.get("gift_item_id")),
+        )
+        for e in mabc.eval_cinit("com.assist.server.PartnerExpeditionType").get("missionList", [])
+        if isinstance(e, dict)
+    ]
+    partner_exp_rows.sort(key=lambda r: r[0])
+
+    # 22. PlayerTitles
+    title_rows = [
+        (safe_int(a[0]), safe_str(a[1]), safe_str(a[3]) if len(a) > 3 else "")
+        for a in mabc.eval_cinit("com.assist.server.PlayerTitleType").get("PlayerTitles", [])
+        if isinstance(a, list) and len(a) >= 2
+    ]
+    title_rows.sort(key=lambda r: r[0])
+
+    # 23. RoleScrapInfos
+    role_cinit = mabc.eval_cinit("com.assist.server.RoleType")
+    scrap_rows = [
+        (safe_int(a[0]), safe_int(a[1]), safe_str(a[3]), safe_str(a[4]), safe_int(a[5]), safe_int(a[6]))
+        for a in role_cinit.get("RoleScrapInfos", [])
+        if isinstance(a, list) and len(a) >= 7
+    ]
+    scrap_rows.sort(key=lambda r: r[0])
+
+    # 24. StEightImmortalsType
+    eight_imm_rows = [
+        (safe_int(a[0]), safe_int(a[1]), safe_str(a[6]), safe_int(a[7]), safe_int(a[8]), safe_int(a[9]))
+        for a in mabc.eval_cinit("com.assist.server.StEightImmortalsType").get("EightImmortalsRules", [])
+        if isinstance(a, list) and len(a) >= 10
+    ]
+    eight_imm_rows.sort(key=lambda r: r[0])
+
+    # 25-26. StShanhaiShop & relicPoint
+    shanhai_cinit = mabc.eval_cinit("com.assist.server.source.StShanHaiRelicTypeData")
+    shanhai_shop_rows = [
+        (safe_int(e.get("id")), safe_int(e.get("item_id")), safe_int(e.get("item_num")), safe_int(e.get("price")), safe_int(e.get("limit")))
+        for e in shanhai_cinit.get("shopArray", [])
+        if isinstance(e, dict)
+    ]
+    shanhai_shop_rows.sort(key=lambda r: r[0])
+    relic_point_rows = [
+        (safe_int(e.get("id")), safe_int(e.get("relic_id")), safe_int(e.get("type")), safe_str(e.get("name")), safe_int(e.get("to_point_id")))
+        for e in shanhai_cinit.get("relicPointArray", [])
+        if isinstance(e, dict)
+    ]
+    relic_point_rows.sort(key=lambda r: r[0])
+
+    # 27. TowerAwardList
+    item_name_by_id = {r[0]: r[1] for r in item_rows}
+    tower_award_rows = [
+        (
+            safe_int(e.get("id")), safe_int(e.get("item_id")),
+            item_name_by_id.get(safe_int(e.get("item_id")), ""),
+            safe_int(e.get("count")), safe_int(e.get("cost")), safe_int(e.get("limit")),
+        )
+        for e in mabc.eval_cinit("com.assist.server.ServerTowerType").get("scoreAwardList", [])
+        if isinstance(e, dict)
+    ]
+    tower_award_rows.sort(key=lambda r: r[0])
+
+    # 28. WorldPKExchange
+    world_pk_rows = [
+        (
+            safe_int(e.get("id")), safe_int(e.get("item_id")), safe_int(e.get("count")),
+            safe_int(e.get("pk_coins")), safe_int(e.get("limit")), safe_int(e.get("gold_coins")),
+        )
+        for e in mabc.eval_cinit("com.assist.server.WorldPkRankingType").get("WorldExchangeArray", [])
+        if isinstance(e, dict)
+    ]
+    world_pk_rows.sort(key=lambda r: r[0])
+
+    # 29. cardSoulList
+    card_soul_rows = [
+        (safe_int(a[0]), safe_str(a[2]), safe_int(a[7]), safe_int(a[8]))
+        for a in mabc.eval_cinit("com.assist.server.CardSoulType").get("cardSoulCardList", [])
+        if isinstance(a, list) and len(a) >= 9
+    ]
+    card_soul_rows.sort(key=lambda r: r[0])
+
+    # 30. daoyuanshop
+    daoyuan_rows = [
+        (
+            safe_int(a[0]), safe_str(a[1]), safe_str(a[2]), safe_str(a[3]),
+            safe_int(a[4]), safe_int(a[5]), safe_int(a[6]), safe_int(a[7]),
+            safe_int(a[8]), safe_int(a[9]), safe_int(a[10]), safe_int(a[11]),
+            safe_int(a[12]), safe_int(a[13]), safe_int(a[14]),
+        )
+        for a in mabc.eval_cinit("com.assist.server.StDaoYuanShopType").get("DaoYuanData", [])
+        if isinstance(a, list) and len(a) >= 15
+    ]
+    daoyuan_rows.sort(key=lambda r: r[0])
+
+    # 31. factureReel
+    facture_rows = [
+        (idx + 1, safe_int(a[0]), safe_int(a[1]), safe_int(a[2]), safe_str(a[3]), safe_int(a[4]))
+        for idx, a in enumerate(mabc.eval_cinit("com.assist.server.FactureReelType").get("_factureReelList", []))
+        if isinstance(a, list) and len(a) >= 5
+    ]
+
+    # 32. fatetype
+    fate_rows = [
+        (safe_int(k), safe_str(a[0]), safe_int(a[2]), safe_int(a[4]), safe_int(a[10]) if len(a) > 10 else 0)
+        for k, a in tabc.eval_cinit("com.assist.server.source.FateTypeData").get("Fates", {}).items()
+        if isinstance(a, list) and len(a) >= 5
+    ]
+    fate_rows.sort(key=lambda r: r[0])
+
+    # 33. newShopGoods
+    new_shop_rows = [
+        (
+            safe_int(e.get("id", k)), safe_int(e.get("item_id")), safe_int(e.get("item_count")),
+            safe_int(e.get("money_type")), safe_int(e.get("price")),
+            safe_int(e.get("limit_buy_count")), safe_int(e.get("function_limit")),
+        )
+        for k, e in mabc.eval_cinit("com.assist.server.StTravelShopType").get("newShopGoods", {}).items()
+        if isinstance(e, dict)
+    ]
+    new_shop_rows.sort(key=lambda r: r[0])
+
+    # 34. serchat
+    serchat_rows = [
+        (safe_int(a[0]), safe_str(a[2]))
+        for a in mabc.eval_cinit("com.assist.server.ServerChatRoomType").get("ChatRooms", [])
+        if isinstance(a, list) and len(a) >= 3
+    ]
+    serchat_rows.sort(key=lambda r: r[0])
+
+    # 35. soulList
+    soul_rows = [
+        (safe_int(k), safe_str(a[2]))
+        for k, a in tabc.eval_cinit("com.assist.server.source.SoulTypeData").get("Soul", {}).items()
+        if isinstance(a, list) and len(a) >= 3
+    ]
+    soul_rows.sort(key=lambda r: r[0])
+
+    # ===== 从零构建全新 SQLite 文件并原子替换 =====
+    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+    tmp_path = db_path + ".tmp"
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+
+    con = sqlite3.connect(tmp_path)
+    ddl = """
+    CREATE TABLE item (
+        id INTEGER PRIMARY KEY, sxdname TEXT, type_id INTEGER, description TEXT,
+        quality INTEGER, require_level INTEGER, price INTEGER, ingot INTEGER, special_gift_tip TEXT
+    );
+    CREATE INDEX idx_item_name ON item(sxdname);
+
+    CREATE TABLE roletype (
+        id INTEGER PRIMARY KEY, sxdname TEXT, JobId INTEGER, Type INTEGER,
+        Fame INTEGER, StuntId INTEGER, UnlockMod INTEGER, InviteType INTEGER, Gender INTEGER
+    );
+
+    CREATE TABLE Missions (
+        MissionsId INTEGER PRIMARY KEY, SectionId INTEGER, MissionLock INTEGER, MissionPower INTEGER,
+        map INTEGER, mapkey INTEGER, MissionName TEXT, MissionType INTEGER, isBossMission INTEGER, monsters TEXT
+    );
+    CREATE INDEX idx_missions_type_lock ON Missions(MissionType, MissionLock);
+
+    CREATE TABLE Quests (
+        QuestsId INTEGER PRIMARY KEY, Type INTEGER, Lock INTEGER, Level INTEGER, Title TEXT,
+        BeginNPCId INTEGER, EndNPCId INTEGER, AwardExperience INTEGER, AwardCoins INTEGER,
+        AwardItemId INTEGER, TalkQuest INTEGER, MissionId INTEGER, AwardItemCount INTEGER
+    );
+    CREATE INDEX idx_quests_type_level ON Quests(Type, Level);
+
+    CREATE TABLE NPCposition (
+        id INTEGER PRIMARY KEY, townid INTEGER, npcid INTEGER, npcname TEXT, npcx INTEGER, npcy INTEGER
+    );
+    CREATE INDEX idx_npcpos_npcid ON NPCposition(npcid);
+    CREATE INDEX idx_npcpos_townid ON NPCposition(townid);
+
+    CREATE TABLE wishpoolaward (
+        id INTEGER PRIMARY KEY, sxdname INTEGER, itemnum INTEGER,
+        quality INTEGER, sort INTEGER, award_type INTEGER, func_id INTEGER
+    );
+
+    CREATE TABLE NPCQuest (
+        id INTEGER PRIMARY KEY, question TEXT,
+        answer_a TEXT, answer_b TEXT, answer_c TEXT,
+        award_a INTEGER, award_b INTEGER, award_c INTEGER,
+        best_answer INTEGER, best_award INTEGER
+    );
+
+    CREATE TABLE beelzebub_boss (
+        id INTEGER PRIMARY KEY, name TEXT, sign TEXT, level INTEGER, max_times INTEGER, secret INTEGER
+    );
+
+    CREATE TABLE faxiang_pray_award (
+        id INTEGER PRIMARY KEY, level INTEGER, item_id INTEGER, item_count INTEGER,
+        cost_dao_yuan INTEGER, cost_time INTEGER, add_exp INTEGER
+    );
+
+    CREATE TABLE functions (
+        id INTEGER PRIMARY KEY, sign TEXT, open_level INTEGER, name TEXT, description TEXT
+    );
+
+    CREATE TABLE ActivityArray (id INTEGER PRIMARY KEY, sign TEXT, name TEXT);
+    CREATE TABLE ChallengeType (id INTEGER PRIMARY KEY, sxdname TEXT, description TEXT);
+    CREATE TABLE DragonBall (
+        id INTEGER PRIMARY KEY, effect_id INTEGER, quality_id INTEGER, sign TEXT,
+        sxdname TEXT, star INTEGER, unlock_map_id INTEGER, need_long_hun INTEGER
+    );
+    CREATE TABLE DragonBallResource (id INTEGER PRIMARY KEY, sign TEXT, sxdname TEXT, desc TEXT);
+    CREATE TABLE FiveElementsEquip (
+        id INTEGER PRIMARY KEY, sxdname TEXT, property_id INTEGER, quality INTEGER,
+        exchange_exp INTEGER, five_dust INTEGER
+    );
+    CREATE TABLE Furinkazan (id INTEGER PRIMARY KEY, type INTEGER, begin_mission INTEGER, end_mission INTEGER);
+    CREATE TABLE IdentifyTreasureaward (id INTEGER PRIMARY KEY, level INTEGER, award_id INTEGER);
+    CREATE TABLE ImmortalFantasy (
+        mission_seq_id INTEGER, stage_id INTEGER, stage_video_id INTEGER, stage_exp_id INTEGER,
+        special_flag INTEGER, monster_sequence INTEGER, monster_scene_id INTEGER, boxes_id INTEGER,
+        npc_id INTEGER, item_id INTEGER, supernatural_piece_id INTEGER
+    );
+    CREATE TABLE Mapkey (mapkey TEXT, mapid INTEGER PRIMARY KEY, mapname TEXT);
+    CREATE TABLE MascotBefall (id INTEGER PRIMARY KEY, sxdname TEXT);
+    CREATE TABLE PartnerExpeditionmission (
+        id INTEGER PRIMARY KEY, mission_name TEXT, describe TEXT, during_time INTEGER,
+        award_num INTEGER, item_id INTEGER, item_num INTEGER,
+        extra_mission_type INTEGER, extra_mission_type2 INTEGER, extra_award_num INTEGER, gift_item_id INTEGER
+    );
+    CREATE TABLE PlayerTitles (id INTEGER PRIMARY KEY, sxdname TEXT, description TEXT);
+    CREATE TABLE RoleScrapInfos (
+        id INTEGER PRIMARY KEY, role_id INTEGER, sxdname TEXT, description TEXT, itemId INTEGER, sort INTEGER
+    );
+    CREATE TABLE StEightImmortalsType (
+        id INTEGER PRIMARY KEY, rule_level INTEGER, eightname TEXT, attr1 INTEGER, attr2 INTEGER, attr3 INTEGER
+    );
+    CREATE TABLE StShanhaiShop (id INTEGER PRIMARY KEY, item_id INTEGER, item_num INTEGER, price INTEGER, limit1 INTEGER);
+    CREATE TABLE TowerAwardList (id INTEGER PRIMARY KEY, item_id INTEGER, name TEXT, count INTEGER, cost INTEGER, exlimit INTEGER);
+    CREATE TABLE WorldPKExchange (id INTEGER PRIMARY KEY, item_id INTEGER, count INTEGER, pk_coins INTEGER, "limit" INTEGER, gold_coins INTEGER);
+    CREATE TABLE cardSoulList (id INTEGER PRIMARY KEY, sxdname TEXT, exchange_scrap INTEGER, resolve_scrap INTEGER);
+    CREATE TABLE daoyuanshop (
+        id INTEGER PRIMARY KEY, sign TEXT, sxdname TEXT, decription TEXT,
+        daoyuan_price INTEGER, ingot_price INTEGER, item_count INTEGER, quality INTEGER,
+        order_id INTEGER, is_max_limit INTEGER, item_id INTEGER, need_vip INTEGER,
+        vip_item_id INTEGER, coin_price INTEGER, item_num INTEGER
+    );
+    CREATE TABLE factureReel (
+        ID INTEGER PRIMARY KEY, reel_id INTEGER, item_id INTEGER, item_number INTEGER,
+        item_description TEXT, mission_id INTEGER
+    );
+    CREATE INDEX idx_facture_reel_id ON factureReel(reel_id);
+    CREATE TABLE fatetype (id INTEGER PRIMARY KEY, sxdname TEXT, Quality INTEGER, WarAttributeType INTEGER, NeedActived INTEGER);
+    CREATE TABLE newShopGoods (
+        id INTEGER PRIMARY KEY, item_id INTEGER, item_count INTEGER, money_type INTEGER,
+        price INTEGER, limit_buy_count INTEGER, function_limit INTEGER
+    );
+    CREATE TABLE relicPoint (id INTEGER PRIMARY KEY, relic_id INTEGER, type INTEGER, name TEXT, to_point_id INTEGER);
+    CREATE TABLE serchat (id INTEGER PRIMARY KEY, sxdname TEXT);
+    CREATE TABLE soulList (id INTEGER PRIMARY KEY, sxdname TEXT);
+    CREATE TABLE _rebuild_meta (key TEXT PRIMARY KEY, value TEXT);
+    """
+
+    table_inserts = [
+        ("item", "INSERT INTO item VALUES (?,?,?,?,?,?,?,?,?)", item_rows),
+        ("roletype", "INSERT INTO roletype VALUES (?,?,?,?,?,?,?,?,?)", role_rows),
+        ("Missions", "INSERT INTO Missions VALUES (?,?,?,?,?,?,?,?,?,?)", mission_rows),
+        ("Quests", "INSERT INTO Quests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", quest_rows),
+        ("NPCposition", "INSERT INTO NPCposition VALUES (?,?,?,?,?,?)", npc_rows),
+        ("wishpoolaward", "INSERT INTO wishpoolaward VALUES (?,?,?,?,?,?,?)", wish_rows),
+        ("NPCQuest", "INSERT INTO NPCQuest VALUES (?,?,?,?,?,?,?,?,?,?)", npc_quest_rows),
+        ("beelzebub_boss", "INSERT INTO beelzebub_boss VALUES (?,?,?,?,?,?)", beelzebub_rows),
+        ("faxiang_pray_award", "INSERT INTO faxiang_pray_award VALUES (?,?,?,?,?,?,?)", faxiang_rows),
+        ("functions", "INSERT INTO functions VALUES (?,?,?,?,?)", function_rows),
+        ("ActivityArray", "INSERT INTO ActivityArray VALUES (?,?,?)", act_rows),
+        ("ChallengeType", "INSERT INTO ChallengeType VALUES (?,?,?)", challenge_rows),
+        ("DragonBall", "INSERT INTO DragonBall VALUES (?,?,?,?,?,?,?,?)", dragonball_rows),
+        ("DragonBallResource", "INSERT INTO DragonBallResource VALUES (?,?,?,?)", dragonball_res_rows),
+        ("FiveElementsEquip", "INSERT INTO FiveElementsEquip VALUES (?,?,?,?,?,?)", five_elem_rows),
+        ("Furinkazan", "INSERT INTO Furinkazan VALUES (?,?,?,?)", furin_rows),
+        ("IdentifyTreasureaward", "INSERT INTO IdentifyTreasureaward VALUES (?,?,?)", id_treasure_rows),
+        ("ImmortalFantasy", "INSERT INTO ImmortalFantasy VALUES (?,?,?,?,?,?,?,?,?,?,?)", immortal_rows),
+        ("Mapkey", "INSERT INTO Mapkey VALUES (?,?,?)", mapkey_rows),
+        ("MascotBefall", "INSERT INTO MascotBefall VALUES (?,?)", mascot_rows),
+        ("PartnerExpeditionmission", "INSERT INTO PartnerExpeditionmission VALUES (?,?,?,?,?,?,?,?,?,?,?)", partner_exp_rows),
+        ("PlayerTitles", "INSERT INTO PlayerTitles VALUES (?,?,?)", title_rows),
+        ("RoleScrapInfos", "INSERT INTO RoleScrapInfos VALUES (?,?,?,?,?,?)", scrap_rows),
+        ("StEightImmortalsType", "INSERT INTO StEightImmortalsType VALUES (?,?,?,?,?,?)", eight_imm_rows),
+        ("StShanhaiShop", "INSERT INTO StShanhaiShop VALUES (?,?,?,?,?)", shanhai_shop_rows),
+        ("TowerAwardList", "INSERT INTO TowerAwardList VALUES (?,?,?,?,?,?)", tower_award_rows),
+        ("WorldPKExchange", "INSERT INTO WorldPKExchange VALUES (?,?,?,?,?,?)", world_pk_rows),
+        ("cardSoulList", "INSERT INTO cardSoulList VALUES (?,?,?,?)", card_soul_rows),
+        ("daoyuanshop", "INSERT INTO daoyuanshop VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", daoyuan_rows),
+        ("factureReel", "INSERT INTO factureReel VALUES (?,?,?,?,?,?)", facture_rows),
+        ("fatetype", "INSERT INTO fatetype VALUES (?,?,?,?,?)", fate_rows),
+        ("newShopGoods", "INSERT INTO newShopGoods VALUES (?,?,?,?,?,?,?)", new_shop_rows),
+        ("relicPoint", "INSERT INTO relicPoint VALUES (?,?,?,?,?)", relic_point_rows),
+        ("serchat", "INSERT INTO serchat VALUES (?,?)", serchat_rows),
+        ("soulList", "INSERT INTO soulList VALUES (?,?)", soul_rows),
+    ]
 
     with con:
-        con.execute("DELETE FROM item")
-        con.executemany(
-            "INSERT INTO item (id, sxdname, type_id, description, quality, require_level, price, ingot, special_gift_tip) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            item_rows,
-        )
+        con.executescript(ddl)
+        for tbl, sql, rows in table_inserts:
+            con.executemany(sql, rows)
 
-        con.execute("DELETE FROM roletype")
-        con.executemany(
-            "INSERT INTO roletype (id, sxdname, JobId, Type, Fame, StuntId, UnlockMod, InviteType, Gender) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            role_rows,
-        )
-
-        con.execute("DELETE FROM Missions")
-        con.executemany(
-            "INSERT INTO Missions (MissionsId, SectionId, MissionLock, MissionPower, map, mapkey, MissionName, MissionType, isBossMission, monsters) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            mission_rows,
-        )
-
-        con.execute("DELETE FROM Quests")
-        con.executemany(
-            "INSERT INTO Quests (QuestsId, Type, Lock, Level, Title, BeginNPCId, EndNPCId, AwardExperience, AwardCoins, AwardItemId, TalkQuest, MissionId, AwardItemCount) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            quest_rows,
-        )
-
-        con.execute("DELETE FROM NPCposition")
-        con.executemany(
-            "INSERT INTO NPCposition (id, townid, npcid, npcname, npcx, npcy) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            npc_rows,
-        )
-
-        con.execute("DELETE FROM wishpoolaward")
-        con.executemany(
-            "INSERT INTO wishpoolaward (id, sxdname, itemnum) VALUES (?, ?, ?)",
-            wish_rows,
-        )
-
-        con.execute(
-            "CREATE TABLE IF NOT EXISTS _rebuild_meta (key TEXT PRIMARY KEY, value TEXT)"
-        )
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         meta = [
             ("cur_ver", cur_ver),
             ("rebuilt_at", now),
-            ("item_rows", str(len(item_rows))),
-            ("roletype_rows", str(len(role_rows))),
-            ("missions_rows", str(len(mission_rows))),
-            ("quests_rows", str(len(quest_rows))),
-            ("npcposition_rows", str(len(npc_rows))),
-            ("wishpoolaward_rows", str(len(wish_rows))),
-        ]
-        con.executemany(
-            "INSERT OR REPLACE INTO _rebuild_meta (key, value) VALUES (?, ?)",
-            meta,
-        )
+            ("table_count", str(len(table_inserts))),
+        ] + [(f"{tbl}_rows", str(len(rows))) for tbl, _, rows in table_inserts]
+        con.executemany("INSERT INTO _rebuild_meta (key, value) VALUES (?, ?)", meta)
 
     con.execute("VACUUM")
     con.close()
+    os.replace(tmp_path, db_path)
 
-    print("\n=== Pieb.db 核心表重建报告 ===")
-    new_counts = {
-        "item": len(item_rows),
-        "roletype": len(role_rows),
-        "Missions": len(mission_rows),
-        "Quests": len(quest_rows),
-        "NPCposition": len(npc_rows),
-        "wishpoolaward": len(wish_rows),
-    }
-    for tbl, new_n in new_counts.items():
-        old_n = old_counts.get(tbl, 0)
-        delta = new_n - old_n
-        sign = "+" if delta >= 0 else ""
-        print(f"  {tbl:15s}: {old_n:6d} -> {new_n:6d} ({sign}{delta})")
+    print(f"\n=== {db_path} 全量重建报告 (cur_ver={cur_ver}, 共 {len(table_inserts)} 张表) ===")
+    total_rows = 0
+    for tbl, _, rows in table_inserts:
+        total_rows += len(rows)
+        print(f"  {tbl:26s}: {len(rows):6d} 行")
+    print(f"  {'TOTAL':26s}: {total_rows:6d} 行 ({os.path.getsize(db_path):,} bytes)")
 
 
 def main():
-    ap = argparse.ArgumentParser(description="从最新官方 SWF 反编译重建 data/Pieb.db")
+    ap = argparse.ArgumentParser(description="从最新官方 SWF 从零反编译构建 data/gamedata.db")
     ap.add_argument("--ver", default="2026112001", help="官方 cur_ver (默认 2026112001)")
     ap.add_argument("--diff", default="r395-01", help="官方 diff_urls[cur_ver] (默认 r395-01)")
-    ap.add_argument("--db", default="data/Pieb.db", help="目标 SQLite 路径")
+    ap.add_argument("--db", default="data/gamedata.db", help="目标 SQLite 路径 (默认 data/gamedata.db)")
     ap.add_argument("--swf-dir", default="", help="SWF 缓存目录 (默认 data/decompiled/swfs/<ver>)")
     ap.add_argument("--skip-fetch", action="store_true", help="跳过网络下载，直接使用本地缓存 SWF")
     ap.add_argument("--update-index-swf", action="store_true", help="同时覆盖根目录 Index.swf")

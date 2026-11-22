@@ -211,7 +211,8 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		slog.Warn("未检测到本地游戏数据字典，部分元数据查询将降级", "error", err)
 	} else {
-		slog.Info("已成功挂载老版游戏数据字典 Pieb.db")
+		dictionary.SetDefault(dictRepo)
+		slog.Info("已成功挂载官方游戏数据字典 gamedata.db")
 	}
 
 	qaEngine, err := qa.NewEngine("")

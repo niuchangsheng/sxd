@@ -1,4 +1,4 @@
-// Package dictionary 提供基于老版 Pieb.db 游戏数据字典的高性能只读查询仓储。
+// Package dictionary 提供基于官方 SWF 构建的 data/gamedata.db 静态数据字典只读仓储。
 //
 // @author Ateng
 // @since 2026-10-08
@@ -45,25 +45,75 @@ type Repository interface {
 	GetQuestNPCs() (map[int]bool, error)
 	GetWishpoolAward(id int) (*WishpoolAward, error)
 	GetWishpoolAwards() (map[int]*WishpoolAward, error)
+	GetNPCQuestAnswer(id int) (*NPCQuestAnswer, error)
+	GetBeelzebubBoss(id int32) (*BeelzebubBoss, error)
+	GetFaxiangPrayAward(id int32) (*FaxiangPrayAward, error)
 	SearchItems(keyword string) ([]*Item, error)
 	Close() error
 }
 
-// WishpoolAward 表示天帝宝库/许愿池大奖条目元数据。
+// WishpoolAward 表示天帝宝库/许愿池大奖条目元数据 (来源 TreasureHouseTypeData.objHouseAward)。
 type WishpoolAward struct {
 	ID          int    // 奖项条目 ID (1..51)
 	ItemID      int    // 关联道具 ID
 	ItemName    string // 道具名称
 	ItemNum     int    // 奖励数量
 	Description string // 描述
+	Quality     int    // 档位品质: 1=珍品, 2=上品, 3=凡品
+	Sort        int    // 官方展示排序 (越小越靠前)
+	AwardType   int    // 奖励类型 (1=普通, 2=特殊)
+	FuncID      int    // 关联功能编号 (FunctionTypeData)
+}
+
+var (
+	defaultMu   sync.RWMutex
+	defaultRepo Repository
+	defaultOnce sync.Once
+)
+
+// SetDefault 注册进程级共享静态数据字典实例（供 protocol / routines 统一查询）。
+func SetDefault(repo Repository) {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+	defaultRepo = repo
+}
+
+// Default 返回进程级共享静态数据字典实例；若尚未显式注册，则懒加载 data/gamedata.db。
+func Default() Repository {
+	defaultMu.RLock()
+	r := defaultRepo
+	defaultMu.RUnlock()
+	if r != nil {
+		return r
+	}
+	defaultOnce.Do(func() {
+		if repo, err := NewRepository(""); err == nil {
+			defaultMu.Lock()
+			if defaultRepo == nil {
+				defaultRepo = repo
+			} else {
+				_ = repo.Close()
+			}
+			defaultMu.Unlock()
+		}
+	})
+	defaultMu.RLock()
+	defer defaultMu.RUnlock()
+	return defaultRepo
 }
 
 type sqliteRepository struct {
 	db *sql.DB
 	mu sync.RWMutex
+
+	cacheMu          sync.RWMutex
+	wishpoolCache    map[int]*WishpoolAward
+	npcQuestCache    map[int]*NPCQuestAnswer
+	beelzebubCache   map[int32]*BeelzebubBoss
+	faxiangPrayCache map[int32]*FaxiangPrayAward
 }
 
-// ResolveDatabasePath 智能探测 Pieb.db 数据库物理路径。
+// ResolveDatabasePath 智能探测 gamedata.db 数据库物理路径。
 func ResolveDatabasePath(customPath string) (string, error) {
 	if customPath != "" {
 		if _, err := os.Stat(customPath); err == nil {
@@ -73,11 +123,10 @@ func ResolveDatabasePath(customPath string) (string, error) {
 	}
 
 	candidates := []string{
-		filepath.Join("data", "Pieb.db"),
-		filepath.Join("..", "data", "Pieb.db"),
-		filepath.Join("..", "..", "data", "Pieb.db"),
-		filepath.Join("..", "..", "..", "data", "Pieb.db"),
-		`D:\Software\疯玩神仙道\Pieb.db`,
+		filepath.Join("data", "gamedata.db"),
+		filepath.Join("..", "data", "gamedata.db"),
+		filepath.Join("..", "..", "data", "gamedata.db"),
+		filepath.Join("..", "..", "..", "data", "gamedata.db"),
 	}
 
 	for _, c := range candidates {
@@ -86,7 +135,7 @@ func ResolveDatabasePath(customPath string) (string, error) {
 		}
 	}
 
-	return "", errors.New("dictionary: 未找到 Pieb.db 数据库文件，请确认已放置在 data/ 目录")
+	return "", errors.New("dictionary: 未找到 gamedata.db 数据库文件，请确认已放置在 data/ 目录或运行 scripts/rebuild_dict.py 生成")
 }
 
 // NewRepository 创建并初始化 SQLite 数据字典仓储。
@@ -607,40 +656,44 @@ func (r *sqliteRepository) GetQuestNPCs() (map[int]bool, error) {
 	return res, nil
 }
 
-// GetWishpoolAward 查询天帝宝库/许愿池单个自选大奖信息。
+// GetWishpoolAward 查询天帝宝库/许愿池单个自选大奖信息（带内存缓存）。
 func (r *sqliteRepository) GetWishpoolAward(id int) (*WishpoolAward, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	if r.db == nil {
-		return nil, errors.New("dictionary: database not connected")
-	}
-
-	query := `SELECT w.id, w.sxdname, w.itemnum, IFNULL(i.sxdname, ''), IFNULL(i.description, '')
-              FROM wishpoolaward w LEFT JOIN item i ON w.sxdname = i.id WHERE w.id = ? LIMIT 1`
-	var a WishpoolAward
-	err := r.db.QueryRow(query, id).Scan(&a.ID, &a.ItemID, &a.ItemNum, &a.ItemName, &a.Description)
+	all, err := r.GetWishpoolAwards()
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("dictionary: 查询宝库大奖失败: %w", err)
+		return nil, err
 	}
-	return &a, nil
+	a, ok := all[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *a
+	return &cp, nil
 }
 
-// GetWishpoolAwards 查询天帝宝库/许愿池全部大奖字典映射。
+// GetWishpoolAwards 查询天帝宝库/许愿池全部大奖字典映射（首次查询后缓存在内存）。
 func (r *sqliteRepository) GetWishpoolAwards() (map[int]*WishpoolAward, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	if r.db == nil {
-		return nil, errors.New("dictionary: database not connected")
+	r.cacheMu.RLock()
+	cached := r.wishpoolCache
+	r.cacheMu.RUnlock()
+	if cached != nil {
+		out := make(map[int]*WishpoolAward, len(cached))
+		for k, v := range cached {
+			cp := *v
+			out[k] = &cp
+		}
+		return out, nil
 	}
 
-	query := `SELECT w.id, w.sxdname, w.itemnum, IFNULL(i.sxdname, ''), IFNULL(i.description, '')
+	r.mu.RLock()
+	if r.db == nil {
+		r.mu.RUnlock()
+		return nil, errors.New("dictionary: database not connected")
+	}
+	query := `SELECT w.id, w.sxdname, w.itemnum, IFNULL(i.sxdname, ''), IFNULL(i.description, ''),
+                     w.quality, w.sort, w.award_type, w.func_id
               FROM wishpoolaward w LEFT JOIN item i ON w.sxdname = i.id ORDER BY w.id ASC`
 	rows, err := r.db.Query(query)
+	r.mu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("dictionary: 查询全部宝库大奖失败: %w", err)
 	}
@@ -649,9 +702,144 @@ func (r *sqliteRepository) GetWishpoolAwards() (map[int]*WishpoolAward, error) {
 	res := make(map[int]*WishpoolAward)
 	for rows.Next() {
 		var a WishpoolAward
-		if err := rows.Scan(&a.ID, &a.ItemID, &a.ItemNum, &a.ItemName, &a.Description); err == nil {
+		if err := rows.Scan(&a.ID, &a.ItemID, &a.ItemNum, &a.ItemName, &a.Description,
+			&a.Quality, &a.Sort, &a.AwardType, &a.FuncID); err == nil {
 			res[a.ID] = &a
 		}
 	}
-	return res, nil
+
+	r.cacheMu.Lock()
+	r.wishpoolCache = res
+	r.cacheMu.Unlock()
+
+	out := make(map[int]*WishpoolAward, len(res))
+	for k, v := range res {
+		cp := *v
+		out[k] = &cp
+	}
+	return out, nil
+}
+
+// GetNPCQuestAnswer 查询 NPC 结交每日问答最优选项（带内存缓存）。
+func (r *sqliteRepository) GetNPCQuestAnswer(id int) (*NPCQuestAnswer, error) {
+	r.cacheMu.RLock()
+	cached := r.npcQuestCache
+	r.cacheMu.RUnlock()
+
+	if cached == nil {
+		r.mu.RLock()
+		if r.db == nil {
+			r.mu.RUnlock()
+			return nil, errors.New("dictionary: database not connected")
+		}
+		rows, err := r.db.Query(`SELECT id, question, best_answer, best_award FROM NPCQuest`)
+		r.mu.RUnlock()
+		if err != nil {
+			return nil, fmt.Errorf("dictionary: 查询 NPC 结交问答失败: %w", err)
+		}
+		defer rows.Close()
+
+		m := make(map[int]*NPCQuestAnswer)
+		for rows.Next() {
+			var q NPCQuestAnswer
+			var bestAns int
+			if err := rows.Scan(&q.ID, &q.Question, &bestAns, &q.BestAward); err == nil {
+				q.BestAnswer = uint8(bestAns)
+				m[q.ID] = &q
+			}
+		}
+		r.cacheMu.Lock()
+		r.npcQuestCache = m
+		r.cacheMu.Unlock()
+		cached = m
+	}
+
+	q, ok := cached[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *q
+	return &cp, nil
+}
+
+// GetBeelzebubBoss 查询魔王试炼 Boss 元数据（带内存缓存）。
+func (r *sqliteRepository) GetBeelzebubBoss(id int32) (*BeelzebubBoss, error) {
+	r.cacheMu.RLock()
+	cached := r.beelzebubCache
+	r.cacheMu.RUnlock()
+
+	if cached == nil {
+		r.mu.RLock()
+		if r.db == nil {
+			r.mu.RUnlock()
+			return nil, errors.New("dictionary: database not connected")
+		}
+		rows, err := r.db.Query(`SELECT id, name, sign, level, max_times, secret FROM beelzebub_boss`)
+		r.mu.RUnlock()
+		if err != nil {
+			return nil, fmt.Errorf("dictionary: 查询魔王试炼 Boss 表失败: %w", err)
+		}
+		defer rows.Close()
+
+		m := make(map[int32]*BeelzebubBoss)
+		for rows.Next() {
+			var b BeelzebubBoss
+			var secret int
+			if err := rows.Scan(&b.ID, &b.Name, &b.Sign, &b.Level, &b.MaxTimes, &secret); err == nil {
+				b.Secret = uint8(secret)
+				m[b.ID] = &b
+			}
+		}
+		r.cacheMu.Lock()
+		r.beelzebubCache = m
+		r.cacheMu.Unlock()
+		cached = m
+	}
+
+	b, ok := cached[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *b
+	return &cp, nil
+}
+
+// GetFaxiangPrayAward 查询主角法相造物佛手祈愿炼化奖励（带内存缓存）。
+func (r *sqliteRepository) GetFaxiangPrayAward(id int32) (*FaxiangPrayAward, error) {
+	r.cacheMu.RLock()
+	cached := r.faxiangPrayCache
+	r.cacheMu.RUnlock()
+
+	if cached == nil {
+		r.mu.RLock()
+		if r.db == nil {
+			r.mu.RUnlock()
+			return nil, errors.New("dictionary: database not connected")
+		}
+		rows, err := r.db.Query(`SELECT id, level, item_id, item_count, cost_dao_yuan, cost_time, add_exp FROM faxiang_pray_award`)
+		r.mu.RUnlock()
+		if err != nil {
+			return nil, fmt.Errorf("dictionary: 查询法相祈愿奖励失败: %w", err)
+		}
+		defer rows.Close()
+
+		m := make(map[int32]*FaxiangPrayAward)
+		for rows.Next() {
+			var a FaxiangPrayAward
+			if err := rows.Scan(&a.ID, &a.Level, &a.ItemID, &a.ItemCount, &a.CostDaoYuan, &a.CostTime, &a.AddExp); err == nil {
+				m[a.ID] = &a
+			}
+		}
+		r.cacheMu.Lock()
+		r.faxiangPrayCache = m
+		r.cacheMu.Unlock()
+		cached = m
+	}
+
+	a, ok := cached[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *a
+	return &cp, nil
 }

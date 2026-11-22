@@ -1,9 +1,10 @@
-// Package protocol 提供 NPC 结交每日问答的静态题库。
+// Package protocol 提供 NPC 结交每日问答的最优选项查询。
 //
-// 数据来源: 官方 Main.swf 的 com.assist.server.NpcFriendShipType.QuestList。
-// 每题三个选项的好感度奖励不同，自动化选择奖励最高的选项。
-// 奖励为 -1 的选项属于负面答案，任何情况下都不选。
+// 数据来源: data/gamedata.db :: NPCQuest (由 scripts/rebuild_dict.py 从官方
+// Main.swf :: com.assist.server.NpcFriendShipType.QuestList 提取)。
 package protocol
+
+import "sxd-pie-ng/internal/dictionary"
 
 // NpcFriendshipAnswer 表示某个 NPC 问答的最优选项。
 type NpcFriendshipAnswer struct {
@@ -13,35 +14,19 @@ type NpcFriendshipAnswer struct {
 	Award int32
 }
 
-// npcFriendshipBestAnswers 问题编号 -> 最优答案。
-//
-// QuestList 共 20 题；同一档位取奖励更高者，-1 永不选取。
-var npcFriendshipBestAnswers = map[int32]NpcFriendshipAnswer{
-	1:  {Answer: NpcFriendshipResultAnswerC, Award: 12},
-	2:  {Answer: NpcFriendshipResultAnswerB, Award: 12},
-	3:  {Answer: NpcFriendshipResultAnswerB, Award: 12},
-	4:  {Answer: NpcFriendshipResultAnswerA, Award: 12},
-	5:  {Answer: NpcFriendshipResultAnswerB, Award: 12},
-	6:  {Answer: NpcFriendshipResultAnswerA, Award: 12},
-	7:  {Answer: NpcFriendshipResultAnswerB, Award: 12},
-	8:  {Answer: NpcFriendshipResultAnswerB, Award: 12},
-	9:  {Answer: NpcFriendshipResultAnswerC, Award: 12},
-	10: {Answer: NpcFriendshipResultAnswerB, Award: 12},
-	11: {Answer: NpcFriendshipResultAnswerA, Award: 12},
-	12: {Answer: NpcFriendshipResultAnswerB, Award: 12},
-	13: {Answer: NpcFriendshipResultAnswerC, Award: 12},
-	14: {Answer: NpcFriendshipResultAnswerC, Award: 12},
-	15: {Answer: NpcFriendshipResultAnswerA, Award: 12},
-	16: {Answer: NpcFriendshipResultAnswerA, Award: 12},
-	17: {Answer: NpcFriendshipResultAnswerB, Award: 12},
-	18: {Answer: NpcFriendshipResultAnswerB, Award: 10},
-	19: {Answer: NpcFriendshipResultAnswerC, Award: 12},
-	20: {Answer: NpcFriendshipResultAnswerA, Award: 12},
-}
-
-// NpcFriendshipBestAnswer 查询指定问答的最优答案。
+// NpcFriendshipBestAnswer 从统一静态数据字典查询指定问答的最优答案。
 // 未知问题返回 ok=false，调用方必须跳过，避免随机作答触发负面奖励。
 func NpcFriendshipBestAnswer(questionID int32) (NpcFriendshipAnswer, bool) {
-	ans, ok := npcFriendshipBestAnswers[questionID]
-	return ans, ok
+	repo := dictionary.Default()
+	if repo == nil {
+		return NpcFriendshipAnswer{}, false
+	}
+	q, err := repo.GetNPCQuestAnswer(int(questionID))
+	if err != nil || q == nil || q.BestAward < 0 || q.BestAnswer == 0 {
+		return NpcFriendshipAnswer{}, false
+	}
+	return NpcFriendshipAnswer{
+		Answer: q.BestAnswer,
+		Award:  q.BestAward,
+	}, true
 }

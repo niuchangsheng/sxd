@@ -13,9 +13,9 @@ import (
 
 func masterPracticeTestRepo(t *testing.T) dictionary.Repository {
 	t.Helper()
-	repo, err := dictionary.NewRepository("../../../data/Pieb.db")
+	repo, err := dictionary.NewRepository("")
 	if err != nil {
-		t.Skipf("Pieb.db unavailable: %v", err)
+		t.Skipf("gamedata.db unavailable: %v", err)
 	}
 	t.Cleanup(func() { repo.Close() })
 	return repo

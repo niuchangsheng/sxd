@@ -10,7 +10,7 @@
 | :--- | :--- |
 | **操作系统** | Linux (amd64/arm64)、macOS、Windows |
 | **Go 版本（编译期）** | Go 1.26+（与 [go.mod](../go.mod) 一致） |
-| **运行期外部依赖** | 无（单二进制）；需同目录保留 `data/Pieb.db` 与配置文件 |
+| **运行期外部依赖** | 无（单二进制）；需同目录保留 `data/gamedata.db` 与配置文件 |
 | **网络出站** | TCP 出站至游戏网关（如 `*.sxdweb.xd.com:8200/8211/8480`）与平台 HTTPS 换票接口 |
 | **监听端口** | 默认 `127.0.0.1:8080`（内嵌 Web 控制台，可在 `server.host` / `server.port` 修改） |
 
@@ -33,7 +33,7 @@ go build -trimpath \
 /opt/sxd-auto/
 ├── bin/sxd-auto
 ├── configs/config.yaml      # 权限建议 0600，切勿提交到 Git
-├── data/Pieb.db             # 离线静态元数据字典（必须存在）
+├── data/gamedata.db         # 官方 SWF 离线静态元数据字典（必须存在）
 └── logs/                    # 运行日志目录（程序自动创建）
 ```
 
@@ -129,7 +129,7 @@ curl -fsS http://127.0.0.1:8080/api/roles
 2. **Cookie 过期续期**：运行 `./bin/sxd-auto --config configs/config.yaml --browser-login`，按提示登录即可自动捕获并回写最新 Cookie。
 3. **多区服换票节流**：`startup.ticket_min_interval_seconds` / `ticket_max_interval_seconds`（默认 2~5 秒）保证同一账号的多区服串行换票，防止短时间并发登录触发风控。
 4. **会话定时自愈**：系统内建 `session_refresh` 例程，每 5 分钟按连接存活时长主动重建主服连接，规避游戏服务端长会话后段的批量静默丢包。
-5. **离线字典同步刷新**：游戏大版本更新（新增道具/伙伴/关卡/宝库大奖）后，执行以下两步刷新 `data/Pieb.db`：
+5. **离线字典同步刷新**：游戏大版本更新（新增道具/伙伴/关卡/宝库大奖/魔王 Boss 等）后，执行以下两步从零重建 `data/gamedata.db`：
    ```bash
    go run -tags=probe test/probes/probe_ticket_extra.go       # 获取最新 cur_ver 与 diff_urls[cur_ver]
    python3 scripts/rebuild_dict.py --ver <cur_ver> --diff <diff_tag>
@@ -149,7 +149,7 @@ curl -fsS http://127.0.0.1:8080/api/roles
 | `PrevAct 重同步重试 ... ok=false` | 特定协议在当前会话状态被服务端静默丢弃 | 属于 `CallWithPrevActResync` 自动自愈尝试；若长期全失败，配合 `--debug` 观察 `recent_rx` 并用探针复现 |
 | `背包已满` (`ErrBagFull`) | 角色背包无空位 | 确认 `bag_cleanup` 与 `dungeon.sweep.sell_swept_items: true` 已启用，或手动清理背包 |
 | `Web 控制台启动失败: address already in use` | 8080 端口被占用 | 修改配置 `server.port` 或停止冲突进程 |
-| 推图/选奖/宗师修行无法识别名称或职业 | 缺少 `data/Pieb.db` | 检查启动日志是否有 `已成功挂载老版游戏数据字典 Pieb.db`，确保工作目录下存在 `data/Pieb.db` |
+| 推图/选奖/宗师修行无法识别名称或职业 | 缺少 `data/gamedata.db` | 检查启动日志是否有 `已成功挂载官方游戏数据字典 gamedata.db`，确保工作目录下存在 `data/gamedata.db` |
 
 ### 离线协议探针诊断
 

@@ -32,8 +32,8 @@ _避免使用_: Timer, Cron, Task Manager
 通过 Go 内嵌文件系统（`go:embed`）与二进制打包在一起的本地 Web 仪表盘，供用户在浏览器中配置账号与监视日志。
 _避免使用_: GUI, Client UI, Dashboard
 
-**Pieb SQLite Engine (游戏字典引擎)**:
-基于纯 Go SQLite 驱动挂载原版 `Pieb.db`，提供道具、伙伴、怪物、NPC 等游戏静态元数据的统一只读数据字典仓储。
+**GameData SQLite Engine (官方游戏字典引擎)**:
+基于纯 Go SQLite 驱动只读挂载由官方 SWF 从零构建的 `data/gamedata.db`，提供道具、伙伴、怪物、NPC、宝库大奖、魔王试炼、法相祈愿与功能开放等 35 张静态表的统一数据字典仓储。
 _避免使用_: Game Database, Local Cache
 
 **QA Bank (题库问答引擎)**:
@@ -129,7 +129,7 @@ _避免使用_: Official Priority, Bug Override, Force Alignment
 - **[协议规范白皮书 (Protocol Specification)](docs/protocol-spec.md)**:
   定义大端序 `[4B Length] + [2B Module] + [2B Action] + Payload` 物理帧结构、类型编解码规范、透明 zlib 解压契约，并包含 `sxd.pcapng` 抓包真实黄金报文用例。
 - **[本地元数据库全量数据字典 (Database Dictionary)](docs/database-dictionary.md)**:
-  定义 `data/Pieb.db` 37 张数据表全量分类索引、实体关系图 (ERD) 与纯 Go SQLite 只读接入规范。
+  定义 `data/gamedata.db` 35 张官方 SWF 静态数据表全量分类索引、实体关系图 (ERD) 与纯 Go SQLite 只读接入规范。
 - **[玩法子系统与规则白皮书 (Routine Specification)](docs/routine-spec.md)**:
   全面对齐原版 `pieb.ini`（23 个核心子系统）与 `01.ini`，规范六大领域包的任务状态机、卫语句检查与发包时序。
 - **[逆向侦察与分析报告合集 (Research & Reconnaissance)](docs/research/pie_reverse_engineering_master_index.md)**:

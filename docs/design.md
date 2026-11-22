@@ -6,13 +6,13 @@
 
 ## 1. 系统总体架构
 
-`sxd-auto` 采用**单进程多角色隔离架构**：每个配置的角色在进程内拥有独立的网络长连接会话（`RoleSession`）与独立的事件驱动调度器（`RoleScheduler`），共享只读的离线元数据仓储（`Pieb.db`）、问答引擎（`qa.Engine`）与内嵌 Web 管理面（`web.Server`）。
+`sxd-auto` 采用**单进程多角色隔离架构**：每个配置的角色在进程内拥有独立的网络长连接会话（`RoleSession`）与独立的事件驱动调度器（`RoleScheduler`），共享只读的官方静态数据字典仓储（`data/gamedata.db`）、问答引擎（`qa.Engine`）与内嵌 Web 管理面（`web.Server`）。
 
 ![sxd-auto 系统总体架构图](assets/architecture.svg)
 
 ### 1.1 核心设计原则
 1. **单角色故障隔离**：每个角色独立持有 `RoleSession`、`RoleScheduler` 与 `DropTracker`，任一区服断线、超时或静默丢包不会阻塞或污染其他区服。
-2. **零外部运行时依赖**：前端静态资源通过 `go:embed` 编入二进制，SQLite 使用纯 Go 驱动挂载 `data/Pieb.db`，单二进制即可部署。
+2. **零外部运行时依赖**：前端静态资源通过 `go:embed` 编入二进制，SQLite 使用纯 Go 驱动挂载 `data/gamedata.db`，单二进制即可部署。
 3. **协议精确对齐与回包解析铁律（ADR-0015）**：严禁以“未超时”判定业务成功，所有业务请求必须解析结果码并按失败语义驱动熔断/冷却。
 4. **元宝安全红线**：自动化默认只消耗免费次数、铜钱、道缘等常规资源；所有涉及元宝的入口（清冷却、买次数、高级抽奖、元宝培养等）默认禁止调用。
 
@@ -93,9 +93,9 @@ stateDiagram-v2
 - **7 大领域包与注册工厂**（[registry.go](file:///home/chang/sxd/internal/routines/registry.go)）：
   - `system`（1 项）、`daily`、`dungeon`、`farming`、`minigame`、`pvp`、`social` 共 **113 个例程**，Phase 3 后全部按单玩法/单业务域拆分为内聚文件（无超 1,500 行文件）。
 
-### 2.5 离线元数据 (`data/Pieb.db`)、自动重建管线与题库 (`internal/qa`)
-- `internal/dictionary` 以只读模式挂载 `data/Pieb.db`，为主线推图（任务/NPC/关卡锁/怪物编队）、精英扫荡与背包清理（`Items.TypeID`/`Price`）、宗师修行（伙伴 `role_id` → `JobId`）、天帝宝库（道具品质与大奖权重）及药园日志翻译提供离线静态数据。
-- 为彻底解决老版静态库数据漂移问题，[rebuild_dict.py](file:///home/chang/sxd/scripts/rebuild_dict.py) 内建纯 Python AVM2 DoABC 字节码求值器，可按官方 CDN `cur_ver` 自动下载最新 `Index.swf` / `Main.swf` / `templet.swf` 并原子重建全部 6 张运行时核心表（当前对齐 `2026112001`：`item` 10,016 / `roletype` 939 / `Missions` 2,003 / `Quests` 1,937 / `NPCposition` 530 / `wishpoolaward` 49），同时写入 `_rebuild_meta` 追踪版本。
+### 2.5 官方静态数据层 (`data/gamedata.db`)、自动构建管线与题库 (`internal/qa`)
+- `internal/dictionary` 以只读模式挂载 `data/gamedata.db`（带进程级 `Default()` 共享与热点表内存缓存），作为全系统唯一的官方 SWF 静态数据层：为主线推图（任务/NPC/关卡锁/怪物编队）、精英扫荡与背包清理（`item`）、宗师修行（`roletype`）、天帝宝库自选大奖（`wishpoolaward`）、NPC 结交问答（`NPCQuest`）、魔王试炼 Boss 元数据（`beelzebub_boss`）及主角法相祈愿奖励（`faxiang_pray_award`）提供统一查询，彻底消除了代码中散落的 SWF 硬编码补丁。
+- [rebuild_dict.py](file:///home/chang/sxd/scripts/rebuild_dict.py) 内建纯 Python AVM2 DoABC 字节码求值器，可按官方 CDN `cur_ver` 自动下载最新 `Index.swf` / `Main.swf` / `templet.swf` 并**从零构建**全部 35 张官方静态表（当前对齐 `2026112001`，共 20,126 行），同时写入 `_rebuild_meta` 追踪版本。
 - `internal/qa` 启动时预加载 5,719 道题库，服务仙旅奇缘与金榜题名自动答题。
 
 ---

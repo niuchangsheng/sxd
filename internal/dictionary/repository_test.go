@@ -170,13 +170,55 @@ func TestRepository_Queries(t *testing.T) {
 		if award.ItemName == "" {
 			t.Errorf("预期解析出道具名称, 实际为空: %+v", award)
 		}
+		if award.Quality != 1 || award.Sort != 12 || award.FuncID != 92 {
+			t.Errorf("预期宝库大奖扩展列正确 (Quality=1,Sort=12,FuncID=92), 实际: %+v", award)
+		}
 
 		awards, err := repo.GetWishpoolAwards()
 		if err != nil {
 			t.Fatalf("查询全部天帝宝库大奖失败: %v", err)
 		}
-		if len(awards) < 30 {
-			t.Errorf("预期大奖映射数量 >= 30, 实际: %d", len(awards))
+		if len(awards) < 49 {
+			t.Errorf("预期大奖映射数量 >= 49, 实际: %d", len(awards))
+		}
+	})
+
+	t.Run("GetNPCQuestAnswer", func(t *testing.T) {
+		q, err := repo.GetNPCQuestAnswer(1)
+		if err != nil {
+			t.Fatalf("查询 NPC 结交问答失败: %v", err)
+		}
+		if q.BestAnswer != 15 || q.BestAward != 12 {
+			t.Errorf("预期第 1 题最优答案 (15, 12), 实际: %+v", q)
+		}
+		if _, err := repo.GetNPCQuestAnswer(999); err != dictionary.ErrNotFound {
+			t.Errorf("未知题号预期 ErrNotFound, 实际: %v", err)
+		}
+	})
+
+	t.Run("GetBeelzebubBoss", func(t *testing.T) {
+		b, err := repo.GetBeelzebubBoss(144)
+		if err != nil {
+			t.Fatalf("查询魔王试炼 Boss 失败: %v", err)
+		}
+		if b.Name != "美猴王" || b.Level != 100 || b.MaxTimes != 1 || b.Secret != 2 {
+			t.Errorf("预期 Boss 144 元数据匹配官方表, 实际: %+v", b)
+		}
+		if _, err := repo.GetBeelzebubBoss(99999); err != dictionary.ErrNotFound {
+			t.Errorf("未知 Boss 预期 ErrNotFound, 实际: %v", err)
+		}
+	})
+
+	t.Run("GetFaxiangPrayAward", func(t *testing.T) {
+		a, err := repo.GetFaxiangPrayAward(15)
+		if err != nil {
+			t.Fatalf("查询法相祈愿奖励失败: %v", err)
+		}
+		if a.CostDaoYuan != 100 || a.AddExp != 760 {
+			t.Errorf("预期法相奖励 15 (CostDaoYuan=100, AddExp=760), 实际: %+v", a)
+		}
+		if _, err := repo.GetFaxiangPrayAward(999); err != dictionary.ErrNotFound {
+			t.Errorf("未知法相奖励预期 ErrNotFound, 实际: %v", err)
 		}
 	})
 

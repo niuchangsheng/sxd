@@ -9,7 +9,7 @@
 开发具体业务模块前，按触发条件查阅对应规范：
 
 - **网络协议与编解码**：实现二进制封包、流式解压或报文单测时，查阅 [docs/protocol-spec.md](./docs/protocol-spec.md)。
-- **元数据与数据字典**：操作 `data/Pieb.db` 静态表结构或 SQLite 仓储时，查阅 [docs/database-dictionary.md](./docs/database-dictionary.md)。
+- **元数据与数据字典**：操作 `data/gamedata.db` 静态表结构或 SQLite 仓储时，查阅 [docs/database-dictionary.md](./docs/database-dictionary.md)。
 - **自动化玩法与调度**：实现 Routine 任务生命周期、卫语句、智能熔断与拟人抖动时，查阅 [docs/routine-spec.md](./docs/routine-spec.md)。
 - **逆向探针与交互验证**：编写或复用脱机协议验证代码时，统一存放于 `test/probes/`，强制声明 `//go:build probe` 与结构化头注释，严禁硬编码敏感凭据。参见 [docs/adr/0013-recon-probe-isolation-and-test-harness.md](./docs/adr/0013-recon-probe-isolation-and-test-harness.md)。
 

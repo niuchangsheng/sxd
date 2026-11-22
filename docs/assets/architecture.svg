@@ -242,7 +242,7 @@
     <g filter="url(#shadow-sm)">
       <rect x="918" y="316" width="318" height="72" rx="8" fill="#FFFFFF" stroke="#DDD6FE"/>
       <text x="932" y="335" class="card-title">静态元数据仓储 (internal/dictionary)</text>
-      <text x="932" y="351" class="card-code font-mono">data/Pieb.db (纯 Go SQLite 只读挂载)</text>
+      <text x="932" y="351" class="card-code font-mono">data/gamedata.db (纯 Go SQLite 只读挂载)</text>
       <text x="932" y="367" class="card-sub">item 10,016 · Missions 2,003 · Quests 1,937</text>
       <text x="932" y="381" class="card-sub">roletype 939 · NPCposition 530 · wishpool 49</text>
     </g>
@@ -271,7 +271,7 @@
       <text x="932" y="605" class="card-title">SWF 字节码求值器 (rebuild_dict.py)</text>
       <text x="932" y="621" class="card-code font-mono">Index.swf · Main.swf · templet.swf</text>
       <text x="932" y="637" class="card-sub">零依赖纯 Python AVM2 DoABC 反编译提取</text>
-      <text x="932" y="651" class="card-sub">原子覆盖 6 张核心表 + _rebuild_meta 溯源</text>
+      <text x="932" y="651" class="card-sub">从零生成 35 张官方静态表 + _rebuild_meta 溯源</text>
     </g>
 
     <g filter="url(#shadow-sm)">
@@ -338,7 +338,7 @@
   <line x1="872" y1="352" x2="914" y2="352" stroke="#7C3AED" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#arrow-purple)"/>
   <line x1="872" y1="428" x2="914" y2="428" stroke="#7C3AED" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#arrow-purple)"/>
 
-  <!-- Offline Pipeline -> Pieb.db -->
+  <!-- Offline Pipeline -> gamedata.db -->
   <path d="M 1236 622 L 1262 622 L 1262 352 L 1240 352" fill="none" stroke="#C026D3" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#arrow-purple)"/>
 
   <!-- Session Layer -> Protocol Layer -->

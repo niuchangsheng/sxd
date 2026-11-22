@@ -33,7 +33,7 @@
   - 内置声明式生命周期中间件（`WithReturnToTown` / `WithFunctionID` / `WithSilentDropPolicy`）与按调度器实例隔离的 `DropTracker` 静默丢包退避；
   - 全部玩法统一使用 `internal/routines/kit`（`kit.Caller` / `kit.Sleep`），断线与取消信号毫秒级响应、绝不吞错。
 - 🔒 **元宝安全红线 & 回包解析铁律**：所有默认自动化链路仅消费免费次数/铜钱/道缘等游戏内常规资源，严禁静默消费元宝；所有业务请求必须解析服务端结果码并按失败语义熔断或冷却（ADR-0015）。
-- 📚 **官方 SWF 同步字典与智能题库**：通过 `scripts/rebuild_dict.py` 从官方最新客户端 SWF（`2026112001`）自动反编译重建 `data/Pieb.db` 静态元数据（10,016 道具 / 939 角色 / 2,003 关卡 / 1,937 任务 / 530 NPC / 49 宝库大奖），并内置 5,719 题智能问答引擎。
+- 📚 **官方 SWF 同步字典与智能题库**：通过 `scripts/rebuild_dict.py` 从官方最新客户端 SWF（`2026112001`）从零反编译构建 `data/gamedata.db`（35 张官方静态表、20,126 行），并内置 5,719 题智能问答引擎。
 - 🌐 **内嵌 Web 控制台**：基于 `go:embed` 打包零外部依赖单文件，提供角色状态监视、按角色/全局玩法动态开关、预设策略切换与实时日志流。
 
 ---
@@ -42,12 +42,12 @@
 
 | 文档 | 说明 |
 | :--- | :--- |
-| [架构与详细设计文档](docs/design.md) | 系统分层架构、核心状态机（`RoleSession` / `PrevActChain` / 事件驱动调度器）、`kit` 原语与 `Pieb.db` 职责 |
+| [架构与详细设计文档](docs/design.md) | 系统分层架构、核心状态机（`RoleSession` / `PrevActChain` / 事件驱动调度器）、`kit` 原语与 `gamedata.db` 静态数据层职责 |
 | [用户使用手册](docs/user-manual.md) | 快速上手、配置文件详解、多区服覆盖、玩法策略调优、Web 控制台操作与 FAQ |
 | [运维部署与排障手册](docs/operations.md) | 生产部署（`systemd`）、日志轮转、监控与 HTTP API、凭据续期、常见故障排查与 CI 校验 |
 | [网络协议规范白皮书](docs/protocol-spec.md) | 二进制帧格式、编解码契约、回包解析铁律与黄金报文 |
 | [玩法自动化规范白皮书](docs/routine-spec.md) | 任务状态机、语义智能熔断、连续丢包退避与工程原语规范 |
-| [数据字典规范](docs/database-dictionary.md) | `data/Pieb.db` 静态表结构说明 |
+| [数据字典规范](docs/database-dictionary.md) | `data/gamedata.db` 官方静态表结构说明 |
 | [架构决策记录 (ADR)](docs/adr/) | 关键工程决策与演进历史 |
 
 ---
@@ -73,13 +73,13 @@ sxd-auto/
 │   │   ├── pvp/                # 本服/仙界/圣域竞技场、神魔大战、劫镖、世界 Boss、跨服天梯
 │   │   └── social/             # 帮派、仙盟、圣盟、灵域猎妖、无量劫海、无尽洞天、魔界远征等
 │   ├── platform/               # 心动等平台全自治 Web 换票驱动与浏览器辅助登录
-│   ├── dictionary/             # data/Pieb.db SQLite 离线静态元数据仓储
+│   ├── dictionary/             # data/gamedata.db SQLite 官方静态元数据仓储
 │   ├── qa/                     # 仙旅奇缘 / 金榜题名智能题库匹配引擎
 │   ├── config/                 # YAML 配置加载、环境变量展开与多区服深度合并覆盖
 │   ├── logging/                # 按大小与时间双维度轮转的本地日志组件
 │   └── web/                    # go:embed 内嵌 Web 控制台与管理 REST API
 ├── configs/                    # 配置模板 (config.example.yaml)
-├── data/                       # 离线静态数据字典 (Pieb.db，由官方 SWF 自动重建)
+├── data/                       # 官方静态数据字典 (gamedata.db，由官方 SWF 从零构建)
 ├── docs/                       # 设计文档、用户手册、运维手册、协议/玩法规范与 ADR
 ├── scripts/                    # 官方 SWF 字典重建 (rebuild_dict.py)、提交与发版脚本
 ├── test/probes/                # 隔离的脱机逆向探针脚本 (强制 //go:build probe)
@@ -92,7 +92,7 @@ sxd-auto/
 
 ### 运行环境
 - **Go**: 1.26+（参见 [go.mod](./go.mod)）
-- **数据字典**: 仓库内置基于 `2026112001` 重建的 `data/Pieb.db`
+- **数据字典**: 仓库内置基于 `2026112001` 从零构建的 `data/gamedata.db`
 
 ### 编译与运行
 
@@ -122,7 +122,7 @@ go build -o bin/sxd-auto ./cmd/server
 # 1. 查看线上最新 cur_ver 与 diff_urls[cur_ver]
 go run -tags=probe test/probes/probe_ticket_extra.go
 
-# 2. 自动拉取官方最新 SWF 并重建 data/Pieb.db 核心表
+# 2. 自动拉取官方最新 SWF 并从零构建 data/gamedata.db 全量表
 python3 scripts/rebuild_dict.py --ver 2026112001 --diff r395-01
 ```
 

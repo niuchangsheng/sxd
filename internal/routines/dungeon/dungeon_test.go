@@ -595,6 +595,15 @@ func (m *mockQuestDungeonRepo) GetWishpoolAward(id int) (*dictionary.WishpoolAwa
 func (m *mockQuestDungeonRepo) GetWishpoolAwards() (map[int]*dictionary.WishpoolAward, error) {
 	return nil, nil
 }
+func (m *mockQuestDungeonRepo) GetNPCQuestAnswer(id int) (*dictionary.NPCQuestAnswer, error) {
+	return nil, dictionary.ErrNotFound
+}
+func (m *mockQuestDungeonRepo) GetBeelzebubBoss(id int32) (*dictionary.BeelzebubBoss, error) {
+	return nil, dictionary.ErrNotFound
+}
+func (m *mockQuestDungeonRepo) GetFaxiangPrayAward(id int32) (*dictionary.FaxiangPrayAward, error) {
+	return nil, dictionary.ErrNotFound
+}
 func (m *mockQuestDungeonRepo) SearchItems(keyword string) ([]*dictionary.Item, error) {
 	return nil, nil
 }
