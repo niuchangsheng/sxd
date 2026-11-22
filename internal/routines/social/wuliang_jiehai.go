@@ -93,6 +93,12 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 战斗结束后回到城镇，避免战斗上下文影响后续 797/3、882 等玩法。
+			defer func() {
+				if ctx.Err() == nil && session.ReturnToTown(ctx, 5*time.Second) {
+					slog.Info("无量劫海结束，已返回城镇场景", "role_id", session.RoleID())
+				}
+			}()
 			st := session.GetPlayerState()
 			slog.Info("无量劫海会话状态", "role_id", session.RoleID(),
 				"town_id", st.TownID, "town_map_id", st.TownMapID, "level", st.Level)

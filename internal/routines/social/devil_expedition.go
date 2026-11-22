@@ -129,6 +129,12 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 战斗结束后回到城镇，避免战斗上下文影响后续玩法。
+			defer func() {
+				if ctx.Err() == nil && session.ReturnToTown(ctx, 5*time.Second) {
+					slog.Info("魔界远征结束，已返回城镇场景", "role_id", session.RoleID())
+				}
+			}()
 
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDDevilExpedition); fErr != nil {
 				slog.Info("魔界远征功能开放状态查询失败，本轮跳过",
