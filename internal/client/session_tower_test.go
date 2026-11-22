@@ -38,18 +38,18 @@ func TestRoleSession_TowerFlow(t *testing.T) {
 			case protocol.ActionIDTowerStartChallenge:
 				cw := protocol.NewWriter()
 				cw.WriteUint8(protocol.TowerResultSuccess) // Result
-				cw.WriteInt32(1001)                       // WarSoulID
-				cw.WriteInt32(300000)                     // WarExp
-				cw.WriteInt32(300)                        // WarFame
-				cw.WriteInt32(50000)                      // WarCoin
+				cw.WriteInt32(1001)                        // WarSoulID
+				cw.WriteInt32(300000)                      // WarExp
+				cw.WriteInt32(300)                         // WarFame
+				cw.WriteInt32(50000)                       // WarCoin
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerStartChallenge, cw.Bytes()))
 
 			case protocol.ActionIDTowerResetLayer:
 				rw := protocol.NewWriter()
 				rw.WriteUint8(protocol.TowerResultSuccess) // Result
-				rw.WriteUint8(1)                          // Layer
+				rw.WriteUint8(1)                           // Layer
 				rw.WriteUint16(50)                         // ResetIngot
-				rw.WriteUint8(0)                          // ResetNum
+				rw.WriteUint8(0)                           // ResetNum
 				_ = protocol.WritePacket(serverConn, protocol.NewPacket(protocol.ActionIDTowerResetLayer, rw.Bytes()))
 
 			case protocol.ActionIDTowerStartAutoChallenge:
