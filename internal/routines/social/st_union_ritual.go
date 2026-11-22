@@ -127,8 +127,8 @@ func tryStUnionIncenseOnSectSession(ctx context.Context, session *client.RoleSes
 		return nil
 	}
 	head := godResp.Payload
-	if len(head) > 96 {
-		head = head[:96]
+	if len(head) > 400 {
+		head = head[:400]
 	}
 	slog.Info("仙盟神像面板（城镇会话）", "role_id", session.RoleID(),
 		"len", len(godResp.Payload), "hex", hex.EncodeToString(head))
@@ -179,8 +179,8 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			_ = call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo, callTimeout)
 			if godResp := call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo, callTimeout); godResp != nil {
 				head := godResp.Payload
-				if len(head) > 96 {
-					head = head[:96]
+				if len(head) > 400 {
+					head = head[:400]
 				}
 				slog.Info("仙盟神像面板", "role_id", session.RoleID(),
 					"len", len(godResp.Payload), "hex", hex.EncodeToString(head))
