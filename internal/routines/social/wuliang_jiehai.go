@@ -39,6 +39,24 @@ const (
 	wuliangMaxLevel int32 = 300
 )
 
+// wuliangPause 在连续动作之间加入短暂拟人间隔。
+//
+// 2026-11-22 实测：853/1 与 853/2、853/3 与 853/4 如果在同一毫秒内连发，
+// 服务端会静默丢弃后一条；相隔 300ms 以上即可正常回包（探针与线上对比）。
+func wuliangPause(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 // wuliangChapterForLevel 返回关卡所属章节 id（1..4）。
 func wuliangChapterForLevel(level int32) int32 {
 	switch {
@@ -72,6 +90,9 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			st := session.GetPlayerState()
+			slog.Info("无量劫海会话状态", "role_id", session.RoleID(),
+				"town_id", st.TownID, "town_map_id", st.TownMapID, "level", st.Level)
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
 				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
 				if err != nil {
@@ -132,8 +153,15 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				chapter := wuliangChapterForLevel(target)
 				if chapter != lastChapter {
 					lastChapter = chapter
+					slog.Info("无量劫海章节请求锚点", "role_id", session.RoleID(),
+						"chapter_id", chapter,
+						"last_business", fmt.Sprintf("0x%08X", session.LastBusinessActionID()),
+						"last_sent", fmt.Sprintf("0x%08X", session.LastActionID()),
+						"last_rx", fmt.Sprintf("0x%08X", session.LastRxActionID()))
 					// 官方客户端会先取章节面板，并用其中的 now_level 作为挑战关卡。
 					// 面板若被静默丢弃，退回 mission_level+1 推断。
+					// 853/1 与 853/2 连发会被服务端限流丢弃，先拟人间隔。
+					wuliangPause(ctx, 400*time.Millisecond)
 					chapterResp := call(protocol.BuildEraInfiniteChapterPacket(chapter),
 						protocol.ActionIDEraInfiniteChapter, callTimeout)
 					if chapterResp == nil {
@@ -161,6 +189,7 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				}
 				if !deployReady {
 					deployReady = true
+					wuliangPause(ctx, 300*time.Millisecond)
 					if resp := call(protocol.BuildEraInfiniteDeployTypeSeqPacket(),
 						protocol.ActionIDEraInfiniteDeployTypeSeq, callTimeout); resp != nil {
 						ids, dErr := protocol.ParseEraInfiniteDeployTypeSeq(resp.Payload)
@@ -175,13 +204,19 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 					}
 					if deployID != 0 {
 						send(protocol.BuildEraInfiniteSuperDeployListPacket(deployID), "854/1 deploy")
+						wuliangPause(ctx, 300*time.Millisecond)
 					}
 				}
 				send(protocol.BuildEraInfiniteMonsterTeamPacket(target, 1), "853/3 team")
+				// 853/3 与 853/4 连发会被服务端限流，间隔 500ms 再挑战。
+				wuliangPause(ctx, 500*time.Millisecond)
 
 				slog.Info("无量劫海发起挑战", "role_id", session.RoleID(),
 					"chapter_id", chapter, "now_level", target,
-					"deploy_id", deployID, "losses", losses)
+					"deploy_id", deployID, "losses", losses,
+					"last_business", fmt.Sprintf("0x%08X", session.LastBusinessActionID()),
+					"last_sent", fmt.Sprintf("0x%08X", session.LastActionID()),
+					"last_rx", fmt.Sprintf("0x%08X", session.LastRxActionID()))
 				fightResp := call(protocol.BuildEraInfiniteFightPacket(target),
 					protocol.ActionIDEraInfiniteFight, fightTimeout)
 				if fightResp == nil {
