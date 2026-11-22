@@ -66,6 +66,12 @@ const (
 	MissionResultSuccess uint8 = 0x0A
 	// MissionResultNotEnoughPower 体力不足状态码 (0x0C = 12)
 	MissionResultNotEnoughPower uint8 = 0x0C
+	// MissionResultAwardAlreadyPicked 重复挑战已通关副本时 pickup_award 的返回码。
+	//
+	// 2026-11-22 实机：任务需要重复击杀同一关卡时，再次通关后 open_box 成功，
+	// 但 pickup_award 返回 23（奖励已领取/本次无可领奖励）。关卡本身已结算，
+	// 自动化应按「已通关」记账，但不得重复累加本地收益。
+	MissionResultAwardAlreadyPicked uint8 = 23
 	// MissionResultPackFull 背包已满状态码 (0x0D = 13)
 	MissionResultPackFull uint8 = 0x0D
 )

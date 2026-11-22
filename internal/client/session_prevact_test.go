@@ -85,7 +85,7 @@ func TestCallWithPrevActResync(t *testing.T) {
 // 「最后发出的包」：服务端在两次请求之间推送通知后，下一次请求的尾部必须携带
 // 该推送的 ActionID。抓包 /tmp/wuliangjiehai.pcapng 中 853/2 的 PrevAct 就是
 // 前一轮收到的 52/0 回包/推送；带参数请求若链不一致会被静默丢弃。
-func TestSendUsesLastReceivedPushAsPrevAct(t *testing.T) {
+func TestSendUsesLastBusinessSendAsPrevAct(t *testing.T) {
 	const (
 		firstAct uint32 = 0x03530004
 		pushAct  uint32 = 0x000D0019
@@ -134,7 +134,7 @@ func TestSendUsesLastReceivedPushAsPrevAct(t *testing.T) {
 		t.Fatalf("first call: %v", err)
 	}
 
-	// 服务端主动推送：客户端应收下并把它作为后续 PrevAct 锚点。
+	// 服务端主动推送：应更新 LastRxActionID，但不得影响业务 PrevAct 锚点。
 	_ = protocol.WritePacket(c2, protocol.NewPacket(pushAct, []byte{0}))
 	waitDeadline := time.Now().Add(time.Second)
 	for sess.LastRxActionID() != pushAct && time.Now().Before(waitDeadline) {
@@ -153,8 +153,9 @@ func TestSendUsesLastReceivedPushAsPrevAct(t *testing.T) {
 	}
 	got := uint32(nextPayload[4])<<24 | uint32(nextPayload[5])<<16 |
 		uint32(nextPayload[6])<<8 | uint32(nextPayload[7])
-	if got != pushAct {
-		t.Fatalf("PrevAct = 0x%08X, want 推送动作 0x%08X", got, pushAct)
+	// PrevAct 取最后一条发送的业务动作 firstAct，而不是推送动作。
+	if got != firstAct {
+		t.Fatalf("PrevAct = 0x%08X, want 最后业务动作 0x%08X (push=0x%08X)", got, firstAct, pushAct)
 	}
 }
 

@@ -4453,7 +4453,19 @@ func challengeStoryMission(
 		resetTownScene(session)
 		return false
 	}
-	if pickResp.Payload[0] != 0 {
+	// 回包解析铁律：pickup_award 首字节为结果码。
+	//   0  = 成功领取；
+	//   23 = 重复挑战已通关副本（任务需重复击杀）时服务端返回「奖励已领取/无奖励」，
+	//        关卡本身已结算，应按通关记账但不重复累加本地收益。
+	rewardGranted := false
+	switch pickResp.Payload[0] {
+	case 0:
+		rewardGranted = true
+	case protocol.MissionResultAwardAlreadyPicked:
+		slog.Info("副本重复挑战无新增奖励，按已通关记账",
+			"role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name,
+			"result", pickResp.Payload[0])
+	default:
 		slog.Warn("副本结算奖励拾取失败，放弃本关记账",
 			"role_id", session.RoleID(), "mission_id", m.ID, "name", m.Name,
 			"result", pickResp.Payload[0])
@@ -4468,10 +4480,12 @@ func challengeStoryMission(
 	time.Sleep(1200 * time.Millisecond)
 
 	remStamina, _ := session.ConsumeStamina(5)
-	session.AddRewards(2500, 12000)
 	*totalCostStamina += 5
-	*totalGainExp += 2500
-	*totalGainCoins += 12000
+	if rewardGranted {
+		session.AddRewards(2500, 12000)
+		*totalGainExp += 2500
+		*totalGainCoins += 12000
+	}
 	clearedMissions[m.ID] = true
 
 	slog.Info("任务关卡推进挑战成功",
@@ -4479,6 +4493,7 @@ func challengeStoryMission(
 		"mission_id", m.ID,
 		"mission_name", m.Name,
 		"waves", len(monsterTeams),
+		"reward_granted", rewardGranted,
 		"remaining_stamina", remStamina,
 	)
 	return true

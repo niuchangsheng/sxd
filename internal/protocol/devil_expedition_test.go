@@ -66,7 +66,7 @@ func TestParseDevilMissionDataM6(t *testing.T) {
 
 func TestBuildDevilPackets(t *testing.T) {
 	start := protocol.BuildDevilStartSinglePacket(protocol.DevilMissionYinYang)
-	if start.ActionID != protocol.ActionIDDevilStartExpeditionSingle || !start.HasPrevAct || len(start.Payload) != 5 || start.Payload[0] != 68 {
+	if start.ActionID != protocol.ActionIDDevilStartExpeditionSingle || !start.PrevActFromLastSent || len(start.Payload) != 5 || start.Payload[0] != 68 {
 		t.Fatalf("429/63 封包不符: %+v", start)
 	}
 	move := protocol.BuildDevilMoveToPacket(774, 481, 436, 413)

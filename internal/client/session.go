@@ -2136,15 +2136,15 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 				p = &protocol.Packet{ActionID: p.ActionID, Payload: cloned, PrevActFromLastSent: true}
 			}
 		}
-		// PrevAct 链以「最后收到的包」为锚点；会话尚未收到任何
-		// 包时退回最后发送动作，保证登录早期请求也有合法前序。
-		// 心跳回包 (0/75) 同样不作为锚点，改用最后一条业务动作。
-		prev := s.lastRxActionID.Load()
-		if prev == 0 || prev == s.cfg.HeartbeatActionID {
-			if b := s.lastBusinessActionID.Load(); b != 0 {
-				prev = b
-			} else if prev == 0 {
-				prev = s.lastActionID.Load()
+		// PrevAct 链与 PrevActFromLastSent 一致，取「上一条发送的业务动作」。
+		// 早期实现使用最后收到的包，但官方抓包与 2026-11-22 实测都表明
+		// 服务端校验的是上一条业务请求；推送/心跳回包会把旧锚点带偏，
+		// 导致 2/107、357/0 等请求被静默丢弃。
+		prev := s.lastBusinessActionID.Load()
+		if prev == 0 {
+			prev = s.lastActionID.Load()
+			if prev == s.cfg.HeartbeatActionID {
+				prev = 0
 			}
 		}
 		if !p.PrevActFromLastSent && prev != 0 {
