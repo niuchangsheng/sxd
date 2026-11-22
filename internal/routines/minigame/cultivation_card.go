@@ -150,11 +150,16 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 			awarded := 0
 			attempts := 0
 			taskDrops := 0
-			const taskGroups = 4
-			for group := int32(1); group <= taskGroups && attempts < maxCultivationTaskAward; group++ {
+			// 2026-11-22 实机探针：859/5 的合法 step 为 1/3/4/5，
+			// step=2 不存在且会被服务端静默丢弃；step=5 回包为空列表。
+			// 只请求真实存在的 step，避免每次巡检空等 5 秒。
+			taskSteps := []int32{1, 3, 4, 5}
+			for _, group := range taskSteps {
+				if attempts >= maxCultivationTaskAward || ctx.Err() != nil {
+					break
+				}
 				taskResp := call(protocol.BuildCultivationCardTaskInfoPacket(group), protocol.ActionIDCultivationTaskInfo)
 				if taskResp == nil {
-					// 实测 group=2 会被静默丢弃；跳过该组继续检查其余分组。
 					taskDrops++
 					continue
 				}
@@ -201,8 +206,8 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 					}
 				}
 			}
-			if taskDrops >= taskGroups {
-				// 四组任务面板全部被静默丢弃（2026-11-15 20:05 实测整点批量唤醒时
+			if taskDrops >= len(taskSteps) {
+				// 全部任务面板被静默丢弃（2026-11-15 20:05 实测整点批量唤醒时
 				// 859/3、859/5 连续无回包）：本轮已无收益，1 小时后再试。
 				return scheduler.NewCooldown(time.Hour, "神仙卡牌任务面板全部无回包")
 			}
