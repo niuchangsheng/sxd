@@ -43,6 +43,13 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 挑战结束后回到城镇：797/22、797/23 在战斗上下文中会被静默丢弃，
+			// 而本玩法战斗冷却 45 秒后会立即重试，必须在两轮之间复位城镇场景。
+			defer func() {
+				if ctx.Err() == nil && session.ReturnToTown(ctx, 5*time.Second) {
+					slog.Info("无尽洞天结束，已返回城镇场景", "role_id", session.RoleID())
+				}
+			}()
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
 				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
 				if err != nil {
