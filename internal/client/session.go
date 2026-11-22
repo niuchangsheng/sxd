@@ -188,11 +188,16 @@ type RoleSession struct {
 	// 而携带上一条业务动作可正常回包；Mod 4 get_sections 对两种锚点都接受。
 	// 因此 PrevActFromLastSent 统一使用本字段，心跳不参与业务尾链。
 	lastBusinessActionID atomic.Uint32
-	// lastAckActionID 记录最后一次收到回包的业务 ActionID。
+	// lastAckActionID 记录最后一次收到回包的业务 ActionID（连接内有效）。
 	// 被服务端静默丢弃的请求也会推进 lastActionID，但不会推进本字段；
 	// 需要严格 PrevAct 链的协议 (如 852/16) 应以本字段作为锚点。
 	lastAckActionID atomic.Uint32
-	lastSendTime    atomic.Int64
+	// chainDirty 标记 PrevAct 业务链已失步：某个带参请求超时（服务端静默丢弃）
+	// 后，客户端锚点已前进而服务端链未前进。下一次带参请求改用 lastAckActionID
+	// （服务端最后确认的动作）作为锚点，避免用一个服务端从未处理过的动作去
+	// 污染后续所有模块的请求。收到任意业务回包后自动清除。
+	chainDirty   atomic.Bool
+	lastSendTime atomic.Int64
 	// connGeneration 每次成功建立新连接后递增，供「主动重建会话」等待新连接使用。
 	connGeneration atomic.Uint64
 	// connSince 最近一次建立连接的时间戳 (UnixNano)，用于判断会话已存活多久。
@@ -782,12 +787,51 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 
 	select {
 	case <-ctx.Done():
+		// 带参请求超时通常意味着服务端静默丢弃：客户端锚点已前进而服务端链
+		// 未前进。标记失步，下一次带参请求回退到 lastAckActionID，避免连环丢包。
+		if requestUsesBusinessChain(req) {
+			s.chainDirty.Store(true)
+		}
 		return nil, ctx.Err()
 	case <-s.ctx.Done():
 		return nil, ErrSessionClosed
 	case p := <-ch:
 		return p, nil
 	}
+}
+
+// requestUsesBusinessChain 判断请求是否会写入 PrevAct 业务尾链。
+func requestUsesBusinessChain(p *protocol.Packet) bool {
+	if p == nil {
+		return false
+	}
+	if p.PrevActFromLastSent || p.HasPrevAct {
+		return true
+	}
+	mod := p.ActionID >> 16
+	return mod == 3 || mod == 4 || mod == 32 || p.ActionID == protocol.ActionIDItemGetPackList
+}
+
+// businessAnchor 返回带参请求应写入的 PrevAct 锚点。
+//
+// 正常取「最后发送的业务动作」（与官方 DataBase.netCall 的 tmpBuff 一致）；
+// 链已失步时改用 lastAckActionID（服务端最后确认的动作），避免继续用被丢弃
+// 的动作污染后续请求。
+func (s *RoleSession) businessAnchor() uint32 {
+	if s.chainDirty.Load() {
+		if ack := s.lastAckActionID.Load(); ack != 0 && ack != s.cfg.HeartbeatActionID {
+			return ack
+		}
+	}
+	anchor := s.lastBusinessActionID.Load()
+	if anchor != 0 {
+		return anchor
+	}
+	anchor = s.lastActionID.Load()
+	if anchor == s.cfg.HeartbeatActionID {
+		return 0
+	}
+	return anchor
 }
 
 // DefaultGatewayAuthenticator 角色默认主服网关认证握手、城镇场景与全量资产四步初始化实现。
@@ -2168,13 +2212,7 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 			// 尾链被静默丢弃，改用最后一条业务动作立即正常回包。因此锚点取
 			// lastBusinessActionID，回退到 lastActionID 仅覆盖登录早期尚无
 			// 业务请求的情况。
-			anchor := s.lastBusinessActionID.Load()
-			if anchor == 0 {
-				anchor = s.lastActionID.Load()
-				if anchor == s.cfg.HeartbeatActionID {
-					anchor = 0
-				}
-			}
+			anchor := s.businessAnchor()
 			if anchor != 0 && len(p.Payload) >= 4 {
 				cloned := make([]byte, len(p.Payload))
 				copy(cloned, p.Payload)
@@ -2186,13 +2224,7 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 		// 早期实现使用最后收到的包，但官方抓包与 2026-11-22 实测都表明
 		// 服务端校验的是上一条业务请求；推送/心跳回包会把旧锚点带偏，
 		// 导致 2/107、357/0 等请求被静默丢弃。
-		prev := s.lastBusinessActionID.Load()
-		if prev == 0 {
-			prev = s.lastActionID.Load()
-			if prev == s.cfg.HeartbeatActionID {
-				prev = 0
-			}
-		}
+		prev := s.businessAnchor()
 		if !p.PrevActFromLastSent && prev != 0 {
 			if p.ActionID == protocol.ActionIDItemGetPackList && len(p.Payload) == 0 {
 				cloned := make([]byte, len(p.Payload)+4)
@@ -2345,8 +2377,11 @@ func (s *RoleSession) runLoop() {
 		s.connSince.Store(time.Now().UnixNano())
 		s.lastActionID.Store(0)
 		s.lastBusinessActionID.Store(0)
-		// 新连接的 PrevAct 链在服务端从零开始，必须清掉上一条连接的收包锚点。
+		// 新连接的 PrevAct 链在服务端从零开始，必须清掉上一条连接的锚点；
+		// lastAckActionID 也属于旧连接，保留会让重连后的链回退到旧动作。
 		s.lastRxActionID.Store(0)
+		s.lastAckActionID.Store(0)
+		s.chainDirty.Store(false)
 		s.writeMu.Unlock()
 
 		// 2. 启动读循环通道
@@ -2608,6 +2643,8 @@ func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
 		// 心跳会周期性回包，但服务端不把它计入业务 PrevAct 链，必须排除。
 		if pkt.ActionID != protocol.ActionIDPlayerHeartbeat {
 			s.lastAckActionID.Store(pkt.ActionID)
+			// 服务端重新确认了链路，失步标记解除。
+			s.chainDirty.Store(false)
 		}
 		select {
 		case ch <- pkt:
