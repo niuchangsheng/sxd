@@ -440,8 +440,8 @@ func TestTreasureHouse_BuildersUseDynamicPrevAct(t *testing.T) {
 
 	// 594/4 例外：官方请求为裸 [Byte flag]，不能追加 PrevAct。
 	flagPkt := protocol.BuildTreasureHouseUseFreeFlagPacket(1, 0)
-	if flagPkt.HasPrevAct || len(flagPkt.Payload) != 1 || flagPkt.Payload[0] != 1 {
-		t.Errorf("594/4 应为裸 1 字节 [Byte 1], 实际 %+v", flagPkt)
+	if !flagPkt.PrevActFromLastSent || len(flagPkt.Payload) != 5 || flagPkt.Payload[0] != 1 {
+		t.Errorf("594/4 应为 [Byte 1][4B PrevAct], 实际 %+v", flagPkt)
 	}
 }
 
