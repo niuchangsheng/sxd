@@ -52,6 +52,16 @@ func TestBeelzebubTrialsRoutine_LevelGate(t *testing.T) {
 	_ = s.Start(ctx)
 	defer s.Close()
 
+	// BaseRoutine 在会话非激活时会直接返回 ErrNotConnected（5 分钟短重试），
+	// 本用例要验证的是玩法自身的等级卫语句，必须先等到 sandbox 会话激活。
+	deadline := time.Now().Add(2 * time.Second)
+	for s.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if s.State() != client.StateActive {
+		t.Fatalf("sandbox 会话未激活: %s", s.State())
+	}
+
 	// 角色等级 60 < 门槛 70
 	s.UpdatePlayerState(func(ps *client.PlayerState) {
 		ps.Level = 60
