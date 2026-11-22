@@ -46,7 +46,7 @@ func eraInfinitePrevPacket(actionID uint32, ints ...int32) *Packet {
 	}
 	w.WriteUint32(0) // PrevAct 占位，由会话层覆盖
 	pkt := NewPacket(actionID, w.Bytes())
-	pkt.HasPrevAct = true
+	pkt.PrevActFromLastSent = true
 	return pkt
 }
 
@@ -94,6 +94,18 @@ func BuildEraInfiniteChapterPacket(chapterID int32) *Packet {
 	return eraInfinitePrevPacket(ActionIDEraInfiniteChapter, chapterID)
 }
 
+// BuildEraInfiniteChapterPacketWithPrev 构造带显式 PrevAct 的章节面板 (853/2)。
+//
+// 章节扫描的两次请求之间可能间隔 4 秒超时，期间主服会发送 0/23 心跳；若继续用
+// HasPrevAct（最后收到的包），下一章的尾链会变成心跳动作，服务端静默丢弃
+// （2026-11-22 实测）。这里固定使用最后一条业务回包（LastAckActionID）作锚点。
+func BuildEraInfiniteChapterPacketWithPrev(chapterID int32, prevAct uint32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(chapterID)
+	w.WriteUint32(prevAct)
+	return NewPacket(ActionIDEraInfiniteChapter, w.Bytes())
+}
+
 // BuildEraInfiniteMonsterTeamPacket 构造怪物队伍查询 (853/3)。
 func BuildEraInfiniteMonsterTeamPacket(nowLevel, team int32) *Packet {
 	return eraInfinitePrevPacket(ActionIDEraInfiniteMonsterTeam, nowLevel, team)
@@ -108,7 +120,7 @@ func BuildEraInfiniteFightPacket(nowLevel int32) *Packet {
 	w.WriteUint16(0) // 空列表
 	w.WriteUint32(0) // PrevAct 占位
 	pkt := NewPacket(ActionIDEraInfiniteFight, w.Bytes())
-	pkt.HasPrevAct = true
+	pkt.PrevActFromLastSent = true
 	return pkt
 }
 

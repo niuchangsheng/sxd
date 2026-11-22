@@ -83,8 +83,13 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				probed++
 				lastLevel := int32(-1)
 				for fights < maxWuliangFights && ctx.Err() == nil {
-					chapterResp := probeChapter(protocol.BuildEraInfiniteChapterPacket(chapterID),
-						protocol.ActionIDEraInfiniteChapter)
+					// 用最后一条业务回包作显式锚点，避免 4 秒探测间隔内的心跳
+					// 把 PrevAct 推进到 0/23 导致 853/2 被静默丢弃。
+					chapterPkt := protocol.BuildEraInfiniteChapterPacket(chapterID)
+					if anchor := session.LastAckActionID(); anchor != 0 {
+						chapterPkt = protocol.BuildEraInfiniteChapterPacketWithPrev(chapterID, anchor)
+					}
+					chapterResp := probeChapter(chapterPkt, protocol.ActionIDEraInfiniteChapter)
 					if chapterResp == nil {
 						dropped++
 						slog.Info("无量劫海章节面板无回包，跳过该章节", "role_id", session.RoleID(),

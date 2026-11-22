@@ -57,7 +57,7 @@ func levitatePrevPacket(actionID uint32, typ uint8) *Packet {
 	w.WriteUint8(typ)
 	w.WriteUint32(0) // PrevAct 占位，由会话层覆盖
 	pkt := NewPacket(actionID, w.Bytes())
-	pkt.HasPrevAct = true
+	pkt.PrevActFromLastSent = true
 	return pkt
 }
 

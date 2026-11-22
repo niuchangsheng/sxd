@@ -44,7 +44,7 @@ func eraRebirthAttrPrevPacket(actionID uint32, prefix []byte) *Packet {
 	payload = append(payload, prefix...)
 	payload = append(payload, 0, 0, 0, 0)
 	pkt := NewPacket(actionID, payload)
-	pkt.HasPrevAct = true
+	pkt.PrevActFromLastSent = true
 	return pkt
 }
 

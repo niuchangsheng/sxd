@@ -43,7 +43,7 @@ func TestParseEraInfiniteFightResult(t *testing.T) {
 
 func TestBuildEraInfiniteFightPacket(t *testing.T) {
 	pkt := protocol.BuildEraInfiniteFightPacket(3)
-	if len(pkt.Payload) != 10 || !pkt.HasPrevAct {
+	if len(pkt.Payload) != 10 || !pkt.PrevActFromLastSent {
 		t.Fatalf("853/4 封包长度不符: %d", len(pkt.Payload))
 	}
 	// [Int 3][Short 0][PrevAct 占位]
