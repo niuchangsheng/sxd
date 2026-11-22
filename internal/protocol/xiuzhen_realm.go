@@ -35,6 +35,8 @@ const (
 	XiuZhenRealmLessPoint    uint8 = 2
 	XiuZhenRealmCondLimit    uint8 = 3
 	XiuZhenRealmItemPackFull uint8 = 4
+	// XiuZhenRealmNoAward 线上实测 6：暂无可领取奖励（点数未累积/已达本轮上限）。
+	XiuZhenRealmNoAward uint8 = 6
 )
 
 // XiuZhenRealmReward 表示礼包中的一项奖励。
@@ -126,6 +128,8 @@ func XiuZhenRealmResultText(code uint8) string {
 		return "条件未满足"
 	case XiuZhenRealmItemPackFull:
 		return "背包已满"
+	case XiuZhenRealmNoAward:
+		return "暂无可领取奖励"
 	default:
 		return fmt.Sprintf("未知结果码(%d)", code)
 	}

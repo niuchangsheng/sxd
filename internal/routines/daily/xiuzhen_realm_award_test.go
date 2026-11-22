@@ -29,8 +29,14 @@ func TestXiuZhenRealmAwardRoutine_Success(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewXiuZhenRealmAwardRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("xiuzhen realm award: %v", err)
+	// 领取成功后 2 小时再检查（奖励可累积重复领取）。
+	err := NewXiuZhenRealmAwardRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("领取成功应返回 2 小时冷却, got %v", err)
+	}
+	if d := time.Until(cd.Until); d < 90*time.Minute || d > 130*time.Minute {
+		t.Fatalf("冷却时长 = %v, want ~2h", d)
 	}
 	if claimCalls.Load() != 1 {
 		t.Fatalf("应领取一次, calls = %d", claimCalls.Load())
@@ -49,8 +55,10 @@ func TestXiuZhenRealmAwardRoutine_MainSilentStillClaims(t *testing.T) {
 	})
 	defer sess.Close()
 
-	if err := NewXiuZhenRealmAwardRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("主面板无回包不应阻断领取: %v", err)
+	err := NewXiuZhenRealmAwardRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("主面板无回包不应阻断领取, got %v", err)
 	}
 	if claimCalls.Load() != 1 {
 		t.Fatalf("主面板无回包时仍应尝试领取, calls = %d", claimCalls.Load())
@@ -77,6 +85,14 @@ func TestXiuZhenRealmAwardRoutine_ResultCodes(t *testing.T) {
 			code: protocol.XiuZhenRealmItemPackFull,
 			check: func(err error) bool {
 				return errors.Is(err, scheduler.ErrBagFull)
+			},
+		},
+		{
+			name: "暂无可领取奖励",
+			code: protocol.XiuZhenRealmNoAward,
+			check: func(err error) bool {
+				var cd *scheduler.CooldownError
+				return errors.As(err, &cd)
 			},
 		},
 		{

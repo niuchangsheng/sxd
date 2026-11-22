@@ -92,7 +92,9 @@ func NewXiuZhenRealmAwardRoutine() scheduler.ActivityRoutine {
 			case protocol.XiuZhenRealmSuccess:
 				slog.Info("修真境界礼包领取成功", "role_id", session.RoleID(),
 					"rewards", xiuzhenRealmRewardDetail(res.Rewards))
-				return nil
+				// 礼包奖励随境界点累积可重复领取（实测 20 分钟后再次领取成功），
+				// 2 小时后再检查，避免 Cron 直接等到次日。
+				return scheduler.NewCooldown(2*time.Hour, "修真境界礼包已领取，2 小时后再检查")
 			case protocol.XiuZhenRealmIsGet:
 				slog.Info("修真境界礼包今日已领取，等待次日重置", "role_id", session.RoleID())
 				return scheduler.NewCooldownUntil(scheduler.NextDailyReset(time.Now()),
@@ -106,6 +108,9 @@ func NewXiuZhenRealmAwardRoutine() scheduler.ActivityRoutine {
 			case protocol.XiuZhenRealmItemPackFull:
 				slog.Info("修真境界礼包领取失败：背包已满", "role_id", session.RoleID())
 				return scheduler.ErrBagFull
+			case protocol.XiuZhenRealmNoAward:
+				slog.Info("修真境界暂无可领取奖励，1 小时后再检查", "role_id", session.RoleID())
+				return scheduler.NewCooldown(time.Hour, "修真境界暂无可领取奖励")
 			default:
 				slog.Info("修真境界礼包领取未成功", "role_id", session.RoleID(),
 					"result", res.Result, "result_text", protocol.XiuZhenRealmResultText(res.Result))
