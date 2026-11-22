@@ -45,6 +45,13 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 战斗结束后回到城镇，避免把战斗上下文留给后续 453/3、669/3 等
+			// 严格校验城镇状态的玩法。
+			defer func() {
+				if ctx.Err() == nil && session.ReturnToTown(ctx, 5*time.Second) {
+					slog.Info("灵域猎妖结束，已返回城镇场景", "role_id", session.RoleID())
+				}
+			}()
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
 				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
 				if err != nil {

@@ -50,6 +50,12 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 挑战结束后回到城镇，避免战斗上下文影响后续玩法。
+			defer func() {
+				if ctx.Err() == nil && session.ReturnToTown(ctx, 5*time.Second) {
+					slog.Info("五行天宫结束，已返回城镇场景", "role_id", session.RoleID())
+				}
+			}()
 
 			call := func(pkt *protocol.Packet, act uint32, timeout time.Duration) *protocol.Packet {
 				cCtx, cancel := context.WithTimeout(ctx, timeout)

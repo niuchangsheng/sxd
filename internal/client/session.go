@@ -1185,6 +1185,33 @@ func (s *RoleSession) EnterTownWithAnchor(ctx context.Context, townID int32, anc
 	return s.enterTownWithPacket(ctx, townID, protocol.BuildEnterTownWithPrevActPacket(townID, anchor))
 }
 
+// ReturnToTown 在战斗/活动结束后回到当前城镇，恢复后续玩法所需的城镇上下文。
+//
+// 2026-11-22 实测：五行天宫 453/3、灵域猎妖 669/3 等动作在上一玩法留下战斗
+// 上下文时会被服务端静默丢弃；回到城镇后同类请求恢复正常。仅发送普通
+// enter_town，不重放登录握手。返回 true 表示服务端确认进入城镇。
+func (s *RoleSession) ReturnToTown(ctx context.Context, timeout time.Duration) bool {
+	if s == nil || s.State() != StateActive {
+		return false
+	}
+	townID := int32(s.GetPlayerState().TownMapID)
+	if townID <= 0 {
+		townID = 3
+	}
+	anchor := s.LastAckActionID()
+	if anchor == 0 {
+		anchor = s.LastBusinessActionID()
+	}
+	c, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	code, err := s.EnterTownWithAnchor(c, townID, anchor)
+	if err != nil {
+		slog.Debug("返回城镇失败", "role_id", s.RoleID(), "town_id", townID, "err", err)
+		return false
+	}
+	return code == 0
+}
+
 func (s *RoleSession) enterTownWithPacket(ctx context.Context, townID int32, pkt *protocol.Packet) (uint8, error) {
 	timeout := 8 * time.Second
 	if s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox" {
