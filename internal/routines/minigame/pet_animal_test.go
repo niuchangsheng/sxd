@@ -246,3 +246,49 @@ func TestPetAnimalRoutine_InfoOKFeedDroppedBacksOff(t *testing.T) {
 		t.Fatalf("熔断唤醒时间 = %s, want %s", cd.Until, exp)
 	}
 }
+
+// TestPetAnimalRoutine_CritDoesNotConsumeOrStaleBreak 验证暴击（Hit>0）不消耗
+// 每日次数时：不触发面板复核、不计入 stale 熔断，继续培养直到次数归零。
+func TestPetAnimalRoutine_CritDoesNotConsumeOrStaleBreak(t *testing.T) {
+	var feedCalls, infoCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDPetAnimalInfo:
+			infoCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildPetAnimalInfoResultPacket(protocol.PetAnimalInfo{
+				Lv: 2, Star: 9, Exp: 180228, FeedNum: 3,
+			}))
+		case protocol.ActionIDPetAnimalFeed:
+			n := feedCalls.Add(1)
+			var hit uint8
+			feedNum := int32(3)
+			switch n {
+			case 1:
+				hit = 1 // 小暴击，不消耗次数
+			case 2:
+				hit = 2 // 大暴击，不消耗次数
+			case 3:
+				feedNum = 2
+			case 4:
+				feedNum = 1
+			default:
+				feedNum = 0
+			}
+			_ = protocol.WritePacket(conn, protocol.BuildPetAnimalFeedResultPacket(protocol.PetAnimalFeedResult{
+				Result: protocol.PetAnimalResultSuccess, Lv: 2, Star: 9,
+				Exp: 180228 + int32(n)*100, ExpAdd: 100,
+				FeedType: protocol.PetAnimalFeedTypeCoin, FeedNum: feedNum, Hit: hit,
+			}))
+		}
+	})
+
+	if err := NewPetAnimalRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("pet animal: %v", err)
+	}
+	if got := feedCalls.Load(); got != 5 {
+		t.Fatalf("应培养 5 次直到次数归零, got %d", got)
+	}
+	if got := infoCalls.Load(); got != 1 {
+		t.Fatalf("暴击与正常递减都不应触发额外面板查询, info calls = %d", got)
+	}
+}

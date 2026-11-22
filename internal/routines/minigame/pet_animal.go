@@ -17,10 +17,12 @@ import (
 
 const (
 	// maxPetAnimalFeeds 单轮最大培养次数，防止服务端异常时死循环。
-	// 暴击培养不消耗每日次数，需允许超过每日 20 次的尝试才能把次数耗完。
-	maxPetAnimalFeeds = 100
-	// maxPetAnimalStaleFeeds 连续多少次回包/面板次数都不递减后判定异常熔断。
-	maxPetAnimalStaleFeeds = 20
+	// 暴击培养不消耗每日次数，实际培养次数会远大于每日 20 次；
+	// 100 次仅覆盖约 80% 暴击率下的极端情况，这里放宽到 200。
+	maxPetAnimalFeeds = 200
+	// maxPetAnimalStaleFeeds 连续多少次「非暴击」培养回包/面板次数都不递减
+	// 后判定服务端异常熔断。暴击不计入（Hit>0 时次数本就不消耗）。
+	maxPetAnimalStaleFeeds = 5
 	// petAnimalCallTimeout 单次协议请求超时。
 	petAnimalCallTimeout = 8 * time.Second
 	// petAnimalFeedInterval 连续培养之间的节流间隔。
@@ -146,6 +148,7 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 			remaining := info.FeedNum
 			feeds := 0
 			staleFeeds := 0
+			crits := 0
 			for feeds < attemptLimit && remaining > 0 {
 				if ctx.Err() != nil {
 					return nil
@@ -188,37 +191,53 @@ func NewPetAnimalRoutine() scheduler.ActivityRoutine {
 					}
 					feeds++
 					remaining = res.FeedNum
-					if remaining >= prevRemaining {
-						// 线上实测首次培养的回包可能仍带旧次数；以面板
-						// feed_num 为准复核，避免误判为“次数未递减”而提前退出。
-						if info := fetchInfo(); info != nil {
-							remaining = info.FeedNum
-						}
-					}
-					if remaining >= prevRemaining {
-						staleFeeds++
-						slog.Info("叶公好龙培养次数暂未递减 (暴击可能不消耗次数)",
-							"role_id", session.RoleID(), "before", prevRemaining,
-							"after", remaining, "feeds", feeds,
-							"stale_feeds", staleFeeds, "max_stale", maxPetAnimalStaleFeeds)
-						if staleFeeds >= maxPetAnimalStaleFeeds {
-							slog.Warn("叶公好龙连续培养次数不递减，熔断本轮",
-								"role_id", session.RoleID(), "stale_feeds", staleFeeds)
-							return nil
-						}
-					} else {
+					if res.Hit > 0 {
+						// 暴击培养（小暴击/大暴击）不消耗每日次数：FeedNum 不变是
+						// 正常业务语义，不能当作「次数未递减」去发面板复核或熔断。
+						crits++
 						staleFeeds = 0
+						if remaining <= 0 && prevRemaining > 0 {
+							// 极端情况：服务端同时下发了暴击与次数归零。
+							remaining = 0
+						}
+						slog.Info("叶公好龙暴击培养成功（不消耗次数）",
+							"role_id", session.RoleID(),
+							"hit", res.Hit, "lv", res.Lv, "star", res.Star,
+							"exp", res.Exp, "exp_add", res.ExpAdd,
+							"feed_num", remaining, "feeds", feeds, "crits", crits)
+					} else {
+						if remaining >= prevRemaining {
+							// 非暴击却未递减：线上实测首次回包可能仍带旧次数，
+							// 以面板 feed_num 为准复核一次。
+							if info := fetchInfo(); info != nil {
+								remaining = info.FeedNum
+							}
+						}
+						if remaining >= prevRemaining {
+							staleFeeds++
+							slog.Info("叶公好龙培养次数未递减且非暴击 (回包滞后或服务端异常)",
+								"role_id", session.RoleID(), "before", prevRemaining,
+								"after", remaining, "feeds", feeds, "hit", res.Hit,
+								"stale_feeds", staleFeeds, "max_stale", maxPetAnimalStaleFeeds)
+							if staleFeeds >= maxPetAnimalStaleFeeds {
+								slog.Warn("叶公好龙连续非暴击培养次数不递减，熔断本轮",
+									"role_id", session.RoleID(), "stale_feeds", staleFeeds)
+								return nil
+							}
+						} else {
+							staleFeeds = 0
+						}
+						slog.Info("叶公好龙普通培养成功",
+							"role_id", session.RoleID(),
+							"lv", res.Lv,
+							"star", res.Star,
+							"exp", res.Exp,
+							"exp_add", res.ExpAdd,
+							"feed_type", res.FeedType,
+							"feed_num", remaining,
+							"hit", res.Hit,
+						)
 					}
-					slog.Info("叶公好龙普通培养成功",
-						"role_id", session.RoleID(),
-						"lv", res.Lv,
-						"star", res.Star,
-						"exp", res.Exp,
-						"exp_add", res.ExpAdd,
-						"feed_type", res.FeedType,
-						"feed_num", remaining,
-						"hit", res.Hit,
-					)
 				case protocol.PetAnimalResultTooMuchExp:
 					slog.Info("叶公好龙经验已满，需先升阶；本轮停止培养", "role_id", session.RoleID())
 					return nil
