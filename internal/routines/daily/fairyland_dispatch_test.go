@@ -159,3 +159,57 @@ func TestFairylandDispatchRoutine_DispatchSilentDropBacksOff(t *testing.T) {
 		t.Fatalf("应记录宠物仙域静默丢包，got %d", got)
 	}
 }
+
+// TestFairylandDispatchRoutine_FailedBareRetriesWithPrevAct 验证裸 714/1 返回
+// FAILED 时不再直接判定“本周上限”，而是再用 PrevAct 变体查询；成功则继续。
+func TestFairylandDispatchRoutine_FailedBareRetriesWithPrevAct(t *testing.T) {
+	var prevActCalls, dispatchCalls atomic.Int32
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFairylandMainPanel:
+			if len(pkt.Payload) == 0 {
+				// 裸载荷失败桩：01 + 全 0。
+				_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+					append([]byte{protocol.FairylandFailed}, make([]byte, 38)...)))
+				return
+			}
+			prevActCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.FairylandSuccess}))
+		case protocol.ActionIDFairylandTaskPanel:
+			w := protocol.NewWriter().WriteUint8(protocol.FairylandSuccess).WriteUint16(0)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDFairylandDispatch:
+			dispatchCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.FairylandTimesLimited}))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewFairylandDispatchRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("带 PrevAct 的主面板成功后应继续执行, got %v", err)
+	}
+	if prevActCalls.Load() != 1 {
+		t.Fatalf("裸载荷失败后应改用 PrevAct 变体, calls = %d", prevActCalls.Load())
+	}
+}
+
+// TestFairylandDispatchRoutine_BothVariantsFailedUsesShortCooldown 验证两个变体
+// 都返回 FAILED 时按 2 小时普通失败退避，而不是睡到周重置。
+func TestFairylandDispatchRoutine_BothVariantsFailedUsesShortCooldown(t *testing.T) {
+	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		if pkt.ActionID == protocol.ActionIDFairylandMainPanel {
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				append([]byte{protocol.FairylandFailed}, make([]byte, 38)...)))
+		}
+	})
+	defer sess.Close()
+
+	err := NewFairylandDispatchRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("主面板失败应返回 CooldownError, got %v", err)
+	}
+	if d := time.Until(cd.Until); d < 110*time.Minute || d > 130*time.Minute {
+		t.Fatalf("失败退避应约为 2 小时，而不是周重置; wait=%v", d)
+	}
+}

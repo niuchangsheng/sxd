@@ -48,12 +48,24 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 
 			panelResp := call(protocol.BuildFairylandMainPanelPacket(), protocol.ActionIDFairylandMainPanel)
 			variant := "bare"
-			if panelResp == nil {
-				// 裸载荷被静默丢弃时，改用服务端最后受理的动作号作为显式锚点重试一次。
+			var code uint8
+			var codeErr error
+			if panelResp != nil {
+				code, codeErr = protocol.ParseActionFirstByte(panelResp.Payload, "宠物仙域主面板")
+			}
+			// 裸载荷返回 FAILED 并不等于“本周上限”：2026-11-22 10:40 实测裸
+			// 714/1 返回 39 字节失败桩（01 + 38 个 0），用户确认游历时间并未
+			// 达上限。失败/无回包时都再试一次带 PrevAct 的变体，只有两个变体
+			// 都失败才按普通失败退避，绝不据此睡到周重置。
+			if panelResp == nil || codeErr != nil || code != protocol.FairylandSuccess {
 				anchor := session.LastAckActionID()
 				variant = fmt.Sprintf("prev_act:0x%08X", anchor)
-				panelResp = call(protocol.BuildFairylandMainPanelWithPrevActPacket(anchor),
-					protocol.ActionIDFairylandMainPanel)
+				if retry := call(protocol.BuildFairylandMainPanelWithPrevActPacket(anchor),
+					protocol.ActionIDFairylandMainPanel); retry != nil {
+					if c, e := protocol.ParseActionFirstByte(retry.Payload, "宠物仙域主面板"); e == nil {
+						panelResp, code, codeErr = retry, c, nil
+					}
+				}
 			}
 			if panelResp == nil {
 				slog.Info("宠物仙域主面板无回包，稍后重试", "role_id", session.RoleID())
@@ -62,19 +74,15 @@ func NewFairylandDispatchRoutine() scheduler.ActivityRoutine {
 			slog.Info("宠物仙域主面板已响应", "role_id", session.RoleID(),
 				"variant", variant, "payload_len", len(panelResp.Payload),
 				"payload_hex", hex.EncodeToString(panelResp.Payload))
-			code, err := protocol.ParseActionFirstByte(panelResp.Payload, "宠物仙域主面板")
-			if err != nil {
-				slog.Warn("宠物仙域主面板解析失败，稍后重试", "role_id", session.RoleID(), "err", err)
+			if codeErr != nil {
+				slog.Warn("宠物仙域主面板解析失败，稍后重试", "role_id", session.RoleID(), "err", codeErr)
 				return scheduler.NewCooldown(10*time.Minute, "宠物仙域主面板解析失败")
 			}
 			if code != protocol.FairylandSuccess {
-				// 用户确认：本周累积游历时间达到 20 小时上限时，714/1 直接返回 FAILED，
-				// 与开放时段无关。上限按周重置，等待下周一 00:05 再试。
-				wake := nextFairylandWeeklyReset(time.Now())
-				slog.Info("宠物仙域本周游历时间已达上限，等待周重置", "role_id", session.RoleID(),
-					"result", code, "result_text", protocol.FairylandResultText(code),
-					"wake_at", wake)
-				return scheduler.NewCooldown(time.Until(wake), "宠物仙域本周游历时间已达上限")
+				slog.Info("宠物仙域主面板返回失败，2 小时后再试", "role_id", session.RoleID(),
+					"variant", variant, "result", code,
+					"result_text", protocol.FairylandResultText(code))
+				return scheduler.NewCooldown(2*time.Hour, "宠物仙域主面板返回失败")
 			}
 
 			taskResp := call(protocol.BuildFairylandTaskPanelPacket(), protocol.ActionIDFairylandTaskPanel)
