@@ -145,3 +145,80 @@ func BuildEraRebirthAttrUseResultPacket(result uint8, itemID, num int32) *Packet
 	w.WriteInt32(num)
 	return NewPacket(ActionIDEraRebirthAttrUseTimeItem, w.Bytes())
 }
+
+// ParseEraRebirthAttrPanelAutoUse 解析 851/1 属性面板中的
+// is_auto_use_time_item 开关（官方客户端只有该开关为 1 时才自动使用时间道具）。
+//
+// 线格式 (Mod_EraRebirthLandAttr_Base.get_attr_panel):
+// Int is_start_func, Int last_rebirth_rate,
+// [UInt16 n, n×(Int,Int)] rebirth_attr_list,
+// Int level, Long season_exp, Long season_coin, Long season_dan,
+// Int mission_level, [UInt16 n, n×(Int,Int)] attr_list,
+// Int is_auto_use_time_item, Int player_level, Int attr_rate, Int next_attr_rate。
+func ParseEraRebirthAttrPanelAutoUse(payload []byte) (int32, error) {
+	r := NewReader(DecompressPayloadIfNeeded(payload))
+	var err error
+	if _, err = r.ReadInt32(); err != nil { // is_start_func
+		return 0, fmt.Errorf("%w: era rebirth attr is_start_func: %v", ErrInvalidPayload, err)
+	}
+	if _, err = r.ReadInt32(); err != nil { // last_rebirth_rate
+		return 0, fmt.Errorf("%w: era rebirth attr last_rate: %v", ErrInvalidPayload, err)
+	}
+	if err = skipEraRebirthAttrPairs(r); err != nil { // rebirth_attr_list
+		return 0, err
+	}
+	if _, err = r.ReadInt32(); err != nil { // level
+		return 0, fmt.Errorf("%w: era rebirth attr level: %v", ErrInvalidPayload, err)
+	}
+	for i := 0; i < 3; i++ { // season_exp / season_coin / season_dan
+		if _, err = r.ReadInt64(); err != nil {
+			return 0, fmt.Errorf("%w: era rebirth attr season value[%d]: %v", ErrInvalidPayload, i, err)
+		}
+	}
+	if _, err = r.ReadInt32(); err != nil { // mission_level
+		return 0, fmt.Errorf("%w: era rebirth attr mission_level: %v", ErrInvalidPayload, err)
+	}
+	if err = skipEraRebirthAttrPairs(r); err != nil { // attr_list
+		return 0, err
+	}
+	flag, err := r.ReadInt32()
+	if err != nil {
+		return 0, fmt.Errorf("%w: era rebirth attr is_auto_use_time_item: %v", ErrInvalidPayload, err)
+	}
+	return flag, nil
+}
+
+func skipEraRebirthAttrPairs(r *Reader) error {
+	n, err := r.ReadUint16()
+	if err != nil {
+		return fmt.Errorf("%w: era rebirth attr list count: %v", ErrInvalidPayload, err)
+	}
+	for i := 0; i < int(n); i++ {
+		if _, err := r.ReadInt32(); err != nil {
+			return fmt.Errorf("%w: era rebirth attr list[%d].a: %v", ErrInvalidPayload, i, err)
+		}
+		if _, err := r.ReadInt32(); err != nil {
+			return fmt.Errorf("%w: era rebirth attr list[%d].b: %v", ErrInvalidPayload, i, err)
+		}
+	}
+	return nil
+}
+
+// BuildEraRebirthAttrPanelResultPacket 构造 851/1 回包，供离线 mock 与单测使用。
+func BuildEraRebirthAttrPanelResultPacket(isAutoUseTimeItem int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(0)  // is_start_func
+	w.WriteInt32(0)  // last_rebirth_rate
+	w.WriteUint16(0) // rebirth_attr_list
+	w.WriteInt32(0)  // level
+	w.WriteInt64(0)  // season_exp
+	w.WriteInt64(0)  // season_coin
+	w.WriteInt64(0)  // season_dan
+	w.WriteInt32(0)  // mission_level
+	w.WriteUint16(0) // attr_list
+	w.WriteInt32(isAutoUseTimeItem)
+	w.WriteInt32(0) // player_level
+	w.WriteInt32(0) // attr_rate
+	w.WriteInt32(0) // next_attr_rate
+	return NewPacket(ActionIDEraRebirthAttrPanel, w.Bytes())
+}

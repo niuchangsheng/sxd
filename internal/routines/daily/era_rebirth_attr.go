@@ -65,7 +65,25 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 
 			// 刷新赛季与属性面板，保证 851/4 返回当前赛季的道具列表。
 			_ = call(protocol.BuildEraRebirthAttrSeasonPacket(), protocol.ActionIDEraRebirthAttrSeason)
-			_ = call(protocol.BuildEraRebirthAttrPanelPacket(), protocol.ActionIDEraRebirthAttrPanel)
+			// 官方客户端只有在 851/1 的 is_auto_use_time_item 开启时才自动
+			// 使用时间道具；关闭时服务端会静默丢弃 851/5，不能盲目发送。
+			autoUse := int32(1) // 解析失败时沿用原流程，避免误阻断
+			if panelResp := call(protocol.BuildEraRebirthAttrPanelPacket(),
+				protocol.ActionIDEraRebirthAttrPanel); panelResp != nil {
+				if flag, pErr := protocol.ParseEraRebirthAttrPanelAutoUse(panelResp.Payload); pErr == nil {
+					autoUse = flag
+					slog.Info("修真境界属性面板", "role_id", session.RoleID(),
+						"is_auto_use_time_item", flag)
+				} else {
+					slog.Warn("解析修真境界属性面板自动使用开关失败，沿用原流程",
+						"role_id", session.RoleID(), "err", pErr)
+				}
+			}
+			if autoUse != 1 {
+				slog.Info("修真境界未开启自动使用时间道具，跳过 851/5",
+					"role_id", session.RoleID(), "is_auto_use_time_item", autoUse)
+				return scheduler.NewCooldown(2*time.Hour, "修真境界未开启自动使用时间道具")
+			}
 
 			pkgResp := call(protocol.BuildEraRebirthAttrResourcePackagePacket(),
 				protocol.ActionIDEraRebirthAttrResourcePackage)
