@@ -16,14 +16,13 @@ import (
 const wuxingRoutinePanelHex = "000000001800050404000024a80000001f000016be0000000100000000000003260304000024a900000038000016be0000000100000000000002500204000024aa00000027000016be00000001000000000000025e0504000024ab00000019000016be0000000100000000000002c50104000024ac0000000e000016be00000001000000000000027b006400000101"
 
 // TestWuxingRoutine_OneKeyRetriesThenExitOnFailure 验证：一键挑战后刷新面板，
-// 存在失败关卡（state=3）时按用户要求重试，连续 N 轮仍失败才结束本轮。
+// 仍存在待挑战关卡（state=4）时按用户要求重试，连续 N 轮仍未清空才结束本轮。
 func TestWuxingRoutine_OneKeyRetriesThenExitOnFailure(t *testing.T) {
 	panelRaw, err := hex.DecodeString(wuxingRoutinePanelHex)
 	if err != nil {
 		t.Fatalf("panel hex: %v", err)
 	}
-	failedPanel := append([]byte(nil), panelRaw...)
-	failedPanel[8] = wuxingStateFailed // 第 1 个条目（element=4）置为失败
+	// 抓包面板 5 个条目均为 state=4（待挑战）；挑战后原样返回即视为仍有待挑战关卡。
 
 	var panelCalls, fightCalls, deployCalls atomic.Int32
 
@@ -32,12 +31,8 @@ func TestWuxingRoutine_OneKeyRetriesThenExitOnFailure(t *testing.T) {
 		case protocol.ActionIDWuxingPanel10:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDWuxingPanel:
-			n := panelCalls.Add(1)
-			body := panelRaw
-			if n > 1 {
-				body = failedPanel
-			}
-			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, body))
+			panelCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, panelRaw))
 		case protocol.ActionIDWuxingDeploy:
 			deployCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
@@ -65,14 +60,17 @@ func TestWuxingRoutine_OneKeyRetriesThenExitOnFailure(t *testing.T) {
 	}
 }
 
-// TestWuxingRoutine_RetrySucceeds 验证失败一轮后下一轮成功即结束，不再打满上限。
+// TestWuxingRoutine_RetrySucceeds 验证待挑战关卡清空后立即结束，不再打满上限。
 func TestWuxingRoutine_RetrySucceeds(t *testing.T) {
 	panelRaw, err := hex.DecodeString(wuxingRoutinePanelHex)
 	if err != nil {
 		t.Fatalf("panel hex: %v", err)
 	}
-	failedPanel := append([]byte(nil), panelRaw...)
-	failedPanel[8] = wuxingStateFailed
+	// 挑战后全部关卡变为 state=3（已通关）。
+	clearedPanel := append([]byte(nil), panelRaw...)
+	for _, off := range []int{8, 34, 60, 86, 112} {
+		clearedPanel[off] = 3
+	}
 
 	var fightCalls atomic.Int32
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
@@ -80,10 +78,10 @@ func TestWuxingRoutine_RetrySucceeds(t *testing.T) {
 		case protocol.ActionIDWuxingPanel10:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDWuxingPanel:
-			// 第一次挑战后失败，第二次挑战后恢复正常。
+			// 第一次挑战后仍未清空，第二次挑战后全部通关。
 			body := panelRaw
-			if fightCalls.Load() == 1 {
-				body = failedPanel
+			if fightCalls.Load() > 1 {
+				body = clearedPanel
 			}
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, body))
 		case protocol.ActionIDWuxingFight:
@@ -97,7 +95,7 @@ func TestWuxingRoutine_RetrySucceeds(t *testing.T) {
 		t.Fatalf("wuxing routine: %v", err)
 	}
 	if got := fightCalls.Load(); got != 2 {
-		t.Fatalf("首轮失败后重试一次即成功, 期望 2 次, 实际 %d", got)
+		t.Fatalf("首轮未清空后重试一次即完成, 期望 2 次, 实际 %d", got)
 	}
 }
 
@@ -130,12 +128,14 @@ func TestWuxingRoutine_FightDroppedExits(t *testing.T) {
 	}
 }
 
-// TestWuxingRoutine_PreExistingFailureSkipsFight 验证挑战前已有失败关卡时
+// TestWuxingRoutine_AllClearedSkipsFight 验证所有关卡已通关 (state=3) 时
 // 不再提交一键挑战。
-func TestWuxingRoutine_PreExistingFailureSkipsFight(t *testing.T) {
+func TestWuxingRoutine_AllClearedSkipsFight(t *testing.T) {
 	panelRaw, _ := hex.DecodeString(wuxingRoutinePanelHex)
-	failedPanel := append([]byte(nil), panelRaw...)
-	failedPanel[8] = wuxingStateFailed
+	clearedPanel := append([]byte(nil), panelRaw...)
+	for _, off := range []int{8, 34, 60, 86, 112} {
+		clearedPanel[off] = 3
+	}
 
 	var panelCalls, fightCalls atomic.Int32
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
@@ -144,7 +144,7 @@ func TestWuxingRoutine_PreExistingFailureSkipsFight(t *testing.T) {
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDWuxingPanel:
 			panelCalls.Add(1)
-			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, failedPanel))
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, clearedPanel))
 		case protocol.ActionIDWuxingFight:
 			fightCalls.Add(1)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
@@ -156,7 +156,7 @@ func TestWuxingRoutine_PreExistingFailureSkipsFight(t *testing.T) {
 		t.Fatalf("wuxing routine: %v", err)
 	}
 	if fightCalls.Load() != 0 {
-		t.Fatalf("挑战前已有失败关卡时不得提交一键挑战, 实际 %d 次", fightCalls.Load())
+		t.Fatalf("全部通关后不得提交一键挑战, 实际 %d 次", fightCalls.Load())
 	}
 	if panelCalls.Load() != 1 {
 		t.Fatalf("只应读取一次面板, 实际 %d 次", panelCalls.Load())
