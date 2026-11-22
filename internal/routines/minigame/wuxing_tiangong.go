@@ -39,8 +39,9 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 		"wuxing_tiangong",
 		"minigame",
 		scheduler.ScheduleCron,
-		// 与其它长会话易丢包的活动一致，登录后尽早执行。
-		scheduler.RoutinePriority(340),
+		// 453/3 一键挑战同样严格校验城镇/战场上下文：实测排在无量劫海
+		// (400) 等战斗之后时会被静默丢弃。排在宝库(450)之后、所有战斗之前。
+		scheduler.RoutinePriority(445),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
