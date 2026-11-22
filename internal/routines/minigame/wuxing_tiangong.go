@@ -39,7 +39,8 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 		"wuxing_tiangong",
 		"minigame",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 与其它长会话易丢包的活动一致，登录后尽早执行。
+		scheduler.RoutinePriority(340),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
