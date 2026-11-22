@@ -33,8 +33,10 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 		"soul_hunt",
 		"social",
 		scheduler.ScheduleCron,
-		// 与其它活动一致，登录后尽早执行，避免长会话后段静默丢包。
-		scheduler.RoutinePriority(335),
+		// 669/3 严格校验城镇/战场上下文：实测排在宝库/五行/无量等之后时
+		// 会被静默丢弃，而登录后第一条业务请求则正常回包。排在宝库(450)之后、
+		// 所有其它战斗玩法之前。
+		scheduler.RoutinePriority(449),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
