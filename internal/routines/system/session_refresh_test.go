@@ -55,12 +55,12 @@ func TestSessionRefreshRoutine_Reconnects(t *testing.T) {
 		t.Fatalf("session not active: %s", sess.State())
 	}
 
-	routine := NewSessionRefreshRoutine()
-	// 首次执行只建立周期基线，不重连。
-	if err := routine.Execute(ctx, sess, nil); err != nil {
-		t.Fatalf("first execute: %v", err)
-	}
-	if err := routine.Execute(ctx, sess, nil); err != nil {
+	// 测试中把健康窗口阈值降为 0，使新连接也立即触发重建。
+	prevAge := minSessionAge
+	minSessionAge = 0
+	defer func() { minSessionAge = prevAge }()
+
+	if err := NewSessionRefreshRoutine().Execute(ctx, sess, nil); err != nil {
 		t.Fatalf("session refresh: %v", err)
 	}
 	if sess.State() != client.StateActive {

@@ -195,6 +195,8 @@ type RoleSession struct {
 	lastSendTime    atomic.Int64
 	// connGeneration 每次成功建立新连接后递增，供「主动重建会话」等待新连接使用。
 	connGeneration atomic.Uint64
+	// connSince 最近一次建立连接的时间戳 (UnixNano)，用于判断会话已存活多久。
+	connSince atomic.Int64
 
 	// lastRxActionID 记录最后一次收到的网关包 ActionID（含推送、回包、心跳回包）。
 	// 仅用于诊断与旧版 HasPrevAct 请求的锚点回退；业务 PrevAct 链以
@@ -2069,6 +2071,15 @@ func (s *RoleSession) ConnectionGeneration() uint64 {
 	return s.connGeneration.Load()
 }
 
+// ConnectionSince 返回当前连接建立的时间；尚未连接时返回零值。
+func (s *RoleSession) ConnectionSince() time.Time {
+	ns := s.connSince.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
 // SetLastActionID 手动设置最后一次向对端发送的协议 ActionID。
 func (s *RoleSession) SetLastActionID(actionID uint32) {
 	s.lastActionID.Store(actionID)
@@ -2304,6 +2315,7 @@ func (s *RoleSession) runLoop() {
 		s.writeMu.Lock()
 		s.conn = conn
 		s.connGeneration.Add(1)
+		s.connSince.Store(time.Now().UnixNano())
 		s.lastActionID.Store(0)
 		s.lastBusinessActionID.Store(0)
 		// 新连接的 PrevAct 链在服务端从零开始，必须清掉上一条连接的收包锚点。

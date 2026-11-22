@@ -19,19 +19,22 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
-// sessionRefreshInterval 会话重建周期。
+// sessionRefreshInterval 会话重建检查周期。
+// 每次检查仅在连接存活超过 minSessionAge 时才真正重连。
+const sessionRefreshInterval = 2 * time.Minute
+
+// minSessionAge 触发主动重建的最小连接存活时长。
 //
-// 线上静默丢弃约在登录后 8 分钟出现；取 5 分钟留出安全余量。
-const sessionRefreshInterval = 5 * time.Minute
+// 线上静默丢弃约在登录后 8 分钟出现；连接满 4 分钟后、下一次 2 分钟检查
+// （即登录后 4-6 分钟）立即重建，留出安全余量。刚被外部顶号重连的会话
+// 不会被再次重建，避免连续登录。
+var minSessionAge = 4 * time.Minute
 
 // sessionRefreshTimeout 等待重连重新激活的上限。
 const sessionRefreshTimeout = 90 * time.Second
 
 // NewSessionRefreshRoutine 构造会话上下文刷新任务。
 func NewSessionRefreshRoutine() scheduler.ActivityRoutine {
-	// 注册后调度器会立即执行一次；此时会话刚登录，属于健康窗口，
-	// 跳过首次执行，从下一个 5 分钟周期开始真正重建。
-	firstRun := true
 	return scheduler.NewBaseRoutine(
 		"session_refresh",
 		"system",
@@ -43,12 +46,13 @@ func NewSessionRefreshRoutine() scheduler.ActivityRoutine {
 			if session == nil {
 				return client.ErrNotConnected
 			}
-			if firstRun {
-				firstRun = false
-				return nil
-			}
 			if session.State() != client.StateActive {
 				// 已在重连中：交给会话状态机，不重复触发。
+				return nil
+			}
+			if since := session.ConnectionSince(); !since.IsZero() &&
+				time.Since(since) < minSessionAge {
+				// 会话仍处在登录后的健康窗口，等待下一次检查。
 				return nil
 			}
 			if jitter != nil {
