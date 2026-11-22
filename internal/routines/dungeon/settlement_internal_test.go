@@ -82,3 +82,52 @@ func TestXunXianRoutine_StopsAfterConsecutiveFailures(t *testing.T) {
 		t.Fatalf("应执行一次一键领取, calls = %d", got)
 	}
 }
+
+// TestChallengeStoryMission_PickupAlreadyPickedBooksClearWithoutRewards 验证重复挑战
+// 已通关副本时 pickup_award 返回 23（奖励已领取）：应记为已通关并消耗体力，
+// 但不再重复累加本地经验/铜钱收益。
+func TestChallengeStoryMission_PickupAlreadyPickedBooksClearWithoutRewards(t *testing.T) {
+	var pickupCalls atomic.Int32
+	sess := newTownResetTestSession(t, func(pkt *protocol.Packet, conn net.Conn) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDMissionPlotEnter:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.MissionResultSuccess}))
+		case protocol.ActionIDMissionFightMonster:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0x00, protocol.MissionResultSuccess}))
+		case protocol.ActionIDMissionRank:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0x00}))
+		case protocol.ActionIDMissionOpenBox:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0x00}))
+		case protocol.ActionIDMissionPickupAward:
+			pickupCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.MissionResultAwardAlreadyPicked}))
+		}
+		return true
+	})
+	sess.SetStamina(50)
+
+	mission := &dictionary.Mission{ID: 88, Name: "重复挑战关卡", Type: 1, Monsters: "1"}
+	costStamina, gainExp, gainCoins := 0, int64(0), int64(0)
+	cleared := map[int]bool{}
+
+	ok := challengeStoryMission(context.Background(), sess, mission,
+		func() bool { return true }, &costStamina, &gainExp, &gainCoins, cleared)
+	if !ok {
+		t.Fatal("pickup=23（已领取）应判定关卡通关")
+	}
+	if pickupCalls.Load() != 1 {
+		t.Fatalf("应拾取一次, calls = %d", pickupCalls.Load())
+	}
+	if !cleared[mission.ID] {
+		t.Fatal("应标记关卡已通关")
+	}
+	if costStamina != 5 {
+		t.Fatalf("应消耗 5 点体力, got %d", costStamina)
+	}
+	if gainExp != 0 || gainCoins != 0 {
+		t.Fatalf("重复挑战无新增奖励时不应累加本地收益: exp=%d coins=%d", gainExp, gainCoins)
+	}
+	if got := sess.GetBaseStamina(); got != 45 {
+		t.Fatalf("体力应扣减 5, got %d", got)
+	}
+}
