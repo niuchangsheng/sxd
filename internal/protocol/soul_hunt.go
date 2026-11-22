@@ -25,15 +25,15 @@ const (
 
 // SoulHunt 结果码。
 const (
-	SoulHuntSuccess        uint8 = 0
-	SoulHuntFuncNotOpen    uint8 = 1
-	SoulHuntFailed         uint8 = 2
-	SoulHuntCantChallenge  uint8 = 3
-	SoulHuntNoIngot        uint8 = 4
+	SoulHuntSuccess         uint8 = 0
+	SoulHuntFuncNotOpen     uint8 = 1
+	SoulHuntFailed          uint8 = 2
+	SoulHuntCantChallenge   uint8 = 3
+	SoulHuntNoIngot         uint8 = 4
 	SoulHuntNoChallengeTime uint8 = 5
-	SoulHuntIsFighting     uint8 = 6
-	SoulHuntNoPotential    uint8 = 7
-	SoulHuntUpLevelLimit   uint8 = 8
+	SoulHuntIsFighting      uint8 = 6
+	SoulHuntNoPotential     uint8 = 7
+	SoulHuntUpLevelLimit    uint8 = 8
 )
 
 // SoulHuntMainPanel 表示灵域猎妖主面板关键字段。
@@ -41,6 +41,10 @@ type SoulHuntMainPanel struct {
 	Result uint8
 	// Values 面板的前 8 个整型字段；抓包中第 2 个字段为当前关卡 (cur_step)。
 	Values [8]int32
+	// StepPairs 关卡列表 [Int,Int]（对应客户端 step_list）。
+	StepPairs [][2]int32
+	// Tail 列表之后的 3 个 Int，用于确认 is_can_challenge / 活动时间等字段。
+	Tail [3]int32
 }
 
 // CurrentStep 返回当前关卡编号。
@@ -93,6 +97,23 @@ func ParseSoulHuntMainPanel(payload []byte) (*SoulHuntMainPanel, error) {
 	for i := 0; i < len(out.Values); i++ {
 		if out.Values[i], err = r.ReadInt32(); err != nil {
 			return nil, fmt.Errorf("%w: soul hunt value[%d]: %v", ErrInvalidPayload, i, err)
+		}
+	}
+	if n, e := r.ReadUint16(); e == nil {
+		for i := 0; i < int(n); i++ {
+			var pair [2]int32
+			if pair[0], e = r.ReadInt32(); e != nil {
+				break
+			}
+			if pair[1], e = r.ReadInt32(); e != nil {
+				break
+			}
+			out.StepPairs = append(out.StepPairs, pair)
+		}
+	}
+	for i := range out.Tail {
+		if out.Tail[i], err = r.ReadInt32(); err != nil {
+			break
 		}
 	}
 	return out, nil

@@ -11,6 +11,7 @@ package social
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -32,7 +33,8 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 		"soul_hunt",
 		"social",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 与其它活动一致，登录后尽早执行，避免长会话后段静默丢包。
+		scheduler.RoutinePriority(335),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
@@ -71,8 +73,13 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 			step := panel.CurrentStep()
+			head := panelResp.Payload
+			if len(head) > 160 {
+				head = head[:160]
+			}
 			slog.Info("灵域猎妖主面板", "role_id", session.RoleID(), "step", step,
-				"values", panel.Values)
+				"values", panel.Values, "step_pairs", panel.StepPairs, "tail", panel.Tail,
+				"payload_hex", fmt.Sprintf("%X", head))
 			if step <= 0 {
 				slog.Info("灵域猎妖当前无可挑战关卡", "role_id", session.RoleID())
 				return nil
