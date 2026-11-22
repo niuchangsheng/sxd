@@ -44,7 +44,7 @@ const (
 type WuxingEntry struct {
 	// Element 五行序号 (1..5)
 	Element uint8
-	// State 关卡状态（抓包中 4=未挑战，3=失败/已挑战）
+	// State 关卡状态（4=待挑战/未通关，3=已通关；2026-11-22 线上实测）
 	State uint8
 	// ID 关卡配置 ID
 	ID int32
