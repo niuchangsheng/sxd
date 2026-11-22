@@ -852,3 +852,63 @@ func TestRoleSession_PrevActSkipsHeartbeat(t *testing.T) {
 			protocol.ActionIDLevitateInfo, got)
 	}
 }
+
+// TestRoleSession_HeartbeatFiresDuringStalledPendingCall 验证业务请求长超时被服务端
+// 静默丢弃时，超过 HeartbeatInterval 后仍能正常发送保活心跳，不再被 pendingCalls 饿死。
+func TestRoleSession_HeartbeatFiresDuringStalledPendingCall(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	hbSeen := make(chan struct{}, 1)
+
+	go func() {
+		defer serverConn.Close()
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			if pkt.ActionID == protocol.ActionHeartbeat {
+				select {
+				case hbSeen <- struct{}{}:
+				default:
+				}
+			}
+			// 刻意不回复业务请求，模拟静默丢包挂起
+		}
+	}()
+
+	session := client.NewRoleSession(client.SessionConfig{
+		RoleID:            "role-hb-pending",
+		RoleName:          "心跳保活测试",
+		ServerAddr:        "mock-pipe",
+		HeartbeatInterval: 40 * time.Millisecond,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error { return nil },
+	})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	defer session.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("session not active, state=%v", session.State())
+	}
+
+	callCtx, cancel := context.WithTimeout(context.Background(), 220*time.Millisecond)
+	defer cancel()
+	_, err := session.Call(callCtx, protocol.NewPacket(0x000A0001, nil), 0x000A0001)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("期望业务请求静默超时, got %v", err)
+	}
+
+	select {
+	case <-hbSeen:
+	default:
+		t.Fatal("业务请求静默挂起超过 HeartbeatInterval 期间未发出保活心跳")
+	}
+}

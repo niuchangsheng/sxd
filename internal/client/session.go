@@ -94,7 +94,7 @@ type SessionConfig struct {
 	// Extra 平台特定的扩展入场凭据 (例如官方 10 字段所需: regdate, id_card, open_time, is_newst 等)
 	Extra map[string]string
 
-	// HeartbeatInterval 心跳定时保活间隔 (默认 1.5s，抓包实测网关超时为 5s)
+	// HeartbeatInterval 心跳定时保活间隔 (默认 15s；2026-11-22 实机探针确认 0/75 为服务端静默吸收且空闲 12s+ 不断线)
 	HeartbeatInterval time.Duration
 	// HeartbeatTimeout 心跳超时时间 (默认 5s)
 	HeartbeatTimeout time.Duration
@@ -174,7 +174,7 @@ type RoleSession struct {
 // NewRoleSession 构造一个新的角色会话实例。
 func NewRoleSession(cfg SessionConfig) *RoleSession {
 	if cfg.HeartbeatInterval <= 0 {
-		cfg.HeartbeatInterval = 1500 * time.Millisecond
+		cfg.HeartbeatInterval = 15 * time.Second
 	}
 	if cfg.HeartbeatTimeout <= 0 {
 		cfg.HeartbeatTimeout = 5 * time.Second
@@ -576,7 +576,7 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 	if err == nil && p != nil {
 		s.lastSendTime.Store(time.Now().UnixNano())
 		s.prevAct.RecordSent(p.ActionID)
-		slog.Debug("发送网关请求", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", p.ActionID, p.ActionID>>16, p.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(p.Payload))
+		slog.Debug("发送网关请求", "role_id", s.cfg.RoleID, "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", p.ActionID, p.ActionID>>16, p.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(p.Payload))
 	}
 	return err
 }
@@ -885,22 +885,9 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 			return s.handleConnectFailure(err)
 
 		case <-ticker.C:
-			// 若当前正有业务请求在等待回包 (pendingCalls > 0)，严禁发送心跳包截断业务
-			s.handlerMu.Lock()
-			hasPending := false
-			for _, calls := range s.pendingCalls {
-				if len(calls) > 0 {
-					hasPending = true
-					break
-				}
-			}
-			s.handlerMu.Unlock()
-			if hasPending {
-				continue
-			}
-
-			// 仅在真实空闲期（距上次发送业务包超过心跳间隔）才发送保活心跳包
-			// 避免在耗时较长的战斗计算/大报文传输期间（如六道轮回塔、剧情挑战）用心跳包截断网关的会话传输
+			// 仅在真实空闲期（距上次发包超过心跳间隔）才发送保活心跳包：
+			//   - 常规业务请求 (< HeartbeatInterval) 期间不会插入心跳；
+			//   - 若遇到长超时静默丢包 (> HeartbeatInterval)，仍允许发送保活包，避免连接被中间件/网关回收。
 			lastSend := time.Unix(0, s.lastSendTime.Load())
 			if time.Since(lastSend) < s.cfg.HeartbeatInterval {
 				continue
@@ -935,7 +922,7 @@ func (s *RoleSession) readLoop(conn net.Conn, errCh chan<- error) {
 		if len(hexDump) > 64 {
 			hexDump = hexDump[:64] + "..."
 		}
-		slog.Debug("收到网关回包", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", pkt.ActionID, pkt.ActionID>>16, pkt.ActionID&0xFFFF), "payload_len", len(pkt.Payload), "hex", hexDump)
+		slog.Debug("收到网关回包", "role_id", s.cfg.RoleID, "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", pkt.ActionID, pkt.ActionID>>16, pkt.ActionID&0xFFFF), "payload_len", len(pkt.Payload), "hex", hexDump)
 		s.dispatchPacket(pkt)
 	}
 }

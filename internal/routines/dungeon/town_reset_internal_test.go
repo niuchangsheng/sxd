@@ -122,3 +122,28 @@ func TestEnterQuestTownScene_NoFallbackWhenFirstPassWorks(t *testing.T) {
 		t.Fatalf("首轮成功时不应发起 0/2 锚点重试, 实际 %d 次", zeroAnchorCalls.Load())
 	}
 }
+
+// TestEnterQuestTownScene_ShortCircuitsOnDisconnect 验证首次 enter_town 触发服务端
+// EOF 断链后，立即中止后续回退城镇 (3/1/2) 与 0/2 锚点重试，避免在死连接上空耗。
+func TestEnterQuestTownScene_ShortCircuitsOnDisconnect(t *testing.T) {
+	var attempts atomic.Int32
+	sess := newTownResetTestSession(t, func(pkt *protocol.Packet, conn net.Conn) bool {
+		if pkt.ActionID == protocol.ActionIDTownEnter {
+			attempts.Add(1)
+			_ = conn.Close() // 模拟服务端立即 FIN (EOF)
+			return true
+		}
+		return false
+	})
+
+	sess.SetLastActionID(protocol.ActionIDQuestList)
+	sess.UpdatePlayerState(func(ps *client.PlayerState) { ps.TownMapID = 22 })
+
+	id, ok := enterQuestTownScene(context.Background(), sess)
+	if ok || id != 0 {
+		t.Fatalf("期望断链后返回 (0, false), 实际 (%d, %v)", id, ok)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("断链后应立即短路，仅尝试 1 次 enter_town, 实际 %d 次", got)
+	}
+}

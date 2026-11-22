@@ -171,15 +171,27 @@ func enterQuestTownScene(ctx context.Context, session *client.RoleSession) (int3
 
 // enterQuestTownSceneWithAnchor 使用指定 PrevAct 锚点复位城镇场景。
 func enterQuestTownSceneWithAnchor(ctx context.Context, session *client.RoleSession, anchor uint32) (int32, bool) {
+	if session == nil || session.State() != client.StateActive {
+		return 0, false
+	}
 	if v, ok := questTownKnownGood.Load(session); ok {
 		if id, _ := v.(int32); enterQuestTownSceneSingle(ctx, session, id, anchor) {
 			return id, true
+		}
+		if session.State() != client.StateActive {
+			return 0, false
 		}
 	}
 	if id := int32(session.GetPlayerState().TownMapID); enterQuestTownSceneSingle(ctx, session, id, anchor) {
 		return id, true
 	}
+	if session.State() != client.StateActive {
+		return 0, false
+	}
 	for _, id := range []int32{3, 1, 2} {
+		if session.State() != client.StateActive {
+			return 0, false
+		}
 		if enterQuestTownSceneSingle(ctx, session, id, anchor) {
 			return id, true
 		}
@@ -189,7 +201,7 @@ func enterQuestTownSceneWithAnchor(ctx context.Context, session *client.RoleSess
 
 // enterQuestTownSceneSingle 以指定锚点进入单个城镇，成功时记录最近可用城镇。
 func enterQuestTownSceneSingle(ctx context.Context, session *client.RoleSession, id int32, anchor uint32) bool {
-	if id <= 0 {
+	if id <= 0 || session == nil || session.State() != client.StateActive {
 		return false
 	}
 	code, err := session.EnterTownWithAnchor(ctx, id, anchor)

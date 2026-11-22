@@ -112,11 +112,17 @@ func advanceQuestMission(
 		// 每关挑战前复位城镇场景：上一个剧情副本结束后服务端仍保留副本/战场上下文，
 		// 直接请求 get_sections 会被静默丢弃（2026-11-14 线上：任务 560 通关后，
 		// 任务 561/564 的 get_sections 连续无回包）。
-		if _, ok := enterQuestTownScene(ctx, session); ok {
-			select {
-			case <-ctx.Done():
-				return clearedPrereq || lastCount > initialCount
-			case <-time.After(200 * time.Millisecond):
+		// 注意：首步且刚完成 3/9 任务列表同步时角色已在城镇上下文，严禁以 3/9 作锚点
+		// 立即发 8 字节 enter_town（2026-11-22 s1 实机连续复现：0x00010000 携带
+		// town=22 + prev=0x00030009 后 112~165ms 被网关直接 FIN 断链）。
+		skipInitialTownReset := step == 0 && session.LastAckActionID() == protocol.ActionIDQuestList
+		if !skipInitialTownReset {
+			if _, ok := enterQuestTownScene(ctx, session); ok {
+				select {
+				case <-ctx.Done():
+					return clearedPrereq || lastCount > initialCount
+				case <-time.After(200 * time.Millisecond):
+				}
 			}
 		}
 
