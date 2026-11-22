@@ -90,10 +90,10 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 
 			challenges := 0
 			for challenges < maxEndlessChallenges && ctx.Err() == nil {
-				// 禁选列表仅为客户端展示所需，部分账号/层会被服务端静默丢弃，
-				// 因此无回包不阻断挑战。
-				_ = call(protocol.BuildEndlessBanListPacket(layer),
-					protocol.ActionIDEndlessBanList, callTimeout)
+				// 禁选列表仅为客户端展示所需，实测该请求在多数状态下会被
+				// 服务端静默丢弃；更严重的是，丢弃后下一条 797/22 会以被丢
+				// 请求作为 PrevAct 尾链而级联超时。自动化不需要禁选数据，
+				// 直接跳过该请求，避免污染后续挑战链路。
 				// 怪物队伍信息同样用于客户端展示，部分时段会被静默丢弃；
 				// 无回包时仍尝试直接挑战，由 797/23 的结果决定。
 				if infoResp := call(protocol.BuildEndlessMonsterTeamInfoPacket(layer),
