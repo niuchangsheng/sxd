@@ -91,10 +91,10 @@ func TestTakeBible_Parsers(t *testing.T) {
 
 	// 2. ParseTakeBibleGetInfoResult
 	wInfo := protocol.NewWriter()
-	wInfo.WriteUint8(protocol.TakeBibleSuccess) // 8
+	wInfo.WriteUint8(protocol.TakeBibleSuccess)  // 8
 	wInfo.WriteInt8(protocol.TakeBibleSunWuKong) // 3 (孙悟空)
-	wInfo.WriteInt32(12345)                     // protectPlayerID
-	wInfo.WriteInt16(0)                         // speedUpCD
+	wInfo.WriteInt32(12345)                      // protectPlayerID
+	wInfo.WriteInt16(0)                          // speedUpCD
 	// 在线好友列表 (1个好友)
 	wInfo.WriteUint16(1)
 	wInfo.WriteInt32(66666)
@@ -103,8 +103,8 @@ func TestTakeBible_Parsers(t *testing.T) {
 	wInfo.WriteInt8(1) // online
 	wInfo.WriteInt8(0) // not escorting
 	// 尾部字段
-	wInfo.WriteInt8(1) // totalTakeTimes
-	wInfo.WriteInt8(3) // robTimes
+	wInfo.WriteInt8(1)  // totalTakeTimes
+	wInfo.WriteInt8(3)  // robTimes
 	wInfo.WriteUint8(0) // isBusy = false
 	infoRes, err := protocol.ParseTakeBibleGetInfoResult(wInfo.Bytes())
 	if err != nil {
@@ -124,7 +124,7 @@ func TestTakeBible_Parsers(t *testing.T) {
 	wRefresh := protocol.NewWriter()
 	wRefresh.WriteUint8(protocol.TakeBibleSuccess)
 	wRefresh.WriteInt8(protocol.TakeBibleTangSeng) // 4 (唐僧)
-	wRefresh.WriteInt16(50)                       // nextCost = 50
+	wRefresh.WriteInt16(50)                        // nextCost = 50
 	refRes, err := protocol.ParseTakeBibleRefreshResult(wRefresh.Bytes())
 	if err != nil {
 		t.Fatalf("ParseTakeBibleRefreshResult 失败: %v", err)

@@ -83,7 +83,7 @@ func BuildStarPictureInfoResultPacket(info StarPictureInfo) *Packet {
 	w.WriteInt32(info.ChipCount)
 	w.WriteInt32(info.ResetCount)
 	w.WriteInt32(info.CurDeployLevel)
-	w.WriteUint16(0)          // award_list 条目数
+	w.WriteUint16(0)                 // award_list 条目数
 	w.WriteBytes([]byte{0, 0, 0, 0}) // 尾部锁定标记
 	return NewPacket(ActionIDStarPictureInfo, w.Bytes())
 }
