@@ -218,7 +218,7 @@ func TestRoleSession_Heartbeat(t *testing.T) {
 	session.Close()
 }
 
-func TestRoleSession_HeartbeatAdvancesPrevActChain(t *testing.T) {
+func TestRoleSession_HeartbeatExcludedFromBusinessPrevAct(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 
 	type capturedPacket struct {
@@ -303,12 +303,13 @@ func TestRoleSession_HeartbeatAdvancesPrevActChain(t *testing.T) {
 		t.Fatalf("心跳请求应为空载荷, got %x", hb.payload)
 	}
 
-	// 3. 关键回归：心跳发出后必须推进 lastActionID，否则后续 Mod 4 请求会带旧 PrevAct 被网关丢弃。
+	// 3. lastActionID 记录真实最后发送动作，心跳也会推进它。
 	if got := session.LastActionID(); got != protocol.ActionHeartbeat {
-		t.Fatalf("心跳后 lastActionID 应推进为 0x%08X, got 0x%08X", protocol.ActionHeartbeat, got)
+		t.Fatalf("心跳后 lastActionID 应为 0x%08X, got 0x%08X", protocol.ActionHeartbeat, got)
 	}
 
-	// 4. 心跳之后的 Mod 4 get_sections 必须携带心跳作为 PrevAct，而不是心跳之前的业务动作。
+	// 4. 心跳不参与业务 PrevAct 尾链：心跳之后的 Mod 4 get_sections 应携带
+	// 最后一条业务动作（2026-11-22 实测 0x4B 尾链会导致 357/0 被静默丢弃）。
 	secPkt := protocol.BuildMissionGetSectionsPacket(13, session.LastActionID())
 	if err := session.Send(secPkt); err != nil {
 		t.Fatalf("send get_sections failed: %v", err)
@@ -320,8 +321,9 @@ func TestRoleSession_HeartbeatAdvancesPrevActChain(t *testing.T) {
 	if len(sec.payload) < 8 {
 		t.Fatalf("get_sections payload too short: %x", sec.payload)
 	}
-	if got := binary.BigEndian.Uint32(sec.payload[len(sec.payload)-4:]); got != protocol.ActionHeartbeat {
-		t.Fatalf("get_sections PrevAct 应为心跳 0x%08X, got 0x%08X", protocol.ActionHeartbeat, got)
+	if got := binary.BigEndian.Uint32(sec.payload[len(sec.payload)-4:]); got != protocol.ActionIDPlayerGetInfo {
+		t.Fatalf("get_sections PrevAct 应跳过心跳取业务动作 0x%08X, got 0x%08X",
+			protocol.ActionIDPlayerGetInfo, got)
 	}
 }
 
@@ -752,5 +754,101 @@ func TestRoleSession_ItemUseGridKeepsBarePayload(t *testing.T) {
 	}
 	if len(got.Payload) != 2 || got.Payload[0] != 0 || got.Payload[1] != 8 {
 		t.Fatalf("payload = %x, want 0008 (裸 grid_id)", got.Payload)
+	}
+}
+
+// TestRoleSession_PrevActSkipsHeartbeat 验证心跳不参与业务 PrevAct 尾链：
+// 心跳之后发送的业务请求应携带最后一条业务动作，而不是 0x4B。
+// 2026-11-22 实测：357/0 携带 0x4B 尾链会被服务端静默丢弃，携带业务动作正常。
+func TestRoleSession_PrevActSkipsHeartbeat(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+
+	type capturedPacket struct {
+		actionID uint32
+		payload  []byte
+	}
+	capturedCh := make(chan capturedPacket, 8)
+	go func() {
+		defer serverConn.Close()
+		for {
+			pkt, err := protocol.ReadPacket(serverConn)
+			if err != nil {
+				return
+			}
+			capturedCh <- capturedPacket{actionID: pkt.ActionID, payload: append([]byte(nil), pkt.Payload...)}
+		}
+	}()
+
+	cfg := client.SessionConfig{
+		RoleID:            "role-business-prevact",
+		RoleName:          "业务尾链测试角色",
+		ServerAddr:        "mock-pipe",
+		HeartbeatInterval: time.Hour,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Authenticator: func(s *client.RoleSession) error { return nil },
+	}
+
+	session := client.NewRoleSession(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("session.Start failed: %v", err)
+	}
+	defer session.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("session did not become active, state=%s", session.State())
+	}
+
+	next := func(t *testing.T) capturedPacket {
+		t.Helper()
+		select {
+		case p := <-capturedCh:
+			return p
+		case <-time.After(2 * time.Second):
+			t.Fatal("未捕获到客户端发包")
+			return capturedPacket{}
+		}
+	}
+
+	if err := session.Send(protocol.BuildLevitateInfoPacket(protocol.LevitateTypeMainRole)); err != nil {
+		t.Fatalf("send business A: %v", err)
+	}
+	_ = next(t)
+
+	if err := session.Send(protocol.NewPacket(protocol.ActionHeartbeat, nil)); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+	hb := next(t)
+	if hb.actionID != protocol.ActionHeartbeat {
+		t.Fatalf("expected heartbeat, got 0x%08X", hb.actionID)
+	}
+	if got := session.LastActionID(); got != protocol.ActionHeartbeat {
+		t.Fatalf("LastActionID 应含心跳, got 0x%08X", got)
+	}
+	if got := session.LastBusinessActionID(); got != protocol.ActionIDLevitateInfo {
+		t.Fatalf("LastBusinessActionID 应为 0x%08X, got 0x%08X",
+			protocol.ActionIDLevitateInfo, got)
+	}
+
+	if err := session.Send(protocol.BuildLevitatePerfusionPacket(protocol.LevitateTypeRole)); err != nil {
+		t.Fatalf("send business B: %v", err)
+	}
+	b := next(t)
+	if b.actionID != protocol.ActionIDLevitatePerfusion {
+		t.Fatalf("expected perfusion, got 0x%08X", b.actionID)
+	}
+	if len(b.payload) < 4 {
+		t.Fatalf("payload too short: %x", b.payload)
+	}
+	if got := binary.BigEndian.Uint32(b.payload[len(b.payload)-4:]); got != protocol.ActionIDLevitateInfo {
+		t.Fatalf("业务 PrevAct 应跳过心跳取 0x%08X, got 0x%08X",
+			protocol.ActionIDLevitateInfo, got)
 	}
 }

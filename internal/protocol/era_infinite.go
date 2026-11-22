@@ -24,6 +24,29 @@ const (
 	ActionIDEraInfiniteMonsterTeam uint32 = 0x03550003
 	// ActionIDEraInfiniteFight 挑战 (853/4)
 	ActionIDEraInfiniteFight uint32 = 0x03550004
+
+	// ActionIDEraInfiniteDeployTypeSeq 布阵类型序列 (854/39)
+	//
+	// 官方客户端进入挑战前先发 854/39（空请求），返回 [UInt16 n, n×(Int type, Int deploy_id)]，
+	// 再发 854/1 [Int deploy_id]，然后才 853/3 / 853/4。两包均无业务回包等待。
+	ActionIDEraInfiniteDeployTypeSeq uint32 = 0x03560027
+	// ActionIDEraInfiniteSuperDeployList 布阵列表 (854/1)
+	ActionIDEraInfiniteSuperDeployList uint32 = 0x03560001
+)
+
+// 853 结果码（Mod_EraInfiniteMission_Base）。
+const (
+	EraInfiniteSuccess        uint8 = 0
+	EraInfiniteFuncNotOpen    uint8 = 1
+	EraInfiniteIsLock         uint8 = 2
+	EraInfiniteAlreadyPass    uint8 = 3
+	EraInfiniteEnded          uint8 = 4
+	EraInfiniteFailed         uint8 = 5
+	EraInfiniteWrongID        uint8 = 6
+	EraInfinitePackageFull    uint8 = 7
+	EraInfiniteNotEnoughItem  uint8 = 8
+	EraInfiniteNotEnoughPoint uint8 = 9
+	EraInfiniteMaxActive      uint8 = 10
 )
 
 // EraInfiniteChapter 表示章节面板关键字段。
@@ -104,6 +127,50 @@ func BuildEraInfiniteChapterPacketWithPrev(chapterID int32, prevAct uint32) *Pac
 	w.WriteInt32(chapterID)
 	w.WriteUint32(prevAct)
 	return NewPacket(ActionIDEraInfiniteChapter, w.Bytes())
+}
+
+// BuildEraInfiniteDeployTypeSeqPacket 构造布阵类型序列查询 (854/39)。
+func BuildEraInfiniteDeployTypeSeqPacket() *Packet {
+	return eraInfinitePrevPacket(ActionIDEraInfiniteDeployTypeSeq)
+}
+
+// BuildEraInfiniteSuperDeployListPacket 构造布阵列表请求 (854/1)。
+func BuildEraInfiniteSuperDeployListPacket(deployID int32) *Packet {
+	return eraInfinitePrevPacket(ActionIDEraInfiniteSuperDeployList, deployID)
+}
+
+// ParseEraInfiniteDeployTypeSeq 解析 854/39：UInt16 数量 + n×(Int type, Int deploy_id)，
+// 返回每项 deploy_id。抓包示例：3 项 (1,90001)(2,90002)(3,90003)。
+func ParseEraInfiniteDeployTypeSeq(payload []byte) ([]int32, error) {
+	p := DecompressPayloadIfNeeded(payload)
+	r := NewReader(p)
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: era infinite deploy seq count: %v", ErrInvalidPayload, err)
+	}
+	out := make([]int32, 0, count)
+	for i := 0; i < int(count); i++ {
+		if _, err = r.ReadInt32(); err != nil { // type
+			return nil, fmt.Errorf("%w: era infinite deploy seq[%d].type: %v", ErrInvalidPayload, i, err)
+		}
+		id, err := r.ReadInt32() // deploy_id
+		if err != nil {
+			return nil, fmt.Errorf("%w: era infinite deploy seq[%d].deploy_id: %v", ErrInvalidPayload, i, err)
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// BuildEraInfiniteDeployTypeSeqResultPacket 构造 854/39 回包，供离线 mock 与单测使用。
+func BuildEraInfiniteDeployTypeSeqResultPacket(pairs [][2]int32) *Packet {
+	w := NewWriter()
+	w.WriteUint16(uint16(len(pairs)))
+	for _, pair := range pairs {
+		w.WriteInt32(pair[0])
+		w.WriteInt32(pair[1])
+	}
+	return NewPacket(ActionIDEraInfiniteDeployTypeSeq, w.Bytes())
 }
 
 // BuildEraInfiniteMonsterTeamPacket 构造怪物队伍查询 (853/3)。
@@ -241,6 +308,15 @@ func EraInfiniteResultText(code uint8) string {
 	default:
 		return fmt.Sprintf("未知结果码(%d)", code)
 	}
+}
+
+// BuildEraInfinitePanelResultPacket 构造 853/1 回包，供离线 mock 与单测使用。
+func BuildEraInfinitePanelResultPacket(eraLevel, missionLevel, rankPerc, rank, fightEndTS, eraZone int32) *Packet {
+	w := NewWriter()
+	for _, v := range []int32{eraLevel, missionLevel, rankPerc, rank, fightEndTS, eraZone} {
+		w.WriteInt32(v)
+	}
+	return NewPacket(ActionIDEraInfinitePanel, w.Bytes())
 }
 
 // BuildEraInfiniteChapterResultPacket 构造章节面板回包，供离线 mock 与单测使用。

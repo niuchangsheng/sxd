@@ -48,6 +48,13 @@ func TestTownPracticeRoutine_GuardStatements(t *testing.T) {
 	})
 	_ = session.Start(ctx)
 	defer session.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("session did not become active, state=%s", session.State())
+	}
 
 	// TownID is default 0
 	if err := r.Execute(ctx, session, nil); err != nil {

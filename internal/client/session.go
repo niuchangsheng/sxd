@@ -183,6 +183,11 @@ type RoleSession struct {
 	lastConnectErr       error
 
 	lastActionID atomic.Uint32
+	// lastBusinessActionID 记录最后一次发送的「业务」动作（不含心跳 0/75）。
+	// 2026-11-22 实测：心跳之后携带 0x4B 作 PrevAct 的 357/0 会被静默丢弃，
+	// 而携带上一条业务动作可正常回包；Mod 4 get_sections 对两种锚点都接受。
+	// 因此 PrevActFromLastSent 统一使用本字段，心跳不参与业务尾链。
+	lastBusinessActionID atomic.Uint32
 	// lastAckActionID 记录最后一次收到回包的业务 ActionID。
 	// 被服务端静默丢弃的请求也会推进 lastActionID，但不会推进本字段；
 	// 需要严格 PrevAct 链的协议 (如 852/16) 应以本字段作为锚点。
@@ -190,10 +195,10 @@ type RoleSession struct {
 	lastSendTime    atomic.Int64
 
 	// lastRxActionID 记录最后一次收到的网关包 ActionID（含推送、回包、心跳回包）。
-	// 官方客户端的 PrevAct 链取「最后收到的包」而非「最后发出的包」：
-	// 抓包 /tmp/wuliangjiehai.pcapng 中 853/0 的 PrevAct 为登录推送 855/1，
-	// 853/2 的 PrevAct 为其前一轮收到的 52/0 回包。带参数的业务请求若 PrevAct
-	// 与服务端链不一致会被静默丢弃（无回包），空参数请求则不受影响。
+	// 仅用于诊断与旧版 HasPrevAct 请求的锚点回退；业务 PrevAct 链以
+	// lastBusinessActionID（最后发送的业务动作）为准。
+	// 抓包 /tmp/wuliangjiehai.pcapng 显示 C2S 尾链始终等于上一条发送的请求
+	// （853/2 尾链=853/1、854/1 尾链=854/39），心跳 0/75 不参与该链。
 	lastRxActionID atomic.Uint32
 
 	// recentRx 记录最近收到的 32 个包 ActionID（环形），仅用于静默丢包诊断：
@@ -658,10 +663,10 @@ func (s *RoleSession) SetPacketObserver(fn func(*protocol.Packet)) {
 var defaultCallTimeout = 30 * time.Second
 
 // CallWithPrevActResync 发送需要 PrevAct 链的请求；若被服务端静默丢弃
-// （表现为超时），用「重试时刻最后一次收到的包」(lastRxActionID) 作为显式
-// 锚点重试一次。官方客户端的 PrevAct 链就是最后收到的包，因此锚点必须随
-// 期间新到达的推送/回包刷新，而不是沿用超时前的旧值。显式锚点不置
-// HasPrevAct，避免被会话层再次改写。两次尝试各自使用独立的 timeout 上下文。
+// （表现为超时），用「重试时刻最新的一条业务锚点」重试一次。锚点必须随
+// 期间新到达的推送/回包刷新，而不是沿用超时前的旧值；心跳 0/75 不参与
+// 业务尾链（2026-11-22 实测）。显式锚点不置 HasPrevAct，避免被会话层
+// 再次改写。两次尝试各自使用独立的 timeout 上下文。
 func (s *RoleSession) CallWithPrevActResync(parent context.Context, timeout time.Duration, req *protocol.Packet, respActionID uint32) (*protocol.Packet, error) {
 	// 首次发送前快照锚点：重连后 lastRxActionID 会被清零，此时 Send 会用
 	// lastActionID（登录握手/上一条发送）作为尾链；重试必须沿用同一锚点，
@@ -669,8 +674,14 @@ func (s *RoleSession) CallWithPrevActResync(parent context.Context, timeout time
 	// （2026-11-22 实测：魔界远征 429/4 被反复当作无量劫海/飞升/修真礼包的
 	// 重试锚点，导致连续静默丢包）。
 	fallbackAnchor := s.lastRxActionID.Load()
-	if fallbackAnchor == 0 {
-		fallbackAnchor = s.lastActionID.Load()
+	if fallbackAnchor == 0 || fallbackAnchor == s.cfg.HeartbeatActionID {
+		fallbackAnchor = s.lastBusinessActionID.Load()
+		if fallbackAnchor == 0 {
+			fallbackAnchor = s.lastActionID.Load()
+			if fallbackAnchor == s.cfg.HeartbeatActionID {
+				fallbackAnchor = 0
+			}
+		}
 	}
 	c1, cancel1 := context.WithTimeout(parent, timeout)
 	resp, err := s.Call(c1, req, respActionID)
@@ -682,7 +693,7 @@ func (s *RoleSession) CallWithPrevActResync(parent context.Context, timeout time
 		return nil, err
 	}
 	anchor := s.lastRxActionID.Load()
-	if anchor == 0 {
+	if anchor == 0 || anchor == s.cfg.HeartbeatActionID {
 		anchor = fallbackAnchor
 	}
 	if anchor == 0 {
@@ -2039,18 +2050,32 @@ func (s *RoleSession) IsFactionFeatureAvailable() bool {
 	return s.factionAvailable.Load()
 }
 
-// LastActionID 获取最后一次向对端发送的协议 ActionID。
+// LastActionID 获取最后一次向对端发送的协议 ActionID（含心跳）。
 func (s *RoleSession) LastActionID() uint32 {
 	return s.lastActionID.Load()
+}
+
+// LastBusinessActionID 获取最后一次发送的业务动作 ActionID（不含心跳 0/75）。
+// 业务请求的 PrevAct 尾链应使用该值：心跳不参与服务端的业务尾链校验。
+func (s *RoleSession) LastBusinessActionID() uint32 {
+	return s.lastBusinessActionID.Load()
 }
 
 // SetLastActionID 手动设置最后一次向对端发送的协议 ActionID。
 func (s *RoleSession) SetLastActionID(actionID uint32) {
 	s.lastActionID.Store(actionID)
+	if actionID == 0 {
+		// 显式清零表示调用方要求禁用尾链自动填充（探针常用）。
+		s.lastBusinessActionID.Store(0)
+		return
+	}
+	if actionID != s.cfg.HeartbeatActionID {
+		s.lastBusinessActionID.Store(actionID)
+	}
 }
 
-// LastRxActionID 获取最后一次收到的网关包 ActionID（含推送与心跳回包），
-// 即官方客户端 PrevAct 链的当前值。
+// LastRxActionID 获取最后一次收到的网关包 ActionID（含推送与心跳回包）。
+// 仅用于诊断；业务 PrevAct 链应使用 LastBusinessActionID。
 func (s *RoleSession) LastRxActionID() uint32 {
 	return s.lastRxActionID.Load()
 }
@@ -2092,7 +2117,19 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 			// 官方客户端的所有请求都在包尾追加「上一条发送的 [Module,Action]」
 			// (DataBase.netCall tmpBuff 链)。结缘 528/1/232/34 校验该链：链路错位
 			// 时服务端静默丢弃。这里在 writeMu 内取最后发送动作，与心跳发送互斥。
-			if anchor := s.lastActionID.Load(); anchor != 0 && len(p.Payload) >= 4 {
+			//
+			// 心跳 (0/75) 不参与该业务尾链：2026-11-22 实测 357/0 携带 0x4B
+			// 尾链被静默丢弃，改用最后一条业务动作立即正常回包。因此锚点取
+			// lastBusinessActionID，回退到 lastActionID 仅覆盖登录早期尚无
+			// 业务请求的情况。
+			anchor := s.lastBusinessActionID.Load()
+			if anchor == 0 {
+				anchor = s.lastActionID.Load()
+				if anchor == s.cfg.HeartbeatActionID {
+					anchor = 0
+				}
+			}
+			if anchor != 0 && len(p.Payload) >= 4 {
 				cloned := make([]byte, len(p.Payload))
 				copy(cloned, p.Payload)
 				binary.BigEndian.PutUint32(cloned[len(cloned)-4:], anchor)
@@ -2101,9 +2138,14 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 		}
 		// PrevAct 链以「最后收到的包」为锚点；会话尚未收到任何
 		// 包时退回最后发送动作，保证登录早期请求也有合法前序。
+		// 心跳回包 (0/75) 同样不作为锚点，改用最后一条业务动作。
 		prev := s.lastRxActionID.Load()
-		if prev == 0 {
-			prev = s.lastActionID.Load()
+		if prev == 0 || prev == s.cfg.HeartbeatActionID {
+			if b := s.lastBusinessActionID.Load(); b != 0 {
+				prev = b
+			} else if prev == 0 {
+				prev = s.lastActionID.Load()
+			}
 		}
 		if !p.PrevActFromLastSent && prev != 0 {
 			if p.ActionID == protocol.ActionIDItemGetPackList && len(p.Payload) == 0 {
@@ -2131,10 +2173,12 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 	err := protocol.WritePacket(s.conn, p)
 	if err == nil && p != nil {
 		s.lastSendTime.Store(time.Now().UnixNano())
-		// 心跳同样会推进服务端 PrevAct 原子链：实测心跳之后紧接的 Mod 4 get_sections
-		// 若仍携带心跳之前的旧 PrevAct 会被网关静默丢弃。官方客户端同样按“最后发送的动作”
-		// 计算 PrevAct，因此这里不能把心跳排除在 lastActionID 之外。
+		// lastActionID 记录真实最后发送动作（含心跳）；lastBusinessActionID 是
+		// 业务 PrevAct 链的锚点，心跳 0/75 不参与（见字段注释与 2026-11-22 实测）。
 		s.lastActionID.Store(p.ActionID)
+		if p.ActionID != s.cfg.HeartbeatActionID {
+			s.lastBusinessActionID.Store(p.ActionID)
+		}
 		slog.Debug("发送网关请求", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", p.ActionID, p.ActionID>>16, p.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(p.Payload))
 	}
 	return err
@@ -2157,6 +2201,9 @@ func (s *RoleSession) SendCompressed(p *protocol.Packet) error {
 	if err == nil && p != nil {
 		s.lastSendTime.Store(time.Now().UnixNano())
 		s.lastActionID.Store(p.ActionID)
+		if p.ActionID != s.cfg.HeartbeatActionID {
+			s.lastBusinessActionID.Store(p.ActionID)
+		}
 	}
 	return err
 }
@@ -2180,6 +2227,9 @@ func (s *RoleSession) SendRaw(data []byte) error {
 		if len(data) >= 8 {
 			actID := binary.BigEndian.Uint32(data[4:8])
 			s.lastActionID.Store(actID)
+			if actID != s.cfg.HeartbeatActionID {
+				s.lastBusinessActionID.Store(actID)
+			}
 		}
 	}
 	return err
@@ -2246,6 +2296,7 @@ func (s *RoleSession) runLoop() {
 		s.writeMu.Lock()
 		s.conn = conn
 		s.lastActionID.Store(0)
+		s.lastBusinessActionID.Store(0)
 		// 新连接的 PrevAct 链在服务端从零开始，必须清掉上一条连接的收包锚点。
 		s.lastRxActionID.Store(0)
 		s.writeMu.Unlock()

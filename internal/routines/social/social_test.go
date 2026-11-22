@@ -33,16 +33,25 @@ func TestSocialRoutines_Execute(t *testing.T) {
 	}()
 
 	session := client.NewRoleSession(client.SessionConfig{
-		RoleID:   "role_test_social",
-		RoleName: "测试社交角色",
+		RoleID:     "role_test_social",
+		RoleName:   "测试社交角色",
+		ServerAddr: "mock-pipe",
 		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return c1, nil
 		},
+		Authenticator: func(*client.RoleSession) error { return nil },
 	})
 	_ = session.Start(context.Background())
 	defer session.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	// BaseRoutine 要求会话已激活；固定 sleep 在 CI 上会与握手竞争。
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if session.State() != client.StateActive {
+		t.Fatalf("session did not become active, state=%s", session.State())
+	}
 
 	r1 := NewGuildActivitiesRoutine()
 	if dr, ok := r1.(scheduler.DetailedRoutine); ok {
@@ -50,8 +59,12 @@ func TestSocialRoutines_Execute(t *testing.T) {
 			t.Fatalf("领域不匹配: %s", dr.Domain())
 		}
 	}
+	// 无响应管道下功能开放查询会超时，应返回冷却而非直接报错。
 	if err := r1.Execute(context.Background(), session, nil); err != nil {
-		t.Fatalf("仙盟任务执行失败: %v", err)
+		var cd *scheduler.CooldownError
+		if !errors.As(err, &cd) {
+			t.Fatalf("仙盟任务执行失败: %v", err)
+		}
 	}
 
 	r2 := NewHomesteadRoutine()

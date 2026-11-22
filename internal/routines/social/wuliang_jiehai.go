@@ -2,15 +2,26 @@
 //
 // 抓包基准: /tmp/wuliangjiehai.pcapng（2026-11-15，qq s0）：
 //
-//	853/0 赛季 → 853/1 面板 → 853/2 [chapter] 章节面板（含 now_level）
-//	→ 853/3 [now_level, 1] 怪物队伍 → 853/4 [now_level] 挑战
+//	855/1(无关) → 853/0 赛季 → 853/1 面板
+//	→ 853/2 [chapter_id]      （选择章节，官方客户端不等回包）
+//	→ 854/39 布阵类型序列      （返回 [[type, deploy_id]]）
+//	→ 854/1 [deploy_id]        （选择布阵，无回包等待）
+//	→ 853/3 [now_level, 1]     （查看怪物队伍，无回包等待）
+//	→ 853/4 [now_level]        （真正挑战，唯一需要等待的回包）
 //
-// 无量劫海分为归墟 1/2/3 与极境，每境 10 关；客户端按 now_level 逐关挑战。
-// 失败/冷却/次数不足即停止或进入冷却唤醒；不消耗元宝。
+// 官方抓包中 853/2、854/39 后的 854/1、853/3 都不会回包；早期实现把 853/2
+// 当作带状态的章节面板并等待回包，导致 8 个章节全部"无回包"空转、从未发起
+// 853/4。这里改为按抓包顺序 fire-and-forget 前置包，只等待 853/4。
+//
+// 章节与关卡对应（静态表：1-10 / 11-30 / 31-60 / 61-300）：
+// 第 2 章起服务端会自动结算多支队伍，整体 is_win 为 0 即本次战斗失败，
+// 需要重试；连续失败 maxWuliangConsecutiveLosses 次后进入冷却。
+// 不消耗元宝。
 package social
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -19,14 +30,35 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
-// maxWuliangFights 单轮最多挑战关卡数。
-const maxWuliangFights = 20
+const (
+	// maxWuliangFights 单轮最多挑战关卡数。
+	maxWuliangFights = 20
+	// maxWuliangConsecutiveLosses 同一关连续失败多少次后退出本轮。
+	maxWuliangConsecutiveLosses = 3
+	// wuliangMaxLevel 无量劫海最高关卡（第 4 章 61-300）。
+	wuliangMaxLevel int32 = 300
+)
+
+// wuliangChapterForLevel 返回关卡所属章节 id（1..4）。
+func wuliangChapterForLevel(level int32) int32 {
+	switch {
+	case level <= 10:
+		return 1
+	case level <= 30:
+		return 2
+	case level <= 60:
+		return 3
+	default:
+		return 4
+	}
+}
 
 // NewWuliangJieHaiRoutine 构造无量劫海挑战任务。
 func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 	const callTimeout = 10 * time.Second
-	// 战斗回包通常在数秒内返回；静默丢弃时 35 秒超时会让单轮阻塞过久，降到 20 秒。
-	const fightTimeout = 20 * time.Second
+	// 多队伍战斗（第 2 章起 2 队、后续更多）需要服务端逐队结算，回包可能超过
+	// 20 秒；实测 20 秒会在战斗仍在计算时误判为静默丢弃。给足 45 秒。
+	const fightTimeout = 45 * time.Second
 	return scheduler.NewBaseRoutine(
 		"wuliang_jiehai",
 		"social",
@@ -44,119 +76,161 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				resp, err := session.CallWithPrevActResync(ctx, timeout, pkt, act)
 				if err != nil {
 					slog.Info("无量劫海协议无回包", "role_id", session.RoleID(),
-						"action", act, "err", err)
+						"action", act, "err", err,
+						"recent_rx", fmt.Sprintf("%X", session.RecentRxActions()))
 					return nil
 				}
 				return resp
 			}
-
-			// probeChapter 用较短超时探测章节面板：章节不可用时服务端会静默丢弃，
-			// 这里不做 PrevAct 重试以免每个无效章节空等两份超时。
-			probeChapter := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
-				cctx, ccancel := context.WithTimeout(ctx, 4*time.Second)
-				defer ccancel()
-				resp, err := session.Call(cctx, pkt, act)
-				if err != nil {
-					return nil
-				}
-				return resp
-			}
-
-			_ = call(protocol.BuildEraInfiniteSeasonPacket(), protocol.ActionIDEraInfiniteSeason, callTimeout)
-			if panelResp := call(protocol.BuildEraInfinitePanelPacket(),
-				protocol.ActionIDEraInfinitePanel, callTimeout); panelResp != nil {
-				if panel, pErr := protocol.ParseEraInfinitePanel(panelResp.Payload); pErr == nil {
-					slog.Info("无量劫海面板", "role_id", session.RoleID(),
-						"era_level", panel.EraLevel, "mission_level", panel.MissionLevel,
-						"rank", panel.Rank, "rank_perc", panel.RankPerc,
-						"era_zone", panel.EraZone)
+			// send 发送无需等待回包的前置动作（853/2、854/1、853/3）。
+			send := func(pkt *protocol.Packet, name string) {
+				if err := session.Send(pkt); err != nil {
+					slog.Info("无量劫海前置动作发送失败", "role_id", session.RoleID(),
+						"name", name, "err", err)
 				}
 			}
 
-			fights := 0
-			// 章节 id 来自客户端静态表（抓包中实测为 1,3,4,5,6…，2 不存在），
-			// 且服务端对当前不可用的章节会静默丢弃 853/2。因此扫描 1..8：
-			// 无回包视为该章节不可用并继续下一章，全部无回包才按静默丢包退避。
-			const lastChapterID = 8
-			probed, dropped := int32(0), 0
-			for chapterID := int32(1); chapterID <= lastChapterID && fights < maxWuliangFights; chapterID++ {
-				probed++
-				lastLevel := int32(-1)
-				for fights < maxWuliangFights && ctx.Err() == nil {
-					// 用最后一条业务回包作显式锚点，避免 4 秒探测间隔内的心跳
-					// 把 PrevAct 推进到 0/23 导致 853/2 被静默丢弃。
-					chapterPkt := protocol.BuildEraInfiniteChapterPacket(chapterID)
-					if anchor := session.LastAckActionID(); anchor != 0 {
-						chapterPkt = protocol.BuildEraInfiniteChapterPacketWithPrev(chapterID, anchor)
-					}
-					chapterResp := probeChapter(chapterPkt, protocol.ActionIDEraInfiniteChapter)
-					if chapterResp == nil {
-						dropped++
-						slog.Info("无量劫海章节面板无回包，跳过该章节", "role_id", session.RoleID(),
-							"chapter_id", chapterID)
-						break
-					}
-					chapter, cErr := protocol.ParseEraInfiniteChapter(chapterResp.Payload)
-					if cErr != nil {
-						slog.Warn("解析无量劫海章节面板失败，本轮跳过", "role_id", session.RoleID(), "err", cErr)
-						return nil
-					}
-					if chapter.Result != 0 || chapter.NowLevel <= 0 {
-						slog.Info("无量劫海该境暂无可挑战关卡", "role_id", session.RoleID(),
-							"chapter_id", chapterID, "result", chapter.Result,
-							"result_text", protocol.EraInfiniteResultText(chapter.Result),
-							"now_level", chapter.NowLevel)
-						break
-					}
-					level := chapter.NowLevel
-					slog.Info("无量劫海章节状态", "role_id", session.RoleID(),
-						"chapter_id", chapterID, "now_level", level)
-					if level == lastLevel {
-						slog.Info("无量劫海关卡未推进，进入下一境", "role_id", session.RoleID(), "now_level", level)
-						break
-					}
-					lastLevel = level
-
-					// 怪物队伍信息用于确认关卡状态；被静默丢弃时不阻断挑战。
-					_ = call(protocol.BuildEraInfiniteMonsterTeamPacket(level, 1),
-						protocol.ActionIDEraInfiniteMonsterTeam, callTimeout)
-
-					fightResp := call(protocol.BuildEraInfiniteFightPacket(level),
-						protocol.ActionIDEraInfiniteFight, fightTimeout)
-					if fightResp == nil {
-						// 章节面板正常但挑战动作被静默丢弃：按连续丢包退避，
-						// 避免每 10 分钟重试一次直到天亮。计数只在挑战真正回包时清零。
-						return scheduler.HandleSilentDrop(session, "wuliang_jiehai", 3,
-							10*time.Minute, "无量劫海挑战无回包")
-					}
-					scheduler.ResetSilentDrops(session, "wuliang_jiehai")
-					res, fErr := protocol.ParseEraInfiniteFightResult(fightResp.Payload)
-					if fErr != nil {
-						return scheduler.NewCooldown(10*time.Minute, "无量劫海挑战回包解析失败")
-					}
-					if res.Result != 0 {
-						slog.Info("无量劫海挑战结束", "role_id", session.RoleID(),
-							"chapter_id", chapterID, "now_level", level, "fights", fights,
-							"result", res.Result, "result_text", protocol.EraInfiniteResultText(res.Result))
-						return nil
-					}
-					if !res.IsWin {
-						slog.Info("无量劫海挑战失败，稍后重试", "role_id", session.RoleID(),
-							"chapter_id", chapterID, "now_level", level, "fights", fights)
-						return scheduler.NewCooldown(10*time.Minute, "无量劫海挑战失败")
-					}
-					fights++
-					slog.Info("无量劫海挑战成功", "role_id", session.RoleID(),
-						"chapter_id", chapterID, "now_level", level, "fights", fights)
-				}
-			}
-			if dropped == int(probed) {
-				// 所有章节面板都被服务端静默丢弃：视为当日/当前赛季状态已结束，
-				// 连续 3 次挂起到次日重置，避免每 30 分钟空等。
+			_ = call(protocol.BuildEraInfiniteSeasonPacket(),
+				protocol.ActionIDEraInfiniteSeason, callTimeout)
+			panelResp := call(protocol.BuildEraInfinitePanelPacket(),
+				protocol.ActionIDEraInfinitePanel, callTimeout)
+			if panelResp == nil {
 				return scheduler.HandleSilentDrop(session, "wuliang_jiehai", 3,
-					30*time.Minute, "无量劫海章节面板全部无回包")
+					30*time.Minute, "无量劫海面板无回包")
 			}
-			slog.Info("无量劫海本轮完成", "role_id", session.RoleID(), "fights", fights)
+			panel, pErr := protocol.ParseEraInfinitePanel(panelResp.Payload)
+			if pErr != nil {
+				return scheduler.NewCooldown(10*time.Minute, "无量劫海面板回包解析失败")
+			}
+			slog.Info("无量劫海面板", "role_id", session.RoleID(),
+				"era_level", panel.EraLevel, "mission_level", panel.MissionLevel,
+				"rank", panel.Rank, "rank_perc", panel.RankPerc,
+				"fight_end_ts", panel.FightEndTS, "era_zone", panel.EraZone)
+			// 面板成功不代表挑战可用，不能在这里 ResetSilentDrops。
+
+			target := panel.MissionLevel + 1
+			if target <= 0 {
+				target = 1
+			}
+			if target > wuliangMaxLevel {
+				slog.Info("无量劫海已达最高关卡", "role_id", session.RoleID(),
+					"mission_level", panel.MissionLevel)
+				return nil
+			}
+
+			// 布阵信息每次执行只需准备一次：854/39 取 deploy_id，854/1 选中。
+			deployReady := false
+			var deployID int32
+			lastChapter := int32(0)
+			fights, losses := 0, 0
+			for fights < maxWuliangFights && ctx.Err() == nil {
+				if target > wuliangMaxLevel {
+					slog.Info("无量劫海已达最高关卡", "role_id", session.RoleID(),
+						"fights", fights)
+					return nil
+				}
+				chapter := wuliangChapterForLevel(target)
+				if chapter != lastChapter {
+					lastChapter = chapter
+					// 官方客户端会先取章节面板，并用其中的 now_level 作为挑战关卡。
+					// 面板若被静默丢弃，退回 mission_level+1 推断。
+					chapterResp := call(protocol.BuildEraInfiniteChapterPacket(chapter),
+						protocol.ActionIDEraInfiniteChapter, callTimeout)
+					if chapterResp == nil {
+						slog.Info("无量劫海章节面板无回包，使用 mission_level+1 推断关卡",
+							"role_id", session.RoleID(), "chapter_id", chapter, "now_level", target)
+					} else if ch, cErr := protocol.ParseEraInfiniteChapter(chapterResp.Payload); cErr != nil {
+						slog.Info("解析无量劫海章节面板失败，使用 mission_level+1 推断关卡",
+							"role_id", session.RoleID(), "chapter_id", chapter, "err", cErr)
+					} else if ch.Result == protocol.EraInfiniteEnded {
+						slog.Info("无量劫海当前赛季已结束", "role_id", session.RoleID(),
+							"chapter_id", chapter, "fights", fights)
+						return nil
+					} else if ch.Result == protocol.EraInfiniteIsLock {
+						slog.Info("无量劫海章节未解锁，稍后重试", "role_id", session.RoleID(),
+							"chapter_id", chapter)
+						return scheduler.NewCooldown(30*time.Minute, "无量劫海章节未解锁")
+					} else if ch.Result == 0 && ch.NowLevel > 0 {
+						if ch.NowLevel != target {
+							slog.Info("无量劫海章节关卡以面板为准", "role_id", session.RoleID(),
+								"chapter_id", chapter, "panel_now_level", ch.NowLevel,
+								"assumed", target)
+						}
+						target = ch.NowLevel
+					}
+				}
+				if !deployReady {
+					deployReady = true
+					if resp := call(protocol.BuildEraInfiniteDeployTypeSeqPacket(),
+						protocol.ActionIDEraInfiniteDeployTypeSeq, callTimeout); resp != nil {
+						ids, dErr := protocol.ParseEraInfiniteDeployTypeSeq(resp.Payload)
+						if dErr != nil {
+							slog.Info("解析无量劫海布阵序列失败，使用服务端默认布阵",
+								"role_id", session.RoleID(), "err", dErr)
+						} else if len(ids) > 0 {
+							deployID = ids[0]
+						}
+						slog.Info("无量劫海布阵序列", "role_id", session.RoleID(),
+							"deploy_ids", ids, "selected", deployID)
+					}
+					if deployID != 0 {
+						send(protocol.BuildEraInfiniteSuperDeployListPacket(deployID), "854/1 deploy")
+					}
+				}
+				send(protocol.BuildEraInfiniteMonsterTeamPacket(target, 1), "853/3 team")
+
+				slog.Info("无量劫海发起挑战", "role_id", session.RoleID(),
+					"chapter_id", chapter, "now_level", target,
+					"deploy_id", deployID, "losses", losses)
+				fightResp := call(protocol.BuildEraInfiniteFightPacket(target),
+					protocol.ActionIDEraInfiniteFight, fightTimeout)
+				if fightResp == nil {
+					// 前置动作正常但挑战被静默丢弃：按连续丢包退避，
+					// 计数只在挑战真正回包时清零。
+					return scheduler.HandleSilentDrop(session, "wuliang_jiehai", 3,
+						10*time.Minute, "无量劫海挑战无回包")
+				}
+				scheduler.ResetSilentDrops(session, "wuliang_jiehai")
+				res, fErr := protocol.ParseEraInfiniteFightResult(fightResp.Payload)
+				if fErr != nil {
+					return scheduler.NewCooldown(10*time.Minute, "无量劫海挑战回包解析失败")
+				}
+				if res.Result != 0 {
+					switch res.Result {
+					case protocol.EraInfiniteEnded:
+						slog.Info("无量劫海当前赛季已结束", "role_id", session.RoleID(),
+							"mission_level", target-1, "fights", fights)
+						return nil
+					case protocol.EraInfiniteFuncNotOpen:
+						slog.Info("无量劫海功能未开放，稍后重试", "role_id", session.RoleID())
+						return scheduler.NewCooldown(2*time.Hour, "无量劫海功能未开放")
+					default:
+						slog.Info("无量劫海挑战未成功，本轮退出", "role_id", session.RoleID(),
+							"chapter_id", chapter, "now_level", target, "fights", fights,
+							"result", res.Result,
+							"result_text", protocol.EraInfiniteResultText(res.Result))
+						return scheduler.NewCooldown(10*time.Minute, "无量劫海挑战结果异常")
+					}
+				}
+				if !res.IsWin {
+					losses++
+					slog.Info("无量劫海挑战失败（多队伍需全部成功）", "role_id", session.RoleID(),
+						"chapter_id", chapter, "now_level", target,
+						"losses", losses, "fights", fights)
+					if losses >= maxWuliangConsecutiveLosses {
+						return scheduler.NewCooldown(30*time.Minute,
+							fmt.Sprintf("无量劫海连续挑战失败 %d 次", losses))
+					}
+					continue
+				}
+				losses = 0
+				fights++
+				target++
+				slog.Info("无量劫海挑战成功", "role_id", session.RoleID(),
+					"chapter_id", chapter, "now_level", target-1, "fights", fights)
+			}
+			slog.Info("无量劫海本轮完成", "role_id", session.RoleID(), "fights", fights,
+				"next_level", target)
 			return nil
 		},
 	)
