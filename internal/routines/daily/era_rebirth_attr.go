@@ -44,7 +44,9 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 		"era_rebirth_attr_gift",
 		"daily",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 与无量劫海/飞升同理：长会话后段 851/5 更容易被静默丢弃，
+		// 登录后优先完成。
+		scheduler.RoutinePriority(370),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {

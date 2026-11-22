@@ -118,7 +118,9 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 		"devil_expedition",
 		"social",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 魔界远征 2/107 屠魔令查询与 429/63 在长会话后段易被静默丢弃，
+		// 登录后优先完成。
+		scheduler.RoutinePriority(380),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
