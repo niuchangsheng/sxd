@@ -24,14 +24,14 @@
 # 本地编译（自动注入版本元数据）
 go build -trimpath \
   -ldflags "-s -w -X main.Version=$(git describe --tags --always) -X main.Commit=$(git rev-parse --short HEAD) -X main.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -o bin/sxd-pie-ng ./cmd/server
+  -o bin/sxd-auto ./cmd/server
 ```
 
 部署目录最小集合：
 
 ```text
-/opt/sxd-pie-ng/
-├── bin/sxd-pie-ng
+/opt/sxd-auto/
+├── bin/sxd-auto
 ├── configs/config.yaml      # 权限建议 0600，切勿提交到 Git
 ├── data/Pieb.db             # 离线静态元数据字典（必须存在）
 └── logs/                    # 运行日志目录（程序自动创建）
@@ -39,18 +39,18 @@ go build -trimpath \
 
 ### 2.2 `systemd` 守护进程部署（Linux 推荐）
 
-创建 `/etc/systemd/system/sxd-pie-ng.service`：
+创建 `/etc/systemd/system/sxd-auto.service`：
 
 ```ini
 [Unit]
-Description=sxd-pie-ng Automation Service
+Description=sxd-auto Automation Service
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/sxd-pie-ng
-ExecStart=/opt/sxd-pie-ng/bin/sxd-pie-ng --config /opt/sxd-pie-ng/configs/config.yaml
+WorkingDirectory=/opt/sxd-auto
+ExecStart=/opt/sxd-auto/bin/sxd-auto --config /opt/sxd-auto/configs/config.yaml
 Environment="PLATFORM_PASSWORD=your_password_if_needed"
 Restart=on-failure
 RestartSec=10s
@@ -60,7 +60,7 @@ TimeoutStopSec=15s
 # 安全加固
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/opt/sxd-pie-ng/logs /opt/sxd-pie-ng/configs
+ReadWritePaths=/opt/sxd-auto/logs /opt/sxd-auto/configs
 
 [Install]
 WantedBy=multi-user.target
@@ -70,9 +70,9 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now sxd-pie-ng
-sudo systemctl status sxd-pie-ng
-journalctl -u sxd-pie-ng -f
+sudo systemctl enable --now sxd-auto
+sudo systemctl status sxd-auto
+journalctl -u sxd-auto -f
 ```
 
 > [!IMPORTANT]
@@ -126,9 +126,15 @@ curl -fsS http://127.0.0.1:8080/api/roles
 ## 5. 凭据与会话生命周期维护
 
 1. **Cookie 模式（强烈推荐）**：在 `accounts[].cookie` 填入心动平台 `A1=...; A2=...` Cookie，可绕过图形验证码风控，通常有效期数周。
-2. **Cookie 过期续期**：运行 `./bin/sxd-pie-ng --config configs/config.yaml --browser-login`，按提示登录即可自动捕获并回写最新 Cookie。
+2. **Cookie 过期续期**：运行 `./bin/sxd-auto --config configs/config.yaml --browser-login`，按提示登录即可自动捕获并回写最新 Cookie。
 3. **多区服换票节流**：`startup.ticket_min_interval_seconds` / `ticket_max_interval_seconds`（默认 2~5 秒）保证同一账号的多区服串行换票，防止短时间并发登录触发风控。
 4. **会话定时自愈**：系统内建 `session_refresh` 例程，每 5 分钟按连接存活时长主动重建主服连接，规避游戏服务端长会话后段的批量静默丢包。
+5. **离线字典同步刷新**：游戏大版本更新（新增道具/伙伴/关卡/宝库大奖）后，执行以下两步刷新 `data/Pieb.db`：
+   ```bash
+   go run -tags=probe test/probes/probe_ticket_extra.go       # 获取最新 cur_ver 与 diff_urls[cur_ver]
+   python3 scripts/rebuild_dict.py --ver <cur_ver> --diff <diff_tag>
+   go test -race -count=1 ./internal/dictionary ./internal/qa
+   ```
 
 ---
 
@@ -171,5 +177,5 @@ go test -race -count=1 ./...
 git diff --check
 
 # 4. 实机灰度冒烟（观察启动、双区握手、高优玩法与优雅停机）
-./bin/sxd-pie-ng --config configs/config.yaml
+./bin/sxd-auto --config configs/config.yaml
 ```

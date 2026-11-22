@@ -1,16 +1,10 @@
-# sxd-pie-ng (神仙道助手重构工程)
+# sxd-auto (神仙道自动化助手)
 
 <p align="center">
   <strong>基于 Go 语言的高性能、脱机纯协议通信、事件驱动拟人防封调度与内嵌 Web 控制台的现代化神仙道自动化助手</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/atengk/sxd-pie-ng/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/atengk/sxd-pie-ng/ci.yml?branch=main&label=CI&style=flat-square" alt="CI Status" />
-  </a>
-  <a href="https://github.com/atengk/sxd-pie-ng/releases">
-    <img src="https://img.shields.io/github/v/release/atengk/sxd-pie-ng?style=flat-square" alt="Release" />
-  </a>
   <a href="https://golang.org/">
     <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square&logo=go" alt="Go Version" />
   </a>
@@ -26,7 +20,7 @@
 
 ## 📖 项目简介
 
-`sxd-pie-ng` 是对《神仙道》传统桌面辅助工具（Pie 助手）的现代化 **Go 语言** 全面重构版本（Next-Generation）。无需启动 Flash 或浏览器渲染环境，直接通过原生 TCP 二进制长连接与主服、跨服、圣域、仙盟城镇及独立聊天服交互，覆盖 **7 大领域、113 个自动化玩法例程**，并内置严格的不消耗元宝安全红线与回包结果码解析铁律。
+`sxd-auto` 是《神仙道》的现代化 **Go 语言** 脱机自动化助手。无需启动 Flash 或浏览器渲染环境，直接通过原生 TCP 二进制长连接与主服、跨服、圣域、仙盟城镇及独立聊天服交互，覆盖 **7 大领域、113 个自动化玩法例程**，并内置严格的不消耗元宝安全红线、回包结果码解析铁律与官方 SWF 静态字典自动重建工具。
 
 ---
 
@@ -39,7 +33,7 @@
   - 内置声明式生命周期中间件（`WithReturnToTown` / `WithFunctionID` / `WithSilentDropPolicy`）与按调度器实例隔离的 `DropTracker` 静默丢包退避；
   - 全部玩法统一使用 `internal/routines/kit`（`kit.Caller` / `kit.Sleep`），断线与取消信号毫秒级响应、绝不吞错。
 - 🔒 **元宝安全红线 & 回包解析铁律**：所有默认自动化链路仅消费免费次数/铜钱/道缘等游戏内常规资源，严禁静默消费元宝；所有业务请求必须解析服务端结果码并按失败语义熔断或冷却（ADR-0015）。
-- 📚 **离线字典与智能题库**：挂载 `data/Pieb.db` 离线静态元数据（任务/关卡/道具/职业/大奖权重）与 5,719 题智能问答引擎。
+- 📚 **官方 SWF 同步字典与智能题库**：通过 `scripts/rebuild_dict.py` 从官方最新客户端 SWF（`2026112001`）自动反编译重建 `data/Pieb.db` 静态元数据（10,016 道具 / 939 角色 / 2,003 关卡 / 1,937 任务 / 530 NPC / 49 宝库大奖），并内置 5,719 题智能问答引擎。
 - 🌐 **内嵌 Web 控制台**：基于 `go:embed` 打包零外部依赖单文件，提供角色状态监视、按角色/全局玩法动态开关、预设策略切换与实时日志流。
 
 ---
@@ -61,7 +55,7 @@
 ## 🏛️ 目录结构
 
 ```text
-sxd-pie-ng/
+sxd-auto/
 ├── cmd/
 │   ├── server/                 # 主服务端入口 (启动编排、多角色舰队、Web 控制台与优雅停机)
 │   └── probe/                  # 脱机协议探针 CLI 工具
@@ -85,8 +79,9 @@ sxd-pie-ng/
 │   ├── logging/                # 按大小与时间双维度轮转的本地日志组件
 │   └── web/                    # go:embed 内嵌 Web 控制台与管理 REST API
 ├── configs/                    # 配置模板 (config.example.yaml)
-├── data/                       # 离线静态数据字典 (Pieb.db)
+├── data/                       # 离线静态数据字典 (Pieb.db，由官方 SWF 自动重建)
 ├── docs/                       # 设计文档、用户手册、运维手册、协议/玩法规范与 ADR
+├── scripts/                    # 官方 SWF 字典重建 (rebuild_dict.py)、提交与发版脚本
 ├── test/probes/                # 隔离的脱机逆向探针脚本 (强制 //go:build probe)
 └── .github/workflows/          # GitHub Actions CI (go vet + go test -race) 与自动化发版
 ```
@@ -97,32 +92,38 @@ sxd-pie-ng/
 
 ### 运行环境
 - **Go**: 1.26+（参见 [go.mod](./go.mod)）
-- **数据字典**: 仓库内置 `data/Pieb.db`
+- **数据字典**: 仓库内置基于 `2026112001` 重建的 `data/Pieb.db`
 
 ### 编译与运行
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/atengk/sxd-pie-ng.git
-cd sxd-pie-ng
-
-# 2. 复制并填写配置文件（将账号/密码或 Cookie 填入 configs/config.yaml）
+# 1. 复制并填写配置文件（将账号/密码或 Cookie 填入 configs/config.yaml）
 cp configs/config.example.yaml configs/config.yaml
 
-# 3. 编译主程序
-go build -o bin/sxd-pie-ng ./cmd/server
+# 2. 编译主程序
+go build -o bin/sxd-auto ./cmd/server
 
-# 4. 启动运行（打开 http://127.0.0.1:8080 查看控制台）
-./bin/sxd-pie-ng --config configs/config.yaml
+# 3. 启动运行（打开 http://127.0.0.1:8080 查看控制台）
+./bin/sxd-auto --config configs/config.yaml
 ```
 
 常用命令行参数：
 
 ```bash
-./bin/sxd-pie-ng -v                                      # 查看版本与构建信息
-./bin/sxd-pie-ng --config configs/config.yaml            # 指定配置文件启动
-./bin/sxd-pie-ng --config configs/config.yaml --debug    # 开启 Debug 日志输出
-./bin/sxd-pie-ng --config configs/config.yaml --browser-login  # 弹出浏览器捕获/刷新平台 Cookie
+./bin/sxd-auto -v                                      # 查看版本与构建信息
+./bin/sxd-auto --config configs/config.yaml            # 指定配置文件启动
+./bin/sxd-auto --config configs/config.yaml --debug    # 开启 Debug 日志输出
+./bin/sxd-auto --config configs/config.yaml --browser-login  # 弹出浏览器捕获/刷新平台 Cookie
+```
+
+### 同步最新官方游戏静态字典
+
+```bash
+# 1. 查看线上最新 cur_ver 与 diff_urls[cur_ver]
+go run -tags=probe test/probes/probe_ticket_extra.go
+
+# 2. 自动拉取官方最新 SWF 并重建 data/Pieb.db 核心表
+python3 scripts/rebuild_dict.py --ver 2026112001 --diff r395-01
 ```
 
 ### 质量校验

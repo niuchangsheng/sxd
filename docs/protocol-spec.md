@@ -51,6 +51,15 @@
 - **禁止丢弃回包**：任何发送业务请求的代码都必须持有响应并解析 `result_code`，禁止以“TCP 收到回包”或 `session.Call` 未返回错误判定业务成功。
 - **失败必须驱动分支**：次数不足、冷却中、条件不满足、背包已满、未知错误码等必须映射为对应的熔断、挂起或退出动作，具体契约见 [routine-spec.md](./routine-spec.md) 2.2 节。
 
+### 1.3 前序动作尾链 (`PrevActMode` / `PrevActChain`) 契约
+
+神仙道主服多数带参业务请求在 Payload 末尾附加 4 字节大端序前序业务 `ActionID`（`PrevAct`）。客户端在 [packet.go](../internal/protocol/packet.go) 中通过 `PrevActMode` 显式声明尾链语义，由 [prevact.go](../internal/client/prevact.go) 中的并发安全 `PrevActChain` 统一维护：
+
+- **`PrevActNone`**：不携带尾链（保留历史 Mod 3/4/32 兼容路径）。
+- **`PrevActAutoBusiness`**：发送瞬间自动用最新一条已发送业务 `ActionID` 填充末尾 4 字节（心跳 `0x0000004B` 与服务端推送不参与业务尾链）；兼容旧 `HasPrevAct` / `PrevActFromLastSent` 双标记。
+- **`PrevActExplicit`**：由调用方显式指定锚点，发送层严禁覆盖（用于 `CallWithPrevActResync` 超时重同步重试及固定锚点场景）。
+- **链污染自愈**：带尾链请求超时后自动标记 `chainDirty`，后续请求回退至服务端最后确认动作 `lastAckActionID`，收到任意新业务回包后恢复正常尾链。
+
 ---
 
 ## 二、 基本数据类型序列化规范 (Type Marshalling)

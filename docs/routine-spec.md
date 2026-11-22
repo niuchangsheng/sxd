@@ -1,7 +1,7 @@
 # 玩法子系统与自动化规则规范白皮书 (Routine Specification)
 
 > [!NOTE]
-> 本白皮书全面对齐原版 `pieb.ini`（23 个核心玩法子系统）与 `01.ini` 的调度逻辑，定义六大领域包（`daily`, `dungeon`, `farming`, `minigame`, `pvp`, `social`）中具体玩法的状态机生命周期、前置卫语句检查、发包时序与语义智能熔断契约。
+> 本白皮书全面对齐原版 `pieb.ini` 与 `01.ini` 的调度逻辑，定义七大领域包（`activity`, `daily`, `dungeon`, `farming`, `minigame`, `pvp`, `social`）中具体玩法的状态机生命周期、前置卫语句检查、发包时序与语义智能熔断契约。
 
 ---
 
@@ -9,17 +9,19 @@
 
 ```mermaid
 flowchart TD
-    Scheduler["双轨复合调度器 (Dual-Track Scheduler)<br/>Cron 批处理 + Loop 短自驱 + 拟人防封抖动管道"]
+    Scheduler["事件驱动复合调度器 (RoleScheduler)<br/>Cron 批处理 + Loop 短自驱 + 拟人防封抖动管道"]
 
-    subgraph 六大领域玩法包 ["Domain Routine Subpackages"]
-        Daily["日常活跃域 (daily)<br/>签到 / 活跃小助手 / 邮件 / VIP俸禄"]
-        Dungeon["关卡挑战域 (dungeon)<br/>体力扫荡 / 六道轮回 / 伏魔塔 / 练功房"]
-        Farming["农场养成域 (farming)<br/>药园种植 / 作物收获 / 经验树定向灌注"]
-        Minigame["趣味博弈域 (minigame)<br/>吉星高照 / 灵猴答题 / 仙履奇缘权重决策"]
-        PVP["竞技对抗域 (pvp)<br/>本服竞技场 / 仙界跨服竞技 / 战力阈值过滤"]
-        Social["社交与帮派域 (social)<br/>壶中界8大祝福 / NPC结交 / 仙盟神兽 / 圣盟祭祀"]
+    subgraph 七大领域玩法包 ["Domain Routine Subpackages"]
+        Activity["限时与周期活动域 (activity)<br/>天帝宝库 / 限时活动 / 节日与周期福利"]
+        Daily["日常活跃域 (daily)<br/>签到 / 活跃小助手 / 邮件 / VIP俸禄 / 命格 / 装备强化"]
+        Dungeon["关卡挑战域 (dungeon)<br/>体力扫荡 / 六道轮回 / 伏魔塔 / 轮回塔 / 练功房"]
+        Farming["农场养成域 (farming)<br/>药园种植 / 作物收获 / 经验树定向灌注 / 飞升养成"]
+        Minigame["趣味博弈域 (minigame)<br/>吉星高照 / 灵猴答题 / 仙履奇缘权重决策 / 叶公好龙"]
+        PVP["竞技对抗域 (pvp)<br/>本服竞技场 / 仙界跨服竞技 / 圣域与跨服争霸"]
+        Social["社交与帮派域 (social)<br/>壶中界8大祝福 / NPC结交 / 仙盟神兽 / 圣盟祭祀 / 取经"]
     end
 
+    Scheduler --> Activity
     Scheduler --> Daily
     Scheduler --> Dungeon
     Scheduler --> Farming
@@ -28,11 +30,12 @@ flowchart TD
     Scheduler --> Social
 ```
 
-| 领域包名称 | 对应目录 | 覆盖原版 `pieb.ini` 玩法模块 | 调度类型 | 优先级 |
+| 领域包名称 | 对应目录 | 覆盖原版 `pieb.ini` / 扩展玩法模块 | 调度类型 | 优先级阶段 |
 | :--- | :--- | :--- | :--- | :--- |
-| **`daily`** | `internal/routines/daily` | `[日常]` 签到、小助手、邮件、VIP俸禄、称号 | `ScheduleCron` (00:00, 06:02) | High / Normal |
-| **`dungeon`** | `internal/routines/dungeon` | `[动作] 扫荡`、`[01.ini 扫荡]` 关卡体力扫荡 | `ScheduleLoop` (30m 周期) | Normal |
-| **`farming`** | `internal/routines/farming` | `[农场]` 土地种植、作物收获、伙伴灌注 | `ScheduleLoop` (15m 周期) | Normal |
+| **`activity`** | `internal/routines/activity` | 限时周期活动、天帝宝库自选大奖与节庆福利 | `ScheduleCron` | Standard / Low |
+| **`daily`** | `internal/routines/daily` | `[日常]` 签到、小助手、邮件、VIP俸禄、称号、命格 | `ScheduleCron` (00:00, 06:02) | High / Normal |
+| **`dungeon`** | `internal/routines/dungeon` | `[动作] 扫荡`、`[01.ini 扫荡]`、六道/伏魔/轮回塔 | `ScheduleLoop` (30m 周期) / `ScheduleCron` | Normal |
+| **`farming`** | `internal/routines/farming` | `[农场]` 土地种植、作物收获、伙伴灌注、灵宠/飞升养成 | `ScheduleLoop` (15m 周期) / `ScheduleCron` | Normal |
 | **`minigame`** | `internal/routines/minigame` | `[日常] 吉星高照`、`[01.ini 仙履奇缘]`、灵猴问答 | `ScheduleCron` (12:00, 18:01) | Normal / Low |
 | **`pvp`** | `internal/routines/pvp` | `[日常] 本服竞技场`、`[圣域竞技]`、`[神魔大战]` | `ScheduleCron` (12:00, 20:01) | Normal |
 | **`social`** | `internal/routines/social` | `[壶中界]`、`[仙盟]`、`[圣盟]`、`[结婚]`、`[取经]` | `ScheduleCron` (08:02, 22:01) | High / Normal |

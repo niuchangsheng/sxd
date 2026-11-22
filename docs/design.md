@@ -1,52 +1,14 @@
 # 系统架构与详细设计文档 (Design Document)
 
-> 本文档面向研发与维护人员，描述 `sxd-pie-ng` 完成 Phase 0~4 工程化重构后的整体架构、核心状态机、并发模型、协议与调度原语以及扩展规范。
+> 本文档面向研发与维护人员，描述 `sxd-auto` 完成 Phase 0~4 工程化重构与 2026 官方静态字典重建后的整体架构、核心状态机、并发模型、协议与调度原语以及扩展规范。
 
 ---
 
 ## 1. 系统总体架构
 
-`sxd-pie-ng` 采用**单进程多角色隔离架构**：每个配置的角色在进程内拥有独立的网络长连接会话（`RoleSession`）与独立的事件驱动调度器（`RoleScheduler`），共享只读的离线元数据仓储（`Pieb.db`）、问答引擎（`qa.Engine`）与内嵌 Web 管理面（`web.Server`）。
+`sxd-auto` 采用**单进程多角色隔离架构**：每个配置的角色在进程内拥有独立的网络长连接会话（`RoleSession`）与独立的事件驱动调度器（`RoleScheduler`），共享只读的离线元数据仓储（`Pieb.db`）、问答引擎（`qa.Engine`）与内嵌 Web 管理面（`web.Server`）。
 
-```mermaid
-flowchart TB
-    subgraph Entry["启动与控制面 (cmd/server)"]
-        Main["main.go / bootstrap.go"]
-        Fleet["MultiRoleManager (fleet.go)"]
-        RM["RoutineManager (routine_manager.go)"]
-        Web["内嵌 Web 控制台 (internal/web)<br/>go:embed + REST API"]
-    end
-
-    subgraph Shared["共享只读基础设施"]
-        Cfg["Config Loader<br/>(YAML + Env + ServerOverrides)"]
-        Platform["Platform Driver<br/>(Web 换票 / Cookie 注入)"]
-        Dict["Dictionary Repo<br/>(data/Pieb.db SQLite)"]
-        QA["QA Engine<br/>(5,719 题智能匹配)"]
-        Log["Rotating Logger + Ring LogBuffer"]
-    end
-
-    subgraph PerRole["单角色隔离运行单元 (每个 server_id 独立实例)"]
-        Sched["RoleScheduler (事件驱动)<br/>Timer + wakeCh + DropTracker"]
-        Routines["113 个玩法例程 (7 大领域)<br/>通过 internal/routines/kit 统一调用"]
-        Sess["RoleSession (主服 TCP 状态机)<br/>PrevActChain + PlayerState + Heartbeat"]
-        SubSess["按需子会话<br/>跨服 (st) / 圣域 (sa) / 仙盟城镇 / 聊天服"]
-    end
-
-    subgraph Protocol["协议层 (internal/protocol)"]
-        Codec["Frame Codec + Transparent Zlib"]
-        Pkt["Packet + PrevActMode + 模块封包库"]
-    end
-
-    Main --> Cfg & Dict & QA & Log & Platform
-    Main --> Fleet --> Sched
-    Main --> Web
-    Web --> Fleet & RM & Log
-    RM --> Sched
-    Sched --> Routines
-    Routines --> Dict & QA & Sess
-    Sess --> SubSess
-    Sess --> Codec --> Pkt
-```
+![sxd-auto 系统总体架构图](assets/architecture.svg)
 
 ### 1.1 核心设计原则
 1. **单角色故障隔离**：每个角色独立持有 `RoleSession`、`RoleScheduler` 与 `DropTracker`，任一区服断线、超时或静默丢包不会阻塞或污染其他区服。
@@ -131,9 +93,10 @@ stateDiagram-v2
 - **7 大领域包与注册工厂**（[registry.go](file:///home/chang/sxd/internal/routines/registry.go)）：
   - `system`（1 项）、`daily`、`dungeon`、`farming`、`minigame`、`pvp`、`social` 共 **113 个例程**，Phase 3 后全部按单玩法/单业务域拆分为内聚文件（无超 1,500 行文件）。
 
-### 2.5 离线元数据 (`data/Pieb.db`) 与题库 (`internal/qa`)
+### 2.5 离线元数据 (`data/Pieb.db`)、自动重建管线与题库 (`internal/qa`)
 - `internal/dictionary` 以只读模式挂载 `data/Pieb.db`，为主线推图（任务/NPC/关卡锁/怪物编队）、精英扫荡与背包清理（`Items.TypeID`/`Price`）、宗师修行（伙伴 `role_id` → `JobId`）、天帝宝库（道具品质与大奖权重）及药园日志翻译提供离线静态数据。
-- `internal/qa` 启动时从 `Pieb.db` 预加载 5,719 道题库，服务仙旅奇缘与金榜题名自动答题。
+- 为彻底解决老版静态库数据漂移问题，[rebuild_dict.py](file:///home/chang/sxd/scripts/rebuild_dict.py) 内建纯 Python AVM2 DoABC 字节码求值器，可按官方 CDN `cur_ver` 自动下载最新 `Index.swf` / `Main.swf` / `templet.swf` 并原子重建全部 6 张运行时核心表（当前对齐 `2026112001`：`item` 10,016 / `roletype` 939 / `Missions` 2,003 / `Quests` 1,937 / `NPCposition` 530 / `wishpoolaward` 49），同时写入 `_rebuild_meta` 追踪版本。
+- `internal/qa` 启动时预加载 5,719 道题库，服务仙旅奇缘与金榜题名自动答题。
 
 ---
 

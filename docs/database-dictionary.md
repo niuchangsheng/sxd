@@ -1,7 +1,7 @@
 # 神仙道本地元数据库 (Pieb.db) 全量数据字典
 
 > [!NOTE]
-> 本文档定义了项目本地挂载的 `data/Pieb.db`（SQLite 3 数据库，包含 37 张表、数万条静态元数据）的完整实体关系图、数据字典与 Go 数据仓储（`internal/dictionary`）映射规范。
+> 本文档定义了 `sxd-auto` 本地挂载的 `data/Pieb.db`（SQLite 3 数据库，核心运行表已于 2026-11-22 通过 `scripts/rebuild_dict.py` 从官方客户端 `cur_ver=2026112001` 的 `Main.swf` / `templet.swf` 反编译全量重建）的完整实体关系图、数据字典与 Go 数据仓储（`internal/dictionary`）映射规范。
 
 ---
 
@@ -74,20 +74,20 @@ erDiagram
 
 | 业务领域分类 | 包含表名 | 记录条数 | 自动化业务用途与职责 |
 | :--- | :--- | :--- | :--- |
-| **物品、装备与配方** | `item` | 8,178 | 全局物品元数据字典（装备、丹药、材料、礼包） |
+| **物品、装备与配方** | `item` *(核心重建)* | 10,016 | 全局物品元数据字典（装备、丹药、材料、礼包；来自 `ItemTypeData.Items`） |
 | | `factureReel` | 2,265 | 卷轴合成配方及材料关卡掉落映射（推导扫荡目标） |
 | | `FiveElementsEquip` | 15 | 五行装备阶数、属性及分解经验规则 |
 | | `DragonBall` | 63 | 龙珠技能、星级与解封消耗龙魂字典 |
 | | `DragonBallResource`| 6 | 龙珠强化与分解资源定义 |
 | | `TowerAwardList` | 8 | 爬塔奖励掉落配置 |
-| **关卡、寻路与任务** | `Missions` | 1,966 | 全量副本地图关卡、体力消耗与怪物配置 |
-| | `Quests` | 1,937 | 主线、支线与日常任务接取/交付 NPC 字典 |
-| | `NPCposition` | 424 | 全城镇 NPC 寻路二维空间坐标字典 |
+| **关卡、寻路与任务** | `Missions` *(核心重建)* | 2,003 | 全量副本地图关卡、体力消耗与怪物编队（来自 `MissionTypeData` + `MissionMonsterTypeData`） |
+| | `Quests` *(核心重建)* | 1,937 | 主线、支线与日常任务接取/交付 NPC 字典（来自 `QuestTypeData.Quests`） |
+| | `NPCposition` *(核心重建)* | 530 | 全城镇 NPC 编号、名称与二维坐标字典（来自 `TownTypeData` + `TownNPCType` + `NPCType`） |
 | | `NPCQuest` | 20 | 场景随机事件问答与答案索引 |
 | | `Mapkey` | 23 | 场景大地图与城镇名称映射字典 |
 | | `hidemap` | 157 | 隐藏关卡与隐藏副本判定表 |
 | | `ImmortalFantasy` | 61 | 虚空幻境副本序列与掉落配置 |
-| **角色、伙伴与养成** | `roletype` | 577 | 全伙伴基础属性、职业、招募声望与绝技 |
+| **角色、伙伴与养成** | `roletype` *(核心重建)* | 939 | 全伙伴基础属性、职业、招募声望与绝技（来自 `RoleType.Roles`） |
 | | `fatetype` | 100 | 命格品质、战斗属性加成与升级经验规则 |
 | | `cardSoulList` | 72 | 伙伴卡魂兑换与分解碎片比率 |
 | | `soulList` | 67 | 伙伴缘魂属性配置 |
@@ -101,7 +101,7 @@ erDiagram
 | | `StShanhaiShop` | 14 | 山海遗迹积分商店物品与每日限购 |
 | | `newShopGoods` | 16 | 新版积分限购商城货架配置 |
 | | `WorldPKExchange` | 12 | 跨服战积分兑换奖池 |
-| | `wishpoolaward` | 35 | 许愿池奖品池与概率分布 |
+| | `wishpoolaward` *(核心重建)* | 49 | 天帝宝库自选大奖条目映射（来自 `TreasureHouseTypeData.awardList`） |
 | | `IdentifyTreasureaward` | 37 | 鉴宝活动奖励表 |
 | **日常活动与社交** | `ActivityArray` | 260 | 全局限时活动标识、枚举与活动名称对照 |
 | | `ChallengeType` | 58 | 世界 BOSS、帮派神兽等挑战怪物定义 |
@@ -110,6 +110,7 @@ erDiagram
 | | `Furinkazan` | 17 | 风林火山活动关卡阶段配置 |
 | | `serchat` | 19 | 闲聊频道分流服务器配置 |
 | | `relicPoint` | 52 | 遗迹积分与传送节点映射 |
+| **构建元数据** | `_rebuild_meta` | 8 | 记录最近一次 SWF 反编译重建的 `cur_ver`、时间与各核心表行数 |
 
 ---
 
@@ -191,5 +192,19 @@ CREATE TABLE NPCposition (
    db, err := sql.Open("sqlite", dbURI)
    ```
 2. **内存热缓存策略**：
-   - 数据量小于 500 条的小字典（如 `NPCposition`、`fatetype`、`DragonBall`、`Mapkey`）在系统启动时一次性加载为 `map[int]*Entity`，实现 $O(1)$ 寻址。
-   - 数据量较大的 `item`（8,178 条）与 `factureReel`（2,265 条）建立预编译 SQL 语句（`sql.Stmt`）按主键及索引索引检索。
+   - 数据量较小的字典（如 `NPCposition`、`fatetype`、`DragonBall`、`Mapkey`）在系统启动时一次性加载为 `map[int]*Entity`，实现 $O(1)$ 寻址。
+   - 数据量较大的 `item`（10,016 条）与 `factureReel`（2,265 条）建立预编译 SQL 语句（`sql.Stmt`）按主键及索引检索。
+
+---
+
+## 五、 官方 SWF 自动重建流水线 (`scripts/rebuild_dict.py`)
+
+为避免静态库随游戏版本更新而过期，项目提供零外部依赖的纯 Python 提取工具 [rebuild_dict.py](../scripts/rebuild_dict.py)：
+
+1. **获取线上最新版本号**：运行 `go run -tags=probe test/probes/probe_ticket_extra.go` 读取 `cur_ver` 与 `diff_urls[cur_ver]`。
+2. **拉取并反编译重建**：
+   ```bash
+   python3 scripts/rebuild_dict.py --ver <cur_ver> --diff <diff_tag>
+   ```
+   脚本会按官方 CDN 目录树规则下载 `Index.swf`、`Main.swf` 与 `templet.swf`，通过内建 AVM2 DoABC 常量池与 `cinit` 字节码求值器提取上述 6 张核心运行表并在单事务中原子替换 `data/Pieb.db`，同时更新 `_rebuild_meta` 记录与执行 `VACUUM`。
+3. **验证回归**：执行 `go test -race -count=1 ./internal/dictionary ./internal/qa` 确认全部查询与题库校验通过。
