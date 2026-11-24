@@ -61,9 +61,9 @@ func TestWuxingRoutine_OneKeyRetriesThenExitOnFailure(t *testing.T) {
 	if panelCalls.Load() < int32(wuxingMaxFailedRounds)+1 {
 		t.Fatalf("每轮挑战后都应刷新面板, panel calls=%d", panelCalls.Load())
 	}
-	// 第 2..N 轮挑战前都要复位城镇（N-1 次），例程结束中间件再复位 1 次。
-	if got, want := townCalls.Load(), int32(wuxingMaxFailedRounds); got != want {
-		t.Fatalf("重试前/结束后应复位城镇 %d 次, 实际 %d", want, got)
+	// 每轮挑战前都复位城镇（N 次），例程结束中间件再复位 1 次。
+	if got, want := townCalls.Load(), int32(wuxingMaxFailedRounds+1); got != want {
+		t.Fatalf("每轮挑战前/结束后应复位城镇 %d 次, 实际 %d", want, got)
 	}
 }
 

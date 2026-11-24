@@ -97,9 +97,10 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 			// 3. 一键挑战；失败关卡按 N 轮重试后退出（挑战副本 N 次失败才退出）。
 			failedRounds := 0
 			for {
-				// 上一轮挑战进入战斗场景后，直接重发 453/3 会被服务端静默丢弃
-				// （2026-11-24 实测）。重试前先复位城镇上下文。
-				if failedRounds > 0 && !session.ReturnToTown(ctx, 5*time.Second) {
+				// 453/3 对城镇上下文敏感：首轮及重试前都先复位城镇。
+				// 2026-11-24 实测重试会被静默丢弃；2026-11-25 00:57 首轮
+				// 在 1.5 分钟会话上同样被丢弃。
+				if !session.ReturnToTown(ctx, 5*time.Second) {
 					slog.Info("五行天宫重试前返回城镇失败，继续尝试", "role_id", session.RoleID())
 				}
 				fightResp := caller.TryCall(protocol.BuildWuxingFightPacket(protocol.WuxingFightModeAll, session.LastActionID()),

@@ -44,9 +44,11 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 2026-11-24 实测：31 分钟会话上 797/22、797/23 连续无回包，
-			// 同会话面板查询正常。挑战写请求需要健康窗口内的新会话。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+			// 2026-11-24 实测：31 分钟会话上 797/22、797/23 连续无回包；
+			// 2026-11-25 00:59 在 2 分钟会话上仍被丢弃，而 38 秒会话成功。
+			// 因此按 60 秒强制刷新，而不是默认 3 分钟。
+			const endlessFreshSessionAge = 60 * time.Second
+			if err := session.EnsureFreshConnection(ctx, endlessFreshSessionAge); err != nil {
 				return err
 			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
