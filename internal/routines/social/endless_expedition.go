@@ -44,6 +44,11 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 2026-11-24 实测：31 分钟会话上 797/22、797/23 连续无回包，
+			// 同会话面板查询正常。挑战写请求需要健康窗口内的新会话。
+			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				return err
+			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			resyncCall := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
 				resp, err := caller.CallResync(pkt, act, timeout...)
