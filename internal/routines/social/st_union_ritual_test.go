@@ -375,4 +375,7 @@ func TestStUnionRitualRoutine_SkipsIncenseWhenActivityFinished(t *testing.T) {
 	if fightCalls.Load() != 1 {
 		t.Fatalf("跳过上香后仍应继续魔神挑战, fights=%d", fightCalls.Load())
 	}
+	if got := scheduler.SilentDropCount(sess, stUnionIncenseDropKey); got != 0 {
+		t.Fatalf("活动已结束不应计入静默丢包, got %d", got)
+	}
 }

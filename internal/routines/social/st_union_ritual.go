@@ -260,7 +260,7 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			variant := "cross"
 			drops := scheduler.SilentDropCountCtx(ctx, session, stUnionIncenseDropKey)
 			if activityFinished {
-				// 活动已结束：不发送任何上香写请求，也不计入静默丢包。
+				// 活动已结束：不发送任何上香写请求（计数在下方统一跳过）。
 			} else if offeredToday {
 				// 179/10 已证明今日上香成功（记录是服务端权威状态），
 				// 再发 179/11 只会被静默丢弃，直接跳过并清零丢包计数。
@@ -285,7 +285,9 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 					}
 				}
 			}
-			if offeredToday && incenseResp == nil {
+			if activityFinished {
+				// 活动已结束：不发送写请求，也不计入静默丢包。
+			} else if offeredToday && incenseResp == nil {
 				// 今日已完成，无需计数；继续魔神挑战。
 			} else if incenseResp == nil {
 				n := scheduler.NoteSilentDropCtx(ctx, session, stUnionIncenseDropKey)
