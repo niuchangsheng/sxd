@@ -40,6 +40,11 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 2026-11-24 实测：7 分钟会话上连 enter_town 都会被静默丢弃，
+			// 随后 840/1 膜拜无回包；而秒级新会话先返回城镇后膜拜立即成功。
+			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				return err
+			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet) *protocol.Packet {
 				resp, err := caller.Call(pkt, pkt.ActionID)
