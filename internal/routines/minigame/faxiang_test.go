@@ -186,20 +186,24 @@ func TestFaxiangRoutine_GainPackageFull(t *testing.T) {
 	}
 }
 
-func TestFaxiangRoutine_UsesPendingAwardList(t *testing.T) {
-	var prayCalls atomic.Int32
+// TestFaxiangRoutine_PraysBeforeChoose 对齐官方抓包顺序：即便 518/11 面板已带
+// 历史候选，也必须先发 518/13 祈愿，再发 518/15 选择；否则服务端会静默丢弃。
+func TestFaxiangRoutine_PraysBeforeChoose(t *testing.T) {
+	var prayCalls, chooseCalls atomic.Int32
 	var chosenAward atomic.Int32
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDFaxiangGetPanelInfo:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
 		case protocol.ActionIDFaxiangExtraFoInfo:
-			// 上一轮祈愿后未选择：直接使用面板里的 award_list。
+			// 面板里带历史候选 [4,12]，仍应先祈愿刷新。
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
 				faxiangFoInfoPayload(3, 1604, []int32{4, 12}, 0, 0)))
 		case protocol.ActionIDFaxiangExtraPray:
 			prayCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, faxiangPrayPayload(4, 12)))
 		case protocol.ActionIDFaxiangExtraChoosePrayAward:
+			chooseCalls.Add(1)
 			if len(pkt.Payload) >= 4 {
 				chosenAward.Store(int32(pkt.Payload[0])<<24 | int32(pkt.Payload[1])<<16 |
 					int32(pkt.Payload[2])<<8 | int32(pkt.Payload[3]))
@@ -221,12 +225,88 @@ func TestFaxiangRoutine_UsesPendingAwardList(t *testing.T) {
 	if !errors.As(err, &cd) {
 		t.Fatalf("err = %v, want cooldown (炼化中)", err)
 	}
-	if prayCalls.Load() != 0 {
-		t.Fatalf("已有待选奖励时不应重新祈愿, pray=%d", prayCalls.Load())
+	if prayCalls.Load() != 1 {
+		t.Fatalf("选择前应先祈愿一次, pray=%d", prayCalls.Load())
+	}
+	if chooseCalls.Load() != 1 {
+		t.Fatalf("祈愿后应选择一次, choose=%d", chooseCalls.Load())
 	}
 	// 4: 120/400=0.30，12: 152/2000=0.076 → 应选 4。
 	if got := chosenAward.Load(); got != 4 {
 		t.Fatalf("chosen award = %d, want 4", got)
+	}
+}
+
+// TestFaxiangRoutine_PrefersFreshPrayAwards 验证祈愿返回的新候选优先于面板历史候选。
+func TestFaxiangRoutine_PrefersFreshPrayAwards(t *testing.T) {
+	var chosenAward atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFaxiangGetPanelInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
+		case protocol.ActionIDFaxiangExtraFoInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				faxiangFoInfoPayload(3, 1604, []int32{4, 12}, 0, 0)))
+		case protocol.ActionIDFaxiangExtraPray:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, faxiangPrayPayload(5, 15, 14)))
+		case protocol.ActionIDFaxiangExtraChoosePrayAward:
+			if len(pkt.Payload) >= 4 {
+				chosenAward.Store(int32(pkt.Payload[0])<<24 | int32(pkt.Payload[1])<<16 |
+					int32(pkt.Payload[2])<<8 | int32(pkt.Payload[3]))
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				protocol.NewWriter().WriteUint8(protocol.FaxiangSuccess).WriteInt32(1780000600).Bytes()))
+		case protocol.ActionIDFaxiangExtraMoInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				faxiangMoInfoPayload(1, 0, 0, 0, 282, 97)))
+		case protocol.ActionIDFaxiangExtraMoChallenge:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				protocol.NewWriter().WriteUint8(protocol.FaxiangHasChallenge).Bytes()))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewFaxiangRoutine().Execute(context.Background(), sess, nil); err == nil {
+		t.Fatal("选择成功后应返回炼化冷却")
+	}
+	if got := chosenAward.Load(); got != 15 {
+		t.Fatalf("应选择新祈愿中收益最高的 15, got %d", got)
+	}
+}
+
+// TestFaxiangRoutine_FallsBackToPanelAwardsWhenPrayUnavailable 验证祈愿不可用
+// （CAN_NOT_PRAY）但面板仍有候选时，仍尝试用面板候选选择。
+func TestFaxiangRoutine_FallsBackToPanelAwardsWhenPrayUnavailable(t *testing.T) {
+	var chooseCalls atomic.Int32
+	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDFaxiangGetPanelInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
+		case protocol.ActionIDFaxiangExtraFoInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				faxiangFoInfoPayload(3, 1604, []int32{4}, 0, 0)))
+		case protocol.ActionIDFaxiangExtraPray:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.FaxiangCanNotPray}))
+		case protocol.ActionIDFaxiangExtraChoosePrayAward:
+			chooseCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				protocol.NewWriter().WriteUint8(protocol.FaxiangSuccess).WriteInt32(1780000600).Bytes()))
+		case protocol.ActionIDFaxiangExtraMoInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				faxiangMoInfoPayload(1, 0, 0, 0, 282, 97)))
+		case protocol.ActionIDFaxiangExtraMoChallenge:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				protocol.NewWriter().WriteUint8(protocol.FaxiangHasChallenge).Bytes()))
+		}
+	})
+	defer sess.Close()
+
+	if err := NewFaxiangRoutine().Execute(context.Background(), sess, nil); err == nil {
+		t.Fatal("选择成功后应返回炼化冷却")
+	}
+	if chooseCalls.Load() != 1 {
+		t.Fatalf("祈愿不可用时应回退面板候选并选择一次, choose=%d", chooseCalls.Load())
 	}
 }
 

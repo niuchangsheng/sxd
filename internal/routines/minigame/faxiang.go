@@ -239,35 +239,52 @@ func runFaxiangFo(session *client.RoleSession, call faxiangCall) (bool, error) {
 		}
 	}
 
-	// 2. 没有进行中的炼化时：优先选择已祈愿的奖励，否则先祈愿再选择。
+	// 2. 没有进行中的炼化时：先祈愿刷新候选，再选择并炼化。
+	//
+	// 官方客户端 518/11 → 518/13 → 518/15（/tmp/faxiang3.pcapng），即使 518/11
+	// 面板里已带历史候选也会先发 518/13。实测 s0 上只凭面板候选直接发 518/15
+	// 会被服务端静默丢弃；518/13 免费，先祈愿可消除这一状态差异。
 	if !pendingRefine {
 		awards := fo.AwardList
-		if len(awards) == 0 {
-			prayResp := call(protocol.BuildFaxiangExtraPrayPacket(), protocol.ActionIDFaxiangExtraPray, "祈愿炼化奖励")
-			if prayResp == nil {
+		prayResp := call(protocol.BuildFaxiangExtraPrayPacket(), protocol.ActionIDFaxiangExtraPray, "祈愿炼化奖励")
+		if prayResp == nil {
+			if len(awards) == 0 {
 				return false, scheduler.NewCooldown(30*time.Minute, "法相祈愿无回包")
 			}
-			opts, pErr := protocol.ParseFaxiangExtraPrayResult(prayResp.Payload)
-			if pErr != nil {
+			slog.Info("法相祈愿无回包，改用面板候选", "role_id", session.RoleID())
+		} else if opts, pErr := protocol.ParseFaxiangExtraPrayResult(prayResp.Payload); pErr != nil {
+			if len(awards) == 0 {
 				slog.Warn("法相祈愿回包解析失败", "role_id", session.RoleID(), "err", pErr)
 				return false, scheduler.NewCooldown(30*time.Minute, "法相祈愿回包解析失败")
 			}
+			slog.Warn("法相祈愿回包解析失败，改用面板候选", "role_id", session.RoleID(), "err", pErr)
+		} else {
 			switch opts.Result {
 			case protocol.FaxiangSuccess:
-				awards = opts.AwardIDs
+				if len(opts.AwardIDs) > 0 {
+					awards = opts.AwardIDs
+				}
 			case protocol.FaxiangCanNotPray, protocol.FaxiangRefining:
-				slog.Info("法相当前不可祈愿，按炼化中处理",
+				if len(awards) == 0 {
+					slog.Info("法相当前不可祈愿，按炼化中处理",
+						"role_id", session.RoleID(), "result", opts.Result)
+					return true, faxiangRefineCooldown(fo.RefineFinishTime)
+				}
+				slog.Info("法相当前不可祈愿，改用面板候选",
 					"role_id", session.RoleID(), "result", opts.Result)
-				return true, faxiangRefineCooldown(fo.RefineFinishTime)
 			case protocol.FaxiangPackageFull:
 				return false, scheduler.ErrBagFull
 			case protocol.FaxiangFunctionNoOpen:
 				return false, scheduler.NewCooldown(6*time.Hour, "法相功能未开放")
 			default:
-				slog.Warn("法相祈愿失败",
-					"role_id", session.RoleID(), "result", opts.Result,
-					"result_text", protocol.FaxiangResultText(opts.Result))
-				return false, scheduler.NewCooldown(30*time.Minute, "法相祈愿失败")
+				if len(awards) == 0 {
+					slog.Warn("法相祈愿失败",
+						"role_id", session.RoleID(), "result", opts.Result,
+						"result_text", protocol.FaxiangResultText(opts.Result))
+					return false, scheduler.NewCooldown(30*time.Minute, "法相祈愿失败")
+				}
+				slog.Info("法相祈愿失败，改用面板候选",
+					"role_id", session.RoleID(), "result", opts.Result)
 			}
 		}
 
