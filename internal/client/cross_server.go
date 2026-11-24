@@ -76,13 +76,38 @@ func (s *RoleSession) EnsureCrossSessionAlive(ctx context.Context) error {
 	if life == nil {
 		life = ctx
 	}
-	cross, err := s.OpenCrossServerSession(life)
+	cred, err := s.FetchCrossServerCredentials(ctx)
+	if err != nil {
+		return fmt.Errorf("client: 申请常驻跨服凭据失败: %w", err)
+	}
+	cross, err := s.openCrossServerKeepaliveSession(life, cred)
 	if err != nil {
 		return fmt.Errorf("client: 建立常驻跨服会话失败: %w", err)
 	}
 	s.crossSession = cross
 	slog.Info("跨服辅助会话已常驻",
 		"role_id", s.cfg.RoleID, "cross_role_id", cross.RoleID())
+	return nil
+}
+
+// KeepaliveBusinessRead 发送一次无害的业务读 (0/6 功能列表) 以刷新主服活动。
+//
+// 2026-11-25 探针实测：不建立跨服连接，仅每 90 秒发一次 0/6，主服会话
+// 可跨过 5 分钟回收扫描点并保持 6.5 分钟在线；而常驻跨服连接若进入仙界
+// 城镇，会让主服返回城镇/写请求被静默丢弃。因此会话保活改用主服业务读。
+func (s *RoleSession) KeepaliveBusinessRead(ctx context.Context) error {
+	if s == nil || s.State() != StateActive {
+		return ErrNotConnected
+	}
+	c, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	resp, err := s.Call(c, protocol.BuildGetPlayerFunctionsPacket(0), protocol.ActionIDPlayerGetFunctions)
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return fmt.Errorf("client: 保活读无回包")
+	}
 	return nil
 }
 
@@ -109,6 +134,19 @@ func (s *RoleSession) OpenCrossServerSession(ctx context.Context) (*RoleSession,
 // OpenCrossServerSessionWithInfo 使用已获取的仙界跨服凭据建立独立会话，
 // 供调用方在同一轮任务中复用凭据、避免重复向主服申请一次性登录串。
 func (s *RoleSession) OpenCrossServerSessionWithInfo(ctx context.Context, cred *protocol.StCrossServerInfo) (*RoleSession, error) {
+	return s.openCrossServerSession(ctx, cred, true)
+}
+
+// openCrossServerKeepaliveSession 建立仅完成登录、不进入仙界城镇的跨服连接。
+//
+// 常驻辅助连接若进入仙界城镇，会让主服认为角色停留在跨服地图，
+// 导致主服 enter_town / 返回城镇被静默丢弃（2026-11-25 实机）。
+// 只登录不进城即可维持账号级辅助连接，同时不影响主服上下文。
+func (s *RoleSession) openCrossServerKeepaliveSession(ctx context.Context, cred *protocol.StCrossServerInfo) (*RoleSession, error) {
+	return s.openCrossServerSession(ctx, cred, false)
+}
+
+func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol.StCrossServerInfo, enterTown bool) (*RoleSession, error) {
 	if cred == nil {
 		return nil, fmt.Errorf("client: 仙界跨服凭据为空")
 	}
@@ -162,6 +200,9 @@ func (s *RoleSession) OpenCrossServerSessionWithInfo(ctx context.Context, cred *
 			ps.OriginNickName = originNickName
 		})
 
+		if !enterTown {
+			return nil
+		}
 		townResp, err := cs.Call(aCtx, protocol.BuildStTownEnterPacket(protocol.TownIDXianJie), protocol.ActionIDStTownEnter)
 		if err != nil {
 			return fmt.Errorf("client: 进入仙界城镇失败: %w", err)
