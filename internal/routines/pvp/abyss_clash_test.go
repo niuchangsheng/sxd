@@ -14,6 +14,20 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
+// newAbyssMockSession 在 pvp mock 基础上自动应答 enter_town（界渊场景 158）。
+func newAbyssMockSession(t *testing.T, handler func(net.Conn, *protocol.Packet)) *client.RoleSession {
+	t.Helper()
+	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		if pkt.ActionID == protocol.ActionIDTownEnter {
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+			return
+		}
+		handler(conn, pkt)
+	})
+	sess.UpdatePlayerState(func(ps *client.PlayerState) { ps.Stamina = 1000 })
+	return sess
+}
+
 // stubAbyssClashSession 让跨服会话建立返回主会话本身，便于单测。
 func stubAbyssClashSession(t *testing.T) {
 	t.Helper()
@@ -47,7 +61,7 @@ func TestAbyssClashRoutine_FightsAllBossesUntilUsedUp(t *testing.T) {
 	stubAbyssClashSession(t)
 	var panelCalls, infoCalls, fightCalls atomic.Int32
 	var fought []int32
-	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+	sess := newAbyssMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDAbyssClashFuncOpen:
 			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashFuncOpenResultPacket(
@@ -98,7 +112,7 @@ func TestAbyssClashRoutine_FightsAllBossesUntilUsedUp(t *testing.T) {
 func TestAbyssClashRoutine_NoFightNumStops(t *testing.T) {
 	stubAbyssClashSession(t)
 	var fightCalls atomic.Int32
-	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+	sess := newAbyssMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDAbyssClashFuncOpen:
 			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashFuncOpenResultPacket(
@@ -127,7 +141,7 @@ func TestAbyssClashRoutine_NoFightNumStops(t *testing.T) {
 func TestAbyssClashRoutine_FuncNotOpenSkips(t *testing.T) {
 	stubAbyssClashSession(t)
 	var panelCalls atomic.Int32
-	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+	sess := newAbyssMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDAbyssClashFuncOpen:
 			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashFuncOpenResultPacket(
@@ -150,7 +164,7 @@ func TestAbyssClashRoutine_FuncNotOpenSkips(t *testing.T) {
 
 func TestAbyssClashRoutine_PanelSilentDropBacksOff(t *testing.T) {
 	stubAbyssClashSession(t)
-	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+	sess := newAbyssMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		if pkt.ActionID == protocol.ActionIDAbyssClashFuncOpen {
 			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashFuncOpenResultPacket(
 				&protocol.AbyssClashFuncOpen{OpenFlag: 1, Step: 1}))
@@ -181,15 +195,14 @@ func TestPickAbyssClashTarget_SortedRoundRobin(t *testing.T) {
 			t.Fatalf("attempt %d: got %+v, want %d", i, got, want)
 		}
 	}
-	// 第二阶段：Boss 未解锁时选普通怪物；解锁后 Boss 也进入候选。
+	// 第二阶段只有 Boss 可挑战；Boss 未解锁时返回 false。
 	panel2 := &protocol.AbyssClashPanel{Step: 2, Monsters: []protocol.AbyssClashMonster{
 		{StepMonsterID: 41, IsBoss: 1, BossCanFightNum: 0},
 		{StepMonsterID: 42, IsBoss: 0},
 		{StepMonsterID: 43, IsBoss: 0},
 	}}
-	got, ok := pickAbyssClashTarget(panel2, 0, nil)
-	if !ok || got.StepMonsterID != 42 {
-		t.Fatalf("step2 target = %+v ok=%v", got, ok)
+	if _, ok := pickAbyssClashTarget(panel2, 0, nil); ok {
+		t.Fatal("Boss 未解锁时不应选出目标")
 	}
 	panel3 := &protocol.AbyssClashPanel{Step: 2, Monsters: []protocol.AbyssClashMonster{
 		{StepMonsterID: 41, IsBoss: 1, BossCanFightNum: 0},
@@ -206,23 +219,23 @@ func TestPickAbyssClashTarget_SortedRoundRobin(t *testing.T) {
 func TestAbyssClashRoutine_MonsterInfoDroppedStillFights(t *testing.T) {
 	stubAbyssClashSession(t)
 	var fightCalls, panelCalls atomic.Int32
-	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+	sess := newAbyssMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDAbyssClashFuncOpen:
 			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashFuncOpenResultPacket(
-				&protocol.AbyssClashFuncOpen{OpenFlag: 1, Step: 2}))
-		case protocol.ActionIDAbyssClashStep2Panel:
+				&protocol.AbyssClashFuncOpen{OpenFlag: 1, Step: 1}))
+		case protocol.ActionIDAbyssClashStep1Panel:
 			n := panelCalls.Add(1)
 			fightNum := int32(0)
 			if n == 1 {
 				fightNum = 1
 			}
-			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashStep2PanelResultPacket(
+			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashStep1PanelResultPacket(
 				&protocol.AbyssClashPanel{
-					Result: protocol.AbyssClashResultSuccess, Step: 2, FightNum: fightNum,
+					Result: protocol.AbyssClashResultSuccess, Step: 1, FightNum: fightNum, CostPower: 40,
 					Monsters: []protocol.AbyssClashMonster{
 						{StepMonsterID: 34, MonsterTeamID: 12939},
-						{StepMonsterID: 36, MonsterTeamID: 12941, IsBoss: 1, BossCanFightNum: 0},
+						{StepMonsterID: 36, MonsterTeamID: 12941},
 					},
 				}))
 		case protocol.ActionIDAbyssClashMonsterTeam:
@@ -241,5 +254,40 @@ func TestAbyssClashRoutine_MonsterInfoDroppedStillFights(t *testing.T) {
 	}
 	if fightCalls.Load() != 1 {
 		t.Fatalf("怪物信息丢包后仍应挑战 1 次, got %d", fightCalls.Load())
+	}
+}
+
+// TestAbyssClashRoutine_NoStaminaCooldown 验证体力不足且无体力道具时返回冷却，
+// 不发送挑战请求 (服务端会静默丢弃)。
+func TestAbyssClashRoutine_NoStaminaCooldown(t *testing.T) {
+	stubAbyssClashSession(t)
+	var fightCalls atomic.Int32
+	sess := newAbyssMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDAbyssClashFuncOpen:
+			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashFuncOpenResultPacket(
+				&protocol.AbyssClashFuncOpen{OpenFlag: 1, Step: 1}))
+		case protocol.ActionIDAbyssClashStep1Panel:
+			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashStep1PanelResultPacket(
+				&protocol.AbyssClashPanel{
+					Result: protocol.AbyssClashResultSuccess, Step: 1, FightNum: 3, CostPower: 40,
+					Monsters: []protocol.AbyssClashMonster{{StepMonsterID: 31, MonsterTeamID: 12936}},
+				}))
+		case protocol.ActionIDItemGetPackList:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, make([]byte, 8)))
+		case protocol.ActionIDAbyssClashStartFight:
+			fightCalls.Add(1)
+		}
+	})
+	defer sess.Close()
+	sess.UpdatePlayerState(func(ps *client.PlayerState) { ps.Stamina = 0 })
+
+	err := NewAbyssClashRoutine().Execute(context.Background(), sess, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("体力不足应返回 CooldownError, got %v", err)
+	}
+	if fightCalls.Load() != 0 {
+		t.Fatalf("体力不足不应挑战, fights=%d", fightCalls.Load())
 	}
 }

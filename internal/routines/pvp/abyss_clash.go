@@ -12,6 +12,7 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/dungeon"
 	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
@@ -154,13 +155,50 @@ func NewAbyssClashRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			// 单次挑战消耗体力 (抓包 cost_power=425/40)。体力不足时服务端会
+			// 静默丢弃 818/3、818/4；每次挑战前按 [包子 > 粽子 > 茶叶蛋] 补充。
+			const maxAbyssStaminaItems = 12
+			replenished := 0
+
 			attempts := 0
 			excluded := make(map[int32]bool)
 			for attempts < maxAbyssClashFights && panel.FightNum > 0 && ctx.Err() == nil {
 				target, ok := pickAbyssClashTarget(panel, attempts, excluded)
 				if !ok {
+					if panel.Step == 2 {
+						// 第二阶段 Boss 未解锁时普通怪物不可挑战 (服务端静默丢弃)，
+						// 30 分钟后复查 boss_can_fight_num。
+						slog.Info("界渊之战 Boss 暂不可挑战，稍后再试",
+							"role_id", session.RoleID(), "fight_num", panel.FightNum)
+						return scheduler.NewCooldown(30*time.Minute, "界渊之战Boss暂不可挑战")
+					}
 					slog.Info("界渊之战暂无可挑战目标", "role_id", session.RoleID())
 					return nil
+				}
+
+				for int32(session.GetPlayerState().Stamina) < panel.CostPower &&
+					replenished < maxAbyssStaminaItems && ctx.Err() == nil {
+					rOk, item, added, rErr := dungeon.TryReplenishStamina(ctx, session)
+					if rErr != nil {
+						slog.Warn("界渊之战补充体力失败", "role_id", session.RoleID(), "err", rErr)
+						break
+					}
+					if !rOk {
+						break
+					}
+					replenished++
+					slog.Info("界渊之战补充体力", "role_id", session.RoleID(),
+						"item", item, "added", added,
+						"stamina", session.GetPlayerState().Stamina,
+						"cost_power", panel.CostPower)
+					if !kit.Sleep(ctx, 300*time.Millisecond) {
+						return ctx.Err()
+					}
+				}
+				if int32(session.GetPlayerState().Stamina) < panel.CostPower {
+					slog.Info("界渊之战体力不足，稍后重试", "role_id", session.RoleID(),
+						"stamina", session.GetPlayerState().Stamina, "cost_power", panel.CostPower)
+					return scheduler.NewCooldown(30*time.Minute, "界渊之战体力不足")
 				}
 
 				// 官方客户端挑战前先打开怪物队伍信息面板；该请求仅用于展示，
@@ -308,8 +346,8 @@ func pickAbyssClashTarget(panel *protocol.AbyssClashPanel, attempts int, exclude
 		if m.StepMonsterID == 0 || excluded[m.StepMonsterID] {
 			continue
 		}
-		if panel.Step == 2 && m.IsBoss == 1 && m.BossCanFightNum <= 0 {
-			// Boss 挑战次数未解锁时先打普通怪物累积次数。
+		if panel.Step == 2 && (m.IsBoss != 1 || m.BossCanFightNum <= 0) {
+			// 第二阶段只有 Boss 可挑战；普通怪物请求会被服务端静默丢弃。
 			continue
 		}
 		candidates = append(candidates, m)
