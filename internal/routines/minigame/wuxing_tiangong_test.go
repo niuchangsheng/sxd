@@ -24,10 +24,13 @@ func TestWuxingRoutine_OneKeyRetriesThenExitOnFailure(t *testing.T) {
 	}
 	// 抓包面板 5 个条目均为 state=4（待挑战）；挑战后原样返回即视为仍有待挑战关卡。
 
-	var panelCalls, fightCalls, deployCalls atomic.Int32
+	var panelCalls, fightCalls, deployCalls, townCalls atomic.Int32
 
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
+		case protocol.ActionIDTownEnter:
+			townCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDWuxingPanel10:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDWuxingPanel:
@@ -57,6 +60,10 @@ func TestWuxingRoutine_OneKeyRetriesThenExitOnFailure(t *testing.T) {
 	}
 	if panelCalls.Load() < int32(wuxingMaxFailedRounds)+1 {
 		t.Fatalf("每轮挑战后都应刷新面板, panel calls=%d", panelCalls.Load())
+	}
+	// 第 2..N 轮挑战前都要复位城镇（N-1 次），例程结束中间件再复位 1 次。
+	if got, want := townCalls.Load(), int32(wuxingMaxFailedRounds); got != want {
+		t.Fatalf("重试前/结束后应复位城镇 %d 次, 实际 %d", want, got)
 	}
 }
 
