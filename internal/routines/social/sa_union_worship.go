@@ -83,10 +83,11 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 				slog.Info("圣盟膜拜今日已完成", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.SaUnionWorshipResultText(code))
 			default:
+				// 有明确结果码说明请求已被受理，属业务失败（如当前无膜拜目标），
+				// 不能计入静默丢包退避。
 				slog.Info("圣盟膜拜未成功，稍后重试", "role_id", session.RoleID(),
 					"result", code, "result_text", protocol.SaUnionWorshipResultText(code))
-				return scheduler.HandleSilentDropCtx(ctx, session, "sa_union_worship", 3,
-					time.Hour, "圣盟膜拜失败")
+				return scheduler.NewCooldown(time.Hour, "圣盟膜拜业务失败")
 			}
 			return nil
 		},

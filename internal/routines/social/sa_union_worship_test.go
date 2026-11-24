@@ -30,7 +30,9 @@ func TestSaUnionWorshipRoutine_FailureCooldown(t *testing.T) {
 	}
 }
 
-func TestSaUnionWorshipRoutine_ThreeFailuresBackOff(t *testing.T) {
+// TestSaUnionWorshipRoutine_BusinessFailureNotCounted 验证服务端返回明确结果码
+// 时属于业务失败，不应计入静默丢包退避（改为 1 小时普通冷却）。
+func TestSaUnionWorshipRoutine_BusinessFailureNotCounted(t *testing.T) {
 	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDSaUnionWorshipPanel:
@@ -44,10 +46,14 @@ func TestSaUnionWorshipRoutine_ThreeFailuresBackOff(t *testing.T) {
 	defer sess.Close()
 	scheduler.ResetSilentDrops(sess, "sa_union_worship")
 	for i := 0; i < 3; i++ {
-		_ = NewSaUnionWorshipRoutine().Execute(context.Background(), sess, nil)
+		err := NewSaUnionWorshipRoutine().Execute(context.Background(), sess, nil)
+		var cd *scheduler.CooldownError
+		if !errors.As(err, &cd) {
+			t.Fatalf("第 %d 轮业务失败应返回 CooldownError, got %v", i+1, err)
+		}
 	}
-	if n := scheduler.SilentDropCount(sess, "sa_union_worship"); n != 3 {
-		t.Fatalf("连续失败计数 = %d, want 3", n)
+	if n := scheduler.SilentDropCount(sess, "sa_union_worship"); n != 0 {
+		t.Fatalf("业务失败不应计入静默丢包, got %d", n)
 	}
 }
 

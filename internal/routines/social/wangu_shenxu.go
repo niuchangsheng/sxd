@@ -89,7 +89,7 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 			// 2. 逐个膜拜未膜拜的大神像 (膜拜免费；worship_ingot 归被膜拜榜一)。
 			// 膜拜是场景写操作：前面战斗玩法污染上下文时会静默丢弃，
 			// 探针实测先 ReturnToTown 后同一载荷立即成功（result=0）。
-			if !session.ReturnToTown(ctx, 5*time.Second) {
+			if len(targets) > 0 && !session.ReturnToTown(ctx, 5*time.Second) {
 				slog.Info("万古神墟膜拜前返回城镇失败，继续尝试", "role_id", session.RoleID())
 			}
 			worshipped, failed := 0, 0
