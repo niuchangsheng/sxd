@@ -106,12 +106,23 @@ func stUnionSelfNames(session *client.RoleSession) []string {
 		if n == "" {
 			continue
 		}
-		if i := strings.LastIndex(n, ".s"); i > 0 {
-			n = n[:i]
-		}
-		out = append(out, n)
+		out = append(out, trimServerSuffix(n))
 	}
 	return out
+}
+
+// trimServerSuffix 去掉官方昵称的 ".sN" 区服后缀（如 "曹植始.s1" → "曹植始"）。
+func trimServerSuffix(name string) string {
+	i := strings.LastIndex(name, ".s")
+	if i <= 0 || i+2 >= len(name) {
+		return name
+	}
+	for _, r := range name[i+2:] {
+		if r < '0' || r > '9' {
+			return name
+		}
+	}
+	return name[:i]
 }
 
 // logStUnionGodPanel 解析并打印 179/10 神像面板，返回「今日是否已上香」。
