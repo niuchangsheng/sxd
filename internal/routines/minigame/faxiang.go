@@ -145,6 +145,11 @@ func NewFaxiangRoutine() scheduler.ActivityRoutine {
 			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
 				return err
 			}
+			// 518/15 是场景写操作：前面的战斗玩法会污染上下文，导致面板查询
+			// 正常而选择炼化被静默丢弃。执行前先复位到城镇场景。
+			if !session.ReturnToTown(ctx, 3*time.Second) {
+				slog.Info("法相执行前返回城镇失败，继续尝试", "role_id", session.RoleID())
+			}
 			caller := kit.NewCaller(ctx, session, faxiangCallTimeout)
 			call := func(pkt *protocol.Packet, act uint32, name string) *protocol.Packet {
 				resp, err := caller.Call(pkt, act)

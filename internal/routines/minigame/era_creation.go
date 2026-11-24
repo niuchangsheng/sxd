@@ -40,6 +40,10 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
 				return err
 			}
+			// 866/10 挑战是场景写操作，执行前复位城镇，避免上下文污染。
+			if !session.ReturnToTown(ctx, 3*time.Second) {
+				slog.Info("造化秘境执行前返回城镇失败，继续尝试", "role_id", session.RoleID())
+			}
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEraCreationRealm); fErr != nil {
 				if abortErr, ok := kit.IsAbortErr(fErr); ok {
 					return abortErr
