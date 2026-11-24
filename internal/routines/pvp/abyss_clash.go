@@ -163,20 +163,22 @@ func NewAbyssClashRoutine() scheduler.ActivityRoutine {
 					return nil
 				}
 
-				// 官方客户端挑战前先打开怪物队伍信息面板。
+				// 官方客户端挑战前先打开怪物队伍信息面板；该请求仅用于展示，
+				// 2026-11-25 实机在 step2 普通怪物上会被静默丢弃，不能因此
+				// 放弃真正的挑战请求。
 				infoResp, iErr := kit.CallResync(ctx, cross,
 					protocol.BuildAbyssClashMonsterTeamPacket(target.StepMonsterID),
 					protocol.ActionIDAbyssClashMonsterTeam, infoTimeout)
+				if abort, ok := kit.IsAbortErr(iErr); ok {
+					return abort
+				}
 				if iErr != nil || infoResp == nil {
-					return handleNoResponse("怪物信息", iErr)
-				}
-				infoCode, pErr := protocol.ParseAbyssClashMonsterTeamResult(infoResp.Payload)
-				if pErr != nil {
-					slog.Warn("界渊之战怪物信息解析失败",
+					slog.Info("界渊之战怪物信息无回包，直接尝试挑战",
+						"role_id", session.RoleID(), "step_monster_id", target.StepMonsterID, "err", iErr)
+				} else if infoCode, pErr := protocol.ParseAbyssClashMonsterTeamResult(infoResp.Payload); pErr != nil {
+					slog.Warn("界渊之战怪物信息解析失败，继续尝试挑战",
 						"role_id", session.RoleID(), "step_monster_id", target.StepMonsterID, "err", pErr)
-					return scheduler.NewCooldown(10*time.Minute, "界渊之战怪物信息解析失败")
-				}
-				if infoCode != protocol.AbyssClashResultSuccess {
+				} else if infoCode != protocol.AbyssClashResultSuccess {
 					slog.Info("界渊之战怪物信息不可用，跳过该目标",
 						"role_id", session.RoleID(), "step_monster_id", target.StepMonsterID,
 						"result", infoCode, "result_text", protocol.AbyssClashResultText(infoCode))

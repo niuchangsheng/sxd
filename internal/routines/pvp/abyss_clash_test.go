@@ -200,3 +200,46 @@ func TestPickAbyssClashTarget_SortedRoundRobin(t *testing.T) {
 		t.Fatalf("step2 unlocked target = %+v ok=%v", got, ok)
 	}
 }
+
+// TestAbyssClashRoutine_MonsterInfoDroppedStillFights 验证怪物信息被静默丢弃时
+// 仍继续发起挑战（该请求仅用于展示）。
+func TestAbyssClashRoutine_MonsterInfoDroppedStillFights(t *testing.T) {
+	stubAbyssClashSession(t)
+	var fightCalls, panelCalls atomic.Int32
+	sess := newPvPMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDAbyssClashFuncOpen:
+			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashFuncOpenResultPacket(
+				&protocol.AbyssClashFuncOpen{OpenFlag: 1, Step: 2}))
+		case protocol.ActionIDAbyssClashStep2Panel:
+			n := panelCalls.Add(1)
+			fightNum := int32(0)
+			if n == 1 {
+				fightNum = 1
+			}
+			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashStep2PanelResultPacket(
+				&protocol.AbyssClashPanel{
+					Result: protocol.AbyssClashResultSuccess, Step: 2, FightNum: fightNum,
+					Monsters: []protocol.AbyssClashMonster{
+						{StepMonsterID: 34, MonsterTeamID: 12939},
+						{StepMonsterID: 36, MonsterTeamID: 12941, IsBoss: 1, BossCanFightNum: 0},
+					},
+				}))
+		case protocol.ActionIDAbyssClashMonsterTeam:
+			// 静默丢弃：不回包。
+		case protocol.ActionIDAbyssClashStartFight:
+			fightCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildAbyssClashFightResultPacket(
+				protocol.AbyssClashResultSuccess, 100, 1))
+		}
+	})
+	defer sess.Close()
+
+	ctx := kit.WithTimeoutOverride(context.Background(), 200*time.Millisecond)
+	if err := NewAbyssClashRoutine().Execute(ctx, sess, nil); err != nil {
+		t.Fatalf("abyss clash: %v", err)
+	}
+	if fightCalls.Load() != 1 {
+		t.Fatalf("怪物信息丢包后仍应挑战 1 次, got %d", fightCalls.Load())
+	}
+}
