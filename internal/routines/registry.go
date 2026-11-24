@@ -115,6 +115,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "caravan_hijack", Name: "阵营劫镖拦截", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "阵营商队巡查截击与声望抢夺", DefaultOn: false},
 		{ID: "world_boss", Name: "世界Boss争夺", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "擎天木/赤炎兽Boss定时准点参战与伤害鼓舞", DefaultOn: false},
 		{ID: "cross_server_ladder", Name: "跨服天梯排位", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "跨服天梯自动匹配竞技与段位宝箱领用", DefaultOn: false},
+		{ID: "abyss_clash", Name: "界渊之战", Domain: "pvp", Schedule: scheduler.ScheduleCron, Description: "界渊之战三个Boss共5次挑战 (Module 818, 不消耗元宝)", DefaultOn: false},
 
 		// 6. Minigame 领域 (7)
 		{ID: "lucky_star", Name: "吉星高照", Domain: "minigame", Schedule: scheduler.ScheduleCron, Description: "个人吉星高照摇骰子、免费逆天改运与奖励领取", DefaultOn: false},
@@ -483,6 +484,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return pvp.NewWorldBossRoutine()
 	case "cross_server_ladder":
 		return pvp.NewCrossServerLadderRoutine()
+	case "abyss_clash":
+		return pvp.NewAbyssClashRoutine()
 
 	// 6. Minigame
 	case "lucky_star":
