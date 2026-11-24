@@ -562,6 +562,11 @@ func (s *RoleSession) EnsureFreshConnection(ctx context.Context, maxAge time.Dur
 		"age", age.Round(time.Second),
 		"max_age", maxAge,
 	)
+	// 主动重建前先换票：旧票据在服务端释放旧会话前往往无法立刻重新登录，
+	// 实测会连续 3 次握手超时、约 80 秒后才由自愈管道换票成功。
+	if s.refreshCredentials(ctx) {
+		slog.Info("重建会话前已换取新凭据", "role_id", s.cfg.RoleID)
+	}
 	gen := s.ConnectionGeneration()
 	s.ReconnectNow()
 
@@ -582,6 +587,28 @@ func (s *RoleSession) EnsureFreshConnection(ctx context.Context, maxAge time.Dur
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// refreshCredentials 在主动重建会话前换取新的平台凭据，返回是否执行了换票。
+//
+// 与 runLoop 的自愈逻辑共用节流：距上次换票不足 minCredentialRefreshInterval
+// 时不重复登录，避免多角色共用账号时互相顶号。
+func (s *RoleSession) refreshCredentials(ctx context.Context) bool {
+	if s.cfg.RefreshCredentials == nil {
+		return false
+	}
+	s.credRefreshMu.Lock()
+	recent := time.Since(s.lastCredRefresh) < minCredentialRefreshInterval
+	s.credRefreshMu.Unlock()
+	if recent {
+		return false
+	}
+	if err := s.cfg.RefreshCredentials(ctx, &s.cfg); err != nil {
+		slog.Warn("重建会话前换票未成功，继续使用现有凭据", "role_id", s.cfg.RoleID, "error", err)
+		return false
+	}
+	s.markCredentialRefreshed()
+	return true
 }
 
 // SetLastActionID 手动设置最后一次向对端发送的协议 ActionID。
