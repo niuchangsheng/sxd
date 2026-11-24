@@ -21,14 +21,16 @@ import (
 
 // sessionRefreshInterval 会话重建检查周期。
 // 每次检查仅在连接存活超过 minSessionAge 时才真正重连。
-const sessionRefreshInterval = 2 * time.Minute
+//
+// 检查必须足够密：服务端在会话年龄约 4.4~4.7 分钟时回收连接，30 秒检查
+// 可确保在 3.5~3.7 分钟触发重建，留出约 1 分钟余量。
+const sessionRefreshInterval = 30 * time.Second
 
 // minSessionAge 触发主动重建的最小连接存活时长。
 //
-// 线上静默丢弃约在登录后 8 分钟出现；连接满 4 分钟后、下一次 2 分钟检查
-// （即登录后 4-6 分钟）立即重建，留出安全余量。刚被外部顶号重连的会话
-// 不会被再次重建，避免连续登录。
-var minSessionAge = 4 * time.Minute
+// 2026-11-24 实测服务端在会话年龄约 4.4~4.7 分钟时回收连接；取 3.5 分钟
+// 触发重建，留出约 1 分钟安全余量。刚被外部顶号重连的会话不会被再次重建。
+var minSessionAge = 210 * time.Second
 
 // sessionRefreshTimeout 等待重连重新激活的上限。
 const sessionRefreshTimeout = 90 * time.Second
@@ -60,33 +62,19 @@ func NewSessionRefreshRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("定期刷新会话上下文，规避长会话静默丢包",
 				"role_id", session.RoleID(),
+				"age", time.Since(session.ConnectionSince()).Round(time.Second),
 				"last_business", session.LastBusinessActionID(),
 				"last_rx", session.LastRxActionID())
-			gen := session.ConnectionGeneration()
-			session.ReconnectNow()
-
-			deadline := time.Now().Add(sessionRefreshTimeout)
-			for {
-				// 必须等到「新一代连接」建立（仅看 State 会命中关闭前的瞬时 Active）。
-				if session.ConnectionGeneration() > gen && session.State() == client.StateActive {
-					slog.Info("会话上下文刷新完成", "role_id", session.RoleID(),
-						"generation", session.ConnectionGeneration())
-					return nil
-				}
-				if session.State() == client.StateClosed {
-					return client.ErrNotConnected
-				}
-				if time.Now().After(deadline) {
-					slog.Warn("会话上下文刷新超时，交给调度器稍后重试",
-						"role_id", session.RoleID(), "state", session.State())
-					return client.ErrNotConnected
-				}
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(200 * time.Millisecond):
-				}
+			// 统一走 EnsureFreshConnection：重建前先换票（网关票据一次性），
+			// 再等待新一代连接 Active；实测恢复时间由约 75 秒降到约 3 秒。
+			if err := session.EnsureFreshConnection(ctx, 0); err != nil {
+				slog.Warn("会话上下文刷新未完成，交给调度器稍后重试",
+					"role_id", session.RoleID(), "state", session.State(), "err", err)
+				return err
 			}
+			slog.Info("会话上下文刷新完成", "role_id", session.RoleID(),
+				"generation", session.ConnectionGeneration())
+			return nil
 		},
 	)
 }
