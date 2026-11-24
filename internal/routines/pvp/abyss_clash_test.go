@@ -181,14 +181,22 @@ func TestPickAbyssClashTarget_SortedRoundRobin(t *testing.T) {
 			t.Fatalf("attempt %d: got %+v, want %d", i, got, want)
 		}
 	}
-	// 第二阶段只选可挑战 Boss。
+	// 第二阶段：Boss 未解锁时选普通怪物；解锁后 Boss 也进入候选。
 	panel2 := &protocol.AbyssClashPanel{Step: 2, Monsters: []protocol.AbyssClashMonster{
 		{StepMonsterID: 41, IsBoss: 1, BossCanFightNum: 0},
-		{StepMonsterID: 42, IsBoss: 1, BossCanFightNum: 2},
-		{StepMonsterID: 43, IsBoss: 0, BossCanFightNum: 2},
+		{StepMonsterID: 42, IsBoss: 0},
+		{StepMonsterID: 43, IsBoss: 0},
 	}}
 	got, ok := pickAbyssClashTarget(panel2, 0, nil)
 	if !ok || got.StepMonsterID != 42 {
 		t.Fatalf("step2 target = %+v ok=%v", got, ok)
+	}
+	panel3 := &protocol.AbyssClashPanel{Step: 2, Monsters: []protocol.AbyssClashMonster{
+		{StepMonsterID: 41, IsBoss: 1, BossCanFightNum: 0},
+		{StepMonsterID: 42, IsBoss: 1, BossCanFightNum: 2},
+		{StepMonsterID: 43, IsBoss: 0},
+	}}
+	if got, ok := pickAbyssClashTarget(panel3, 0, nil); !ok || got.StepMonsterID != 42 {
+		t.Fatalf("step2 unlocked target = %+v ok=%v", got, ok)
 	}
 }

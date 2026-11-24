@@ -296,7 +296,9 @@ func logAbyssClashPanel(session *client.RoleSession, panel *protocol.AbyssClashP
 
 // pickAbyssClashTarget 按 step_monster_id 升序轮询目标。
 //
-// 第一阶段三个怪物都有效；第二阶段只选 is_boss=1 且仍有挑战次数的 Boss。
+// 第一阶段三个怪物都有效。第二阶段：Boss 只有在 boss_can_fight_num>0 时
+// 可挑战；普通怪物使用玩家剩余 fight_num 挑战 (官方 MonsterInfoView 中
+// 非 Boss 的 fight_num 取 info.fight_num)，胜利可累积 Boss 挑战次数。
 // excluded 记录服务端返回 WRONG_ID/BOSS_CAN_NOT_FIGHT 的目标。
 func pickAbyssClashTarget(panel *protocol.AbyssClashPanel, attempts int, excluded map[int32]bool) (protocol.AbyssClashMonster, bool) {
 	candidates := make([]protocol.AbyssClashMonster, 0, len(panel.Monsters))
@@ -304,10 +306,9 @@ func pickAbyssClashTarget(panel *protocol.AbyssClashPanel, attempts int, exclude
 		if m.StepMonsterID == 0 || excluded[m.StepMonsterID] {
 			continue
 		}
-		if panel.Step == 2 {
-			if m.IsBoss != 1 || m.BossCanFightNum <= 0 {
-				continue
-			}
+		if panel.Step == 2 && m.IsBoss == 1 && m.BossCanFightNum <= 0 {
+			// Boss 挑战次数未解锁时先打普通怪物累积次数。
+			continue
 		}
 		candidates = append(candidates, m)
 	}
