@@ -318,7 +318,7 @@ func (b *BaseRoutine) Execute(ctx context.Context, session *client.RoleSession, 
 	// 此处再确认一次会话状态，避免在连接中断窗口内向服务端发送注定超时的业务包。
 	if session != nil && session.State() != client.StateActive {
 		// 返回 ErrNotConnected 而不是 nil：nil 会被调度器当成“本轮成功”，
-		// Cron/30 分钟循环要等下一个周期才重试；ErrNotConnected 走 5 分钟短重试。
+		// Cron/30 分钟循环要等下一个周期才重试；ErrNotConnected 走 90 秒短重试。
 		return client.ErrNotConnected
 	}
 

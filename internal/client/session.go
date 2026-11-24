@@ -540,7 +540,7 @@ const HealthySessionAge = 3 * time.Minute
 // 若已超过健康窗口，主动重建连接并等待新一代连接进入 Active：重型玩法
 // （无量劫海/飞升灌注/魔界远征等）在旧会话上会被服务端丢弃甚至断链，
 // 在登录后的早期窗口内才能稳定完成。等待超时返回 ErrNotConnected，
-// 由调度器按 5 分钟短重试。
+// 由调度器按 90 秒短重试。
 //
 // maxAge 为 0 表示无条件重建（供定期刷新等调用方使用）；负数取默认健康窗口。
 func (s *RoleSession) EnsureFreshConnection(ctx context.Context, maxAge time.Duration) error {

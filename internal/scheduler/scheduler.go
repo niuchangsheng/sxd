@@ -20,7 +20,12 @@ import (
 // 断线并不代表玩法已完成：剩余次数需要尽快补做，而不是等下一次 Cron
 // （2~4 小时）。调度器在会话非激活期间本来就不会拉起任务，因此该间隔
 // 只会在会话恢复后生效。
-const sessionLostRetryInterval = 5 * time.Minute
+//
+// 2026-11-24 实机统计：服务端对主服会话约 225 秒强制断链，重连成功耗时
+// 中位数 23 秒（主动重建）/ 76 秒（被动踢线），p90 约 111 秒。原先的 5 分钟
+// 会让被打断的玩法白等 4 分钟以上；90 秒覆盖绝大多数重连窗口，且会话未
+// 恢复时任务会在 BaseRoutine 前置检查处立即返回，不产生额外请求。
+const sessionLostRetryInterval = 90 * time.Second
 
 type scheduledItem struct {
 	routine      ActivityRoutine
@@ -237,7 +242,7 @@ func (s *RoleScheduler) runLoop() {
 		// 例程内部可能把「断线」当成普通查询失败而 return nil（例如
 		// IsFunctionOpen 报 session is not active 后直接跳过），Cron 任务就会
 		// 直接等到次日。这里统一兜底：返回 nil 但会话已不在激活态，按断线
-		// 处理，5 分钟后重连重试。
+		// 处理，90 秒后重连重试。
 		if execErr == nil && s.session != nil && s.session.State() != client.StateActive {
 			execErr = client.ErrNotConnected
 		}
@@ -288,7 +293,7 @@ func (s *RoleScheduler) runLoop() {
 				)
 			} else if errors.Is(execErr, client.ErrNotConnected) || errors.Is(execErr, client.ErrSessionClosed) {
 				// 执行中途断线：本轮确实没做完（可能还有剩余次数），
-				// 会话恢复后 5 分钟即重试；调度器在重连期间本身也不会拉起任务。
+				// 90 秒后即重试；调度器在重连期间本身也不会拉起任务。
 				retrySoon = true
 				slog.Info("会话重连中，任务本轮跳过并稍后重试",
 					"role_id", s.roleID,

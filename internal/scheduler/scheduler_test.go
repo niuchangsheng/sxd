@@ -645,10 +645,10 @@ func TestScheduler_DeadlineExceededRetriesInThirtyMinutes(t *testing.T) {
 	}
 }
 
-// TestScheduler_NotConnectedRetriesInFiveMinutes 验证执行中途断线
-// (client.ErrNotConnected) 的 Cron 任务按 5 分钟短重试，而不是推迟到下一次
+// TestScheduler_NotConnectedRetriesShortly 验证执行中途断线
+// (client.ErrNotConnected) 的 Cron 任务按 90 秒短重试，而不是推迟到下一次
 // Cron（2~4 小时）导致剩余次数长期漏做。
-func TestScheduler_NotConnectedRetriesInFiveMinutes(t *testing.T) {
+func TestScheduler_NotConnectedRetriesShortly(t *testing.T) {
 	fastJitter := scheduler.NewJitter(scheduler.JitterConfig{
 		MinDuration: 2 * time.Millisecond,
 		MaxDuration: 5 * time.Millisecond,
@@ -690,13 +690,13 @@ func TestScheduler_NotConnectedRetriesInFiveMinutes(t *testing.T) {
 	if !found {
 		t.Fatal("未找到 routine 状态")
 	}
-	if wait := time.Until(next); wait < 4*time.Minute || wait > 6*time.Minute {
-		t.Fatalf("断线后应在约 5 分钟后重试, 实际 wait=%v", wait)
+	if wait := time.Until(next); wait < 60*time.Second || wait > 2*time.Minute {
+		t.Fatalf("断线后应在约 90 秒后重试, 实际 wait=%v", wait)
 	}
 }
 
 // TestBaseRoutine_InactiveSessionReturnsErrNotConnected 验证会话未激活（断线重连窗口）
-// 时不再把任务当作成功返回 nil，而是返回 ErrNotConnected，交由调度器 5 分钟后重试。
+// 时不再把任务当作成功返回 nil，而是返回 ErrNotConnected，交由调度器 90 秒后重试。
 func TestBaseRoutine_InactiveSessionReturnsErrNotConnected(t *testing.T) {
 	sess := client.NewRoleSession(client.SessionConfig{
 		RoleID:     "role-inactive",
