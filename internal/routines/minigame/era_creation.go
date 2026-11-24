@@ -178,6 +178,7 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 				"result_text", protocol.EraCreationResultText(code), "fights", fights)
 			return nil
 		},
+		scheduler.WithReturnToTown(),
 	)
 }
 

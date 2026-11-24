@@ -194,6 +194,7 @@ func NewFaxiangRoutine() scheduler.ActivityRoutine {
 			}
 			return nil
 		},
+		scheduler.WithReturnToTown(),
 	)
 }
 
