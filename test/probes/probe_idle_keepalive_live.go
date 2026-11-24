@@ -23,6 +23,12 @@
 //	none     只登录，之后不发任何应用层包（内置心跳关闭）
 //	heart075 空闲时每 15 秒上行 0/75（当前线上行为）
 //	time022  空闲时每 30 秒发 0/22 get_server_time（官方客户端行为，纯只读）
+//	town     空闲时每 60 秒进一次城镇（场景操作，零消耗）
+//
+// 2026-11-24 首轮结果：none / heart075 / time022 全部在 4m33s~4m35s 被服务端
+// 断链，说明查询类请求与 0/75 都不刷新会话；而生产日志中的长会话都穿插了
+// 战斗/场景切换（跨服PK、无量劫海、取经打劫、副本扫荡），故追加 town 模式
+// 验证「场景操作刷新会话」。
 //
 // 只读探测：不进入副本、不领奖、不消耗元宝与次数。运行前请确认账号没有在玩，
 // 否则会把外部登录顶掉。
@@ -199,6 +205,23 @@ func runMode(tc *platform.TicketCache, acc config.AccountConfig, role config.Rol
 				}
 			}
 			next = time.Now().Add(30 * time.Second)
+		case "town":
+			// 场景操作：进入当前城镇（Mod_Town_Base.enter_town，不消耗任何资源）。
+			// 直接调用底层方法记录结果码，区分“被静默丢弃”与“已在城镇”两种情况。
+			townID := int32(sess.GetPlayerState().TownMapID)
+			if townID <= 0 {
+				townID = 3
+			}
+			anchor := sess.LastAckActionID()
+			if anchor == 0 {
+				anchor = sess.LastBusinessActionID()
+			}
+			callCtx, ccancel := context.WithTimeout(ctx, 8*time.Second)
+			code, err := sess.EnterTownWithAnchor(callCtx, townID, anchor)
+			ccancel()
+			slog.Info("enter_town 结果", "mode", mode, "town_id", townID,
+				"anchor", fmt.Sprintf("0x%08X", anchor), "code", code, "err", err)
+			next = time.Now().Add(60 * time.Second)
 		default:
 			slog.Warn("未知模式", "mode", mode)
 			next = time.Now().Add(time.Hour)
