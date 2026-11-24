@@ -74,6 +74,11 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 2026-11-24 探针实测：干净新会话上 669/3 step=4 正常回包
+			// (result=0)；例程在长会话/其他玩法之后调用会被静默丢弃。
+			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				return err
+			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			resyncCall := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
 				resp, err := caller.CallResync(pkt, act, timeout...)
