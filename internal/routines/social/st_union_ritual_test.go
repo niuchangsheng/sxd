@@ -327,3 +327,52 @@ func TestStUnionRitualRoutine_SectSessionSkipsIncenseWhenOfferedToday(t *testing
 		t.Fatalf("城镇会话面板显示今日已上香时不应再发 179/11, calls = %d", sectIncense.Load())
 	}
 }
+
+// TestStUnionRitualRoutine_SkipsIncenseWhenActivityFinished 验证 179/0 首字节为
+// HAS_FINISH(6) 时活动已结束：不再拉神像面板、不发 179/11、也不打开城镇会话，
+// 但仍继续魔神挑战。
+func TestStUnionRitualRoutine_SkipsIncenseWhenActivityFinished(t *testing.T) {
+	var godCalls, incenseCalls, fightCalls atomic.Int32
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDStUnionTreeInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.StUnionActivityHasFinish, 0, 0, 0}))
+		case protocol.ActionIDStUnionGodInfo:
+			godCalls.Add(1)
+		case protocol.ActionIDStUnionGodIncense:
+			incenseCalls.Add(1)
+		case protocol.ActionIDStUnionTaskInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionTaskFight:
+			fightCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.StUnionTaskTimesUsed, 0, 0, 0, 0, 0}))
+		}
+	})
+	restore := SetStUnionSessionOpenerForTest(func(_ context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+		return s, nil
+	})
+	defer restore()
+	var sectOpened atomic.Int32
+	restoreSect := SetStUnionSectSessionOpenerForTest(func(_ context.Context, _ *client.RoleSession) (*client.RoleSession, error) {
+		sectOpened.Add(1)
+		return nil, errors.New("should not open sect session")
+	})
+	defer restoreSect()
+	defer sess.Close()
+
+	if err := NewStUnionRitualRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("st union ritual: %v", err)
+	}
+	if godCalls.Load() != 0 || incenseCalls.Load() != 0 {
+		t.Fatalf("活动已结束不应请求神像/上香, god=%d incense=%d",
+			godCalls.Load(), incenseCalls.Load())
+	}
+	if sectOpened.Load() != 0 {
+		t.Fatalf("活动已结束不应打开仙盟城镇会话, calls=%d", sectOpened.Load())
+	}
+	if fightCalls.Load() != 1 {
+		t.Fatalf("跳过上香后仍应继续魔神挑战, fights=%d", fightCalls.Load())
+	}
+}

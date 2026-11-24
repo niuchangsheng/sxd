@@ -149,3 +149,22 @@ func TestStUnionGodInfo_OfferedTodayByName(t *testing.T) {
 		t.Fatal("不匹配的名称不应命中")
 	}
 }
+
+func TestParseStUnionTreeStatus(t *testing.T) {
+	// 2026-11-24 实机跨服会话 179/0 回包首字节为 6 (HAS_FINISH)。
+	const liveHex = "060000000000000002010003002d0012000008d70000000501002b00130000089500000001010028001100000994000000080100"
+	raw, err := hex.DecodeString(liveHex)
+	if err != nil {
+		t.Fatalf("hex: %v", err)
+	}
+	st, err := ParseStUnionTreeStatus(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if st != StUnionActivityHasFinish {
+		t.Fatalf("status = %d, want %d", st, StUnionActivityHasFinish)
+	}
+	if _, err := ParseStUnionTreeStatus(nil); err == nil {
+		t.Fatal("空载荷应报错")
+	}
+}

@@ -162,6 +162,21 @@ func ParseStUnionTaskInfo(payload []byte) (*StUnionTaskInfo, error) {
 	return out, nil
 }
 
+// StUnionActivityHasFinish 仙盟许愿树/上香活动状态：已结束 (HAS_FINISH)。
+//
+// 179/0 回包首字节为活动状态码，取值与 Mod_StUnionActivity_Base 常量一致。
+// 活动结束后 179/10 仍返回历史记录，但 179/11 会被服务端静默丢弃。
+const StUnionActivityHasFinish uint8 = 6
+
+// ParseStUnionTreeStatus 读取 179/0 许愿树面板首字节活动状态。
+func ParseStUnionTreeStatus(payload []byte) (uint8, error) {
+	p := DecompressPayloadIfNeeded(payload)
+	if len(p) < 1 {
+		return 0, fmt.Errorf("%w: st union tree status empty", ErrInvalidPayload)
+	}
+	return p[0], nil
+}
+
 // StUnionGodRecord 表示 179/10 面板中的一条膜拜记录。
 //
 // 线格式: [Int player_id][String name][String platform][String server]

@@ -237,13 +237,31 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 1. 仙盟上香（仅铜钱档）。抓包顺序：179/0 许愿树 → 179/10 神像 → 179/11 上香。
-			_ = call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo)
-			offeredToday, godKnown := logStUnionGodPanel("cross",
-				session, call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo))
+			// 179/0 首字节是活动状态；HAS_FINISH(6) 时活动已结束，179/10 仍返回
+			// 历史记录，但 179/11 必然被静默丢弃，故直接跳过写请求。
+			treeResp := call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo)
+			activityFinished := false
+			if treeResp != nil {
+				if st, stErr := protocol.ParseStUnionTreeStatus(treeResp.Payload); stErr == nil {
+					if st == protocol.StUnionActivityHasFinish {
+						activityFinished = true
+						scheduler.ResetSilentDropsCtx(ctx, session, stUnionIncenseDropKey)
+						slog.Info("仙盟上香活动已结束，跳过 179/10/179/11",
+							"role_id", session.RoleID(), "status", st)
+					}
+				}
+			}
+			offeredToday, godKnown := false, false
+			if !activityFinished {
+				offeredToday, godKnown = logStUnionGodPanel("cross",
+					session, call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo))
+			}
 			var incenseResp *protocol.Packet
 			variant := "cross"
 			drops := scheduler.SilentDropCountCtx(ctx, session, stUnionIncenseDropKey)
-			if offeredToday {
+			if activityFinished {
+				// 活动已结束：不发送任何上香写请求，也不计入静默丢包。
+			} else if offeredToday {
 				// 179/10 已证明今日上香成功（记录是服务端权威状态），
 				// 再发 179/11 只会被静默丢弃，直接跳过并清零丢包计数。
 				scheduler.ResetSilentDropsCtx(ctx, session, stUnionIncenseDropKey)
