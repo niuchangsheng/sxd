@@ -91,6 +91,7 @@ stateDiagram-v2
 - **会话健康窗口（2026-11-24 实测）**：服务端对长会话的重型请求（无量劫海 854/1 布阵、853/3/853/4 战斗等）会在会话年龄约 4 分钟后静默丢弃甚至直接断开连接；同一批请求在登录后早期窗口内全部正常。对 87 次布阵序列的相关性分析：成功时会话年龄中位数 **6 秒**，被断开时中位数 **250 秒**。
   - 重型 Routine 入口必须调用 `RoleSession.EnsureFreshConnection(ctx, maxAge)`：未超窗直接执行；超窗主动重建连接并等待新连接 Active；等待超时返回 `ErrNotConnected` 走 5 分钟短重试。
   - 窗口按玩法实测取值：`wuliang_jiehai` 的 854/39→854/1→853/3→853/4 序列对年龄极敏感，按 **30 秒**刷新（89 次采样：<30s 29/29 成功、30–60s 2/7、>60s 3/53）；`levitate_perfusion`、`devil_expedition`、`era_rebirth_attr_gift` 使用 `client.HealthySessionAge`（3 分钟）。
+  - 主动重建**必须重新换票**：网关票据一次性，复用已消费票据会连续 3 次握手超时（实测约 75 秒空窗）；`EnsureFreshConnection` 重建前先调用 `RefreshCredentials`（10 秒防抖），实测恢复时间从约 75 秒降到约 3 秒。普通断线的自愈换票仍受 2 分钟节流，避免同账号多角色互相顶号。
 
 ### 2.2 回包解析铁律（强制）
 

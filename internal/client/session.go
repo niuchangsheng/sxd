@@ -597,8 +597,10 @@ func (s *RoleSession) refreshCredentials(ctx context.Context) bool {
 	if s.cfg.RefreshCredentials == nil {
 		return false
 	}
+	// 主动重建时旧票据已被本次登录消费，必须换新票；只做 10 秒防抖，
+	// 避免同一次重建流程里重复登录。普通断线的自愈仍受 2 分钟节流约束。
 	s.credRefreshMu.Lock()
-	recent := time.Since(s.lastCredRefresh) < minCredentialRefreshInterval
+	recent := time.Since(s.lastCredRefresh) < 10*time.Second
 	s.credRefreshMu.Unlock()
 	if recent {
 		return false
