@@ -90,7 +90,7 @@ stateDiagram-v2
   - 请求超时（`context.DeadlineExceeded` / 服务端静默丢包）且 Routine 自身没有 dropbackoff 计数时，调度器按 **30 分钟**重试；已接入 `HandleSilentDrop` 的玩法仍以「连续 3 次 → 挂起至 min(次日重置, 6 小时)」为准。
 - **会话健康窗口（2026-11-24 实测）**：服务端对长会话的重型请求（无量劫海 854/1 布阵、853/3/853/4 战斗等）会在会话年龄约 4 分钟后静默丢弃甚至直接断开连接；同一批请求在登录后早期窗口内全部正常。对 87 次布阵序列的相关性分析：成功时会话年龄中位数 **6 秒**，被断开时中位数 **250 秒**。
   - 重型 Routine 入口必须调用 `RoleSession.EnsureFreshConnection(ctx, maxAge)`：未超窗直接执行；超窗主动重建连接并等待新连接 Active；等待超时返回 `ErrNotConnected` 走 5 分钟短重试。
-  - 窗口按玩法实测取值：`wuliang_jiehai` 的 854/39→854/1→853/3→853/4 序列对年龄极敏感，按 **60 秒**刷新（89 次采样的成功率：<60s 86%、60–120s 20%、>240s 0%）；`levitate_perfusion`、`devil_expedition`、`era_rebirth_attr_gift` 使用 `client.HealthySessionAge`（3 分钟）。
+  - 窗口按玩法实测取值：`wuliang_jiehai` 的 854/39→854/1→853/3→853/4 序列对年龄极敏感，按 **30 秒**刷新（89 次采样：<30s 29/29 成功、30–60s 2/7、>60s 3/53）；`levitate_perfusion`、`devil_expedition`、`era_rebirth_attr_gift` 使用 `client.HealthySessionAge`（3 分钟）。
 
 ### 2.2 回包解析铁律（强制）
 

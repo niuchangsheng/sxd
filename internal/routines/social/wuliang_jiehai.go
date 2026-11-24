@@ -80,10 +80,11 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 	const fightTimeout = 45 * time.Second
 	// wuliangFreshSessionAge 无量劫海专用健康窗口。
 	//
-	// 2026-11-24 对 89 次布阵序列做会话年龄统计：年龄 <60 秒时成功率 86%，
-	// 60–120 秒降到 20%，240 秒以上为 0%。该序列（854/39 → 854/1 → 853/3
-	// → 853/4）在旧会话上会被服务端直接断链，因此入口按 60 秒强制刷新。
-	const wuliangFreshSessionAge = 60 * time.Second
+	// 2026-11-24 对 89 次布阵序列做会话年龄统计：<30 秒 29/29 成功，
+	// 30–60 秒 2/7，>60 秒 3/53（且多为孤立样本）。该序列
+	// （854/39 → 854/1 → 853/3 → 853/4）在旧会话上会被服务端直接断链，
+	// 因此入口按 30 秒强制刷新。
+	const wuliangFreshSessionAge = 30 * time.Second
 	return scheduler.NewBaseRoutine(
 		"wuliang_jiehai",
 		"social",
