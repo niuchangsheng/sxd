@@ -50,6 +50,11 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 			} else if abort := caller.AbortErr(); abort != nil {
 				return abort
 			}
+			// 与仙盟上香/万古膜拜相同的场景写操作：先复位城镇再膜拜，
+			// 避免战斗上下文污染导致静默丢弃。
+			if !session.ReturnToTown(ctx, 5*time.Second) {
+				slog.Info("圣盟膜拜前返回城镇失败，继续尝试", "role_id", session.RoleID())
+			}
 			resp := call(protocol.BuildSaUnionWorshipPacket(protocol.SaUnionWorshipUseCoin), protocol.ActionIDSaUnionWorship)
 			if resp == nil {
 				if abort := caller.AbortErr(); abort != nil {
