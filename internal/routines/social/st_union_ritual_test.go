@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
@@ -175,5 +176,154 @@ func TestStUnionRitualRoutine_CrossSessionFailed(t *testing.T) {
 	var cd *scheduler.CooldownError
 	if !errors.As(err, &cd) {
 		t.Fatalf("跨服会话失败应返回 CooldownError, got %v", err)
+	}
+}
+
+// stUnionGodPanelWithRecords 构造 179/10 面板回包。
+func stUnionGodPanelWithRecords(records []protocol.StUnionGodRecord) *protocol.Packet {
+	return protocol.BuildStUnionGodInfoResultPacket(1, 100, 0, 0, records)
+}
+
+// TestStUnionRitualRoutine_SkipsIncenseWhenOfferedToday 验证 179/10 面板已记录
+// 今日上香时不再发 179/11（服务端会对重复上香静默丢包），并清零丢包计数。
+func TestStUnionRitualRoutine_SkipsIncenseWhenOfferedToday(t *testing.T) {
+	var incenseCalls, fightCalls atomic.Int32
+	now := time.Now()
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDStUnionTreeInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionGodInfo:
+			_ = protocol.WritePacket(conn, stUnionGodPanelWithRecords([]protocol.StUnionGodRecord{
+				{PlayerID: 999, Name: "同尘", Platform: "qq", Server: "s0",
+					A: 1, B: 34, Time: now.Add(-time.Hour).Unix()},
+			}))
+		case protocol.ActionIDStUnionGodIncense:
+			incenseCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildStUnionIncenseResultPacket(
+				protocol.StUnionIncenseSuccess, 34, 34, 0))
+		case protocol.ActionIDStUnionTaskInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionTaskFight:
+			fightCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.StUnionTaskTimesUsed, 0, 0, 0, 0, 0}))
+		}
+	})
+	restore := SetStUnionSessionOpenerForTest(func(_ context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+		return s, nil
+	})
+	defer restore()
+	restoreSect := SetStUnionSectSessionOpenerForTest(func(_ context.Context, _ *client.RoleSession) (*client.RoleSession, error) {
+		return nil, errors.New("skip sect session in test")
+	})
+	defer restoreSect()
+	defer sess.Close()
+
+	// 预置一个历史丢包计数，验证「今日已上香」会将其清零。
+	scheduler.NoteSilentDrop(sess, stUnionIncenseDropKey)
+	if err := NewStUnionRitualRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("st union ritual: %v", err)
+	}
+	if incenseCalls.Load() != 0 {
+		t.Fatalf("今日已上香时不应再发 179/11, calls = %d", incenseCalls.Load())
+	}
+	if fightCalls.Load() != 1 {
+		t.Fatalf("跳过上香后仍应继续魔神挑战, fights = %d", fightCalls.Load())
+	}
+	if got := scheduler.SilentDropCount(sess, stUnionIncenseDropKey); got != 0 {
+		t.Fatalf("今日已上香应清零丢包计数, got %d", got)
+	}
+}
+
+// TestStUnionRitualRoutine_AttemptsIncenseWhenOnlyOthersOffered 验证面板只有他人记录时
+// 仍正常尝试 179/11，预检不能误伤未上香的情况。
+func TestStUnionRitualRoutine_AttemptsIncenseWhenOnlyOthersOffered(t *testing.T) {
+	var incenseCalls atomic.Int32
+	now := time.Now()
+	sess := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDStUnionTreeInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionGodInfo:
+			_ = protocol.WritePacket(conn, stUnionGodPanelWithRecords([]protocol.StUnionGodRecord{
+				{PlayerID: 1000, Name: "他人", Platform: "qq", Server: "s0",
+					A: 1, B: 34, Time: now.Add(-time.Hour).Unix()},
+			}))
+		case protocol.ActionIDStUnionGodIncense:
+			incenseCalls.Add(1)
+			_ = protocol.WritePacket(conn, protocol.BuildStUnionIncenseResultPacket(
+				protocol.StUnionIncenseSuccess, 34, 34, 0))
+		case protocol.ActionIDStUnionTaskInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionTaskFight:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.StUnionTaskTimesUsed, 0, 0, 0, 0, 0}))
+		}
+	})
+	restore := SetStUnionSessionOpenerForTest(func(_ context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+		return s, nil
+	})
+	defer restore()
+	restoreSect := SetStUnionSectSessionOpenerForTest(func(_ context.Context, _ *client.RoleSession) (*client.RoleSession, error) {
+		return nil, errors.New("skip sect session in test")
+	})
+	defer restoreSect()
+	defer sess.Close()
+
+	if err := NewStUnionRitualRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("st union ritual: %v", err)
+	}
+	if incenseCalls.Load() != 1 {
+		t.Fatalf("未上香时应尝试 179/11 一次, calls = %d", incenseCalls.Load())
+	}
+}
+
+// TestStUnionRitualRoutine_SectSessionSkipsIncenseWhenOfferedToday 验证兜底城镇会话
+// 的 179/10 面板也参与预检：今日已上香时不再发 179/11。
+func TestStUnionRitualRoutine_SectSessionSkipsIncenseWhenOfferedToday(t *testing.T) {
+	var sectIncense atomic.Int32
+	now := time.Now()
+	cross := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDStUnionTreeInfo, protocol.ActionIDStUnionGodInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+			// 179/11 跨服会话静默丢弃。
+		case protocol.ActionIDStUnionTaskInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionTaskFight:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.StUnionTaskTimesUsed, 0, 0, 0, 0, 0}))
+		}
+	})
+	town := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDStUnionTreeInfo:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDStUnionGodInfo:
+			_ = protocol.WritePacket(conn, stUnionGodPanelWithRecords([]protocol.StUnionGodRecord{
+				{PlayerID: 999, Name: "同尘", Platform: "qq", Server: "s0",
+					A: 1, B: 34, Time: now.Add(-time.Hour).Unix()},
+			}))
+		case protocol.ActionIDStUnionGodIncense:
+			sectIncense.Add(1)
+		}
+	})
+	restore := SetStUnionSessionOpenerForTest(func(_ context.Context, s *client.RoleSession) (*client.RoleSession, error) {
+		return s, nil
+	})
+	defer restore()
+	restoreSect := SetStUnionSectSessionOpenerForTest(func(_ context.Context, _ *client.RoleSession) (*client.RoleSession, error) {
+		return town, nil
+	})
+	defer restoreSect()
+	defer cross.Close()
+	defer town.Close()
+
+	if err := NewStUnionRitualRoutine().Execute(context.Background(), cross, nil); err != nil {
+		t.Fatalf("st union ritual: %v", err)
+	}
+	if sectIncense.Load() != 0 {
+		t.Fatalf("城镇会话面板显示今日已上香时不应再发 179/11, calls = %d", sectIncense.Load())
 	}
 }

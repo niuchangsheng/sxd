@@ -14,7 +14,10 @@
 //	  2 add_star / 3 buy_ticket（元宝购买，自动化禁止调用）
 package protocol
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 const (
 	// ActionIDStUnionTreeInfo 仙盟许愿树面板 (179/0)
@@ -157,6 +160,121 @@ func ParseStUnionTaskInfo(payload []byte) (*StUnionTaskInfo, error) {
 		*dst = v
 	}
 	return out, nil
+}
+
+// StUnionGodRecord 表示 179/10 面板中的一条膜拜记录。
+//
+// 线格式: [Int player_id][String name][String platform][String server]
+//
+//	[Int a][Int b][Int timestamp]
+type StUnionGodRecord struct {
+	PlayerID int32
+	Name     string
+	Platform string
+	Server   string
+	A        int32
+	B        int32
+	Time     int64
+}
+
+// StUnionGodInfo 表示 179/10 神像面板。
+type StUnionGodInfo struct {
+	Flag    uint8
+	Exp     int32
+	C       uint8
+	D       uint8
+	Records []StUnionGodRecord
+}
+
+// ParseStUnionGodInfo 解析 179/10：
+// [Byte][Int][Byte][Byte][UInt16 n, n×[Int,String,String,String,Int,Int,Int]]。
+func ParseStUnionGodInfo(payload []byte) (*StUnionGodInfo, error) {
+	p := DecompressPayloadIfNeeded(payload)
+	r := NewReader(p)
+	out := &StUnionGodInfo{}
+	var err error
+	if out.Flag, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: st union god flag: %v", ErrInvalidPayload, err)
+	}
+	if out.Exp, err = r.ReadInt32(); err != nil {
+		return nil, fmt.Errorf("%w: st union god exp: %v", ErrInvalidPayload, err)
+	}
+	if out.C, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: st union god c: %v", ErrInvalidPayload, err)
+	}
+	if out.D, err = r.ReadUint8(); err != nil {
+		return nil, fmt.Errorf("%w: st union god d: %v", ErrInvalidPayload, err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: st union god record count: %v", ErrInvalidPayload, err)
+	}
+	for i := 0; i < int(count); i++ {
+		var rec StUnionGodRecord
+		if rec.PlayerID, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: st union god record[%d] id: %v", ErrInvalidPayload, i, err)
+		}
+		if rec.Name, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: st union god record[%d] name: %v", ErrInvalidPayload, i, err)
+		}
+		if rec.Platform, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: st union god record[%d] platform: %v", ErrInvalidPayload, i, err)
+		}
+		if rec.Server, err = r.ReadString(); err != nil {
+			return nil, fmt.Errorf("%w: st union god record[%d] server: %v", ErrInvalidPayload, i, err)
+		}
+		if rec.A, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: st union god record[%d] a: %v", ErrInvalidPayload, i, err)
+		}
+		if rec.B, err = r.ReadInt32(); err != nil {
+			return nil, fmt.Errorf("%w: st union god record[%d] b: %v", ErrInvalidPayload, i, err)
+		}
+		ts, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: st union god record[%d] time: %v", ErrInvalidPayload, i, err)
+		}
+		rec.Time = int64(ts)
+		out.Records = append(out.Records, rec)
+	}
+	return out, nil
+}
+
+// OfferedToday 判断指定玩家当天是否已有成功上香记录。
+func (g *StUnionGodInfo) OfferedToday(playerID int32, now time.Time) bool {
+	if g == nil || playerID <= 0 {
+		return false
+	}
+	loc := now.Location()
+	for _, rec := range g.Records {
+		if rec.PlayerID != playerID || rec.Time <= 0 {
+			continue
+		}
+		t := time.Unix(rec.Time, 0).In(loc)
+		if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
+			return true
+		}
+	}
+	return false
+}
+
+// BuildStUnionGodInfoResultPacket 构造 179/10 回包，供离线 mock 与单测使用。
+func BuildStUnionGodInfoResultPacket(flag uint8, exp int32, c, d uint8, records []StUnionGodRecord) *Packet {
+	w := NewWriter()
+	w.WriteUint8(flag)
+	w.WriteInt32(exp)
+	w.WriteUint8(c)
+	w.WriteUint8(d)
+	w.WriteUint16(uint16(len(records)))
+	for _, rec := range records {
+		w.WriteInt32(rec.PlayerID)
+		w.WriteString(rec.Name)
+		w.WriteString(rec.Platform)
+		w.WriteString(rec.Server)
+		w.WriteInt32(rec.A)
+		w.WriteInt32(rec.B)
+		w.WriteInt32(int32(rec.Time))
+	}
+	return NewPacket(ActionIDStUnionGodInfo, w.Bytes())
 }
 
 // ParseStUnionResult 解析单字节结果码。

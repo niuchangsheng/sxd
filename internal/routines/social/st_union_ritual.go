@@ -94,19 +94,51 @@ var openStUnionSectSession = func(ctx context.Context, s *client.RoleSession) (*
 	return s.OpenSectTownSession(ctx)
 }
 
+// logStUnionGodPanel 解析并打印 179/10 神像面板，返回「今日是否已上香」。
+// panel 为 nil / 解析失败时第二个返回值 known 为 false，调用方应继续尝试上香。
+func logStUnionGodPanel(scope string, session *client.RoleSession, resp *protocol.Packet) (offered, known bool) {
+	if resp == nil {
+		return false, false
+	}
+	head := resp.Payload
+	if len(head) > 400 {
+		head = head[:400]
+	}
+	slog.Info("仙盟神像面板", "scope", scope, "role_id", session.RoleID(),
+		"len", len(resp.Payload), "hex", hex.EncodeToString(head))
+	info, err := protocol.ParseStUnionGodInfo(resp.Payload)
+	if err != nil {
+		slog.Info("仙盟神像面板解析失败", "scope", scope, "role_id", session.RoleID(), "err", err)
+		return false, false
+	}
+	offered = info.OfferedToday(session.PlayerID(), time.Now())
+	var lastTime int64
+	for _, rec := range info.Records {
+		if rec.Time > lastTime {
+			lastTime = rec.Time
+		}
+	}
+	slog.Info("仙盟神像面板记录", "scope", scope, "role_id", session.RoleID(),
+		"player_id", session.PlayerID(),
+		"records", len(info.Records), "offered_today", offered,
+		"last_record_at", time.Unix(lastTime, 0).Format(time.DateTime))
+	return offered, true
+}
+
 // tryStUnionIncenseOnSectSession 在仙盟城镇会话上按 179/0 → 179/10 → 179/11
-// 重试上香，返回 179/11 回包（任何一步无回包则返回 nil）。
+// 重试上香，返回 179/11 回包；offered=true 表示 179/10 面板证明今日已上香，
+// 此时不再发 179/11（服务端会对重复上香静默丢包）。
 //
 // 179/10 只读面板在仙界跨服会话可用，但上香是仙盟场景写操作：跨服会话上服务端
 // 会静默丢弃 179/11（2026-11-16 00:21 起多次实测，均在上香前刚成功拉过 179/10）。
 // 仙盟城镇会话（8252）才是官方客户端打开神像面板/点击上香的会话，故作为兜底。
 // 仅在上一步拿到回包后才发下一步，避免 PrevAct 链路令牌错位。
 func tryStUnionIncenseOnSectSession(ctx context.Context, session *client.RoleSession,
-	timeout time.Duration) *protocol.Packet {
+	timeout time.Duration) (resp *protocol.Packet, offered bool) {
 	sect, err := openStUnionSectSession(ctx, session)
 	if err != nil {
 		slog.Info("仙盟城镇会话建立失败，跳过城镇会话上香", "role_id", session.RoleID(), "err", err)
-		return nil
+		return nil, false
 	}
 	if sect != session {
 		defer sect.Close()
@@ -122,20 +154,17 @@ func tryStUnionIncenseOnSectSession(ctx context.Context, session *client.RoleSes
 		return resp
 	}
 	if call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo) == nil {
-		return nil
+		return nil, false
 	}
 	godResp := call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo)
 	if godResp == nil {
-		return nil
+		return nil, false
 	}
-	head := godResp.Payload
-	if len(head) > 400 {
-		head = head[:400]
+	if offered, _ := logStUnionGodPanel("sect_town", session, godResp); offered {
+		return nil, true
 	}
-	slog.Info("仙盟神像面板（城镇会话）", "role_id", session.RoleID(),
-		"len", len(godResp.Payload), "hex", hex.EncodeToString(head))
 	return call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
-		protocol.ActionIDStUnionGodIncense)
+		protocol.ActionIDStUnionGodIncense), false
 }
 
 // NewStUnionRitualRoutine 构造仙盟上香 + 魔神挑战任务。
@@ -178,26 +207,38 @@ func NewStUnionRitualRoutine() scheduler.ActivityRoutine {
 
 			// 1. 仙盟上香（仅铜钱档）。抓包顺序：179/0 许愿树 → 179/10 神像 → 179/11 上香。
 			_ = call(protocol.BuildStUnionTreeInfoPacket(), protocol.ActionIDStUnionTreeInfo)
-			if godResp := call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo); godResp != nil {
-				head := godResp.Payload
-				if len(head) > 400 {
-					head = head[:400]
-				}
-				slog.Info("仙盟神像面板", "role_id", session.RoleID(),
-					"len", len(godResp.Payload), "hex", hex.EncodeToString(head))
-			}
+			offeredToday, godKnown := logStUnionGodPanel("cross",
+				session, call(protocol.BuildStUnionGodInfoPacket(), protocol.ActionIDStUnionGodInfo))
 			var incenseResp *protocol.Packet
 			variant := "cross"
 			drops := scheduler.SilentDropCountCtx(ctx, session, stUnionIncenseDropKey)
-			incenseResp = call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
-				protocol.ActionIDStUnionGodIncense)
-			if incenseResp == nil && drops < maxStUnionIncenseSectTownTries {
-				slog.Info("仙盟上香在跨服会话无回包，改在仙盟城镇会话重试",
-					"role_id", session.RoleID(), "consecutive", drops)
-				variant = "sect_town"
-				incenseResp = tryStUnionIncenseOnSectSession(ctx, session, callTimeout)
+			if offeredToday {
+				// 179/10 已证明今日上香成功（记录是服务端权威状态），
+				// 再发 179/11 只会被静默丢弃，直接跳过并清零丢包计数。
+				scheduler.ResetSilentDropsCtx(ctx, session, stUnionIncenseDropKey)
+				slog.Info("仙盟神像面板显示今日已上香，跳过 179/11",
+					"role_id", session.RoleID())
+			} else {
+				if !godKnown {
+					slog.Info("仙盟神像面板不可用，仍尝试上香", "role_id", session.RoleID())
+				}
+				incenseResp = call(protocol.BuildStUnionIncensePacket(stUnionIncenseOfferID),
+					protocol.ActionIDStUnionGodIncense)
+				if incenseResp == nil && drops < maxStUnionIncenseSectTownTries {
+					slog.Info("仙盟上香在跨服会话无回包，改在仙盟城镇会话重试",
+						"role_id", session.RoleID(), "consecutive", drops)
+					variant = "sect_town"
+					var sectOffered bool
+					incenseResp, sectOffered = tryStUnionIncenseOnSectSession(ctx, session, callTimeout)
+					if sectOffered {
+						offeredToday = true
+						incenseResp = nil
+					}
+				}
 			}
-			if incenseResp == nil {
+			if offeredToday && incenseResp == nil {
+				// 今日已完成，无需计数；继续魔神挑战。
+			} else if incenseResp == nil {
 				n := scheduler.NoteSilentDropCtx(ctx, session, stUnionIncenseDropKey)
 				if n == 1 || n%24 == 0 {
 					slog.Warn("仙盟上香无回包，继续尝试魔神挑战", "role_id", session.RoleID(),
