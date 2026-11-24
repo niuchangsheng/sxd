@@ -140,6 +140,11 @@ func NewFaxiangRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 518/15 等写请求在长会话上会被服务端静默丢弃（2026-11-24 实测
+			// 17 分钟会话上 518/15 无回包，而同批次面板查询正常）。
+			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				return err
+			}
 			// 518/15 是场景写操作：前面的战斗玩法会污染上下文，导致面板查询
 			// 正常而选择炼化被静默丢弃。执行前先复位到城镇场景。
 			if !session.ReturnToTown(ctx, 3*time.Second) {

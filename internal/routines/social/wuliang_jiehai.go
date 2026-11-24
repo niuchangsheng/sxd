@@ -78,6 +78,13 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 	// 多队伍战斗（第 2 章起 2 队、后续更多）需要服务端逐队结算，回包可能超过
 	// 20 秒；实测 20 秒会在战斗仍在计算时误判为静默丢弃。给足 45 秒。
 	const fightTimeout = 45 * time.Second
+	// wuliangFreshSessionAge 无量劫海专用健康窗口。
+	//
+	// 2026-11-24 对 89 次布阵序列做会话年龄统计：<30 秒 29/29 成功，
+	// 30–60 秒 2/7，>60 秒 3/53（且多为孤立样本）。该序列
+	// （854/39 → 854/1 → 853/3 → 853/4）在旧会话上会被服务端直接断链，
+	// 因此入口按 30 秒强制刷新。
+	const wuliangFreshSessionAge = 30 * time.Second
 	return scheduler.NewBaseRoutine(
 		"wuliang_jiehai",
 		"social",
@@ -91,6 +98,11 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 			}
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
+			}
+			// 布阵/战斗序列对会话年龄极敏感：超过 60 秒成功率不足 30%，
+			// 超窗时先重建连接，避免整轮挑战被服务端断链。
+			if err := session.EnsureFreshConnection(ctx, wuliangFreshSessionAge); err != nil {
+				return err
 			}
 			st := session.GetPlayerState()
 			slog.Info("无量劫海会话状态", "role_id", session.RoleID(),

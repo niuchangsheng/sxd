@@ -35,6 +35,11 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 866/10 挑战在长会话上会被静默丢弃（2026-11-24 实测 16 分钟
+			// 会话上无回包，而探索/事件查询正常）。
+			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				return err
+			}
 			// 866/10 挑战是场景写操作，执行前复位城镇，避免上下文污染。
 			if !session.ReturnToTown(ctx, 3*time.Second) {
 				slog.Info("造化秘境执行前返回城镇失败，继续尝试", "role_id", session.RoleID())
