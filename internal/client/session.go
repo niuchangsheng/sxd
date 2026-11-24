@@ -528,6 +528,62 @@ func (s *RoleSession) ConnectionSince() time.Time {
 	return time.Unix(0, ns)
 }
 
+// HealthySessionAge 是重型玩法建议使用的会话健康窗口。
+//
+// 2026-11-24 对 11 小时日志做的相关性分析：同一批无量劫海请求在会话年龄
+// 中位数 6 秒时全部成功，而在会话年龄中位数 250 秒（>4 分钟）时会被服务端
+// 静默丢弃或直接断开连接。取 3 分钟留出安全余量。
+const HealthySessionAge = 3 * time.Minute
+
+// EnsureFreshConnection 确保当前会话年龄不超过 maxAge。
+//
+// 若已超过健康窗口，主动重建连接并等待新一代连接进入 Active：重型玩法
+// （无量劫海/飞升灌注/魔界远征等）在旧会话上会被服务端丢弃甚至断链，
+// 在登录后的早期窗口内才能稳定完成。等待超时返回 ErrNotConnected，
+// 由调度器按 5 分钟短重试。
+func (s *RoleSession) EnsureFreshConnection(ctx context.Context, maxAge time.Duration) error {
+	if maxAge <= 0 {
+		maxAge = HealthySessionAge
+	}
+	if s.State() != StateActive {
+		return ErrNotConnected
+	}
+	since := s.ConnectionSince()
+	age := time.Duration(0)
+	if !since.IsZero() {
+		age = time.Since(since)
+	}
+	if age <= maxAge {
+		return nil
+	}
+
+	slog.Info("会话已超过健康窗口，主动重建后再执行重型玩法",
+		"role_id", s.cfg.RoleID,
+		"age", age.Round(time.Second),
+		"max_age", maxAge,
+	)
+	gen := s.ConnectionGeneration()
+	s.ReconnectNow()
+
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		if s.ConnectionGeneration() > gen && s.State() == StateActive {
+			return nil
+		}
+		if s.State() == StateClosed {
+			return ErrNotConnected
+		}
+		if time.Now().After(deadline) {
+			return ErrNotConnected
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
 // SetLastActionID 手动设置最后一次向对端发送的协议 ActionID。
 func (s *RoleSession) SetLastActionID(actionID uint32) {
 	s.prevAct.SetManualLastSent(actionID)

@@ -131,6 +131,11 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
+			// 重型玩法在登录后的早期窗口内才能稳定完成；旧会话会被服务端
+			// 静默丢弃或直接断链（2026-11-24 相关性分析）。
+			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				return err
+			}
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDDevilExpedition); fErr != nil {
 				if abort, ok := kit.IsAbortErr(fErr); ok {
 					return abort
