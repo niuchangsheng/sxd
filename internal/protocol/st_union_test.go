@@ -22,7 +22,8 @@ func stUnionGodRecordsFixture(now time.Time) []StUnionGodRecord {
 }
 
 func TestParseStUnionGodInfo_RoundTrip(t *testing.T) {
-	now := time.Now()
+	// 固定中午时间，避免测试在午夜前后跨日导致 OfferedToday 断言不稳定。
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.Local)
 	pkt := BuildStUnionGodInfoResultPacket(1, 3456, 2, 3, stUnionGodRecordsFixture(now))
 	if pkt.ActionID != ActionIDStUnionGodInfo {
 		t.Fatalf("action id = 0x%08X", pkt.ActionID)
