@@ -140,6 +140,11 @@ func NewFaxiangRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 518/15 等写请求在长会话上会被服务端静默丢弃（2026-11-24 实测
+			// 17 分钟会话上 518/15 无回包，而同批次面板查询正常）。
+			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				return err
+			}
 			caller := kit.NewCaller(ctx, session, faxiangCallTimeout)
 			call := func(pkt *protocol.Packet, act uint32, name string) *protocol.Packet {
 				resp, err := caller.Call(pkt, act)

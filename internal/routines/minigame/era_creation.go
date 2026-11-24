@@ -35,6 +35,11 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
+			// 866/10 挑战在长会话上会被静默丢弃（2026-11-24 实测 16 分钟
+			// 会话上无回包，而探索/事件查询正常）。
+			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				return err
+			}
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEraCreationRealm); fErr != nil {
 				if abortErr, ok := kit.IsAbortErr(fErr); ok {
 					return abortErr
