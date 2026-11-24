@@ -240,13 +240,31 @@ func ParseStUnionGodInfo(payload []byte) (*StUnionGodInfo, error) {
 }
 
 // OfferedToday 判断指定玩家当天是否已有成功上香记录。
-func (g *StUnionGodInfo) OfferedToday(playerID int32, now time.Time) bool {
-	if g == nil || playerID <= 0 {
+//
+// playerID 为会话的 PlayerID；names 为本角色的显示名（用于兜底）。
+// 实测 179/10 记录里的数字 ID 与会话 PlayerID 并不总是同一命名空间
+// （2026-11-24：会话 PlayerID=234797，记录里同尘的 ID=44577），因此
+// ID 不匹配时再按显示名匹配。
+func (g *StUnionGodInfo) OfferedToday(playerID int32, names []string, now time.Time) bool {
+	if g == nil {
 		return false
 	}
 	loc := now.Location()
+	want := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		if n != "" {
+			want[n] = struct{}{}
+		}
+	}
 	for _, rec := range g.Records {
-		if rec.PlayerID != playerID || rec.Time <= 0 {
+		if rec.Time <= 0 {
+			continue
+		}
+		matched := playerID > 0 && rec.PlayerID == playerID
+		if !matched {
+			_, matched = want[rec.Name]
+		}
+		if !matched {
 			continue
 		}
 		t := time.Unix(rec.Time, 0).In(loc)

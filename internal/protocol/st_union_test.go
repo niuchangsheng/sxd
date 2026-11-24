@@ -44,16 +44,16 @@ func TestParseStUnionGodInfo_RoundTrip(t *testing.T) {
 		got.A != want.A || got.B != want.B || got.Time != want.Time {
 		t.Fatalf("record = %+v, want %+v", got, want)
 	}
-	if !info.OfferedToday(999, now) {
+	if !info.OfferedToday(999, nil, now) {
 		t.Fatal("当天记录应判定为已上香")
 	}
-	if info.OfferedToday(1000, now) {
+	if info.OfferedToday(1000, nil, now) {
 		t.Fatal("他人两日前的记录不应判定为今日已上香")
 	}
-	if info.OfferedToday(999, now.Add(24*time.Hour)) {
+	if info.OfferedToday(999, nil, now.Add(24*time.Hour)) {
 		t.Fatal("次日不应沿用昨日记录")
 	}
-	if info.OfferedToday(0, now) {
+	if info.OfferedToday(0, nil, now) {
 		t.Fatal("非法 playerID 应返回 false")
 	}
 }
@@ -92,7 +92,7 @@ func TestParseStUnionGodInfo_Truncated(t *testing.T) {
 
 func TestStUnionGodInfo_NilSafe(t *testing.T) {
 	var info *StUnionGodInfo
-	if info.OfferedToday(999, time.Now()) {
+	if info.OfferedToday(999, nil, time.Now()) {
 		t.Fatal("nil 面板不应判定为已上香")
 	}
 }
@@ -123,7 +123,29 @@ func TestParseStUnionGodInfo_LivePanel(t *testing.T) {
 		t.Fatalf("record[1] = %+v", rec)
 	}
 	// 面板最新记录是 2026-11-22，2026-11-24 应判定为今日未上香。
-	if info.OfferedToday(44577, time.Unix(1795500000, 0)) {
+	if info.OfferedToday(44577, nil, time.Unix(1795500000, 0)) {
 		t.Fatal("11-22 的记录不应判定为 11-24 已上香")
+	}
+}
+
+// TestStUnionGodInfo_OfferedTodayByName 验证记录内数字 ID 与会话 PlayerID
+// 命名空间不一致时，仍能按显示名判断今日已上香。
+func TestStUnionGodInfo_OfferedTodayByName(t *testing.T) {
+	now := time.Now()
+	pkt := BuildStUnionGodInfoResultPacket(1, 0, 0, 0, []StUnionGodRecord{
+		{PlayerID: 44577, Name: "同尘", Platform: "心动", Server: "s0", Time: now.Unix()},
+	})
+	info, err := ParseStUnionGodInfo(pkt.Payload)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if info.OfferedToday(234797, nil, now) {
+		t.Fatal("ID 不一致且未提供名称时不应命中")
+	}
+	if !info.OfferedToday(234797, []string{"同尘"}, now) {
+		t.Fatal("应按显示名命中今日记录")
+	}
+	if info.OfferedToday(234797, []string{"他人"}, now) {
+		t.Fatal("不匹配的名称不应命中")
 	}
 }

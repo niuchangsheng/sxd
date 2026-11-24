@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -94,6 +95,25 @@ var openStUnionSectSession = func(ctx context.Context, s *client.RoleSession) (*
 	return s.OpenSectTownSession(ctx)
 }
 
+// stUnionSelfNames 返回用于匹配 179/10 记录的本角色显示名。
+//
+// 179/10 记录里的数字 ID 与会话 PlayerID 可能不是同一命名空间，故同时用
+// 登录同步的官方昵称（可能带 .sN 后缀）与配置角色名兜底。
+func stUnionSelfNames(session *client.RoleSession) []string {
+	names := []string{session.RoleName(), session.OriginNickName()}
+	out := names[:0]
+	for _, n := range names {
+		if n == "" {
+			continue
+		}
+		if i := strings.LastIndex(n, ".s"); i > 0 {
+			n = n[:i]
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
 // logStUnionGodPanel 解析并打印 179/10 神像面板，返回「今日是否已上香」。
 // panel 为 nil / 解析失败时第二个返回值 known 为 false，调用方应继续尝试上香。
 func logStUnionGodPanel(scope string, session *client.RoleSession, resp *protocol.Packet) (offered, known bool) {
@@ -111,7 +131,7 @@ func logStUnionGodPanel(scope string, session *client.RoleSession, resp *protoco
 		slog.Info("仙盟神像面板解析失败", "scope", scope, "role_id", session.RoleID(), "err", err)
 		return false, false
 	}
-	offered = info.OfferedToday(session.PlayerID(), time.Now())
+	offered = info.OfferedToday(session.PlayerID(), stUnionSelfNames(session), time.Now())
 	var lastTime int64
 	for _, rec := range info.Records {
 		if rec.Time > lastTime {
