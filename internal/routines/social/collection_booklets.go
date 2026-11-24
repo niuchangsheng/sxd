@@ -39,11 +39,6 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 长会话上好友列表查询会被静默丢弃（2026-11-24 12:47 实测），
-			// 入口先保证会话在健康窗口内。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			slog.Info("正在执行社交任务: 神仙收藏册", "role_id", session.RoleID())
 
 			caller := kit.NewCaller(ctx, session, 5*time.Second)

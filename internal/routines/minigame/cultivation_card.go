@@ -38,11 +38,6 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 神仙卡牌在轮末执行，859/3、859/5 任务面板在长会话上会被静默丢弃，
-			// 导致任务奖励（资源）长时间不变化。入口先保证会话健康窗口。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 				resp, err := caller.Call(pkt, act)

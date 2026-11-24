@@ -45,6 +45,54 @@ func (s *RoleSession) FetchCrossServerCredentials(ctx context.Context) (*protoco
 	return info, nil
 }
 
+// EnsureCrossSessionAlive 确保当前主服会话常驻一条仙界跨服辅助连接。
+//
+// 2026-11-25 抓包与探针实测结论：
+//   - 服务端每 5 分钟按墙钟扫描一次（本网关在整点后约 23~29 秒），回收
+//     「最近约 120 秒没有真实业务活动」的主服会话；
+//   - 官方客户端空闲 10 分钟不在主服上行任何业务包，仅靠常驻的 8219 等
+//     辅助连接即可跨过多个扫描点；
+//   - 探针 cross 模式（主服零上行 + 常驻一条跨服连接）同样存活 10 分钟，
+//     而纯空闲模式在同一扫描点被回收。
+//
+// 该方法只应由调度器单协程调用（cross_keepalive 例程），避免在主服业务
+// 序列中间插入跨服凭据请求导致 PrevAct 尾链错位。
+func (s *RoleSession) EnsureCrossSessionAlive(ctx context.Context) error {
+	s.crossMu.Lock()
+	defer s.crossMu.Unlock()
+
+	if s.crossSession != nil {
+		if s.crossSession.State() != StateClosed {
+			return nil
+		}
+		s.crossSession.Close()
+		s.crossSession = nil
+	}
+	if s.State() != StateActive {
+		return ErrNotConnected
+	}
+	// 用主会话生命周期作为父 context：跨服连接必须活过本轮调度执行。
+	life := s.ctx
+	if life == nil {
+		life = ctx
+	}
+	cross, err := s.OpenCrossServerSession(life)
+	if err != nil {
+		return fmt.Errorf("client: 建立常驻跨服会话失败: %w", err)
+	}
+	s.crossSession = cross
+	slog.Info("跨服辅助会话已常驻",
+		"role_id", s.cfg.RoleID, "cross_role_id", cross.RoleID())
+	return nil
+}
+
+// HasCrossSession 返回当前是否存在未关闭的常驻跨服会话（诊断用）。
+func (s *RoleSession) HasCrossSession() bool {
+	s.crossMu.Lock()
+	defer s.crossMu.Unlock()
+	return s.crossSession != nil && s.crossSession.State() != StateClosed
+}
+
 // OpenCrossServerSession 拉取仙界跨服凭据并建立已进入仙界城镇的独立会话。
 //
 // 返回的会话仅在调用方使用期间有效，调用方负责在结束后调用 Close。
@@ -136,6 +184,11 @@ func (s *RoleSession) OpenCrossServerSessionWithInfo(ctx context.Context, cred *
 		return nil, fmt.Errorf("client: 启动仙界跨服会话失败: %w", err)
 	}
 
+	// 等待激活必须有上限，但 Start 使用调用方 ctx（常驻场景下是主会话生命周期），
+	// 不能在这里给 ctx 加 deadline，否则跨服连接会在等待结束后被一并取消。
+	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer waitCancel()
+
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -147,9 +200,9 @@ func (s *RoleSession) OpenCrossServerSessionWithInfo(ctx context.Context, cred *
 			return nil, fmt.Errorf("client: 仙界跨服会话在激活前关闭")
 		}
 		select {
-		case <-ctx.Done():
+		case <-waitCtx.Done():
 			cross.Close()
-			return nil, fmt.Errorf("client: 等待仙界跨服会话激活超时: %w", ctx.Err())
+			return nil, fmt.Errorf("client: 等待仙界跨服会话激活超时: %w", waitCtx.Err())
 		case <-ticker.C:
 		}
 	}

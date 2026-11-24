@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,9 @@ import (
 
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
+	if os.Getenv("SXD_PROBE_DEBUG") != "" {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
 	cfgPath := os.Getenv("SXD_CONFIG")
 	if cfgPath == "" {
 		cfgPath = "configs/niuchangsheng.yaml"
@@ -61,7 +65,13 @@ func main() {
 		return
 	}
 	acc := cfg.Accounts[0]
-	role := acc.Roles[0]
+	roleIdx := 0
+	if v := os.Getenv("SXD_PROBE_ROLE_INDEX"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n < len(acc.Roles) {
+			roleIdx = n
+		}
+	}
+	role := acc.Roles[roleIdx]
 
 	modes := strings.Split(envOr("SXD_PROBE_MODES", "none,heart075,time022"), ",")
 	wait, err := time.ParseDuration(envOr("SXD_PROBE_WAIT", "12m"))
@@ -162,16 +172,30 @@ func runMode(tc *platform.TicketCache, acc config.AccountConfig, role config.Rol
 		return 0, false
 	}
 
+	// 复刻官方客户端拓扑：空闲期保持一条仙界跨服连接常驻（对应抓包中的 8219）。
+	var cross *client.RoleSession
+	if mode == "cross" || mode == "cross022" {
+		c, err := sess.OpenCrossServerSession(ctx)
+		if err != nil {
+			slog.Warn("建立跨服会话失败，按无辅助连接继续", "mode", mode, "err", err)
+		} else {
+			cross = c
+			defer cross.Close()
+			slog.Info("跨服会话已建立并保持", "mode", mode, "state", cross.State())
+		}
+	}
+
 	start := time.Now()
 	slog.Info("会话已激活，开始观察", "mode", mode, "wait", wait)
 
 	next := start
+	practicing := false
 	for time.Since(start) < wait {
 		time.Sleep(500 * time.Millisecond)
 		if sess.State() != client.StateActive {
 			alive := time.Since(start)
 			slog.Info("检测到断链", "mode", mode, "alive", alive.Round(time.Second),
-				"state", sess.State())
+				"state", sess.State(), "recent_rx", fmt.Sprintf("%X", sess.RecentRxActionIDs()))
 			return alive, true
 		}
 		if time.Now().Before(next) {
@@ -187,10 +211,12 @@ func runMode(tc *platform.TicketCache, acc config.AccountConfig, role config.Rol
 			}
 			next = time.Now().Add(15 * time.Second)
 		case "time022":
-			// 官方客户端 0/22：4 字节参数 + 自动业务尾链。
+			// 官方抓包 (/tmp/daily.pcapng)：0/22 请求无业务参数，帧内 4 字节
+			// 全部是 PrevAct 尾链（如 00100001 = 上一条 16/1）。此前探针多发
+			// 4 字节 int32(0) 参数，格式与官方不一致，可能因此不被计入。
 			callCtx, ccancel := context.WithTimeout(ctx, 5*time.Second)
 			resp, err := sess.Call(callCtx,
-				protocol.NewPacketWithAutoPrevAct(protocol.ActionIDPlayerServerTime, int32Bytes(0)),
+				protocol.NewPacketWithAutoPrevAct(protocol.ActionIDPlayerServerTime, nil),
 				protocol.ActionIDPlayerServerTime)
 			ccancel()
 			if err != nil {
@@ -205,6 +231,36 @@ func runMode(tc *platform.TicketCache, acc config.AccountConfig, role config.Rol
 				}
 			}
 			next = time.Now().Add(30 * time.Second)
+		case "cross":
+			// 仅保持跨服辅助连接常驻，主连接完全不发应用层包。
+			next = time.Now().Add(time.Hour)
+		case "cross022":
+			// 跨服连接常驻 + 主连接每 100 秒发一次 0/22（官方空闲节律）。
+			callCtx, ccancel := context.WithTimeout(ctx, 5*time.Second)
+			resp, err := sess.Call(callCtx,
+				protocol.NewPacketWithAutoPrevAct(protocol.ActionIDPlayerServerTime, nil),
+				protocol.ActionIDPlayerServerTime)
+			ccancel()
+			if err != nil {
+				slog.Warn("0/22 无回包", "mode", mode, "err", err)
+			} else if resp != nil && len(resp.Payload) >= 4 {
+				slog.Info("0/22 回包", "mode", mode,
+					"server_time", binary.BigEndian.Uint32(resp.Payload[:4]))
+			}
+			next = time.Now().Add(100 * time.Second)
+		case "practice":
+			// 真实状态变更：交替开始/取消城镇打坐（0/36、0/39，免费且可逆）。
+			// 用于验证服务端 5 分钟会话回收是否只认「非查询型业务动作」。
+			if !practicing {
+				err := sess.StartTownPractice(ctx)
+				slog.Info("开始打坐", "mode", mode, "err", err)
+				practicing = true
+			} else {
+				err := sess.CancelTownPractice(ctx)
+				slog.Info("取消打坐", "mode", mode, "err", err)
+				practicing = false
+			}
+			next = time.Now().Add(60 * time.Second)
 		case "town":
 			// 场景操作：进入当前城镇（Mod_Town_Base.enter_town，不消耗任何资源）。
 			// 直接调用底层方法记录结果码，区分“被静默丢弃”与“已在城镇”两种情况。

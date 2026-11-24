@@ -149,6 +149,15 @@ type RoleSession struct {
 	failuresSinceRefresh int
 	lastConnectErr       error
 
+	// crossMu 保护常驻跨服辅助会话。
+	//
+	// 2026-11-25 实测：服务端每 5 分钟做一次会话回收扫描，回收「最近约 120 秒
+	// 没有业务活动」的主服会话；官方客户端登录后始终保持 8219/8251 等辅助连接，
+	// 主服即使完全空闲 10 分钟也不会被回收。因此这里为每个主服会话常驻一条
+	// 仙界跨服连接，由 cross_keepalive 例程在调度空隙维护。
+	crossMu      sync.Mutex
+	crossSession *RoleSession
+
 	// prevAct 集中管理当前连接的业务动作尾链 (PrevAct) 与最近收包诊断缓冲。
 	prevAct      *PrevActChain
 	lastSendTime atomic.Int64
@@ -475,6 +484,13 @@ func (s *RoleSession) Close() {
 		s.cancel()
 	}
 
+	s.crossMu.Lock()
+	if s.crossSession != nil {
+		s.crossSession.Close()
+		s.crossSession = nil
+	}
+	s.crossMu.Unlock()
+
 	s.closeCurrentConn()
 	s.wg.Wait()
 
@@ -624,6 +640,12 @@ func (s *RoleSession) SetLastActionID(actionID uint32) {
 // 仅用于诊断；业务 PrevAct 链应使用 LastBusinessActionID。
 func (s *RoleSession) LastRxActionID() uint32 {
 	return s.prevAct.LastRx()
+}
+
+// RecentRxActionIDs 返回最近收到的网关包 ActionID 环形缓冲（按时间先后，最新在末尾）。
+// 仅用于断链诊断：探针可在 EOF 时倒查服务端断链前最后送达的推送/回包。
+func (s *RoleSession) RecentRxActionIDs() []uint32 {
+	return s.prevAct.RecentRx()
 }
 
 // LastAckActionID 获取最后一次收到服务端回包的业务 ActionID。

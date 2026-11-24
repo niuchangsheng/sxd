@@ -30,10 +30,6 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 与万古膜拜相同：长会话上写请求（含 enter_town）会被静默丢弃。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 				resp, err := caller.Call(pkt, act)
