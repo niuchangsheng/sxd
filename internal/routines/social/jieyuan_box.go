@@ -130,9 +130,10 @@ func fetchJieYuanBoxCount(ctx context.Context, session *client.RoleSession, item
 // 2026-11-22 实测：同一账号用 probe 新登录后立即执行
 // 232/30 -> 528/1 -> 232/34 成功（3938 15->5）；而日常批次数分钟后才执行时，
 // 528/1 载荷与抓包完全一致仍被服务端静默丢弃（2026-11-25 01:00 再次复现）。
-// 因此必须高于所有业务阶段（含城镇敏感 420 / 早期战斗 350），只排在
-// session_refresh(500) 之后；232/30 之前也不能插入 0/6 等功能探测请求。
-var jieyuanPriority = scheduler.PhasePriority(scheduler.PhaseSystem, -50)
+// 因此必须排在所有业务阶段（含城镇敏感 420 / 早期战斗 350）与
+// cross_keepalive(510) 之前，成为登录后的第一个业务请求；
+// 232/30 之前也不能插入 0/6 等功能探测请求。
+var jieyuanPriority = scheduler.PhasePriority(scheduler.PhaseSystem, 20)
 
 func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 	cfg := DefaultJieYuanBoxConfig()
