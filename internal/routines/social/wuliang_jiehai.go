@@ -229,13 +229,17 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 						return abort
 					}
 					if deployID != 0 {
+						// 官方抓包 (/tmp/wuliangjiehai.pcapng)：854/39 → +149ms → 854/1。
+						wuliangPause(ctx, 150*time.Millisecond)
 						send(protocol.BuildEraInfiniteSuperDeployListPacket(deployID), "854/1 deploy")
-						wuliangPause(ctx, 300*time.Millisecond)
+						// 854/1 → 853/3 官方间隔 482ms。
+						wuliangPause(ctx, 480*time.Millisecond)
 					}
 				}
 				send(protocol.BuildEraInfiniteMonsterTeamPacket(target, 1), "853/3 team")
-				// 853/3 与 853/4 连发会被服务端限流，间隔 500ms 再挑战。
-				wuliangPause(ctx, 500*time.Millisecond)
+				// 官方抓包：853/3 → 853/4 间隔 1799ms。服务端需要先完成队伍结算，
+				// 旧实现 500ms 就发挑战，会话越老越容易被直接断链。
+				wuliangPause(ctx, 1800*time.Millisecond)
 
 				slog.Info("无量劫海发起挑战", "role_id", session.RoleID(),
 					"chapter_id", chapter, "now_level", target,
