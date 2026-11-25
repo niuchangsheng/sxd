@@ -99,14 +99,6 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 布阵/战斗序列对会话年龄极敏感：超过 60 秒成功率不足 30%，
-			// 超窗时先重建连接，避免整轮挑战被服务端断链。
-			if err := session.EnsureFreshConnection(ctx, wuliangFreshSessionAge); err != nil {
-				return err
-			}
-			st := session.GetPlayerState()
-			slog.Info("无量劫海会话状态", "role_id", session.RoleID(),
-				"town_id", st.TownID, "town_map_id", st.TownMapID, "level", st.Level)
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			resyncCall := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
 				resp, err := caller.CallResync(pkt, act, timeout...)
@@ -118,21 +110,35 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				}
 				return resp
 			}
-			// send 发送无需等待回包的前置动作（853/2、854/1、853/3）。
+			// send 发送无需等待回包的前置动作（854/1、853/3）。
 			send := func(pkt *protocol.Packet, name string) {
 				if err := session.Send(pkt); err != nil {
 					slog.Info("无量劫海前置动作发送失败", "role_id", session.RoleID(),
 						"name", name, "err", err)
 				}
 			}
-
-			_ = resyncCall(protocol.BuildEraInfiniteSeasonPacket(),
-				protocol.ActionIDEraInfiniteSeason)
-			if abort := caller.AbortErr(); abort != nil {
-				return abort
+			isSessionAged := func() bool {
+				since := session.ConnectionSince()
+				return !since.IsZero() && time.Since(since) > wuliangFreshSessionAge
 			}
-			panelResp := resyncCall(protocol.BuildEraInfinitePanelPacket(),
-				protocol.ActionIDEraInfinitePanel)
+			fetchMainPanel := func() *protocol.Packet {
+				_ = resyncCall(protocol.BuildEraInfiniteSeasonPacket(),
+					protocol.ActionIDEraInfiniteSeason)
+				if caller.AbortErr() != nil {
+					return nil
+				}
+				return resyncCall(protocol.BuildEraInfinitePanelPacket(),
+					protocol.ActionIDEraInfinitePanel)
+			}
+
+			// 先在当前会话上只读探查面板：若已满关或赛季结束，绝不平白拆毁健康连接。
+			panelResp := fetchMainPanel()
+			if panelResp == nil && caller.AbortErr() == nil && isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, wuliangFreshSessionAge); err != nil {
+					return err
+				}
+				panelResp = fetchMainPanel()
+			}
 			if panelResp == nil {
 				if abort := caller.AbortErr(); abort != nil {
 					return abort
@@ -160,6 +166,23 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 				return nil
 			}
 
+			// 确认存在可挑战关卡后，若当前会话已超窗再按需重建并重开 853/0→853/1。
+			if isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, wuliangFreshSessionAge); err != nil {
+					return err
+				}
+				if refreshed := fetchMainPanel(); refreshed == nil {
+					if abort := caller.AbortErr(); abort != nil {
+						return abort
+					}
+					return scheduler.HandleSilentDropCtx(ctx, session, "wuliang_jiehai", 3,
+						30*time.Minute, "无量劫海刷新后主面板无回包")
+				}
+			}
+			st := session.GetPlayerState()
+			slog.Info("无量劫海会话状态", "role_id", session.RoleID(),
+				"town_id", st.TownID, "town_map_id", st.TownMapID, "level", st.Level)
+
 			// 布阵信息每次执行只需准备一次：854/39 取 deploy_id，854/1 选中。
 			deployReady := false
 			var deployID int32
@@ -179,9 +202,10 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 						"last_business", fmt.Sprintf("0x%08X", session.LastBusinessActionID()),
 						"last_sent", fmt.Sprintf("0x%08X", session.LastActionID()),
 						"last_rx", fmt.Sprintf("0x%08X", session.LastRxActionID()))
-					// 官方客户端会先取章节面板，并用其中的 now_level 作为挑战关卡。
-					// 面板若被静默丢弃，退回 mission_level+1 推断。
-					// 853/1 与 853/2 连发会被服务端限流丢弃，先拟人间隔。
+					// 官方客户端先取 853/2 章节面板进入章节状态，再用其中的 now_level 发起挑战。
+					// 2026-11-25 审计 12h 实机日志 (58 次踢线)：当 853/2 无回包或返回非零错误码时，
+					// 服务端并未进入章节上下文，继续强发 854/1 + 853/3 会被网关在 <1s 内直接断开 TCP (EOF)！
+					// 因此 853/2 未成功进入章节时必须立即中止并退避，严禁继续发后续动作。
 					wuliangPause(ctx, 400*time.Millisecond)
 					chapterResp := resyncCall(protocol.BuildEraInfiniteChapterPacket(chapter),
 						protocol.ActionIDEraInfiniteChapter)
@@ -189,26 +213,44 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 						if abort := caller.AbortErr(); abort != nil {
 							return abort
 						}
-						slog.Info("无量劫海章节面板无回包，使用 mission_level+1 推断关卡",
+						slog.Info("无量劫海章节面板无回包，中止本轮避免非法序列触发服务端断链",
 							"role_id", session.RoleID(), "chapter_id", chapter, "now_level", target)
-					} else if ch, cErr := protocol.ParseEraInfiniteChapter(chapterResp.Payload); cErr != nil {
-						slog.Info("解析无量劫海章节面板失败，使用 mission_level+1 推断关卡",
+						return scheduler.HandleSilentDropCtx(ctx, session, "wuliang_jiehai", 3,
+							30*time.Minute, "无量劫海章节面板无回包")
+					}
+					ch, cErr := protocol.ParseEraInfiniteChapter(chapterResp.Payload)
+					if cErr != nil {
+						slog.Warn("解析无量劫海章节面板失败，中止本轮",
 							"role_id", session.RoleID(), "chapter_id", chapter, "err", cErr)
-					} else if ch.Result == protocol.EraInfiniteEnded {
+						return scheduler.NewCooldown(10*time.Minute, "无量劫海章节面板解析失败")
+					}
+					switch ch.Result {
+					case 0:
+						if ch.NowLevel > 0 {
+							if ch.NowLevel != target {
+								slog.Info("无量劫海章节关卡以面板为准", "role_id", session.RoleID(),
+									"chapter_id", chapter, "panel_now_level", ch.NowLevel,
+									"assumed", target)
+							}
+							target = ch.NowLevel
+						}
+					case protocol.EraInfiniteEnded:
 						slog.Info("无量劫海当前赛季已结束", "role_id", session.RoleID(),
 							"chapter_id", chapter, "fights", fights)
 						return nil
-					} else if ch.Result == protocol.EraInfiniteIsLock {
+					case protocol.EraInfiniteIsLock:
 						slog.Info("无量劫海章节未解锁，稍后重试", "role_id", session.RoleID(),
 							"chapter_id", chapter)
 						return scheduler.NewCooldown(30*time.Minute, "无量劫海章节未解锁")
-					} else if ch.Result == 0 && ch.NowLevel > 0 {
-						if ch.NowLevel != target {
-							slog.Info("无量劫海章节关卡以面板为准", "role_id", session.RoleID(),
-								"chapter_id", chapter, "panel_now_level", ch.NowLevel,
-								"assumed", target)
-						}
-						target = ch.NowLevel
+					case protocol.EraInfiniteFuncNotOpen:
+						slog.Info("无量劫海功能未开放，稍后重试", "role_id", session.RoleID(),
+							"chapter_id", chapter)
+						return scheduler.NewCooldown(2*time.Hour, "无量劫海功能未开放")
+					default:
+						slog.Info("无量劫海章节不可进入，中止本轮", "role_id", session.RoleID(),
+							"chapter_id", chapter, "result", ch.Result,
+							"result_text", protocol.EraInfiniteResultText(ch.Result))
+						return scheduler.NewCooldown(30*time.Minute, "无量劫海章节不可进入")
 					}
 				}
 				if !deployReady {
@@ -286,7 +328,7 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 						"chapter_id", chapter, "now_level", target,
 						"losses", losses, "fights", fights)
 					if losses >= maxWuliangConsecutiveLosses {
-						return scheduler.NewCooldown(30*time.Minute,
+						return scheduler.NewCooldown(4*time.Hour,
 							fmt.Sprintf("无量劫海连续挑战失败 %d 次", losses))
 					}
 					continue

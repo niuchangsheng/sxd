@@ -44,22 +44,44 @@ func (s *RoleSession) ReturnToTown(ctx context.Context, timeout time.Duration) b
 	if s == nil || s.State() != StateActive {
 		return false
 	}
-	townID := int32(s.GetPlayerState().TownMapID)
-	if townID <= 0 {
-		townID = 3
+	var candidates []int32
+	addCandidate := func(id int32) {
+		if id <= 0 {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == id {
+				return
+			}
+		}
+		candidates = append(candidates, id)
 	}
-	anchor := s.LastAckActionID()
-	if anchor == 0 {
-		anchor = s.LastBusinessActionID()
+	addCandidate(s.knownGoodTownID.Load())
+	addCandidate(int32(s.GetPlayerState().TownMapID))
+	addCandidate(3)
+	addCandidate(2)
+	addCandidate(1)
+
+	for _, townID := range candidates {
+		anchor := s.LastAckActionID()
+		if anchor == 0 {
+			anchor = s.LastBusinessActionID()
+		}
+		c, cancel := context.WithTimeout(ctx, timeout)
+		code, err := s.EnterTownWithAnchor(c, townID, anchor)
+		cancel()
+		if err != nil {
+			slog.Debug("返回城镇失败", "role_id", s.RoleID(), "town_id", townID, "err", err)
+			// 超时/断连代表 1/0 通道本身未应答（或静默丢弃），继续轮询其他 townID 只会成倍放大超时；
+			// 仅当服务端明确返回非 0 失败码 (如 153 -> code=1 FAILED) 时才回退尝试下一个候选主城。
+			return false
+		}
+		if code == 0 {
+			s.knownGoodTownID.Store(townID)
+			return true
+		}
 	}
-	c, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	code, err := s.EnterTownWithAnchor(c, townID, anchor)
-	if err != nil {
-		slog.Debug("返回城镇失败", "role_id", s.RoleID(), "town_id", townID, "err", err)
-		return false
-	}
-	return code == 0
+	return false
 }
 
 func (s *RoleSession) enterTownWithPacket(ctx context.Context, townID int32, pkt *protocol.Packet) (uint8, error) {

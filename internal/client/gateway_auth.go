@@ -212,6 +212,7 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 				"payload_len", len(respPkt.Payload),
 				"payload_head", okHead,
 			)
+			s.markTicketConsumed()
 			if authResp.PlayerID > 0 {
 				s.UpdatePlayerState(func(ps *PlayerState) {
 					ps.PlayerID = authResp.PlayerID

@@ -10,24 +10,24 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"sxd-pie-ng/internal/protocol"
 )
 
-// crossServerMaxReconnectAttempts 仙界跨服会话的最大建连尝试次数。
-//
-// 跨服节点偶发 DNS/网络抖动时不应直接放弃整轮玩法；凭据在登录成功前未消耗，
-// 允许一次短间隔重拨即可覆盖绝大多数瞬时失败。认证被拒等业务失败仍会快速终止。
+// crossServerMaxReconnectAttempts 临时仙界跨服城镇会话的最大建连尝试次数。
 const crossServerMaxReconnectAttempts = 2
 
 // FetchCrossServerCredentials 通过主服会话申请仙界跨服节点登录凭据 (Mod 96 Act 0)。
 //
-// 官方客户端在进入仙界城镇前会先调用 Mod_StcLogin_Base.get_login_info 获取
+// 官方客户端在连接仙界节点前会先调用 Mod_StcLogin_Base.get_login_info 获取
 // 跨服地址、一次性时间戳与验签串，随后在独立连接上执行 Mod_StLogin_Base.login。
 func (s *RoleSession) FetchCrossServerCredentials(ctx context.Context) (*protocol.StCrossServerInfo, error) {
+	cCtx, cancel := context.WithTimeout(ctx, s.callTimeout(8*time.Second, 300*time.Millisecond))
+	defer cancel()
 	pkt := protocol.NewPacket(protocol.ActionIDStcLoginGetInfo, nil)
-	resp, err := s.Call(ctx, pkt, protocol.ActionIDStcLoginGetInfo)
+	resp, err := s.Call(cCtx, pkt, protocol.ActionIDStcLoginGetInfo)
 	if err != nil {
 		return nil, fmt.Errorf("client: 申请仙界跨服凭据失败: %w", err)
 	}
@@ -45,33 +45,69 @@ func (s *RoleSession) FetchCrossServerCredentials(ctx context.Context) (*protoco
 	return info, nil
 }
 
-// EnsureCrossSessionAlive 确保当前主服会话常驻一条仙界跨服辅助连接。
+// dropStaleCrossSession 在主服会话重新建立新一代连接后清理旧代数的跨服辅助连接。
+func (s *RoleSession) dropStaleCrossSession() {
+	s.crossMu.Lock()
+	var stale *RoleSession
+	if s.crossSession != nil && s.crossParentGen != s.ConnectionGeneration() {
+		stale = s.crossSession
+		s.crossSession = nil
+		s.crossParentGen = 0
+	}
+	s.crossMu.Unlock()
+	if stale != nil {
+		stale.Close()
+	}
+}
+
+// suspendCrossSession 在临时进入仙界城镇前挂起常驻辅助连接，避免同一角色双 8219 连接互踢。
+func (s *RoleSession) suspendCrossSession() {
+	s.crossMu.Lock()
+	cs := s.crossSession
+	s.crossSession = nil
+	s.crossParentGen = 0
+	s.crossMu.Unlock()
+	if cs != nil {
+		cs.Close()
+	}
+}
+
+// EnsureCrossSessionAlive 确保当前主服会话常驻一条仙界跨服辅助连接 (login-only + enter_st_channel)。
 //
-// 2026-11-25 抓包与探针实测结论：
-//   - 服务端每 5 分钟按墙钟扫描一次（本网关在整点后约 23~29 秒），回收
-//     「最近约 120 秒没有真实业务活动」的主服会话；
-//   - 官方客户端空闲 10 分钟不在主服上行任何业务包，仅靠常驻的 8219 等
-//     辅助连接即可跨过多个扫描点；
-//   - 探针 cross 模式（主服零上行 + 常驻一条跨服连接）同样存活 10 分钟，
-//     而纯空闲模式在同一扫描点被回收。
-//
-// 该方法只应由调度器单协程调用（cross_keepalive 例程），避免在主服业务
-// 序列中间插入跨服凭据请求导致 PrevAct 尾链错位。
+// 2026-11-25 抓包 (/tmp/daily.pcapng) 与 A/B 对照探针实测结论：
+//   - 服务端每 5 分钟按墙钟扫描回收无跨服辅助连接的主服会话（纯主服 0/6、0/22、0/75
+//     均在扫描点收到 EOF）；
+//   - 对齐原版 Main.swf (View.as:16639 chatConnect)：登录 8219/8480 并加入仙界频道 (6/12)，
+//     不调用 95/0 enter_town，既让主服持续免于 5 分钟扫描回收，又不改变主服城镇场景上下文；
+//   - 当临时跨服城镇玩法正在执行 (crossTownActive) 时跳过，玩法退出时自动恢复。
 func (s *RoleSession) EnsureCrossSessionAlive(ctx context.Context) error {
+	if s == nil || s.State() != StateActive {
+		return ErrNotConnected
+	}
+	if s.crossTownActive.Load() {
+		return nil
+	}
+
 	s.crossMu.Lock()
 	defer s.crossMu.Unlock()
 
+	if s.crossTownActive.Load() {
+		return nil
+	}
+	curGen := s.ConnectionGeneration()
 	if s.crossSession != nil {
-		if s.crossSession.State() != StateClosed {
+		if s.crossSession.State() == StateActive && s.crossParentGen == curGen {
 			return nil
 		}
-		s.crossSession.Close()
+		old := s.crossSession
 		s.crossSession = nil
+		s.crossParentGen = 0
+		old.Close()
 	}
 	if s.State() != StateActive {
 		return ErrNotConnected
 	}
-	// 用主会话生命周期作为父 context：跨服连接必须活过本轮调度执行。
+
 	life := s.ctx
 	if life == nil {
 		life = ctx
@@ -85,23 +121,20 @@ func (s *RoleSession) EnsureCrossSessionAlive(ctx context.Context) error {
 		return fmt.Errorf("client: 建立常驻跨服会话失败: %w", err)
 	}
 	s.crossSession = cross
+	s.crossParentGen = curGen
 	slog.Info("跨服辅助会话已常驻",
 		"role_id", s.cfg.RoleID, "cross_role_id", cross.RoleID())
 	return nil
 }
 
-// KeepaliveBusinessRead 发送一次无害的业务读 (0/6 功能列表) 以刷新主服活动。
-//
-// 2026-11-25 探针实测：不建立跨服连接，仅每 90 秒发一次 0/6，主服会话
-// 可跨过 5 分钟回收扫描点并保持 6.5 分钟在线；而常驻跨服连接若进入仙界
-// 城镇，会让主服返回城镇/写请求被静默丢弃。因此会话保活改用主服业务读。
+// KeepaliveBusinessRead 发送一次无害的业务读 (0/6 功能列表)。
 func (s *RoleSession) KeepaliveBusinessRead(ctx context.Context) error {
 	if s == nil || s.State() != StateActive {
 		return ErrNotConnected
 	}
 	c, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	resp, err := s.Call(c, protocol.BuildGetPlayerFunctionsPacket(0), protocol.ActionIDPlayerGetFunctions)
+	resp, err := s.Call(c, protocol.BuildGetPlayerFunctionsPacket(s.LastBusinessActionID()), protocol.ActionIDPlayerGetFunctions)
 	if err != nil {
 		return err
 	}
@@ -111,7 +144,7 @@ func (s *RoleSession) KeepaliveBusinessRead(ctx context.Context) error {
 	return nil
 }
 
-// HasCrossSession 返回当前是否存在未关闭的常驻跨服会话（诊断用）。
+// HasCrossSession 返回当前是否存在激活中的常驻跨服辅助会话（诊断与单测用）。
 func (s *RoleSession) HasCrossSession() bool {
 	s.crossMu.Lock()
 	defer s.crossMu.Unlock()
@@ -120,9 +153,8 @@ func (s *RoleSession) HasCrossSession() bool {
 
 // OpenCrossServerSession 拉取仙界跨服凭据并建立已进入仙界城镇的独立会话。
 //
-// 返回的会话仅在调用方使用期间有效，调用方负责在结束后调用 Close。
-// 跨服连接不支持主服四步初始化，因此这里使用专用认证器：
-// Mod 94 登录握手 → Mod 95 进入仙界城镇 (town_id=41)。
+// 返回的会话仅在调用方使用期间有效，调用方负责在结束后调用 Close；
+// Close 时会自动发送 95/2 leave_town 清除跨服城镇状态，并在后台恢复常驻辅助连接。
 func (s *RoleSession) OpenCrossServerSession(ctx context.Context) (*RoleSession, error) {
 	cred, err := s.FetchCrossServerCredentials(ctx)
 	if err != nil {
@@ -131,17 +163,54 @@ func (s *RoleSession) OpenCrossServerSession(ctx context.Context) (*RoleSession,
 	return s.OpenCrossServerSessionWithInfo(ctx, cred)
 }
 
-// OpenCrossServerSessionWithInfo 使用已获取的仙界跨服凭据建立独立会话，
-// 供调用方在同一轮任务中复用凭据、避免重复向主服申请一次性登录串。
+// OpenCrossServerSessionWithInfo 使用已获取的仙界跨服凭据建立已进城的独立会话。
 func (s *RoleSession) OpenCrossServerSessionWithInfo(ctx context.Context, cred *protocol.StCrossServerInfo) (*RoleSession, error) {
-	return s.openCrossServerSession(ctx, cred, true)
+	s.crossTownActive.Store(true)
+	s.suspendCrossSession()
+
+	cross, err := s.openCrossServerSession(ctx, cred, true)
+	if err != nil {
+		s.crossTownActive.Store(false)
+		s.restoreCrossKeepaliveAsync()
+		return nil, err
+	}
+	cross.onBeforeClose = func() {
+		leaveTimeout := 2 * time.Second
+		if s.isCustomDialer {
+			leaveTimeout = 50 * time.Millisecond
+		}
+		lCtx, cancel := context.WithTimeout(context.Background(), leaveTimeout)
+		defer cancel()
+		resp, lErr := cross.Call(lCtx, protocol.BuildStTownLeavePacket(), protocol.ActionIDStTownLeave)
+		if lErr == nil && resp != nil {
+			if code, pErr := protocol.ParseStTownLeaveResult(resp.Payload); pErr == nil && code != protocol.StTownResultTrue && code != protocol.StTownResultSuccess {
+				slog.Debug("离开仙界城镇返回非成功码", "role_id", cross.RoleID(), "code", code)
+			}
+		}
+	}
+	cross.onAfterClose = func() {
+		s.crossTownActive.Store(false)
+		s.restoreCrossKeepaliveAsync()
+	}
+	return cross, nil
 }
 
-// openCrossServerKeepaliveSession 建立仅完成登录、不进入仙界城镇的跨服连接。
-//
-// 常驻辅助连接若进入仙界城镇，会让主服认为角色停留在跨服地图，
-// 导致主服 enter_town / 返回城镇被静默丢弃（2026-11-25 实机）。
-// 只登录不进城即可维持账号级辅助连接，同时不影响主服上下文。
+func (s *RoleSession) restoreCrossKeepaliveAsync() {
+	if s == nil || s.isCustomDialer || s.State() != StateActive || s.ctx == nil {
+		return
+	}
+	parentCtx := s.ctx
+	go func() {
+		rCtx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
+		defer cancel()
+		if err := s.EnsureCrossSessionAlive(rCtx); err != nil && parentCtx.Err() == nil {
+			slog.Debug("跨服业务结束后恢复常驻辅助连接未成功，交由保活例程重试",
+				"role_id", s.RoleID(), "err", err)
+		}
+	}()
+}
+
+// openCrossServerKeepaliveSession 建立仅完成登录与频道加入、不进入仙界城镇的常驻跨服连接。
 func (s *RoleSession) openCrossServerKeepaliveSession(ctx context.Context, cred *protocol.StCrossServerInfo) (*RoleSession, error) {
 	return s.openCrossServerSession(ctx, cred, false)
 }
@@ -151,18 +220,43 @@ func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol
 		return nil, fmt.Errorf("client: 仙界跨服凭据为空")
 	}
 
+	var credMu sync.Mutex
+	curCred := *cred
+
 	cfg := s.cfg
 	cfg.RoleID = s.cfg.RoleID + "-st"
-	cfg.ServerAddr = net.JoinHostPort(cred.Host, strconv.Itoa(int(cred.Port)))
-	cfg.ServerID = cred.ServerName
-	cfg.Time1 = cred.Time
-	cfg.Hash1 = cred.PassCode
+	cfg.ServerAddr = net.JoinHostPort(curCred.Host, strconv.Itoa(int(curCred.Port)))
+	cfg.ServerID = curCred.ServerName
+	cfg.Time1 = curCred.Time
+	cfg.Hash1 = curCred.PassCode
 	cfg.Hash = ""  // 强制走跨服分支
 	cfg.Token = "" // 跨服登录不使用平台票据
 	cfg.PlayerID = s.PlayerID()
 	cfg.OriginNickName = s.OriginNickName()
-	cfg.MaxReconnectAttempts = crossServerMaxReconnectAttempts
-	cfg.RefreshCredentials = nil
+	if enterTown {
+		cfg.MaxReconnectAttempts = crossServerMaxReconnectAttempts
+		cfg.RefreshCredentials = nil
+	} else {
+		// 常驻辅助连接随主会话无限自愈：8219 偶发 EOF 后自动向主服换取新一次性 PassCode。
+		cfg.MaxReconnectAttempts = 0
+		cfg.RefreshCredentials = func(c context.Context, sCfg *SessionConfig) error {
+			if s.State() != StateActive || s.crossTownActive.Load() {
+				return ErrNotConnected
+			}
+			fresh, fErr := s.FetchCrossServerCredentials(c)
+			if fErr != nil {
+				return fErr
+			}
+			credMu.Lock()
+			curCred = *fresh
+			credMu.Unlock()
+			sCfg.ServerAddr = net.JoinHostPort(fresh.Host, strconv.Itoa(int(fresh.Port)))
+			sCfg.ServerID = fresh.ServerName
+			sCfg.Time1 = fresh.Time
+			sCfg.Hash1 = fresh.PassCode
+			return nil
+		}
+	}
 
 	originNickName := cfg.OriginNickName
 	if originNickName == "" {
@@ -172,12 +266,16 @@ func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol
 		aCtx, cancel := context.WithTimeout(cs.ctx, 5*time.Second)
 		defer cancel()
 
+		credMu.Lock()
+		activeCred := curCred
+		credMu.Unlock()
+
 		loginPkt, err := protocol.BuildStLoginPacket(protocol.StLoginRequest{
-			ServerName:     cred.ServerName,
+			ServerName:     activeCred.ServerName,
 			PlayerID:       cfg.PlayerID,
 			OriginNickName: originNickName,
-			Time:           cred.Time,
-			PassCode:       cred.PassCode,
+			Time:           activeCred.Time,
+			PassCode:       activeCred.PassCode,
 		})
 		if err != nil {
 			return fmt.Errorf("client: 构造仙界跨服登录封包失败: %w", err)
@@ -191,8 +289,9 @@ func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol
 			return fmt.Errorf("client: 解析仙界跨服登录回包失败: %w", err)
 		}
 		if loginRes.Result != 0 {
-			return fmt.Errorf("client: 仙界跨服登录被拒绝: result=%d", loginRes.Result)
+			return fmt.Errorf("%w: 仙界跨服登录被拒绝: result=%d", ErrAuthRejected, loginRes.Result)
 		}
+		cs.markTicketConsumed()
 		cs.UpdatePlayerState(func(ps *PlayerState) {
 			if loginRes.PlayerID > 0 {
 				ps.PlayerID = loginRes.PlayerID
@@ -201,6 +300,17 @@ func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol
 		})
 
 		if !enterTown {
+			// 对齐原版 View.as:16669 chatConnectLoginBack：加入仙界聊天频道使节点维持活跃态。
+			if !s.isCustomDialer {
+				chCtx, chCancel := context.WithTimeout(cs.ctx, 3*time.Second)
+				chResp, chErr := cs.Call(chCtx, protocol.BuildChatEnterStChannelPacket(), protocol.ActionIDChatEnterStChannel)
+				chCancel()
+				if chErr == nil && chResp != nil {
+					if chCode, pErr := protocol.ParseChatEnterStChannelResult(chResp.Payload); pErr == nil && chCode != protocol.ChatChannelResultSuccess {
+						slog.Debug("加入仙界频道返回非零状态", "role_id", cs.RoleID(), "code", chCode)
+					}
+				}
+			}
 			return nil
 		}
 		townResp, err := cs.Call(aCtx, protocol.BuildStTownEnterPacket(protocol.TownIDXianJie), protocol.ActionIDStTownEnter)
@@ -217,7 +327,7 @@ func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol
 		"role_id", s.cfg.RoleID,
 		"cross_role_id", cfg.RoleID,
 		"addr", cfg.ServerAddr,
-		"server_id", cred.ServerName,
+		"server_id", curCred.ServerName,
 	)
 
 	cross := NewRoleSession(cfg)
@@ -225,8 +335,6 @@ func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol
 		return nil, fmt.Errorf("client: 启动仙界跨服会话失败: %w", err)
 	}
 
-	// 等待激活必须有上限，但 Start 使用调用方 ctx（常驻场景下是主会话生命周期），
-	// 不能在这里给 ctx 加 deadline，否则跨服连接会在等待结束后被一并取消。
 	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer waitCancel()
 

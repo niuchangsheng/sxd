@@ -140,21 +140,29 @@ func NewFaxiangRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 518/15 等写请求在长会话上会被服务端静默丢弃（2026-11-24 实测
-			// 17 分钟会话上 518/15 无回包，而同批次面板查询正常）。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			// 518/15 是场景写操作：前面的战斗玩法会污染上下文，导致面板查询
-			// 正常而选择炼化被静默丢弃。执行前先复位到城镇场景。
+			// 正常而选择炼化被静默丢弃。执行前先复位到城镇场景；仅当写请求在老会话上
+			// 真正发生丢包时再按需重建连接，避免炼化/魔兽均冷却时平白断连。
 			if !session.ReturnToTown(ctx, 3*time.Second) {
 				slog.Info("法相执行前返回城镇失败，继续尝试", "role_id", session.RoleID())
 			}
 			caller := kit.NewCaller(ctx, session, faxiangCallTimeout)
+			refreshedOnce := false
 			call := func(pkt *protocol.Packet, act uint32, name string) *protocol.Packet {
 				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("法相协议无回包", "role_id", session.RoleID(), "name", name, "action", act, "err", err)
+					if !refreshedOnce && caller.AbortErr() == nil && act != protocol.ActionIDFaxiangGetPanelInfo {
+						if since := session.ConnectionSince(); !since.IsZero() && time.Since(since) > client.HealthySessionAge {
+							refreshedOnce = true
+							if rErr := session.EnsureFreshConnection(ctx, client.HealthySessionAge); rErr == nil {
+								_ = session.ReturnToTown(ctx, 3*time.Second)
+								if retryResp, retryErr := caller.Call(pkt, act); retryErr == nil {
+									return retryResp
+								}
+							}
+						}
+					}
 					return nil
 				}
 				return resp

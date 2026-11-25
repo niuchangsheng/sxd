@@ -74,11 +74,6 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 2026-11-24 探针实测：干净新会话上 669/3 step=4 正常回包
-			// (result=0)；例程在长会话/其他玩法之后调用会被静默丢弃。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			resyncCall := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
 				resp, err := caller.CallResync(pkt, act, timeout...)
@@ -89,9 +84,21 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 				}
 				return resp
 			}
+			isSessionAged := func() bool {
+				since := session.ConnectionSince()
+				return !since.IsZero() && time.Since(since) > client.HealthySessionAge
+			}
 
+			// 先查询主面板：未开放或无可挑战关卡时不重建健康会话。
 			panelResp := resyncCall(protocol.BuildSoulHuntMainPanelPacket(),
 				protocol.ActionIDSoulHuntMainPanel)
+			if panelResp == nil && caller.AbortErr() == nil && isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+					return err
+				}
+				panelResp = resyncCall(protocol.BuildSoulHuntMainPanelPacket(),
+					protocol.ActionIDSoulHuntMainPanel)
+			}
 			if panelResp == nil {
 				if abort := caller.AbortErr(); abort != nil {
 					return abort
@@ -123,6 +130,15 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 			if step <= 0 {
 				slog.Info("灵域猎妖当前无可挑战关卡", "role_id", session.RoleID())
 				return nil
+			}
+
+			// 确认可挑战后，若会话已超窗再重建保证 669/3 城镇/战场上下文干净。
+			if isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+					return err
+				}
+				_ = resyncCall(protocol.BuildSoulHuntMainPanelPacket(),
+					protocol.ActionIDSoulHuntMainPanel)
 			}
 
 			fights := 0

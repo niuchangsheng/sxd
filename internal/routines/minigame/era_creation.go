@@ -35,15 +35,7 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 866/10 挑战在长会话上会被静默丢弃（2026-11-24 实测 16 分钟
-			// 会话上无回包，而探索/事件查询正常）。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
-			// 866/10 挑战是场景写操作，执行前复位城镇，避免上下文污染。
-			if !session.ReturnToTown(ctx, 3*time.Second) {
-				slog.Info("造化秘境执行前返回城镇失败，继续尝试", "role_id", session.RoleID())
-			}
+			// 先做只读功能开放预检，未开放时不重建健康连接、不发送 enter_town。
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDEraCreationRealm); fErr != nil {
 				if abortErr, ok := kit.IsAbortErr(fErr); ok {
 					return abortErr
@@ -54,11 +46,33 @@ func NewEraCreationRoutine() scheduler.ActivityRoutine {
 				slog.Info("造化秘境功能未开放，跳过", "role_id", session.RoleID(), "function_id", protocol.FunctionIDEraCreationRealm)
 				return nil
 			}
+			// 866/10 挑战是场景写操作，执行前复位城镇，避免上下文污染。
+			if !session.ReturnToTown(ctx, 3*time.Second) {
+				slog.Info("造化秘境执行前返回城镇失败，继续尝试", "role_id", session.RoleID())
+			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
+			refreshedOnce := false
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("造化秘境协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
+					if !refreshedOnce && caller.AbortErr() == nil {
+						if since := session.ConnectionSince(); !since.IsZero() && time.Since(since) > client.HealthySessionAge {
+							refreshedOnce = true
+							if rErr := session.EnsureFreshConnection(ctx, client.HealthySessionAge); rErr == nil {
+								_ = session.ReturnToTown(ctx, 3*time.Second)
+								if act == protocol.ActionIDEraCreationFight {
+									_ = func() *protocol.Packet {
+										r, _ := caller.Call(protocol.BuildEraCreationPanelPacket(), protocol.ActionIDEraCreationPanel)
+										return r
+									}()
+								}
+								if retryResp, retryErr := caller.Call(pkt, act); retryErr == nil {
+									return retryResp
+								}
+							}
+						}
+					}
 					return nil
 				}
 				return resp

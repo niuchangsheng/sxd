@@ -1222,14 +1222,9 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							// 新会话的 Mod 4 状态与旧会话无关，必须清除地图静默期，
 							// 否则重连后首个 4/0 会被静默期直接跳过，4/1 缺少 Mod 4 锚点。
 							questSectionsDown.Delete(session)
-							session.ReconnectNow()
-							slog.Info("任务上下文不可用，主动重连后继续本轮推图",
+							slog.Info("任务上下文不可用，换取新凭据主动重连后继续本轮推图",
 								"role_id", session.RoleID())
-							// ReconnectNow 只是关闭连接，状态机由读循环异步切到
-							// Reconnecting；若立即检查 State()==Active 会误判为已恢复，
-							// 随后一整轮交付/同步全部以 session is not active 失败
-							// （2026-11-17 12:34 实测 10 次无效交付）。
-							if !waitForReconnect(ctx, session.State, 5*time.Second, 60*time.Second) {
+							if !reconnectQuestSession(ctx, session) {
 								slog.Info("主动重连未在超时内恢复，跳过本轮任务推图", "role_id", session.RoleID())
 								questBad = true
 							}

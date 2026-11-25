@@ -39,20 +39,34 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 长会话上好友列表查询会被静默丢弃（2026-11-24 12:47 实测），
-			// 入口先保证会话在健康窗口内。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			slog.Info("正在执行社交任务: 神仙收藏册", "role_id", session.RoleID())
 
 			caller := kit.NewCaller(ctx, session, 5*time.Second)
 			call := func(pkt *protocol.Packet, act uint32) (*protocol.Packet, error) {
 				return caller.Call(pkt, act)
 			}
+			refreshedOnce := false
+			ensureFreshOnDrop := func() error {
+				if refreshedOnce {
+					return nil
+				}
+				since := session.ConnectionSince()
+				if since.IsZero() || time.Since(since) <= client.HealthySessionAge {
+					return nil
+				}
+				refreshedOnce = true
+				return session.EnsureFreshConnection(ctx, client.HealthySessionAge)
+			}
 
-			// 1. 声望档位奖励。
+			// 1. 声望档位奖励（仅在老会话发生静默丢包时按需重建，避免无奖励时平白断连）。
 			resp, err := call(protocol.BuildCollectionBookletsPopularityInfoPacket(), protocol.ActionIDCollectionBookletsPopularityInfo)
+			if (err != nil || resp == nil) && caller.AbortErr() == nil {
+				if rErr := ensureFreshOnDrop(); rErr != nil {
+					return rErr
+				} else if refreshedOnce {
+					resp, err = call(protocol.BuildCollectionBookletsPopularityInfoPacket(), protocol.ActionIDCollectionBookletsPopularityInfo)
+				}
+			}
 			if err != nil || resp == nil {
 				if abort, ok := kit.IsAbortErr(err); ok {
 					return abort
@@ -113,8 +127,15 @@ func NewCollectionBookletsRoutine() scheduler.ActivityRoutine {
 				}
 			}
 
-			// 2. 拜访好友获得声望。
+			// 2. 拜访好友获得声望（长会话若静默丢弃则按需刷新一次重试）。
 			fResp, fErr := call(protocol.BuildCollectionBookletsMyFriendPacket(), protocol.ActionIDCollectionBookletsMyFriend)
+			if (fErr != nil || fResp == nil) && caller.AbortErr() == nil && !refreshedOnce {
+				if rErr := ensureFreshOnDrop(); rErr != nil {
+					return rErr
+				} else if refreshedOnce {
+					fResp, fErr = call(protocol.BuildCollectionBookletsMyFriendPacket(), protocol.ActionIDCollectionBookletsMyFriend)
+				}
+			}
 			if fErr != nil || fResp == nil {
 				slog.Info("查询神仙收藏册好友列表无回包，稍后重试", "role_id", session.RoleID(), "err", fErr)
 				return scheduler.NewCooldown(30*time.Minute, "神仙收藏册好友列表无回包")

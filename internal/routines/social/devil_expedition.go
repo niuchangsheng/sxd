@@ -131,11 +131,7 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 
-			// 重型玩法在登录后的早期窗口内才能稳定完成；旧会话会被服务端
-			// 静默丢弃或直接断链（2026-11-24 相关性分析）。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
+			// 先做只读开放预检与面板判断，未开放或无次数时不重建健康会话。
 			if open, fErr := session.IsFunctionOpen(ctx, protocol.FunctionIDDevilExpedition); fErr != nil {
 				if abort, ok := kit.IsAbortErr(fErr); ok {
 					return abort
@@ -159,9 +155,20 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 				}
 				return resp
 			}
+			isSessionAged := func() bool {
+				since := session.ConnectionSince()
+				return !since.IsZero() && time.Since(since) > client.HealthySessionAge
+			}
 
 			statusResp := resyncCall(protocol.BuildDevilActivityStatusPacket(),
 				protocol.ActionIDDevilActivityStatus)
+			if statusResp == nil && caller.AbortErr() == nil && isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+					return err
+				}
+				statusResp = resyncCall(protocol.BuildDevilActivityStatusPacket(),
+					protocol.ActionIDDevilActivityStatus)
+			}
 			if statusResp == nil {
 				if abort := caller.AbortErr(); abort != nil {
 					return abort
@@ -200,11 +207,35 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 			)
 
 			// 屠魔令为 0 时任何类型的 start_expedition_single 都不可能成功。
-			// 实测（2026-11-15 16:04）该状态下服务端直接静默丢包、连结果码都不回，
-			// 等待超时只会白占一轮。这里依据面板数量直接跳过，不发必被丢弃的请求。
 			if panel.TumoLingNum <= 0 {
 				slog.Info("魔界远征屠魔令为 0，跳过所有伙伴挑战", "role_id", session.RoleID())
 				return scheduler.NewCooldown(time.Hour, "魔界远征屠魔令不足")
+			}
+
+			types := []uint8{
+				protocol.DevilMissionYinYang,
+				protocol.DevilMissionMonsterGod,
+				protocol.DevilMissionHermit,
+			}
+			hasUncapped := false
+			for _, mt := range types {
+				if capped, _ := devilMaterialCapped(panel, mt); !capped {
+					hasUncapped = true
+					break
+				}
+			}
+			if !hasUncapped {
+				slog.Info("魔界远征本周三伙伴材料均已达上限，无需挑战", "role_id", session.RoleID())
+				return nil
+			}
+
+			// 确认已开放、有次数且未满上限后，若会话较老再重建保证 2/107 与 429/63 成功率。
+			if isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+					return err
+				}
+				_ = resyncCall(protocol.BuildDevilActivityStatusPacket(), protocol.ActionIDDevilActivityStatus)
+				_ = resyncCall(protocol.BuildDevilMatchPanelPacket(), protocol.ActionIDDevilMatchPanel)
 			}
 
 			// 屠魔令预检：每次 429/63 固定消耗 10 个，背包不足时服务端直接
@@ -231,11 +262,6 @@ func NewDevilExpeditionRoutine() scheduler.ActivityRoutine {
 			// 服务端在 start_expedition_single 后推送 notify_enter_mission。
 			entryState := devilStateFor(session)
 
-			types := []uint8{
-				protocol.DevilMissionYinYang,
-				protocol.DevilMissionMonsterGod,
-				protocol.DevilMissionHermit,
-			}
 			for _, missionType := range types {
 				if ctx.Err() != nil {
 					return nil

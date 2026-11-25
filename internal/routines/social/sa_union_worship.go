@@ -30,10 +30,6 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 与万古膜拜相同：长会话上写请求（含 enter_town）会被静默丢弃。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 				resp, err := caller.Call(pkt, act)
@@ -54,12 +50,22 @@ func NewSaUnionWorshipRoutine() scheduler.ActivityRoutine {
 			} else if abort := caller.AbortErr(); abort != nil {
 				return abort
 			}
-			// 与仙盟上香/万古膜拜相同的场景写操作：先复位城镇再膜拜，
-			// 避免战斗上下文污染导致静默丢弃。
+			// 与仙盟上香/万古膜拜相同的场景写操作：先复位城镇再膜拜；
+			// 仅当写请求在老会话上被静默丢弃时按需重建一次，避免今日已膜拜时平白断连。
 			if !session.ReturnToTown(ctx, 5*time.Second) {
 				slog.Info("圣盟膜拜前返回城镇失败，继续尝试", "role_id", session.RoleID())
 			}
 			resp := call(protocol.BuildSaUnionWorshipPacket(protocol.SaUnionWorshipUseCoin), protocol.ActionIDSaUnionWorship)
+			if resp == nil && caller.AbortErr() == nil {
+				if since := session.ConnectionSince(); !since.IsZero() && time.Since(since) > client.HealthySessionAge {
+					if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+						return err
+					}
+					_ = call(protocol.BuildSaUnionWorshipPanelPacketWithPrev(session.LastActionID()), protocol.ActionIDSaUnionWorshipPanel)
+					_ = session.ReturnToTown(ctx, 5*time.Second)
+					resp = call(protocol.BuildSaUnionWorshipPacket(protocol.SaUnionWorshipUseCoin), protocol.ActionIDSaUnionWorship)
+				}
+			}
 			if resp == nil {
 				if abort := caller.AbortErr(); abort != nil {
 					return abort

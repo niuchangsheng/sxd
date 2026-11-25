@@ -2,6 +2,7 @@ package dungeon
 
 import (
 	"context"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,5 +78,63 @@ func TestAllowQuestMidCycleReconnect_Throttle(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if !allowQuestMidCycleReconnect(sess) {
 		t.Fatal("超过节流间隔后应重新允许重连")
+	}
+}
+
+// TestReconnectQuestSession_RefreshesTicketAndAdvancesGen 验证推图主动重连前
+// 会先刷新一次性票据并等待新一代连接进入 Active，取消上下文时返回 false。
+func TestReconnectQuestSession_RefreshesTicketAndAdvancesGen(t *testing.T) {
+	var refreshed, dials atomic.Int32
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-quest-reconn",
+		ServerAddr: "mock-pipe",
+		Dialer: func(context.Context, string, string) (net.Conn, error) {
+			dials.Add(1)
+			srv, cli := net.Pipe()
+			t.Cleanup(func() {
+				_ = srv.Close()
+				_ = cli.Close()
+			})
+			go func() {
+				buf := make([]byte, 64)
+				for {
+					if _, err := srv.Read(buf); err != nil {
+						return
+					}
+				}
+			}()
+			return cli, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+		RefreshCredentials: func(_ context.Context, cfg *client.SessionConfig) error {
+			refreshed.Add(1)
+			cfg.Hash = "fresh-ticket"
+			return nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sess.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sess.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	gen0 := sess.ConnectionGeneration()
+
+	if !reconnectQuestSession(ctx, sess) {
+		t.Fatal("reconnectQuestSession 应成功恢复会话")
+	}
+	if refreshed.Load() != 1 {
+		t.Fatalf("主动重连前应换票 1 次, got %d", refreshed.Load())
+	}
+	if sess.ConnectionGeneration() <= gen0 {
+		t.Fatalf("连接代数应递增: before=%d after=%d", gen0, sess.ConnectionGeneration())
+	}
+
+	if reconnectQuestSession(ctx, nil) {
+		t.Fatal("nil session 应返回 false")
 	}
 }

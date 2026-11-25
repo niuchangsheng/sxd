@@ -123,11 +123,6 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 重型玩法在登录后的早期窗口内才能稳定完成；旧会话会被服务端
-			// 静默丢弃或直接断链（2026-11-24 相关性分析）。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 				resp, err := caller.CallResync(pkt, act)
@@ -139,6 +134,13 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 					return nil
 				}
 				return resp
+			}
+			ensureFreshIfAged := func() error {
+				since := session.ConnectionSince()
+				if since.IsZero() || time.Since(since) <= client.HealthySessionAge {
+					return nil
+				}
+				return session.EnsureFreshConnection(ctx, client.HealthySessionAge)
 			}
 			fetchInfo := func(typ uint8) *protocol.LevitateInfo {
 				resp := call(protocol.BuildLevitateInfoPacket(typ), protocol.ActionIDLevitateInfo)
@@ -215,6 +217,9 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 				}
 				slog.Info("飞升条件满足，执行飞升", "role_id", session.RoleID(),
 					"type", typ, "step", info.Step, "use_shen_lian_zhu", useShenLian)
+				if err := ensureFreshIfAged(); err != nil {
+					return false, err
+				}
 				return true, ascend(typ, useShenLian)
 			}
 
@@ -247,6 +252,11 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 				// 面板被静默丢弃时仍尝试一次 357/1，以结果码为准。
 				slog.Info("飞升信息面板无回包，直接尝试灌注一次（以结果码判断状态）",
 					"role_id", session.RoleID())
+			}
+
+			// 确认需要执行 357/1 灌注时，若会话已超窗再按需重建。
+			if err := ensureFreshIfAged(); err != nil {
+				return err
 			}
 			// 注意：面板 357/0 回包成功不代表灌注动作 357/1 可用。早期实现在这里
 			// ResetSilentDrops，导致「面板正常、灌注被静默丢弃」时连续丢包计数每轮

@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,7 @@ var (
 
 // XindongAuthenticator 提供心动游戏平台 (sxd.xd.com) 的原生 Web 凭据换取驱动。
 type XindongAuthenticator struct {
+	mu         sync.Mutex
 	client     *http.Client
 	playURL    string
 	cookie     string
@@ -92,6 +94,8 @@ func (a *XindongAuthenticator) Platform() string {
 
 // SetCookie 设置/更新会话 Cookie 并同步注满 CookieJar。
 func (a *XindongAuthenticator) SetCookie(cookie string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.cookie = strings.TrimSpace(cookie)
 	if a.cookie != "" && a.client != nil && a.client.Jar != nil {
 		targets := []string{
@@ -109,7 +113,10 @@ func (a *XindongAuthenticator) SetCookie(cookie string) {
 }
 
 // Login 执行心动平台入场跳转并换取目标区服的动态凭据。
+// 多区服并发自愈换票共享同一认证器与 http.Client.CheckRedirect，需串行化防止串票。
 func (a *XindongAuthenticator) Login(ctx context.Context, username, password, serverID string) (*Ticket, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	// 0. 若未配置有效 Cookie 且提供了账号密码，优先尝试全自治登录换票流水线 (集成图形验证码 OCR)
 	if a.playURL == "https://www.xd.com/games/play" && (a.cookie == "" || strings.Contains(a.cookie, "YOUR_A1_VALUE")) && username != "" && password != "" {
 		if t, err := a.loginViaScript(ctx, username, password, serverID); err == nil && t != nil {

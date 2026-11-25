@@ -56,7 +56,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "era_rebirth_attr_gift", Name: "修真境界礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "使用修真境界时间道具 (851/4→851/5, 道具不足跳过)", DefaultOn: false},
 		{ID: "xiuzhen_realm_award", Name: "修真境界一键礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "领取修真境界主面板礼包 (552/1→552/5, 已领取等次日重置)", DefaultOn: true},
 		{ID: "session_refresh", Name: "会话上下文刷新", Domain: "system", Schedule: scheduler.ScheduleLoop, Description: "可选：连接满 4 分钟后主动重连（登录竞争激烈时建议关闭）", DefaultOn: false},
-		{ID: "cross_keepalive", Name: "主服会话保活", Domain: "system", Schedule: scheduler.ScheduleLoop, Description: "每 90 秒发送一次 0/6 业务读，避免主服会话被 5 分钟回收扫描踢掉", DefaultOn: false},
+		{ID: "cross_keepalive", Name: "跨服辅助常驻保活", Domain: "system", Schedule: scheduler.ScheduleLoop, Description: "常驻登录态仙界跨服辅助连接 (94/0+6/12，不进跨服城镇)，避免主服会话被 5 分钟回收扫描踢掉", DefaultOn: true},
 		{ID: "levitate_perfusion", Name: "飞升伙伴灌注经验", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "飞升页面伙伴灌注经验 (357/1, 已灌注完即停止)", DefaultOn: false},
 		{ID: "activity_report", Name: "每日活跃度汇总", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "只读汇总每日/周常活跃度并输出 1200 达标缺口", DefaultOn: false},
 		{ID: "tactics_water", Name: "兵法圣水购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "铜钱购买湛蓝圣水完成兵法活跃度 (不消耗元宝)", DefaultOn: false},

@@ -56,11 +56,6 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 重型玩法在登录后的早期窗口内才能稳定完成；旧会话会被服务端
-			// 静默丢弃或直接断链（2026-11-24 相关性分析）。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 				resp, err := caller.CallResync(pkt, act)
@@ -71,8 +66,12 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 				}
 				return resp
 			}
+			isSessionAged := func() bool {
+				since := session.ConnectionSince()
+				return !since.IsZero() && time.Since(since) > client.HealthySessionAge
+			}
 
-			// 刷新赛季与属性面板，保证 851/4 返回当前赛季的道具列表。
+			// 先只读检查开关与礼包库存，无可用时间道具时不平白拆毁健康连接。
 			_ = call(protocol.BuildEraRebirthAttrSeasonPacket(), protocol.ActionIDEraRebirthAttrSeason)
 			// 官方客户端只有在 851/1 的 is_auto_use_time_item 开启时才自动
 			// 使用时间道具；关闭时服务端会静默丢弃 851/5，不能盲目发送。
@@ -96,6 +95,14 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 
 			pkgResp := call(protocol.BuildEraRebirthAttrResourcePackagePacket(),
 				protocol.ActionIDEraRebirthAttrResourcePackage)
+			if pkgResp == nil && caller.AbortErr() == nil && isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+					return err
+				}
+				_ = call(protocol.BuildEraRebirthAttrSeasonPacket(), protocol.ActionIDEraRebirthAttrSeason)
+				pkgResp = call(protocol.BuildEraRebirthAttrResourcePackagePacket(),
+					protocol.ActionIDEraRebirthAttrResourcePackage)
+			}
 			if pkgResp == nil {
 				return scheduler.NewCooldown(time.Hour, "修真境界礼包无回包")
 			}
@@ -109,6 +116,16 @@ func NewEraRebirthAttrGiftRoutine() scheduler.ActivityRoutine {
 			if len(items) == 0 {
 				slog.Info("修真境界暂无可使用的时间道具", "role_id", session.RoleID())
 				return nil
+			}
+
+			// 确认有时间道具待使用时，若会话超窗再重建保证 851/5 不被丢弃。
+			if isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+					return err
+				}
+				_ = call(protocol.BuildEraRebirthAttrSeasonPacket(), protocol.ActionIDEraRebirthAttrSeason)
+				_ = call(protocol.BuildEraRebirthAttrResourcePackagePacket(),
+					protocol.ActionIDEraRebirthAttrResourcePackage)
 			}
 
 			used := 0

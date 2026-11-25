@@ -86,10 +86,7 @@ func NewAbyssClashRoutine() scheduler.ActivityRoutine {
 				return scheduler.NewCooldown(time.Hour, "界渊之战阶段不可挑战")
 			}
 
-			// 面板/挑战走跨服会话；主服只用于开放状态与凭据。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
+			// 面板/挑战走独立跨服会话；主服已成功返回开放状态，无需重建主服连接。
 			cross, err := openAbyssClashSession(ctx, session)
 			if err != nil || cross == nil {
 				slog.Info("建立界渊之战跨服会话失败，稍后重试",

@@ -44,13 +44,7 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 2026-11-24 实测：31 分钟会话上 797/22、797/23 连续无回包；
-			// 2026-11-25 00:59 在 2 分钟会话上仍被丢弃，而 38 秒会话成功。
-			// 因此按 60 秒强制刷新，而不是默认 3 分钟。
 			const endlessFreshSessionAge = 60 * time.Second
-			if err := session.EnsureFreshConnection(ctx, endlessFreshSessionAge); err != nil {
-				return err
-			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			resyncCall := func(pkt *protocol.Packet, act uint32, timeout ...time.Duration) *protocol.Packet {
 				resp, err := caller.CallResync(pkt, act, timeout...)
@@ -61,9 +55,21 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 				}
 				return resp
 			}
+			isSessionAged := func() bool {
+				since := session.ConnectionSince()
+				return !since.IsZero() && time.Since(since) > endlessFreshSessionAge
+			}
 
+			// 先查询状态与主面板：未开放或不可挑战时不重建健康会话。
 			stateResp := resyncCall(protocol.BuildEndlessActivityStatePacket(),
 				protocol.ActionIDEndlessActivityState)
+			if stateResp == nil && caller.AbortErr() == nil && isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, endlessFreshSessionAge); err != nil {
+					return err
+				}
+				stateResp = resyncCall(protocol.BuildEndlessActivityStatePacket(),
+					protocol.ActionIDEndlessActivityState)
+			}
 			if stateResp == nil {
 				if abort := caller.AbortErr(); abort != nil {
 					return abort
@@ -101,6 +107,17 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 			slog.Info("无尽洞天当前层", "role_id", session.RoleID(), "layer", layer)
 			if layer <= 0 {
 				return nil
+			}
+
+			// 确认可挑战后，若会话已超过 60s 健康窗再按需重建并重拉面板。
+			if isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, endlessFreshSessionAge); err != nil {
+					return err
+				}
+				_ = resyncCall(protocol.BuildEndlessActivityStatePacket(),
+					protocol.ActionIDEndlessActivityState)
+				_ = resyncCall(protocol.BuildEndlessPanelPacket(),
+					protocol.ActionIDEndlessPanel)
 			}
 
 			challenges := 0

@@ -16,6 +16,10 @@ const (
 	ActionIDStcLoginGetInfo uint32 = 0x00600000
 	// ActionIDStTownEnter 进入仙界跨服城镇 (Mod_StTown_Base.enter_town, Module 95 Action 0 -> 0x005F0000)
 	ActionIDStTownEnter uint32 = 0x005F0000
+	// ActionIDStTownLeave 离开仙界跨服城镇 (Mod_StTown_Base.leave_town, Module 95 Action 2 -> 0x005F0002)
+	ActionIDStTownLeave uint32 = 0x005F0002
+	// ActionIDChatEnterStChannel 进入仙界跨服聊天频道 (Mod_Chat_Base.enter_st_channel, Module 6 Action 12 -> 0x0006000C)
+	ActionIDChatEnterStChannel uint32 = 0x0006000C
 	// TownIDXianJie 仙界城镇编号 (官方 TownType.getId(TownType.XianJie))
 	TownIDXianJie int32 = 41
 
@@ -24,6 +28,12 @@ const (
 	// 注意该模块常量并非从 0 开始：TRUE=0、FALSE=1、SUCCESS=2、FAILED=3、FULL=4、
 	// NOT_ENOUGH_INGOT=5。实机回包首字节为 0x02 即成功。
 	StTownResultSuccess uint8 = 2
+	// StTownResultTrue 跨服城镇布尔成功值 (Mod_StTown_Base.TRUE = 0，leave_town 等使用)。
+	StTownResultTrue uint8 = 0
+	// StTownResultFailed 跨服城镇失败状态码 (Mod_StTown_Base.FAILED = 3)。
+	StTownResultFailed uint8 = 3
+	// ChatChannelResultSuccess 进入跨服聊天频道成功值 (Mod_Chat_Base.SUCCESS = 0)。
+	ChatChannelResultSuccess uint8 = 0
 )
 
 // StCrossServerInfo 代表主服下发的仙界跨服节点登录凭据。
@@ -90,4 +100,32 @@ func BuildStTownEnterPacket(townID int32) *Packet {
 	w := NewWriter()
 	w.WriteInt32(townID)
 	return NewPacket(ActionIDStTownEnter, w.Bytes())
+}
+
+// BuildStTownLeavePacket 构造离开仙界跨服城镇请求封包 (0x005F0002)。
+// 对齐官方 ServerTownMapView.as:614，请求为空参数并由跨服 Socket 追加前序动作号。
+func BuildStTownLeavePacket() *Packet {
+	return NewPacketWithAutoPrevAct(ActionIDStTownLeave, nil)
+}
+
+// ParseStTownLeaveResult 解析离开仙界跨服城镇响应首字节结果码。
+func ParseStTownLeaveResult(payload []byte) (uint8, error) {
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("%w: empty st town leave response", ErrInvalidPayload)
+	}
+	return payload[0], nil
+}
+
+// BuildChatEnterStChannelPacket 构造进入仙界聊天频道请求封包 (0x0006000C)。
+// 对齐官方 View.as:16669 chatConnectLoginBack，请求为空参数并携带前序动作号。
+func BuildChatEnterStChannelPacket() *Packet {
+	return NewPacketWithAutoPrevAct(ActionIDChatEnterStChannel, nil)
+}
+
+// ParseChatEnterStChannelResult 解析进入仙界聊天频道回包结果码。
+func ParseChatEnterStChannelResult(payload []byte) (uint8, error) {
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("%w: empty enter_st_channel response", ErrInvalidPayload)
+	}
+	return payload[0], nil
 }

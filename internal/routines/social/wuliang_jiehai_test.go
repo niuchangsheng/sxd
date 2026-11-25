@@ -250,3 +250,62 @@ func TestWuliangJieHaiRoutine_ChapterPanelOverridesAssumedLevel(t *testing.T) {
 		t.Fatalf("应以章节面板 now_level=7 发起挑战, got %v", fightLevels)
 	}
 }
+
+// TestWuliangJieHaiRoutine_ChapterDropAndErrorAbortBeforeFight 验证 853/2 无回包或返回
+// 非成功错误码时立即中止退避，绝不继续发送 854/1、853/3、853/4 导致服务端踢线。
+func TestWuliangJieHaiRoutine_ChapterDropAndErrorAbortBeforeFight(t *testing.T) {
+	// 1. 853/2 静默丢弃分支
+	var illegalFollowUps atomic.Int32
+	sessDrop := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDEraInfiniteSeason:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 4}))
+		case protocol.ActionIDEraInfinitePanel:
+			_ = protocol.WritePacket(conn, protocol.BuildEraInfinitePanelResultPacket(110, 2, 0, 0, 0, 1))
+		case protocol.ActionIDEraInfiniteChapter:
+			// 静默丢弃 853/2
+		case protocol.ActionIDEraInfiniteDeployTypeSeq,
+			protocol.ActionIDEraInfiniteSuperDeployList,
+			protocol.ActionIDEraInfiniteMonsterTeam,
+			protocol.ActionIDEraInfiniteFight:
+			illegalFollowUps.Add(1)
+		}
+	})
+	defer sessDrop.Close()
+	scheduler.ResetSilentDrops(sessDrop, "wuliang_jiehai")
+
+	ctx := kit.WithTimeoutOverride(context.Background(), 120*time.Millisecond)
+	err := NewWuliangJieHaiRoutine().Execute(ctx, sessDrop, nil)
+	var cd *scheduler.CooldownError
+	if !errors.As(err, &cd) {
+		t.Fatalf("章节面板无回包应返回 CooldownError, got %v", err)
+	}
+	if illegalFollowUps.Load() != 0 {
+		t.Fatalf("章节面板无回包后严禁继续发送布阵/挑战包, got %d", illegalFollowUps.Load())
+	}
+
+	// 2. 853/2 返回非成功状态码 (FuncNotOpen) 分支
+	var illegalOnErr atomic.Int32
+	sessErr := newSocialMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
+		switch pkt.ActionID {
+		case protocol.ActionIDEraInfiniteSeason:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 4}))
+		case protocol.ActionIDEraInfinitePanel:
+			_ = protocol.WritePacket(conn, protocol.BuildEraInfinitePanelResultPacket(110, 2, 0, 0, 0, 1))
+		case protocol.ActionIDEraInfiniteChapter:
+			_ = protocol.WritePacket(conn, protocol.BuildEraInfiniteChapterResultPacket(
+				protocol.EraInfiniteFuncNotOpen, 0, 1))
+		case protocol.ActionIDEraInfiniteMonsterTeam, protocol.ActionIDEraInfiniteFight:
+			illegalOnErr.Add(1)
+		}
+	})
+	defer sessErr.Close()
+
+	err2 := NewWuliangJieHaiRoutine().Execute(ctx, sessErr, nil)
+	if !errors.As(err2, &cd) {
+		t.Fatalf("章节返回未开放错误码应返回 CooldownError, got %v", err2)
+	}
+	if illegalOnErr.Load() != 0 {
+		t.Fatalf("章节未开放后严禁发送 853/3 或 853/4, got %d", illegalOnErr.Load())
+	}
+}

@@ -40,11 +40,6 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 2026-11-24 实测：7 分钟会话上连 enter_town 都会被静默丢弃，
-			// 随后 840/1 膜拜无回包；而秒级新会话先返回城镇后膜拜立即成功。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
 			call := func(pkt *protocol.Packet) *protocol.Packet {
 				resp, err := caller.Call(pkt, pkt.ActionID)
@@ -55,9 +50,19 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 				}
 				return resp
 			}
+			isSessionAged := func() bool {
+				since := session.ConnectionSince()
+				return !since.IsZero() && time.Since(since) > client.HealthySessionAge
+			}
 
-			// 1. 主面板：确认活动开放状态与今日可膜拜对象。
+			// 1. 先查询主面板：若今日已全部膜拜且无可领铜钱，不平白重建健康会话。
 			panelResp := call(protocol.BuildWanguShenxuMainInfoPacket())
+			if panelResp == nil && caller.AbortErr() == nil && isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+					return err
+				}
+				panelResp = call(protocol.BuildWanguShenxuMainInfoPacket())
+			}
 			if panelResp == nil {
 				if abort := caller.AbortErr(); abort != nil {
 					return abort
@@ -85,6 +90,17 @@ func NewWanguShenxuRoutine() scheduler.ActivityRoutine {
 			slog.Info("万古神墟面板", "role_id", session.RoleID(),
 				"statues", len(panel.Players), "worshippable", len(targets),
 				"can_get_coin", panel.CanGetCoin)
+			if len(targets) == 0 && panel.CanGetCoin <= 0 {
+				return nil
+			}
+
+			// 存在可膜拜目标或可领铜钱时，若会话已超窗再按需重建并重拉面板。
+			if isSessionAged() {
+				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+					return err
+				}
+				_ = call(protocol.BuildWanguShenxuMainInfoPacket())
+			}
 
 			// 2. 逐个膜拜未膜拜的大神像 (膜拜免费；worship_ingot 归被膜拜榜一)。
 			// 膜拜是场景写操作：前面战斗玩法污染上下文时会静默丢弃，

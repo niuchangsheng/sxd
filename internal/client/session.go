@@ -142,21 +142,30 @@ type RoleSession struct {
 	reconnectAttempts int
 	isCustomDialer    bool
 
-	// 凭据自愈节流：记录最近一次 Web 换票时间、换票后连续失败次数与最近一次
-	// 连接失败原因，避免普通 EOF 也触发 Web 登录（多角色同账号会互相顶号）。
+	// 凭据自愈节流：记录最近一次 Web 换票时间、换票后连续失败次数、当前票据是否已被
+	// 成功登录消费，以及最近一次连接失败原因。
 	credRefreshMu        sync.Mutex
 	lastCredRefresh      time.Time
 	failuresSinceRefresh int
 	lastConnectErr       error
+	ticketConsumed       bool
 
 	// crossMu 保护常驻跨服辅助会话。
 	//
-	// 2026-11-25 实测：服务端每 5 分钟做一次会话回收扫描，回收「最近约 120 秒
-	// 没有业务活动」的主服会话；官方客户端登录后始终保持 8219/8251 等辅助连接，
-	// 主服即使完全空闲 10 分钟也不会被回收。因此这里为每个主服会话常驻一条
-	// 仙界跨服连接，由 cross_keepalive 例程在调度空隙维护。
-	crossMu      sync.Mutex
-	crossSession *RoleSession
+	// 2026-11-25 实测：服务端每 5 分钟按墙钟扫描回收无常驻跨服辅助连接的主服会话
+	// （纯主服 0/6、0/22、0/75 均仍会被回收）；常驻 login-only 的 8219/8480 连接可跨过所有扫描点。
+	crossMu         sync.Mutex
+	crossSession    *RoleSession
+	crossParentGen  uint64
+	crossTownActive atomic.Bool
+
+	// knownGoodTownID 缓存主服 EnterTown 返回 code=0 的有效城镇地图 ID。
+	knownGoodTownID atomic.Int32
+
+	// onBeforeClose 在 Close 关闭底层连接前执行（用于跨服城镇会话发送 95/2 leave_town）。
+	onBeforeClose func()
+	// onAfterClose 在 Close 释放资源后执行（用于跨服业务会话结束后恢复常驻辅助连接）。
+	onAfterClose func()
 
 	// prevAct 集中管理当前连接的业务动作尾链 (PrevAct) 与最近收包诊断缓冲。
 	prevAct      *PrevActChain
@@ -212,7 +221,7 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 			}
 		} else {
 			cfg.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
-				d := net.Dialer{Timeout: 5 * time.Second}
+				d := net.Dialer{Timeout: 5 * time.Second, KeepAlive: 45 * time.Second}
 				return d.DialContext(ctx, network, addr)
 			}
 		}
@@ -477,8 +486,13 @@ func (s *RoleSession) Close() {
 		s.stateMu.Unlock()
 		return
 	}
+	wasActive := s.state == StateActive
 	s.state = StateClosed
 	s.stateMu.Unlock()
+
+	if wasActive && s.onBeforeClose != nil {
+		s.onBeforeClose()
+	}
 
 	if s.cancel != nil {
 		s.cancel()
@@ -486,13 +500,20 @@ func (s *RoleSession) Close() {
 
 	s.crossMu.Lock()
 	if s.crossSession != nil {
-		s.crossSession.Close()
+		cs := s.crossSession
 		s.crossSession = nil
+		s.crossMu.Unlock()
+		cs.Close()
+	} else {
+		s.crossMu.Unlock()
 	}
-	s.crossMu.Unlock()
 
 	s.closeCurrentConn()
 	s.wg.Wait()
+
+	if s.onAfterClose != nil {
+		s.onAfterClose()
+	}
 
 	slog.Info("角色会话已安全关闭", "role_id", s.cfg.RoleID, "role_name", s.cfg.RoleName)
 }
@@ -615,10 +636,10 @@ func (s *RoleSession) refreshCredentials(ctx context.Context) bool {
 	if s.cfg.RefreshCredentials == nil {
 		return false
 	}
-	// 主动重建时旧票据已被本次登录消费，必须换新票；只做 10 秒防抖，
-	// 避免同一次重建流程里重复登录。普通断线的自愈仍受 2 分钟节流约束。
+	// 主动重建时若当前票据已被登录消费 (ticketConsumed)，必须立即换取新票；
+	// 尚未消费的新票据保留 10 秒防抖，避免同一次重建流程里重复登录。
 	s.credRefreshMu.Lock()
-	recent := time.Since(s.lastCredRefresh) < 10*time.Second
+	recent := !s.ticketConsumed && time.Since(s.lastCredRefresh) < 10*time.Second
 	s.credRefreshMu.Unlock()
 	if recent {
 		return false
@@ -819,7 +840,9 @@ func (s *RoleSession) runLoop() {
 		}
 
 		// 4. 激活会话状态
+		s.markTicketConsumed()
 		s.setState(StateActive)
+		s.dropStaleCrossSession()
 
 		// 5. 运行激活态心跳保活与异常等待
 		if !s.runActiveSession(conn, readErrCh) {
@@ -867,23 +890,30 @@ func nextReconnectDelay(attempt int, base time.Duration) time.Duration {
 	return wait
 }
 
+const consumedTicketRefreshCooldown = 15 * time.Second
+
 // shouldRefreshCredentials 判断本次重连前是否需要重新向平台换票。
 //
-//   - 距上次换票不足 minCredentialRefreshInterval：不换，避免多角色同账号互相顶号；
-//   - 上一次失败是服务端明确拒绝认证：尽快换票（票据多半已失效）；
-//   - 普通断线（EOF/超时）：优先复用现有票据，连续失败达到阈值后才换票。
+//   - 服务端要求选角：不换票；
+//   - 当前一次性网关票据已被成功登录消费过 (ticketConsumed)：经短防抖 (15s) 后立即换票，
+//     避免复用已消费票据连续触发 2~3 次 15 秒握手超时（约 75 秒断线空窗）；
+//   - 未消费过的票据：受 minCredentialRefreshInterval 与连续失败阈值保护。
 func (s *RoleSession) shouldRefreshCredentials() bool {
 	s.credRefreshMu.Lock()
 	since := time.Since(s.lastCredRefresh)
 	failures := s.failuresSinceRefresh
 	lastErr := s.lastConnectErr
+	consumed := s.ticketConsumed
 	s.credRefreshMu.Unlock()
 
-	if since < minCredentialRefreshInterval {
-		return false
-	}
 	// 服务端要求选角：换票无济于事，只会制造登录抖动。
 	if errors.Is(lastErr, ErrRoleSelectionRequired) {
+		return false
+	}
+	if consumed && since >= consumedTicketRefreshCooldown {
+		return true
+	}
+	if since < minCredentialRefreshInterval {
 		return false
 	}
 	if errors.Is(lastErr, ErrAuthRejected) {
@@ -892,12 +922,20 @@ func (s *RoleSession) shouldRefreshCredentials() bool {
 	return failures >= credentialRefreshFailureThreshold
 }
 
+// markTicketConsumed 标记当前一次性登录票据已被网关认证消费。
+func (s *RoleSession) markTicketConsumed() {
+	s.credRefreshMu.Lock()
+	s.ticketConsumed = true
+	s.credRefreshMu.Unlock()
+}
+
 // markCredentialRefreshed 记录一次成功的 Web 换票。
 func (s *RoleSession) markCredentialRefreshed() {
 	s.credRefreshMu.Lock()
 	s.lastCredRefresh = time.Now()
 	s.failuresSinceRefresh = 0
 	s.lastConnectErr = nil
+	s.ticketConsumed = false
 	s.credRefreshMu.Unlock()
 }
 

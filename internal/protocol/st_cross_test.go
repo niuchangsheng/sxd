@@ -57,3 +57,36 @@ func TestBuildStTownEnterPacket(t *testing.T) {
 		t.Errorf("expected town id 41, got %d", townID)
 	}
 }
+
+func TestStTownLeaveAndChatChannel_BuildAndParse(t *testing.T) {
+	leavePkt := protocol.BuildStTownLeavePacket()
+	if leavePkt.ActionID != protocol.ActionIDStTownLeave {
+		t.Fatalf("unexpected leave action: 0x%08X", leavePkt.ActionID)
+	}
+	if leavePkt.EffectivePrevActMode() != protocol.PrevActAutoBusiness {
+		t.Fatalf("expected PrevActAutoBusiness on leave_town, got %v", leavePkt.EffectivePrevActMode())
+	}
+	if code, err := protocol.ParseStTownLeaveResult([]byte{protocol.StTownResultTrue}); err != nil || code != protocol.StTownResultTrue {
+		t.Fatalf("expected leave success code 0, got code=%d err=%v", code, err)
+	}
+	if code, err := protocol.ParseStTownLeaveResult([]byte{protocol.StTownResultFailed}); err != nil || code != protocol.StTownResultFailed {
+		t.Fatalf("expected leave failed code 3, got code=%d err=%v", code, err)
+	}
+	if _, err := protocol.ParseStTownLeaveResult(nil); err == nil {
+		t.Fatal("expected error on empty leave_town payload")
+	}
+
+	chPkt := protocol.BuildChatEnterStChannelPacket()
+	if chPkt.ActionID != protocol.ActionIDChatEnterStChannel {
+		t.Fatalf("unexpected enter_st_channel action: 0x%08X", chPkt.ActionID)
+	}
+	if code, err := protocol.ParseChatEnterStChannelResult([]byte{protocol.ChatChannelResultSuccess}); err != nil || code != 0 {
+		t.Fatalf("expected enter_st_channel code 0, got code=%d err=%v", code, err)
+	}
+	if code, err := protocol.ParseChatEnterStChannelResult([]byte{1}); err != nil || code != 1 {
+		t.Fatalf("expected enter_st_channel failure code 1, got code=%d err=%v", code, err)
+	}
+	if _, err := protocol.ParseChatEnterStChannelResult(nil); err == nil {
+		t.Fatal("expected error on empty enter_st_channel payload")
+	}
+}

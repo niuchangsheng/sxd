@@ -81,6 +81,20 @@ func allowQuestMidCycleReconnect(session *client.RoleSession) bool {
 	return true
 }
 
+// reconnectQuestSession 刷新一次性网关票据后触发主动重连，并等待新一代连接进入 Active。
+//
+// 网关登录 Hash 票据一次性有效：若裸调 ReconnectNow 而不预先换票，旧票据首轮重连
+// 必然触发 15 秒握手超时，叠加退避很容易突破 60 秒等待上限并把 s1 拖入 4m18s 重连循环。
+func reconnectQuestSession(ctx context.Context, session *client.RoleSession) bool {
+	if session == nil {
+		return false
+	}
+	if session.State() == client.StateActive {
+		return session.EnsureFreshConnection(ctx, 0) == nil
+	}
+	return waitForReconnect(ctx, session.State, 5*time.Second, 60*time.Second)
+}
+
 // waitForReconnect 等待主动重连完成一次「离开 Active → 回到 Active」的状态迁移。
 //
 // ReconnectNow 仅关闭底层连接，状态机由读循环异步切入 StateReconnecting。
@@ -1134,8 +1148,7 @@ func executeAuthoritativeQuestCycle(
 					// 新会话不应继承旧会话的地图静默期，否则重连后首个 4/0
 					// 被直接跳过，4/1 只能带非 Mod 4 锚点而被丢弃。
 					questSectionsDown.Delete(session)
-					session.ReconnectNow()
-					if waitForReconnect(ctx, session.State, 5*time.Second, 60*time.Second) {
+					if reconnectQuestSession(ctx, session) {
 						slog.Info("任务上下文失效，本轮内重连后继续推图",
 							"role_id", session.RoleID(),
 							"reconnects", missionsReconnects,

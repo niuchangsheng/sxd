@@ -38,16 +38,23 @@ func NewCultivationCardRoutine() scheduler.ActivityRoutine {
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
-			// 神仙卡牌在轮末执行，859/3、859/5 任务面板在长会话上会被静默丢弃，
-			// 导致任务奖励（资源）长时间不变化。入口先保证会话健康窗口。
-			if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
-				return err
-			}
 			caller := kit.NewCaller(ctx, session, callTimeout)
+			refreshedOnce := false
 			call := func(pkt *protocol.Packet, act uint32) *protocol.Packet {
 				resp, err := caller.Call(pkt, act)
 				if err != nil {
 					slog.Info("神仙卡牌协议无回包", "role_id", session.RoleID(), "action", act, "err", err)
+					// 仅当长会话上请求发生静默丢包时按需刷新一次，避免无事可做时平白断连。
+					if !refreshedOnce && caller.AbortErr() == nil {
+						if since := session.ConnectionSince(); !since.IsZero() && time.Since(since) > client.HealthySessionAge {
+							refreshedOnce = true
+							if rErr := session.EnsureFreshConnection(ctx, client.HealthySessionAge); rErr == nil {
+								if retryResp, retryErr := caller.Call(pkt, act); retryErr == nil {
+									return retryResp
+								}
+							}
+						}
+					}
 					return nil
 				}
 				return resp

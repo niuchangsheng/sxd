@@ -84,6 +84,31 @@ func TestShouldRefreshCredentials(t *testing.T) {
 	}
 }
 
+// TestShouldRefreshCredentials_ConsumedTicket 验证一次性登录票据已被网关认证消费后，
+// 再次断线只需过 15 秒防抖即触发重新换票，避免连续 3 次 15 秒握手超时。
+func TestShouldRefreshCredentials_ConsumedTicket(t *testing.T) {
+	s := NewRoleSession(SessionConfig{RoleID: "t-consumed", ServerAddr: "mock"})
+	s.markTicketConsumed()
+
+	// 15 秒防抖内不重复换票。
+	s.credRefreshMu.Lock()
+	s.lastCredRefresh = time.Now().Add(-5 * time.Second)
+	s.lastConnectErr = io.EOF
+	s.failuresSinceRefresh = 1
+	s.credRefreshMu.Unlock()
+	if s.shouldRefreshCredentials() {
+		t.Fatal("15s 防抖内不应重复换票")
+	}
+
+	// 超过 15 秒防抖后，即便仅第 1 次 EOF，已消费票据也应立即换新票。
+	s.credRefreshMu.Lock()
+	s.lastCredRefresh = time.Now().Add(-20 * time.Second)
+	s.credRefreshMu.Unlock()
+	if !s.shouldRefreshCredentials() {
+		t.Fatal("已消费过的一次性票据断线后应立即重新换票")
+	}
+}
+
 // TestReconnectWait_HandshakeTimeout 验证登录握手超时后至少等待旧会话释放窗口，
 // 避免断线后立刻重连导致连续多次 15 秒握手超时。
 func TestReconnectWait_HandshakeTimeout(t *testing.T) {
