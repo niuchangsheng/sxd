@@ -153,8 +153,16 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 					if abort := caller.AbortErr(); abort != nil {
 						return abort
 					}
-					// 当日挑战次数耗尽后服务端会静默丢弃关卡面板；连续 3 次即挂起
-					// 到次日重置，避免每 10 分钟反复空等。
+					// 本轮的挑战次数用尽时，服务端会静默丢弃 669/3。主面板的
+					// step_pairs 已给出下一轮开放时间；若下一轮在 1 小时以后，
+					// 直接唤醒到开放时间，避免每 10 分钟反复空等与丢包。
+					if next := nextSoulHuntActivityTime(panel, time.Now()); !next.IsZero() &&
+						time.Until(next) > time.Hour {
+						slog.Info("灵域猎妖本轮已结束，按下一轮开放时间唤醒",
+							"role_id", session.RoleID(), "next_open", next)
+						return scheduler.NewCooldownUntil(next, "灵域猎妖本轮已结束")
+					}
+					// 下一轮即将开放时保留 10 分钟短重试；连续 3 次后挂起到次日重置。
 					return scheduler.HandleSilentDropCtx(ctx, session, "soul_hunt", 3,
 						10*time.Minute, "灵域猎妖关卡面板无回包")
 				}
