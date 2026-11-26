@@ -95,9 +95,10 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 			}
 
 			// 3. 一键挑战；失败关卡按 N 轮重试后退出（挑战副本 N 次失败才退出）。
-			// 453/3 在约 1.5 分钟的会话上会被静默丢弃（2026-11-25 00:57、
-			// 2026-11-26 19:46 实机），挑战前按 60 秒窗口刷新。
-			if err := session.EnsureFreshConnection(ctx, 60*time.Second); err != nil {
+			// 453/3 在约 50 秒的会话上就可能被静默丢弃：2026-11-26 19:55
+			// 实机前序灵域猎妖超时后 PrevAct 链失步，enter_town 与 453/3 均无
+			// 回包。挑战前按 30 秒窗口刷新，确保场景复位与挑战都在干净链路上。
+			if err := session.EnsureFreshConnection(ctx, 30*time.Second); err != nil {
 				return err
 			}
 			failedRounds := 0
