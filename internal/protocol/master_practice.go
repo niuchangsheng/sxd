@@ -359,13 +359,17 @@ func ParseMasterPracticeDeployInfoResult(payload []byte) (*MasterPracticeDeployI
 		if role.IsMainRole, err = r.ReadUint8(); err != nil {
 			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].is_main_role: %v", ErrInvalidPayload, i, err)
 		}
-		for j := 0; j < 2; j++ { // health, max_health
-			if _, err = r.ReadInt32(); err != nil {
-				return nil, fmt.Errorf("%w: failed to read deploy_role[%d].health[%d]: %v", ErrInvalidPayload, i, j, err)
+		// 实机回包 (/tmp/deploy_probe.log, 2026-11-26 s0) 在名字前有 5 个 Int32：
+		// [0, 生命/战力, 0, 生命/战力, 角色类型ID]。早期实现只读 3 个，
+		// 导致第 2 个角色起整体错位（deploy_role[1].string[0] EOF）。
+		for j := 0; j < 5; j++ {
+			v, rErr := r.ReadInt32()
+			if rErr != nil {
+				return nil, fmt.Errorf("%w: failed to read deploy_role[%d].pre[%d]: %v", ErrInvalidPayload, i, j, rErr)
 			}
-		}
-		if role.RoleID, err = r.ReadInt32(); err != nil {
-			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].role_id: %v", ErrInvalidPayload, i, err)
+			if j == 4 {
+				role.RoleID = v
+			}
 		}
 		if role.RoleName, err = r.ReadString(); err != nil {
 			return nil, fmt.Errorf("%w: failed to read deploy_role[%d].role_name: %v", ErrInvalidPayload, i, err)
@@ -424,7 +428,10 @@ func BuildMasterPracticeDeployInfoResultPacket(info MasterPracticeDeployInfo) *P
 		for _, role := range info.Roles {
 			w.WriteInt32(role.PlayerRoleID)
 			w.WriteUint8(role.IsMainRole)
+			// 与实机回包一致：名字前 5 个 Int32，第 5 个为角色类型 ID。
+			w.WriteInt32(0)
 			w.WriteInt32(100)
+			w.WriteInt32(0)
 			w.WriteInt32(100)
 			w.WriteInt32(role.RoleID)
 			w.WriteString(role.RoleName)

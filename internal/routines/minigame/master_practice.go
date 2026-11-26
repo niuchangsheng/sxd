@@ -5,6 +5,7 @@ package minigame
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -634,7 +635,8 @@ func masterPracticeFetchDeploy(call func(*protocol.Packet, uint32) (*protocol.Pa
 	}
 	info, pErr := protocol.ParseMasterPracticeDeployInfoResult(resp.Payload)
 	if pErr != nil {
-		slog.Warn("宗师修行布阵信息解析失败", "err", pErr, "payload_len", len(resp.Payload))
+		slog.Warn("宗师修行布阵信息解析失败", "err", pErr, "payload_len", len(resp.Payload),
+			"payload_hex", hex.EncodeToString(resp.Payload))
 		return nil
 	}
 	if info.Result != protocol.MasterPracticeResultSuccess {
