@@ -241,6 +241,22 @@ func NewJieYuanBoxRoutine(cfgs ...JieYuanBoxConfig) scheduler.ActivityRoutine {
 					// 背包查询 (2/41)，锚点会是 2/41 而不是列表 232/30。
 					ctxResp, cErr := callJieYuanContext(ctx, session)
 					if cErr != nil || ctxResp == nil {
+						// 528/1 上下文对「登录后首个业务请求」敏感：长时间运行的
+						// 会话上会持续被静默丢弃（2026-11-26 18:11~19:42 每 30 分钟
+						// 一次）。强制重建连接后以首个业务请求重试一次。
+						slog.Info("结缘宝箱 528/1 无回包，强制新连接后重试一次",
+							"role_id", session.RoleID(), "err", cErr)
+						if fErr := session.EnsureFreshConnection(ctx, 0); fErr != nil {
+							if abort, ok := kit.IsAbortErr(fErr); ok {
+								return abort
+							}
+							slog.Info("结缘宝箱强制重建连接失败，稍后重试",
+								"role_id", session.RoleID(), "err", fErr)
+							return scheduler.NewCooldown(30*time.Minute, "结缘宝箱重建连接失败")
+						}
+						ctxResp, cErr = callJieYuanContext(ctx, session)
+					}
+					if cErr != nil || ctxResp == nil {
 						slog.Info("结缘宝箱开箱设置 528/1 无回包，稍后重试",
 							"role_id", session.RoleID(), "err", cErr)
 						return scheduler.NewCooldown(30*time.Minute, "结缘宝箱设置无回包")

@@ -5,9 +5,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/protocol"
 )
 
@@ -264,5 +267,93 @@ func TestJieYuanBoxRoutine_ContextRetryUsesLastRxAnchor(t *testing.T) {
 	}
 	if got := ctxCalls.Load(); got != 2 {
 		t.Fatalf("首次 528/1 无回包后应重试一次, ctx calls = %d", got)
+	}
+}
+
+// TestJieYuanBoxRoutine_ForcesFreshConnectionOnContextDrop 验证 528/1 在旧会话上
+// 连续无回包时，例程会强制重建连接并以新连接首个业务请求重试一次。
+func TestJieYuanBoxRoutine_ForcesFreshConnectionOnContextDrop(t *testing.T) {
+	var mu sync.Mutex
+	dials := 0
+	var ctxCalls, openCalls atomic.Int32
+
+	handle := func(conn net.Conn, connIndex int) {
+		for {
+			pkt, err := protocol.ReadPacket(conn)
+			if err != nil {
+				return
+			}
+			switch pkt.ActionID {
+			case protocol.ActionIDJieYuanBoxList:
+				w := protocol.NewWriter()
+				if openCalls.Load() == 0 {
+					w.WriteUint16(1)
+					w.WriteInt32(protocol.ItemJieYuanBoxCommon)
+					w.WriteInt32(2)
+				} else {
+					w.WriteUint16(0)
+				}
+				_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+			case protocol.ActionIDJieYuanBoxOpenContext:
+				n := ctxCalls.Add(1)
+				if connIndex == 0 {
+					// 旧会话上 528/1 始终静默丢弃。
+					continue
+				}
+				_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+					[]byte{protocol.JieYuanOpenContextResultOK}))
+				_ = n
+			case protocol.ActionIDJieYuanBoxOpen:
+				openCalls.Add(1)
+				_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID,
+					[]byte{protocol.JieYuanBoxOpenResultSuccess, 0x00, 0x00}))
+			}
+		}
+	}
+
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID:        "role-jieyuan-fresh",
+		RoleName:      "结缘测试",
+		ServerAddr:    "mock-pipe",
+		Authenticator: func(*client.RoleSession) error { return nil },
+		Dialer: func(context.Context, string, string) (net.Conn, error) {
+			mu.Lock()
+			idx := dials
+			dials++
+			mu.Unlock()
+			serverConn, clientConn := net.Pipe()
+			t.Cleanup(func() {
+				_ = serverConn.Close()
+				_ = clientConn.Close()
+			})
+			go handle(serverConn, idx)
+			return clientConn, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sess.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sess.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != client.StateActive {
+		t.Fatalf("session not active: %s", sess.State())
+	}
+
+	if err := NewJieYuanBoxRoutine().Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("jieyuan box: %v", err)
+	}
+	mu.Lock()
+	d := dials
+	mu.Unlock()
+	if d < 2 {
+		t.Fatalf("528/1 丢弃后应强制重建连接, dials=%d", d)
+	}
+	if openCalls.Load() != 1 {
+		t.Fatalf("新连接握手成功后应开箱 1 次, opened=%d", openCalls.Load())
 	}
 }
