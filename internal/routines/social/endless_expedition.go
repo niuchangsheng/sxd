@@ -165,8 +165,11 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 						"result", code, "result_text", protocol.EndlessResultText(code),
 						"payload_len", len(fightResp.Payload), "payload_head", hex.EncodeToString(head))
 					if code == protocol.EndlessWarCD {
-						// 实测冷却 <30s（01:05:30 CD → 01:05:59 可再次挑战），取 45s 保守唤醒。
-						return scheduler.NewCooldown(45*time.Second, "无尽洞天战斗冷却")
+						// 挑战必须发生在新建会话上（797/22/23 在 45~90 秒会话上
+						// 会被静默丢弃），而每次重连都会换票并重建跨服辅助连接。
+						// 45 秒一轮会造成每小时数十次登录；改为 5 分钟一轮，
+						// 在保持推进的同时显著降低登录/保活抖动。
+						return scheduler.NewCooldown(5*time.Minute, "无尽洞天战斗冷却")
 					}
 					return nil
 				}

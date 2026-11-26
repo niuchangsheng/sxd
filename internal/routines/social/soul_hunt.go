@@ -84,16 +84,20 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 				}
 				return resp
 			}
+
+			// 669/3 在约 40 秒以上的会话上会间歇性被静默丢弃（2026-11-26
+			// 19:45 实机 43 秒会话），按 30 秒窗口执行挑战前刷新。
+			const soulHuntFreshSessionAge = 30 * time.Second
 			isSessionAged := func() bool {
 				since := session.ConnectionSince()
-				return !since.IsZero() && time.Since(since) > client.HealthySessionAge
+				return !since.IsZero() && time.Since(since) > soulHuntFreshSessionAge
 			}
 
 			// 先查询主面板：未开放或无可挑战关卡时不重建健康会话。
 			panelResp := resyncCall(protocol.BuildSoulHuntMainPanelPacket(),
 				protocol.ActionIDSoulHuntMainPanel)
 			if panelResp == nil && caller.AbortErr() == nil && isSessionAged() {
-				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				if err := session.EnsureFreshConnection(ctx, soulHuntFreshSessionAge); err != nil {
 					return err
 				}
 				panelResp = resyncCall(protocol.BuildSoulHuntMainPanelPacket(),
@@ -134,7 +138,7 @@ func NewSoulHuntRoutine() scheduler.ActivityRoutine {
 
 			// 确认可挑战后，若会话已超窗再重建保证 669/3 城镇/战场上下文干净。
 			if isSessionAged() {
-				if err := session.EnsureFreshConnection(ctx, client.HealthySessionAge); err != nil {
+				if err := session.EnsureFreshConnection(ctx, soulHuntFreshSessionAge); err != nil {
 					return err
 				}
 				_ = resyncCall(protocol.BuildSoulHuntMainPanelPacket(),
