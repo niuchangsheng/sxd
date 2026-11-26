@@ -59,6 +59,7 @@
 - **`PrevActAutoBusiness`**：发送瞬间自动用最新一条已发送业务 `ActionID` 填充末尾 4 字节（心跳 `0x0000004B` 与服务端推送不参与业务尾链）；兼容旧 `HasPrevAct` / `PrevActFromLastSent` 双标记。
 - **`PrevActExplicit`**：由调用方显式指定锚点，发送层严禁覆盖（用于 `CallWithPrevActResync` 超时重同步重试及固定锚点场景）。
 - **链污染自愈**：带尾链请求超时后自动标记 `chainDirty`，后续请求回退至服务端最后确认动作 `lastAckActionID`，收到任意新业务回包后恢复正常尾链。
+- **空载荷业务请求必须保留 4 字节占位**：`NewPacket(action, nil)` 生成 0 字节载荷，发送层不会补尾链，网关会静默丢弃。2026-11-26 线上实证：`0x299/2`（宗师修行布阵信息）空载荷无尾链，19.5 小时内被丢弃 112 次，而同模块 `0x299/1` 显式携带 PrevAct 全部正常。空参数业务请求应使用 `NewPacketWithAutoPrevAct(action, nil)`。
 
 ---
 
