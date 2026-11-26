@@ -22,6 +22,10 @@ import (
 	"sxd-pie-ng/internal/scheduler"
 )
 
+// storyMissionCallTimeout 剧情副本 enter/fight 单请求超时。
+// 变量形式便于单测缩短；生产保持 8 秒。
+var storyMissionCallTimeout = 8 * time.Second
+
 // advanceQuestMission 推进指定任务的关联剧情关卡（包含自动清理同章节前置未通关小关与秒扫荡闭环）。
 func advanceQuestMission(
 	ctx context.Context,
@@ -793,13 +797,19 @@ func challengeStoryMission(
 		"prev_act", fmt.Sprintf("0x%08X", prevAct),
 		"payload_hex", hex.EncodeToString(enterPkt.Payload),
 	)
-	enterCtx, enterCancel := context.WithTimeout(ctx, 8*time.Second)
+	enterCtx, enterCancel := context.WithTimeout(ctx, storyMissionCallTimeout)
 	enterResp, enterErr := session.Call(enterCtx, enterPkt, protocol.ActionIDMissionPlotEnter)
 	enterCancel()
 
 	if enterErr != nil || enterResp == nil || len(enterResp.Payload) == 0 {
 		if errSessionTerminated(ctx, enterErr) {
 			return false
+		}
+		if enterErr != nil {
+			// 网络层超时说明服务端已丢弃本会话的 Mod 4 上下文：标记后由
+			// quest_cycle 统一重连一次再继续，避免逐关卡盲打。
+			// 2026-11-26 实测：单轮 8~9 个关卡各空等 8 秒（107 次/19.5h）。
+			questContextBad.Store(session, true)
 		}
 		slog.Warn("进入剧情副本未收到有效响应",
 			"role_id", session.RoleID(),
@@ -919,7 +929,7 @@ func challengeStoryMission(
 		}
 
 		fightPkt := protocol.BuildMissionFightMonsterPacket(mtID, 0, 0, questPrevAct(session))
-		fightCtx, fightCancel := context.WithTimeout(ctx, 8*time.Second)
+		fightCtx, fightCancel := context.WithTimeout(ctx, storyMissionCallTimeout)
 		fightResp, fightErr := session.Call(fightCtx, fightPkt, protocol.ActionIDMissionFightMonster)
 		fightCancel()
 
@@ -931,6 +941,10 @@ func challengeStoryMission(
 				slog.Info("剧情副本已击败当前可用波次怪物，返回城镇同步进度", "role_id", session.RoleID(), "mission_id", m.ID, "monster_team_id", mtID)
 				resetTownScene(session)
 				return true
+			}
+			if fightErr != nil {
+				// 同上：fight_monster 无回包意味着 Mod 4 上下文已不可用。
+				questContextBad.Store(session, true)
 			}
 			slog.Warn("剧情副本挑战怪物未收到响应", "role_id", session.RoleID(), "mission_id", m.ID, "monster_team_id", mtID, "err", fightErr)
 			resetTownScene(session)

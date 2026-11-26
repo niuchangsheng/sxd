@@ -5,6 +5,7 @@ package farming
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -268,6 +269,11 @@ func handleCrossPilgrimage(ctx context.Context, session *client.RoleSession, cfg
 				isSa = true
 				origin = "圣域"
 				defer cross.Close()
+			} else if errors.Is(openErr, client.ErrSaintAreaCredentialMissing) {
+				// 圣域未对当前角色开放（如 s1 区服）：属永久能力限制，
+				// 回退跨服取经即可，不再每轮打 WARN。
+				slog.Info("圣域功能未对当前角色开放，回退跨服取经",
+					"role_id", session.RoleID())
 			} else {
 				slog.Warn("圣域会话建立失败，尝试跨服取经入口",
 					"role_id", session.RoleID(), "error", openErr)

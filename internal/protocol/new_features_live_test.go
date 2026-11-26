@@ -584,3 +584,21 @@ func TestDragonballSacrificeProtocol(t *testing.T) {
 		}
 	}
 }
+
+// TestMasterPracticeDeployInfoPacketCarriesPrevAct 验证 0x299/2 请求携带
+// 4 字节自动 PrevAct 尾链，避免网关静默丢弃。
+//
+// 2026-11-26 线上：该请求空载荷无尾链，19.5 小时内被静默丢弃 112 次，
+// 而同模块面板 0x299/1 显式携带 PrevAct 全部正常。
+func TestMasterPracticeDeployInfoPacketCarriesPrevAct(t *testing.T) {
+	pkt := protocol.BuildMasterPracticeDeployInfoPacket()
+	if pkt.ActionID != protocol.ActionIDMasterPracticeDeployInfo {
+		t.Fatalf("ActionID = 0x%08X, want 0x%08X", pkt.ActionID, protocol.ActionIDMasterPracticeDeployInfo)
+	}
+	if len(pkt.Payload) != 4 {
+		t.Fatalf("载荷应为 4 字节 PrevAct 占位, got %d", len(pkt.Payload))
+	}
+	if got := pkt.EffectivePrevActMode(); got != protocol.PrevActAutoBusiness {
+		t.Fatalf("PrevAct 模式 = %v, want PrevActAutoBusiness", got)
+	}
+}

@@ -2,9 +2,11 @@ package dungeon
 
 import (
 	"context"
+	"encoding/binary"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/dictionary"
 	"sxd-pie-ng/internal/protocol"
@@ -129,5 +131,62 @@ func TestChallengeStoryMission_PickupAlreadyPickedBooksClearWithoutRewards(t *te
 	}
 	if got := sess.GetBaseStamina(); got != 45 {
 		t.Fatalf("体力应扣减 5, got %d", got)
+	}
+}
+
+// TestChallengeStoryMission_EnterTimeoutMarksContextBad 验证剧情副本入口网络超时
+// 会标记 Mod 4 上下文失效，由 quest_cycle 统一重连，而不是逐关卡盲打。
+func TestChallengeStoryMission_EnterTimeoutMarksContextBad(t *testing.T) {
+	old := storyMissionCallTimeout
+	storyMissionCallTimeout = 120 * time.Millisecond
+	defer func() { storyMissionCallTimeout = old }()
+
+	// 服务端对 enter_mission 完全无回包。
+	sess := newTownResetTestSession(t, func(*protocol.Packet, net.Conn) bool { return false })
+	questContextBad.Delete(sess)
+
+	mission := &dictionary.Mission{ID: 990001, Type: 1, Name: "测试精英关", Monsters: "1493"}
+	var cost int
+	var exp, coins int64
+	ok := challengeStoryMission(context.Background(), sess, mission,
+		func() bool { return true }, &cost, &exp, &coins, map[int]bool{})
+	if ok {
+		t.Fatal("入口超时不应返回成功")
+	}
+	if _, bad := questContextBad.Load(sess); !bad {
+		t.Fatal("入口超时后应标记 questContextBad，触发会话重连而不是继续盲打")
+	}
+}
+
+// TestChallengeStoryMission_FightTimeoutMarksContextBad 验证 fight_monster 超时
+// 同样标记 Mod 4 上下文失效。
+func TestChallengeStoryMission_FightTimeoutMarksContextBad(t *testing.T) {
+	old := storyMissionCallTimeout
+	storyMissionCallTimeout = 120 * time.Millisecond
+	defer func() { storyMissionCallTimeout = old }()
+
+	sess := newTownResetTestSession(t, func(pkt *protocol.Packet, conn net.Conn) bool {
+		if pkt.ActionID != protocol.ActionIDMissionPlotEnter {
+			return false
+		}
+		payload := make([]byte, 24)
+		payload[0] = protocol.MissionResultSuccess
+		binary.BigEndian.PutUint16(payload[18:20], 1)
+		binary.BigEndian.PutUint32(payload[20:24], 1493)
+		_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, payload))
+		return true
+	})
+	questContextBad.Delete(sess)
+
+	mission := &dictionary.Mission{ID: 990002, Type: 1, Name: "测试精英关", Monsters: "1493"}
+	var cost int
+	var exp, coins int64
+	ok := challengeStoryMission(context.Background(), sess, mission,
+		func() bool { return true }, &cost, &exp, &coins, map[int]bool{})
+	if ok {
+		t.Fatal("fight 超时不应返回成功")
+	}
+	if _, bad := questContextBad.Load(sess); !bad {
+		t.Fatal("fight 超时后应标记 questContextBad")
 	}
 }

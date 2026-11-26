@@ -6,6 +6,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,6 +15,12 @@ import (
 
 	"sxd-pie-ng/internal/protocol"
 )
+
+// ErrSaintAreaCredentialMissing 服务端未下发圣域连接凭据：该角色/区服未开放圣域。
+//
+// 2026-11-26 实机：s1 区服圣域未开放，状态探测返回开放但凭据 host/server 均为空；
+// s0 正常。调用方应把它当作永久能力限制回退其它通道，并避免高频重试/告警。
+var ErrSaintAreaCredentialMissing = errors.New("client: 圣域功能未对当前角色开放（连接凭据为空）")
 
 // FetchSaintAreaCredentials 通过主服会话申请圣域连接凭据 (Mod 293 Act 1)。
 func (s *RoleSession) FetchSaintAreaCredentials(ctx context.Context) (*protocol.SaintAreaCredentials, error) {
@@ -30,8 +37,8 @@ func (s *RoleSession) FetchSaintAreaCredentials(ctx context.Context) (*protocol.
 		return nil, fmt.Errorf("client: 解析圣域连接凭据失败: %w", err)
 	}
 	if cred.Host == "" || cred.Port == 0 || cred.ServerName == "" || cred.PassCode == "" {
-		return nil, fmt.Errorf("client: 圣域连接凭据不完整 (host=%q port=%d server=%q)",
-			cred.Host, cred.Port, cred.ServerName)
+		return nil, fmt.Errorf("%w (host=%q port=%d server=%q)",
+			ErrSaintAreaCredentialMissing, cred.Host, cred.Port, cred.ServerName)
 	}
 	return cred, nil
 }

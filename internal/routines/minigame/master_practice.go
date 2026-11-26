@@ -629,10 +629,16 @@ func masterPracticeFetchPanel(call func(*protocol.Packet, uint32) (*protocol.Pac
 func masterPracticeFetchDeploy(call func(*protocol.Packet, uint32) (*protocol.Packet, error)) *protocol.MasterPracticeDeployInfo {
 	resp, err := call(protocol.BuildMasterPracticeDeployInfoPacket(), protocol.ActionIDMasterPracticeDeployInfo)
 	if err != nil || resp == nil {
+		slog.Warn("宗师修行布阵信息无回包", "err", err)
 		return nil
 	}
 	info, pErr := protocol.ParseMasterPracticeDeployInfoResult(resp.Payload)
-	if pErr != nil || info.Result != protocol.MasterPracticeResultSuccess {
+	if pErr != nil {
+		slog.Warn("宗师修行布阵信息解析失败", "err", pErr, "payload_len", len(resp.Payload))
+		return nil
+	}
+	if info.Result != protocol.MasterPracticeResultSuccess {
+		slog.Info("宗师修行布阵信息返回业务失败", "result", info.Result)
 		return nil
 	}
 	return info

@@ -324,8 +324,12 @@ type MasterPracticeDeployInfo struct {
 }
 
 // BuildMasterPracticeDeployInfoPacket 构造查询宗师修行布阵信息封包 (0x02990002)。
+//
+// 与同模块面板请求一致，必须携带 4 字节 PrevAct 尾链：2026-11-26 线上
+// 19.5 小时内该请求被服务端静默丢弃 112 次，而同模块面板 (0x02990001,
+// 显式携带 PrevAct) 全部正常。空载荷封包在网关侧不会被自动补尾链。
 func BuildMasterPracticeDeployInfoPacket() *Packet {
-	return NewPacket(ActionIDMasterPracticeDeployInfo, nil)
+	return NewPacketWithAutoPrevAct(ActionIDMasterPracticeDeployInfo, nil)
 }
 
 // ParseMasterPracticeDeployInfoResult 解析宗师修行布阵信息 (Act 2)。
