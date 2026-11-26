@@ -806,6 +806,10 @@ func (s *RoleSession) runLoop() {
 		if s.State() != StateReconnecting {
 			s.setState(StateConnecting)
 		}
+		// 同一角色的常驻跨服辅助连接在线时，网关会拒绝新的主服登录
+		// （实测连续握手超时约 75 秒）。每次重连前先断开辅助连接，
+		// 新连接激活后由 cross_keepalive 重新建立。
+		s.suspendCrossSession()
 		conn, err := s.cfg.Dialer(s.ctx, "tcp", s.cfg.ServerAddr)
 		if err != nil {
 			if !s.handleConnectFailure(err) {
