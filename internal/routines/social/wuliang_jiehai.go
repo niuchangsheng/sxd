@@ -82,8 +82,7 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 	//
 	// 2026-11-24 对 89 次布阵序列做会话年龄统计：<30 秒 29/29 成功，
 	// 30–60 秒 2/7，>60 秒 3/53（且多为孤立样本）。该序列
-	// （854/39 → 854/1 → 853/3 → 853/4）在旧会话上会被服务端直接断链，
-	// 因此入口按 30 秒强制刷新。
+	// （854/39 → 854/1 → 853/3 → 853/4）在旧会话上会被服务端直接断链。
 	const wuliangFreshSessionAge = 30 * time.Second
 	return scheduler.NewBaseRoutine(
 		"wuliang_jiehai",
@@ -209,6 +208,18 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 					wuliangPause(ctx, 400*time.Millisecond)
 					chapterResp := resyncCall(protocol.BuildEraInfiniteChapterPacket(chapter),
 						protocol.ActionIDEraInfiniteChapter)
+					if chapterResp == nil && caller.AbortErr() == nil && isSessionAged() {
+						// 853/2 在 30–60 秒会话上偶发丢包（2026-11-27 22:01
+						// 47 秒会话）；旧会话上强制新连接后重试一次，成功则
+						// 继续完整序列。新会话仍失败则按原逻辑退避。
+						slog.Info("无量劫海章节面板无回包，重建连接后重试一次",
+							"role_id", session.RoleID(), "chapter_id", chapter, "now_level", target)
+						if fErr := session.EnsureFreshConnection(ctx, 0); fErr == nil {
+							wuliangPause(ctx, 300*time.Millisecond)
+							chapterResp = resyncCall(protocol.BuildEraInfiniteChapterPacket(chapter),
+								protocol.ActionIDEraInfiniteChapter)
+						}
+					}
 					if chapterResp == nil {
 						if abort := caller.AbortErr(); abort != nil {
 							return abort
