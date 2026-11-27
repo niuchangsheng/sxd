@@ -276,3 +276,65 @@ func TestChallengeStoryMission_OfficialFightSequence(t *testing.T) {
 		t.Fatalf("4/2 fight 载荷 = %s, want %s（尾链必须为 0/41 动作）", got[iFight].body, want)
 	}
 }
+
+// TestPracticeMission_QueriesStatusBeforeStart 对齐官方扫荡序列
+// (/tmp/story_repeat.pcapng)：25/0 状态查询 → 25/1 开始扫荡 → 25/3 快速完成。
+//
+// 关键断言：25/1 的尾链必须为 25/0 (0x00190000)，25/3 的尾链为 25/1 (0x00190001)。
+// 旧实现跳过 25/0 直接发 25/1，服务端因尾链不匹配静默丢弃。
+func TestPracticeMission_QueriesStatusBeforeStart(t *testing.T) {
+	type rec struct {
+		act  uint32
+		body string
+	}
+	var mu sync.Mutex
+	var got []rec
+	sess := newTownResetTestSession(t, func(pkt *protocol.Packet, conn net.Conn) bool {
+		mu.Lock()
+		got = append(got, rec{pkt.ActionID, hex.EncodeToString(pkt.Payload)})
+		mu.Unlock()
+		switch pkt.ActionID {
+		case protocol.ActionIDPracticeGetStatus:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
+		case protocol.ActionIDPracticeStart:
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.PracticeResultSuccess)
+			w.WriteInt32(625)
+			w.WriteInt16(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		case protocol.ActionIDPracticeQuickly:
+			w := protocol.NewWriter()
+			w.WriteUint8(protocol.PracticeResultSuccess)
+			w.WriteInt16(1)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, w.Bytes()))
+		}
+		return true
+	})
+
+	var cost int
+	var exp, coins int64
+	ok, rounds, err := practiceMission(context.Background(), sess, 625, 1,
+		func() bool { return true }, &cost, &exp, &coins)
+	if err != nil || !ok || rounds != 1 {
+		t.Fatalf("practiceMission ok=%v rounds=%d err=%v", ok, rounds, err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) < 3 {
+		t.Fatalf("扫荡请求数 = %d, want >=3 (%+v)", len(got), got)
+	}
+	if got[0].act != protocol.ActionIDPracticeGetStatus ||
+		got[1].act != protocol.ActionIDPracticeStart ||
+		got[2].act != protocol.ActionIDPracticeQuickly {
+		t.Fatalf("扫荡顺序不符: %+v", got)
+	}
+	start := got[1].body
+	if len(start) != 22 || start[len(start)-8:] != "00190000" {
+		t.Fatalf("25/1 载荷 = %s, 尾链应为 00190000", start)
+	}
+	quick := got[2].body
+	if len(quick) != 12 || quick[len(quick)-8:] != "00190001" {
+		t.Fatalf("25/3 载荷 = %s, 尾链应为 00190001", quick)
+	}
+}

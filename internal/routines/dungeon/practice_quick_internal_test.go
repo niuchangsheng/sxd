@@ -14,6 +14,8 @@ import (
 func TestPracticeMission_QuickSilentDropDoesNotBookRewards(t *testing.T) {
 	sess := newTownResetTestSession(t, func(pkt *protocol.Packet, conn net.Conn) bool {
 		switch pkt.ActionID {
+		case protocol.ActionIDPracticeGetStatus:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
 		case protocol.ActionIDPracticeStart:
 			res, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
 				Result:    protocol.PracticeResultSuccess,
@@ -51,6 +53,8 @@ func TestPracticeMission_QuickSilentDropDoesNotBookRewards(t *testing.T) {
 func TestPracticeMission_QuickSuccessBooksRewards(t *testing.T) {
 	sess := newTownResetTestSession(t, func(pkt *protocol.Packet, conn net.Conn) bool {
 		switch pkt.ActionID {
+		case protocol.ActionIDPracticeGetStatus:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
 		case protocol.ActionIDPracticeStart:
 			res, _ := protocol.BuildStartPracticeResultPacket(protocol.StartPracticeResult{
 				Result:    protocol.PracticeResultSuccess,

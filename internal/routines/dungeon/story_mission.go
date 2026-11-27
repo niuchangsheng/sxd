@@ -214,9 +214,11 @@ func advanceQuestMission(
 				"mission_id", targetMission.ID,
 				"name", targetMission.Name,
 			)
-		} else if !targetKnownUncleared && targetInSections && !clearedMissions[targetMission.ID] {
-			// 已通关关卡的 25/1 会被服务端静默丢弃（2026-11-14 任务 561 实测）；
-			// 若任务仍需重复击杀，改走剧情副本重复挑战。
+		} else if !targetKnownUncleared && targetInSections {
+			// 已通关关卡同样优先扫荡：官方抓包 (/tmp/story_repeat.pcapng)
+			// 对已通关的 647 连续执行 9 次 25/0→25/1→25/3 扫荡，任务重复击杀
+			// 计数由扫荡推进。历史上 25/1 被丢弃是因为缺少 25/0 前置导致尾链
+			// 不匹配（2026-11-27 已修复），不再需要绕行剧情副本。
 			practiced, _, pErr = practiceMission(ctx, session, int32(targetMission.ID), batchCount, ensureStamina, totalCostStamina, totalGainExp, totalGainCoins)
 			if pErr != nil {
 				if errors.Is(pErr, scheduler.ErrStaminaDepleted) || errors.Is(pErr, scheduler.ErrBagFull) {
@@ -228,7 +230,7 @@ func advanceQuestMission(
 			if !targetInSections {
 				reason = "关卡不在已开放章节列表中 (未解锁或列表拉取失败)"
 			} else if clearedMissions[targetMission.ID] {
-				reason = "关卡已通关但任务需重复击杀 (25/1 会被丢弃)"
+				reason = "关卡已通关且章节状态未确认，回退剧情副本"
 			}
 			slog.Info("跳过 Module 25 扫荡直接进入剧情副本",
 				"role_id", session.RoleID(),
@@ -390,6 +392,22 @@ func practiceMission(
 	}
 	if count == 0 {
 		return false, 0, scheduler.ErrStaminaDepleted
+	}
+
+	// 0. 先查询扫荡状态 (25/0)。官方抓包 (/tmp/story_repeat.pcapng)：
+	//    25/1 的尾链必须是 25/0 (0x00190000)；本会话从未发过 25/0 时，
+	//    服务端会因尾链不匹配而静默丢弃 25/1（历史上“25/1 会被丢弃”的根因）。
+	statusPkt, statusBuildErr := protocol.BuildPracticeGetStatusPacket(missionID, questPrevAct(session))
+	if statusBuildErr != nil {
+		return false, 0, statusBuildErr
+	}
+	statusCtx, statusCancel := context.WithTimeout(ctx, 8*time.Second)
+	statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
+	statusCancel()
+	if statusErr != nil || statusResp == nil {
+		slog.Warn("Module 25 扫荡状态查询无回包，跳过本次扫荡",
+			"role_id", session.RoleID(), "mission_id", missionID, "err", statusErr)
+		return false, 0, fmt.Errorf("扫荡状态查询无回包: %w", statusErr)
 	}
 
 	// 1. 发起扫荡 (ActionIDPracticeStart: 0x00190001)
