@@ -19,6 +19,7 @@ package daily
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -106,8 +107,16 @@ func NewNimbusGatherRoutine() scheduler.ActivityRoutine {
 				if i > 0 && !kit.Sleep(ctx, nimbusGatherPace) {
 					return nil
 				}
-				resp, err := caller.Call(protocol.BuildNimbusGatherPacket(protocol.NimbusGourdWood),
-					protocol.ActionIDNimbusGather)
+				// 尾链取「最近收到的包」：与剧情副本 4/2 一致，服务端按自己最后
+				// 发出的包校验锚点；服务端推送（如 0/79）插入时，lastSent 锚点会失配。
+				gatherPkt := protocol.NewPacketWithExplicitPrevAct(protocol.ActionIDNimbusGather,
+					[]byte{protocol.NimbusGourdWood}, session.LastRxActionID())
+				if gathered == 0 {
+					slog.Info("灵脉采集请求锚点", "role_id", session.RoleID(),
+						"anchor", fmt.Sprintf("0x%08X", session.LastRxActionID()),
+						"payload_hex", hex.EncodeToString(gatherPkt.Payload))
+				}
+				resp, err := caller.Call(gatherPkt, protocol.ActionIDNimbusGather)
 				if err != nil || resp == nil {
 					if abort := caller.AbortErr(); abort != nil {
 						return abort
