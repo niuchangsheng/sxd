@@ -41,6 +41,12 @@ const (
 	// nimbusRetryInterval 单次失败后的短重试间隔；连续 3 次后由
 	// scheduler 的静默丢包熔断升级到 6 小时。
 	nimbusRetryInterval = 10 * time.Minute
+	// nimbusFreshSessionAge 灵脉采集对会话年龄的容忍窗口。
+	//
+	// 2026-11-28 实机：长会话上 104/0 面板正常，但 104/1 采集一律无回包；
+	// 干净新会话（探针 probe_nimbus_live）上同字节请求立即成功。采集属于
+	// 场景写操作，入口先确保会话年龄不超过 60 秒。
+	nimbusFreshSessionAge = 60 * time.Second
 )
 
 // NewNimbusGatherRoutine 构造每日灵脉采集任务。
@@ -60,6 +66,10 @@ func NewNimbusGatherRoutine() scheduler.ActivityRoutine {
 				_ = jitter.Wait(ctx)
 			}
 			slog.Info("正在执行日常任务: 每日灵脉采集", "role_id", session.RoleID())
+
+			if err := session.EnsureFreshConnection(ctx, nimbusFreshSessionAge); err != nil {
+				return err
+			}
 
 			caller := kit.NewCaller(ctx, session, nimbusCallTimeout)
 
