@@ -241,6 +241,13 @@ func advanceQuestMission(
 		}
 
 		if !practiced {
+			if _, bad := questContextBad.Load(session); bad {
+				// 扫荡网络超时已标记上下文失效：本会话的副本上下文不可用，
+				// 继续发剧情战斗只会再空等；立即结束本轮交由 quest_cycle 重连。
+				slog.Info("扫荡上下文已失效，跳过本轮剧情战斗等待重连",
+					"role_id", session.RoleID(), "mission_id", targetMission.ID)
+				return clearedPrereq || lastCount > initialCount
+			}
 			// 关卡已通关但任务进度未完成 (如 1/30 的重复击杀任务)：
 			// 25/1 已被服务端丢弃，改为重复挑战剧情副本推进进度。
 			if clearedMissions[targetMission.ID] {
