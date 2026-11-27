@@ -35,6 +35,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "daily_quest", Name: "每日日常小助手", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动完成小助手日常活跃度与常规跑环", DefaultOn: false},
 		{ID: "mail_collect", Name: "邮件一键收取", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动一键领取系统邮件与好友信件附件", DefaultOn: false},
 		{ID: "online_gift", Name: "在线礼包与终结礼包", Domain: "daily", Schedule: scheduler.ScheduleLoop, Description: "领取在线时长福利，以及吉星高照/喜从天降/灵脉/拜关公/聚灵等功能终结礼包", DefaultOn: false},
+		{ID: "nimbus_gather", Name: "每日灵脉采集", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "每日 30 次木葫芦采集灵脉 (免费；面板无回包视为未开放/已终结，连续 3 次挂起 6 小时)", DefaultOn: false},
 		{ID: "vip_welfare", Name: "VIP特权与俸禄", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领取VIP每日礼包与官职俸禄", DefaultOn: false},
 		{ID: "god_bless", Name: "跨服天神赐福", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "自动领用跨服天神赐福增益点数", DefaultOn: false},
 		{ID: "partner_practice", Name: "幻境修炼", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "开始/结算幻境修炼免费收益 (不加速、不雇佣)", DefaultOn: false},
@@ -359,6 +360,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewDestinySwordRoutine()
 	case "daily_gifts":
 		return daily.NewDailyGiftsRoutine()
+	case "nimbus_gather":
+		return daily.NewNimbusGatherRoutine()
 	case "saint_practice":
 		return daily.NewSaintPracticeRoutine()
 	case "dragonball_offer":
