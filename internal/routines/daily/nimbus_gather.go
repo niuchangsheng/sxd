@@ -37,8 +37,9 @@ const (
 	nimbusGatherPace = 250 * time.Millisecond
 	// nimbusFailureThreshold 连续失败阈值（无回包或业务失败均计数）。
 	nimbusFailureThreshold = 3
-	// nimbusFailureHold 连续失败后的挂起时长。
-	nimbusFailureHold = 6 * time.Hour
+	// nimbusRetryInterval 单次失败后的短重试间隔；连续 3 次后由
+	// scheduler 的静默丢包熔断升级到 6 小时。
+	nimbusRetryInterval = 10 * time.Minute
 )
 
 // NewNimbusGatherRoutine 构造每日灵脉采集任务。
@@ -73,7 +74,7 @@ func NewNimbusGatherRoutine() scheduler.ActivityRoutine {
 				slog.Info("灵脉面板无回包（功能未开放或已终结）",
 					"role_id", session.RoleID(), "err", err)
 				return scheduler.HandleSilentDropCtx(ctx, session, routineID,
-					nimbusFailureThreshold, nimbusFailureHold, "灵脉面板无回包")
+					nimbusFailureThreshold, nimbusRetryInterval, "灵脉面板无回包")
 			}
 			info, pErr := protocol.ParseNimbusInfo(infoResp.Payload)
 			if pErr != nil {
@@ -90,7 +91,13 @@ func NewNimbusGatherRoutine() scheduler.ActivityRoutine {
 					"灵脉今日采集次数已用尽")
 			}
 
-			// 2. 逐次采集木葫芦，直到剩余次数耗尽或达到本轮上限。
+			// 2. 采集前复位城镇场景：灵脉采集属于场景写操作，副本/活动残留
+			//    上下文会被服务端静默丢弃（2026-11-28 00:07 首次采集无回包）。
+			if !session.ReturnToTown(ctx, 2*time.Second) {
+				slog.Info("灵脉采集前返回城镇失败，继续尝试采集", "role_id", session.RoleID())
+			}
+
+			// 3. 逐次采集木葫芦，直到可用次数耗尽或达到本轮上限。
 			gathered := 0
 			for i := 0; i < int(info.Remain) && i < maxNimbusGatherPerRound; i++ {
 				if ctx.Err() != nil {
@@ -111,7 +118,7 @@ func NewNimbusGatherRoutine() scheduler.ActivityRoutine {
 					slog.Info("灵脉采集无回包，中止本轮",
 						"role_id", session.RoleID(), "gathered", gathered, "err", err)
 					return scheduler.HandleSilentDropCtx(ctx, session, routineID,
-						nimbusFailureThreshold, nimbusFailureHold, "灵脉采集无回包")
+						nimbusFailureThreshold, nimbusRetryInterval, "灵脉采集无回包")
 				}
 				res, rErr := protocol.ParseNimbusGatherResult(resp.Payload)
 				if rErr != nil {
@@ -129,7 +136,7 @@ func NewNimbusGatherRoutine() scheduler.ActivityRoutine {
 						"remain", res.Remain,
 						"payload_hex", hex.EncodeToString(res.Raw))
 					return scheduler.HandleSilentDropCtx(ctx, session, routineID,
-						nimbusFailureThreshold, nimbusFailureHold, "灵脉采集业务失败")
+						nimbusFailureThreshold, nimbusRetryInterval, "灵脉采集业务失败")
 				}
 				scheduler.ResetSilentDropsCtx(ctx, session, routineID)
 				gathered++

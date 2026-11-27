@@ -43,6 +43,8 @@ func TestNimbusGatherRoutine_ConsumesThirtyUses(t *testing.T) {
 	var badPayload bool
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
+		case protocol.ActionIDTownEnter:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDNimbusInfo:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, nimbusInfoPayload(t, 30)))
 		case protocol.ActionIDNimbusGather:
@@ -93,6 +95,8 @@ func TestNimbusGatherRoutine_BusinessFailureStops(t *testing.T) {
 	var gatherCalls int
 	sess := newDailyMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
+		case protocol.ActionIDTownEnter:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDNimbusInfo:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, nimbusInfoPayload(t, 30)))
 		case protocol.ActionIDNimbusGather:
