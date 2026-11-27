@@ -55,6 +55,14 @@ const (
 	ActionIDMissionPlotEnter uint32 = 0x00040001
 	// ActionIDMissionFightMonster 挑战副本内指定怪物编队 (Module 4, Action 2)
 	ActionIDMissionFightMonster uint32 = 0x00040002
+	// ActionIDMissionFightPrep 进入副本后的战斗场景准备 (Module 4, Action 24)。
+	//
+	// 2026-11-27 官方抓包 (/tmp/story_repeat.pcapng)：enter_mission 成功后发送，
+	// payload 固定 8 字节 [Int32 missionID][Int32 0x02F80001]，不带 PrevAct 尾链。
+	ActionIDMissionFightPrep uint32 = 0x00040018
+	// ActionIDMissionPlotPrep 进入副本前的场景准备 (Module 4, Action 25)。
+	// 官方在 get_sections 之后、enter_mission 之前发送，payload 仅 4 字节 PrevAct。
+	ActionIDMissionPlotPrep uint32 = 0x00040019
 	// ActionIDMissionRank 结算副本通关星级与评价 (Module 4, Action 3)
 	ActionIDMissionRank uint32 = 0x00040003
 	// ActionIDMissionOpenBox 开启副本通关宝箱 (Module 4, Action 4)
@@ -522,6 +530,21 @@ func BuildMissionPlotEnterPacket(missionID int32, prevAct uint32) *Packet {
 	pkt := NewPacket(ActionIDMissionPlotEnter, w.Bytes())
 	pkt.HasPrevAct = true
 	return pkt
+}
+
+// BuildMissionFightPrepPacket 构造进入副本后的战斗场景准备封包 (Module 4, Action 24)。
+// payload 固定 8 字节 [Int32 missionID][Int32 0x02F80001]（官方抓包实测）。
+func BuildMissionFightPrepPacket(missionID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(missionID)
+	w.WriteInt32(0x02F80001)
+	return NewPacket(ActionIDMissionFightPrep, w.Bytes())
+}
+
+// BuildMissionPlotPrepPacket 构造进入副本前的场景准备封包 (Module 4, Action 25)。
+// payload 仅 4 字节 PrevAct 占位，由会话层填充。
+func BuildMissionPlotPrepPacket() *Packet {
+	return NewPacketWithAutoPrevAct(ActionIDMissionPlotPrep, nil)
 }
 
 // BuildMissionFightMonsterPacket 构造挑战副本内怪物编队请求封包 (Module 4, Action 2)。

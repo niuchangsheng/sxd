@@ -711,6 +711,34 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 	return err
 }
 
+// SendVerbatim 发送已按线格式编码好的业务封包：不追加或覆盖 PrevAct 尾链，
+// 但仍按普通业务动作推进尾链状态与 lastSendTime。
+//
+// 少数官方动作的末 4 字节是业务参数而非 PrevAct（如剧情副本 4/24 的
+// 0x02F80001），不能用常规 Send 的自动尾链填充。
+func (s *RoleSession) SendVerbatim(p *protocol.Packet) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if s.State() == StateClosed {
+		return ErrSessionClosed
+	}
+	if s.conn == nil {
+		return ErrNotConnected
+	}
+	s.setWriteDeadline()
+
+	err := protocol.WritePacket(s.conn, p)
+	if err == nil && p != nil {
+		s.lastSendTime.Store(time.Now().UnixNano())
+		s.prevAct.RecordSent(p.ActionID)
+		slog.Debug("发送网关请求(verbatim)", "role_id", s.cfg.RoleID,
+			"action_id", fmt.Sprintf("0x%08X", p.ActionID),
+			"payload_hex", hex.EncodeToString(p.Payload))
+	}
+	return err
+}
+
 // SendCompressed 向对端发送经 zlib 压缩的协议封包。
 func (s *RoleSession) SendCompressed(p *protocol.Packet) error {
 	s.writeMu.Lock()

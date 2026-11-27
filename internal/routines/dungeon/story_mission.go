@@ -782,6 +782,21 @@ func challengeStoryMission(
 		waitForMod4Response(ctx, session, 2*time.Second)
 	}
 
+	// 官方抓包 (/tmp/story_repeat.pcapng)：enter 之前先发 4/25 场景准备（仅 4 字节
+	// PrevAct），enter 的尾链随之对齐为 4/25。缺失该步时服务端仍可能放行 enter，
+	// 但后续战斗阶段会拒绝，因此这里作为固定前置。
+	plotPrepCtx, plotPrepCancel := context.WithTimeout(ctx, storyMissionCallTimeout)
+	plotPrepResp, plotPrepErr := session.Call(plotPrepCtx,
+		protocol.BuildMissionPlotPrepPacket(), protocol.ActionIDMissionPlotPrep)
+	plotPrepCancel()
+	if plotPrepErr != nil || plotPrepResp == nil {
+		if errSessionTerminated(ctx, plotPrepErr) {
+			return false
+		}
+		slog.Info("进入副本前场景准备 4/25 无回包，继续尝试进入",
+			"role_id", session.RoleID(), "mission_id", m.ID, "err", plotPrepErr)
+	}
+
 	// 1. 进入副本 (Mod 4, Act 1: enter_mission, 前置对齐 ActionIDMissionGetSections)
 	prevAct := questPrevAct(session)
 	enterPkt := protocol.BuildMissionPlotEnterPacket(int32(m.ID), prevAct)
@@ -915,6 +930,18 @@ func challengeStoryMission(
 		monsterTeams = activeMonsterTeams
 	}
 
+	// 官方抓包：enter 成功后发送 4/24 战斗场景准备（8 字节业务参数，无 PrevAct 尾链）。
+	// 必须走 SendVerbatim，避免 Module 4 的自动尾链覆盖业务参数 0x02F80001。
+	if err := session.SendVerbatim(protocol.BuildMissionFightPrepPacket(int32(m.ID))); err != nil {
+		slog.Warn("剧情副本战斗场景准备 4/24 发送失败",
+			"role_id", session.RoleID(), "mission_id", m.ID, "err", err)
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(100 * time.Millisecond):
+	}
+
 	// 2. 逐波次挑战副本内怪物编队 (Mod 4, Act 2: fight_monster)
 	anyWaveSuccess := false
 	for idx, mtID := range monsterTeams {
@@ -926,6 +953,23 @@ func challengeStoryMission(
 				return anyWaveSuccess
 			case <-time.After(1000 * time.Millisecond):
 			}
+		}
+
+		// 官方抓包：每场战斗前 60ms 查询任务战斗冷却 (0/41, warType=13)，
+		// fight_monster 的 PrevAct 必须等于该请求动作 0x00000029；缺失时
+		// 服务端静默丢弃战斗（2026-11-27 实机 107 次/19.5h 的直接原因）。
+		if err := session.Send(protocol.BuildPlayerGetWarCdTimePacket(protocol.WarCdTypeMission, 0)); err != nil {
+			if errSessionTerminated(ctx, err) {
+				return anyWaveSuccess
+			}
+			slog.Warn("剧情副本战斗冷却查询发送失败",
+				"role_id", session.RoleID(), "mission_id", m.ID, "monster_team_id", mtID, "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			resetTownScene(session)
+			return anyWaveSuccess
+		case <-time.After(60 * time.Millisecond):
 		}
 
 		fightPkt := protocol.BuildMissionFightMonsterPacket(mtID, 0, 0, questPrevAct(session))
@@ -951,25 +995,25 @@ func challengeStoryMission(
 			return false
 		}
 
-		resByte := fightResp.Payload[len(fightResp.Payload)-1]
-		// 10 = SUCCESS, 19 = TRUNK_ALREADY_FIGHT, 30 = HASCHALLENGED (该波怪物已击败，继续下一波)
-		if resByte != protocol.MissionResultSuccess && resByte != 19 && resByte != 30 {
-			if anyWaveSuccess {
-				slog.Info("剧情副本后续波次暂不可用，返回城镇同步进度", "role_id", session.RoleID(), "mission_id", m.ID, "monster_team_id", mtID)
-				resetTownScene(session)
-				return true
-			}
-			slog.Warn("剧情副本战斗未获胜或受阻",
-				"role_id", session.RoleID(),
-				"mission_id", m.ID,
-				"name", m.Name,
-				"wave", fmt.Sprintf("%d/%d", idx+1, len(monsterTeams)),
-				"monster_team_id", mtID,
-				"result", resByte,
-			)
-			resetTownScene(session)
-			return false
+		// 4/2 回包是整场战斗日志（官方抓包 14KB，整包 zlib），首/末字节不是简单结果码；
+		// 收到回包即说明服务端已执行战斗。胜负与奖励以结算 4/3 与任务进度同步为准。
+		headLen := len(fightResp.Payload)
+		if headLen > 8 {
+			headLen = 8
 		}
+		tail := fightResp.Payload
+		if len(tail) > 4 {
+			tail = tail[len(tail)-4:]
+		}
+		slog.Info("剧情副本战斗回包",
+			"role_id", session.RoleID(),
+			"mission_id", m.ID,
+			"monster_team_id", mtID,
+			"wave", fmt.Sprintf("%d/%d", idx+1, len(monsterTeams)),
+			"payload_len", len(fightResp.Payload),
+			"head_hex", hex.EncodeToString(fightResp.Payload[:headLen]),
+			"tail_hex", hex.EncodeToString(tail),
+		)
 		anyWaveSuccess = true
 	}
 

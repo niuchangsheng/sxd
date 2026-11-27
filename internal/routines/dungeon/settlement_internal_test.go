@@ -3,7 +3,9 @@ package dungeon
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -188,5 +190,89 @@ func TestChallengeStoryMission_FightTimeoutMarksContextBad(t *testing.T) {
 	}
 	if _, bad := questContextBad.Load(sess); !bad {
 		t.Fatal("fight 超时后应标记 questContextBad")
+	}
+}
+
+// TestChallengeStoryMission_OfficialFightSequence 对齐官方抓包
+// (/tmp/story_repeat.pcapng) 的剧情副本战斗序列：
+//
+//	4/25 场景准备 → 4/1 enter → 4/24 战斗准备(8 字节无尾链)
+//	→ 0/41 战斗冷却[warType=13] → 4/2 fight(尾链=0/41)
+//
+// 关键断言：4/24 的末 4 字节必须是业务参数 0x02F80001（不被 Module 4 自动尾链覆盖），
+// 且 4/2 的尾链必须是 0x00000029（0/41 请求动作）。
+func TestChallengeStoryMission_OfficialFightSequence(t *testing.T) {
+	type rec struct {
+		act  uint32
+		body string
+	}
+	var mu sync.Mutex
+	var got []rec
+
+	sess := newTownResetTestSession(t, func(pkt *protocol.Packet, conn net.Conn) bool {
+		mu.Lock()
+		got = append(got, rec{pkt.ActionID, hex.EncodeToString(pkt.Payload)})
+		mu.Unlock()
+		switch pkt.ActionID {
+		case protocol.ActionIDMissionPlotPrep:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
+		case protocol.ActionIDMissionPlotEnter:
+			payload := make([]byte, 24)
+			payload[0] = protocol.MissionResultSuccess
+			binary.BigEndian.PutUint16(payload[18:20], 1)
+			binary.BigEndian.PutUint32(payload[20:24], 1493)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, payload))
+		case protocol.ActionIDMissionFightMonster:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0, 0, 0, 0}))
+		case protocol.ActionIDMissionRank:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDMissionOpenBox:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		case protocol.ActionIDMissionPickupAward:
+			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+		}
+		return true
+	})
+	questContextBad.Delete(sess)
+
+	mission := &dictionary.Mission{ID: 990004, Type: 1, Name: "测试精英关", Monsters: "1493"}
+	var cost int
+	var exp, coins int64
+	_ = challengeStoryMission(context.Background(), sess, mission,
+		func() bool { return true }, &cost, &exp, &coins, map[int]bool{})
+
+	mu.Lock()
+	defer mu.Unlock()
+	idx := func(act uint32) int {
+		for i, r := range got {
+			if r.act == act {
+				return i
+			}
+		}
+		return -1
+	}
+	iPrep := idx(protocol.ActionIDMissionPlotPrep)
+	iEnter := idx(protocol.ActionIDMissionPlotEnter)
+	iFightPrep := idx(protocol.ActionIDMissionFightPrep)
+	iWarCd := idx(protocol.ActionIDPlayerGetWarCdTime)
+	iFight := idx(protocol.ActionIDMissionFightMonster)
+	if iPrep < 0 || iEnter < 0 || iFightPrep < 0 || iWarCd < 0 || iFight < 0 {
+		t.Fatalf("序列缺失: prep=%d enter=%d fightprep=%d warcd=%d fight=%d (%+v)",
+			iPrep, iEnter, iFightPrep, iWarCd, iFight, got)
+	}
+	if !(iPrep < iEnter && iEnter < iFightPrep && iFightPrep < iWarCd && iWarCd < iFight) {
+		t.Fatalf("序列顺序不符: %+v", got)
+	}
+	if want := "000f1b3400040019"; got[iEnter].body != want {
+		t.Fatalf("4/1 enter 载荷 = %s, want %s", got[iEnter].body, want)
+	}
+	if want := "000f1b3402f80001"; got[iFightPrep].body != want {
+		t.Fatalf("4/24 fight_prep 载荷 = %s, want %s（业务参数不得被尾链覆盖）", got[iFightPrep].body, want)
+	}
+	if want := "0000000d00040018"; got[iWarCd].body != want {
+		t.Fatalf("0/41 war_cd 载荷 = %s, want %s", got[iWarCd].body, want)
+	}
+	if want := "000005d5000000000000000029"; got[iFight].body != want {
+		t.Fatalf("4/2 fight 载荷 = %s, want %s（尾链必须为 0/41 动作）", got[iFight].body, want)
 	}
 }
