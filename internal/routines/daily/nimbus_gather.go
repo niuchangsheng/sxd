@@ -44,9 +44,10 @@ const (
 	// nimbusFreshSessionAge 灵脉采集对会话年龄的容忍窗口。
 	//
 	// 2026-11-28 实机：长会话上 104/0 面板正常，但 104/1 采集一律无回包；
-	// 干净新会话（探针 probe_nimbus_live）上同字节请求立即成功。采集属于
-	// 场景写操作，入口先确保会话年龄不超过 60 秒。
-	nimbusFreshSessionAge = 60 * time.Second
+	// 干净新会话（探针 probe_nimbus_live）上同字节请求立即成功，00:49 守卫
+	// 重连后的首次采集也成功。60 秒窗口仍偏松（01:08 会话约 1 分钟时失败），
+	// 收紧到 10 秒，确保采集发生在刚建立的连接上。
+	nimbusFreshSessionAge = 10 * time.Second
 )
 
 // NewNimbusGatherRoutine 构造每日灵脉采集任务。
