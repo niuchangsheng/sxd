@@ -405,6 +405,11 @@ func practiceMission(
 	statusResp, statusErr := session.Call(statusCtx, statusPkt, protocol.ActionIDPracticeGetStatus)
 	statusCancel()
 	if statusErr != nil || statusResp == nil {
+		if statusErr != nil {
+			// 网络超时说明本会话的 Mod 4/25 上下文已不可用：标记后由
+			// quest_cycle 统一重连，避免回退到同样会失败的剧情战斗。
+			questContextBad.Store(session, true)
+		}
 		slog.Warn("Module 25 扫荡状态查询无回包，跳过本次扫荡",
 			"role_id", session.RoleID(), "mission_id", missionID, "err", statusErr)
 		return false, 0, fmt.Errorf("扫荡状态查询无回包: %w", statusErr)
@@ -423,6 +428,9 @@ func practiceMission(
 	callCancel()
 
 	if callErr != nil || respPkt == nil {
+		if callErr != nil {
+			questContextBad.Store(session, true)
+		}
 		slog.Warn("Module 25 扫荡请求未收到响应", "role_id", session.RoleID(), "mission_id", missionID, "err", callErr)
 		return false, 0, callErr
 	}
@@ -448,6 +456,10 @@ func practiceMission(
 		quickResp, quickErr := session.Call(qCtx, quickPkt, protocol.ActionIDPracticeQuickly)
 		qCancel()
 		if quickErr != nil || quickResp == nil {
+			if quickErr != nil {
+				// 加速步骤网络超时 = 本会话 Mod 4/25 上下文已失效。
+				questContextBad.Store(session, true)
+			}
 			slog.Warn("Module 25 扫荡加速无回包，不扣体力也不加奖励",
 				"role_id", session.RoleID(), "mission_id", missionID, "err", quickErr)
 			if quickErr != nil {
