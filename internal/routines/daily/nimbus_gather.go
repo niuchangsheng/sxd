@@ -117,13 +117,14 @@ func NewNimbusGatherRoutine() scheduler.ActivityRoutine {
 				if i > 0 && !kit.Sleep(ctx, nimbusGatherPace) {
 					return nil
 				}
-				// 尾链取「最近收到的包」：与剧情副本 4/2 一致，服务端按自己最后
-				// 发出的包校验锚点；服务端推送（如 0/79）插入时，lastSent 锚点会失配。
-				gatherPkt := protocol.NewPacketWithExplicitPrevAct(protocol.ActionIDNimbusGather,
-					[]byte{protocol.NimbusGourdWood}, session.LastRxActionID())
+				// 尾链按官方抓包取「上一条业务请求」：官方连续采集的尾链依次为
+				// 104/0、104/1、104/1…（请求/回包同号）。不能用 lastRx——服务端
+				// 推送（0/79 等）会插入并改变锚点。
+				gatherPkt := protocol.NewPacketWithAutoPrevAct(protocol.ActionIDNimbusGather,
+					[]byte{protocol.NimbusGourdWood})
 				if gathered == 0 {
 					slog.Info("灵脉采集请求锚点", "role_id", session.RoleID(),
-						"anchor", fmt.Sprintf("0x%08X", session.LastRxActionID()),
+						"anchor", fmt.Sprintf("0x%08X", session.LastBusinessActionID()),
 						"payload_hex", hex.EncodeToString(gatherPkt.Payload))
 				}
 				resp, err := caller.Call(gatherPkt, protocol.ActionIDNimbusGather)
