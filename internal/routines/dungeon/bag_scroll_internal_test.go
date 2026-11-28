@@ -63,9 +63,9 @@ func scrollPackPayload(items []protocol.ItemRecord) []byte {
 	return buf.Bytes()
 }
 
-// TestSellEquipmentScrollsAfterEliteSweep_S0Only 验证精英扫荡兜底只卖
-// s0 的装备制作卷 (1002)，不卖 1-5 品丹药卷 (1001)，也不卖其他道具。
-func TestSellEquipmentScrollsAfterEliteSweep_S0Only(t *testing.T) {
+// TestSellEquipmentScrollsAfterEliteSweep_SkipsNonEquipment 验证精英扫荡
+// 兜底出售装备制作卷 (1002)，不卖 1-5 品丹药卷 (1001)，也不卖其他道具。
+func TestSellEquipmentScrollsAfterEliteSweep_SkipsNonEquipment(t *testing.T) {
 	dictRepo, err := dictionary.NewRepository("")
 	if err != nil {
 		t.Fatalf("load dictionary: %v", err)
