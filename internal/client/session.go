@@ -22,8 +22,13 @@ import (
 var (
 	// ErrSessionClosed 会话已主动关闭
 	ErrSessionClosed = errors.New("client: session is closed")
-	// ErrNotConnected 当前未处于已连接且激活状态
+	// ErrNotConnected 当前未处于已连接且激活状态（发包前即确认无可用连接）
 	ErrNotConnected = errors.New("client: session is not active")
+	// ErrConnectionLost 请求写入阶段或等待回包期间连接中断。
+	// 它包装 ErrNotConnected，使上层断线判断（调度器 90 秒短重试、kit.IsAbortErr）
+	// 语义保持一致；同时让调用方能区分「发包前未连接（可安全等待重连并重试）」与
+	// 「已发包后断链（不可自动重发，防止非幂等业务重复执行）」。
+	ErrConnectionLost = fmt.Errorf("%w: connection lost in flight", ErrNotConnected)
 	// ErrAuthRejected 服务端明确拒绝登录凭据（resultCode 非成功值）。
 	// 与网络闪断不同，该错误通常意味着票据失效或被顶号，需要重新换票。
 	ErrAuthRejected = errors.New("client: authentication rejected by server")
@@ -418,23 +423,20 @@ func (s *RoleSession) currentConnCtx() context.Context {
 	return nil
 }
 
-// registerPendingCall 在当前代连接上登记一个回包等待通道。
-func (s *RoleSession) registerPendingCall(actionID uint32) (chan *protocol.Packet, func(), context.Context, error) {
-	if s.State() == StateClosed {
-		return nil, nil, nil, ErrSessionClosed
-	}
-	t := s.currentTransport()
-	if t == nil {
-		return nil, nil, nil, ErrNotConnected
+// registerPendingCall 在当前可写代连接上登记一个回包等待通道，并返回所绑定的 transport。
+func (s *RoleSession) registerPendingCall(actionID uint32) (*connTransport, chan *protocol.Packet, func(), context.Context, error) {
+	t, err := s.activeTransportForWrite()
+	if err != nil {
+		return nil, nil, nil, nil, err
 	}
 	ch, cleanup, ok := t.registerPending(actionID)
 	if !ok {
 		if s.State() == StateClosed {
-			return nil, nil, nil, ErrSessionClosed
+			return nil, nil, nil, nil, ErrSessionClosed
 		}
-		return nil, nil, nil, ErrNotConnected
+		return nil, nil, nil, nil, ErrNotConnected
 	}
-	return ch, cleanup, t.ctx, nil
+	return t, ch, cleanup, t.ctx, nil
 }
 
 // State 获取会话当前所处状态。
@@ -597,13 +599,14 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 		ctx = callCtx
 	}
 
-	ch, cleanup, connCtx, err := s.registerPendingCall(respActionID)
+	t, ch, cleanup, connCtx, err := s.registerPendingCall(respActionID)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	if err := s.Send(req); err != nil {
+	// 严格在同一个 connTransport 代上发包，杜绝挂号与发包跨代错配。
+	if err := s.sendOnTransport(t, req); err != nil {
 		return nil, err
 	}
 
@@ -630,13 +633,13 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 		if s.State() == StateClosed {
 			return nil, ErrSessionClosed
 		}
-		return nil, ErrNotConnected
+		return nil, ErrConnectionLost
 	case p, ok := <-ch:
 		if !ok || p == nil {
 			if s.State() == StateClosed {
 				return nil, ErrSessionClosed
 			}
-			return nil, ErrNotConnected
+			return nil, ErrConnectionLost
 		}
 		return p, nil
 	}
@@ -976,6 +979,10 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 	if err != nil {
 		return err
 	}
+	return s.sendOnTransport(t, p)
+}
+
+func (s *RoleSession) sendOnTransport(t *connTransport, p *protocol.Packet) error {
 	var stamped *protocol.Packet
 	if err := t.writeLocked(func(conn net.Conn) error {
 		stamped = s.prevAct.StampPayload(p)

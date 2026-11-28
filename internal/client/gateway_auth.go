@@ -137,7 +137,7 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 	}
 
 	// 注册握手回包通道并流水线发送首部封包
-	respCh, cleanupResp, regConnCtx, regErr := s.registerPendingCall(loginRespActionID)
+	t, respCh, cleanupResp, regConnCtx, regErr := s.registerPendingCall(loginRespActionID)
 	if regErr != nil {
 		return fmt.Errorf("client: failed to register login waiter: %w", regErr)
 	}
@@ -146,14 +146,14 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 		connCtx = regConnCtx
 	}
 
-	if err := s.Send(loginPkt); err != nil {
+	if err := s.sendOnTransport(t, loginPkt); err != nil {
 		return fmt.Errorf("client: failed to send login packet: %w", err)
 	}
 
 	// 官方流水线对齐：官方微端在发送 M0:A0 登录请求后，立刻连发 Action 72 触发场景与分线初始化
 	if loginRespActionID == protocol.ActionIDPlayerLogin {
 		step1Pkt := protocol.BuildPlayerInitStep1Packet(0x00000000)
-		_ = s.Send(step1Pkt)
+		_ = s.sendOnTransport(t, step1Pkt)
 	}
 
 	var connDone <-chan struct{}

@@ -67,8 +67,8 @@ func IsAbortErr(err error) (error, bool) {
 // 若首次调用因会话正在重连（ErrNotConnected 且状态可自愈）失败，先等待状态机
 // 恢复再重试一次，避免把「重连窗口」当成业务失败暴露给 Routine。
 //
-// 重试不会产生重复业务动作：Call 只在发包前（Send 发现 conn 不可用）返回
-// ErrNotConnected；一旦请求已写入连接，失败口径是超时，不做重发。
+// 重试不会产生重复业务动作：只在发包前确认未连接（裸 ErrNotConnected）时等待重连
+// 并重试；一旦请求进入写入或已发出后中途断链（ErrConnectionLost），绝不自动重发。
 func Call(ctx context.Context, session *client.RoleSession, pkt *protocol.Packet, respActionID uint32, timeout time.Duration) (*protocol.Packet, error) {
 	if session == nil {
 		return nil, client.ErrNotConnected
@@ -115,10 +115,12 @@ func callOnce(ctx context.Context, session *client.RoleSession, pkt *protocol.Pa
 	return session.Call(cCtx, pkt, respActionID)
 }
 
-// shouldWaitForReconnect 判断本次失败是否属于「会话正在自愈」的断线：
-// 只有 ErrNotConnected 且状态机仍在建连/认证/重连，且调用上下文未取消时才值得等待。
+// shouldWaitForReconnect 判断本次失败是否属于「发包前会话正在自愈」的断线：
+// 只有发包前未连接（ErrNotConnected 且非 ErrConnectionLost）、状态机仍在建连/认证/重连，
+// 且调用上下文未取消时才值得等待重连并重试。已进入写入或发包后断链（ErrConnectionLost）
+// 绝不重发，防止非幂等业务动作被重复执行。
 func shouldWaitForReconnect(ctx context.Context, session *client.RoleSession, err error) bool {
-	if !errors.Is(err, client.ErrNotConnected) {
+	if !errors.Is(err, client.ErrNotConnected) || errors.Is(err, client.ErrConnectionLost) {
 		return false
 	}
 	if ctx.Err() != nil || session == nil {

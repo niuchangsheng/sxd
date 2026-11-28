@@ -627,3 +627,101 @@ func TestOpenChildSession_RespectsWaitCtxTimeout(t *testing.T) {
 		t.Fatalf("openChildSession 应遵守 waitCtx (120ms) 而非等待 30s, took %v", elapsed)
 	}
 }
+
+type failingWriteConn struct {
+	net.Conn
+	writeErr error
+}
+
+func (c *failingWriteConn) Write(_ []byte) (int, error) {
+	return 0, c.writeErr
+}
+
+// TestSend_WriteErrorWrapsErrConnectionLost 验证底层 TCP 写失败（如 broken pipe / reset）
+// 会被包装为 ErrConnectionLost（同时满足 errors.Is(err, ErrNotConnected) 与原始错误），
+// 确保上层 kit.IsAbortErr 与调度器能识别为断链，同时不会触发非幂等自动重发。
+func TestSend_WriteErrorWrapsErrConnectionLost(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+
+	sentinelWriteErr := errors.New("mock broken pipe")
+	sess := NewRoleSession(SessionConfig{
+		RoleID:     "role-write-err",
+		ServerAddr: "mock-pipe",
+		Dialer: func(context.Context, string, string) (net.Conn, error) {
+			return &failingWriteConn{Conn: c1, writeErr: sentinelWriteErr}, nil
+		},
+		Authenticator: func(*RoleSession) error { return nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	defer sess.Close()
+
+	waitActiveCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := sess.AwaitActive(waitActiveCtx); err != nil {
+		t.Fatalf("AwaitActive: %v", err)
+	}
+
+	err := sess.Send(protocol.NewPacket(0x01010001, nil))
+	if err == nil {
+		t.Fatal("期望写失败返回错误，实际 nil")
+	}
+	if !errors.Is(err, ErrConnectionLost) {
+		t.Fatalf("写失败应包装 ErrConnectionLost, got %v", err)
+	}
+	if !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("写失败应同时满足 ErrNotConnected, got %v", err)
+	}
+	if !errors.Is(err, sentinelWriteErr) {
+		t.Fatalf("写失败应保留原始错误, got %v", err)
+	}
+}
+
+// TestCall_InFlightDisconnectReturnsErrConnectionLost 验证请求发出后中途断链时，
+// Call 返回 ErrConnectionLost（而非裸 ErrNotConnected），以便调用方禁止非幂等自动重发。
+func TestCall_InFlightDisconnectReturnsErrConnectionLost(t *testing.T) {
+	const actID uint32 = 0x01010010
+	c1, c2 := net.Pipe()
+	go func() {
+		// 收到业务包后直接断链不回包
+		if _, err := protocol.ReadPacket(c2); err == nil {
+			_ = c2.Close()
+		}
+	}()
+
+	var dialed atomic.Int32
+	sess := NewRoleSession(SessionConfig{
+		RoleID:     "role-inflight-disconnect",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			if dialed.Add(1) == 1 {
+				return c1, nil
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Authenticator: func(*RoleSession) error { return nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	defer sess.Close()
+
+	waitActiveCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := sess.AwaitActive(waitActiveCtx); err != nil {
+		t.Fatalf("AwaitActive: %v", err)
+	}
+
+	callCtx, callCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer callCancel()
+	_, err := sess.Call(callCtx, protocol.NewPacket(actID, nil), actID)
+	if !errors.Is(err, ErrConnectionLost) {
+		t.Fatalf("发包后断链应返回 ErrConnectionLost, got %v", err)
+	}
+	if !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("ErrConnectionLost 应同时满足 ErrNotConnected, got %v", err)
+	}
+}

@@ -190,7 +190,7 @@ func (t *connTransport) writeLocked(fn func(net.Conn) error) error {
 		_ = t.conn.Close()
 		t.conn = nil
 		t.cancel()
-		return err
+		return fmt.Errorf("%w: %w", ErrConnectionLost, err)
 	}
 	return nil
 }

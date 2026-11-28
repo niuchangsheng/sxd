@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -137,11 +138,22 @@ func TestSleep_RespectsContextCancel(t *testing.T) {
 // 等待状态机恢复后重试一次，而不是把 ErrNotConnected 暴露给业务层。
 func TestCall_WaitsForReconnectAndRetries(t *testing.T) {
 	const okAct uint32 = 0x01010003
+	var dialCount atomic.Int32
+	secondDialEntered := make(chan struct{})
+	releaseReconnect := make(chan struct{})
 
 	sess := client.NewRoleSession(client.SessionConfig{
 		RoleID:     "role-kit-reconnect",
 		ServerAddr: "mock-pipe",
-		Dialer: func(context.Context, string, string) (net.Conn, error) {
+		Dialer: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			if dialCount.Add(1) == 2 {
+				close(secondDialEntered)
+				select {
+				case <-releaseReconnect:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
 			c1, c2 := net.Pipe()
 			go func() {
 				defer c2.Close()
@@ -163,28 +175,92 @@ func TestCall_WaitsForReconnectAndRetries(t *testing.T) {
 		t.Fatalf("start session: %v", err)
 	}
 	defer sess.Close()
-	deadline := time.Now().Add(2 * time.Second)
-	for sess.State() != client.StateActive && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if sess.State() != client.StateActive {
-		t.Fatalf("session not active: %s", sess.State())
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if err := sess.AwaitActive(waitCtx); err != nil {
+		t.Fatalf("session not active: %v", err)
 	}
 
-	// 主动断开，等状态机进入重连窗口后再发起业务调用。
+	// 主动断开，并把第二次建连门控在 Reconnecting 态，确保 kit.Call 确实命中重连等待路径。
 	sess.ReconnectNow()
-	deadline = time.Now().Add(2 * time.Second)
-	for sess.State() != client.StateReconnecting && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-secondDialEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待状态机进入第二次建连超时")
 	}
 	if !sess.State().IsRecovering() {
-		t.Fatalf("state = %s, want Reconnecting", sess.State())
+		t.Fatalf("state = %s, want recovering", sess.State())
 	}
+
+	// 放行重连并验证 kit.Call 等待恢复后自动重试成功。
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		close(releaseReconnect)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	resp, err := kit.Call(ctx, sess, protocol.NewPacket(okAct, nil), okAct, time.Second)
 	if err != nil || resp == nil || len(resp.Payload) != 1 || resp.Payload[0] != 0x09 {
 		t.Fatalf("重连后重试应成功: resp=%v err=%v", resp, err)
+	}
+}
+
+// TestCall_InFlightDisconnectDoesNotRetryNonIdempotent 验证请求已写入连接后中途断链时，
+// 即使状态机立即重连恢复，kit.Call 也绝不自动重发同一个请求（防止非幂等写重复执行），
+// 且 kit.IsAbortErr 仍将其归一化为 client.ErrNotConnected 交由调度器短重试。
+func TestCall_InFlightDisconnectDoesNotRetryNonIdempotent(t *testing.T) {
+	const writeAct uint32 = 0x01010099
+	var received atomic.Int32
+
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-kit-no-double-send",
+		ServerAddr: "mock-pipe",
+		Dialer: func(context.Context, string, string) (net.Conn, error) {
+			c1, c2 := net.Pipe()
+			go func() {
+				defer c2.Close()
+				for {
+					pkt, err := protocol.ReadPacket(c2)
+					if err != nil {
+						return
+					}
+					if pkt.ActionID == writeAct {
+						if received.Add(1) == 1 {
+							// 首次收到请求后立刻断链不回包，模拟服务端已执行但回包前断链。
+							_ = c2.Close()
+							return
+						}
+						_ = protocol.WritePacket(c2, protocol.NewPacket(writeAct, []byte{0x01}))
+					}
+				}
+			}()
+			return c1, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	defer sess.Close()
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if err := sess.AwaitActive(waitCtx); err != nil {
+		t.Fatalf("AwaitActive: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := kit.Call(ctx, sess, protocol.NewPacket(writeAct, nil), writeAct, 2*time.Second)
+	if !errors.Is(err, client.ErrConnectionLost) {
+		t.Fatalf("发包后断链应返回 ErrConnectionLost, got %v", err)
+	}
+	if got := received.Load(); got != 1 {
+		t.Fatalf("发包后断链绝不应重发非幂等请求: received = %d, want 1", got)
+	}
+	abortErr, isAbort := kit.IsAbortErr(err)
+	if !isAbort || !errors.Is(abortErr, client.ErrNotConnected) {
+		t.Fatalf("IsAbortErr(ErrConnectionLost) = (%v, %v), want (ErrNotConnected, true)", abortErr, isAbort)
 	}
 }
