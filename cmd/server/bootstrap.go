@@ -33,9 +33,13 @@ func buildRoutineEnabledMap(sc config.SchedulerConfig) map[string]bool {
 		enabled[k] = v
 		switch k {
 		case "dungeon":
-			enabled["dungeon_sweep"] = v
+			if _, explicit := sc.Routines["dungeon_sweep"]; !explicit {
+				enabled["dungeon_sweep"] = v
+			}
 		case "dungeon_sweep":
-			enabled["dungeon"] = v
+			if _, explicit := sc.Routines["dungeon"]; !explicit {
+				enabled["dungeon"] = v
+			}
 		}
 	}
 	return enabled

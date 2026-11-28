@@ -94,8 +94,9 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "sect_monster", Name: "宗门灵兽喂养", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "经仙盟城镇会话免费喂养宗门灵兽 (type=0, 不消耗元宝)", DefaultOn: false},
 		{ID: "server_chat_room", Name: "全网聊天室发言", Domain: "social", Schedule: scheduler.ScheduleCron, Description: "每天在独立聊天服发一次免费表情 (不消耗元宝)", DefaultOn: false},
 
-		// 4. Dungeon 领域 (8)
-		{ID: "dungeon", Name: "副本推图与扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线/支线任务闭环推图与关卡扫荡", DefaultOn: true},
+		// 4. Dungeon 领域
+		{ID: "dungeon", Name: "主支线与精英副本推图", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "主线 > 支线 > 精英任务闭环首通推图 (优先级高于通天塔与精英扫荡)", DefaultOn: true},
+		{ID: "dungeon_sweep", Name: "精英副本扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "消耗剩余自然体力扫荡精英副本并自动出售装备制作卷 (优先级低于推图与通天塔)", DefaultOn: true},
 		{ID: "bag_cleanup", Name: "背包清理（仅装备制作卷）", Domain: "dungeon", Schedule: scheduler.ScheduleLoop, Description: "背包空格不足时出售装备制作卷腾格位（不卖其它物品、不耗元宝）", DefaultOn: true},
 		{ID: "six_realms", Name: "六道轮回挑战", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "六道轮回塔爬塔与灵件自动熔炼分解", DefaultOn: false},
 		{ID: "demon_tower", Name: "伏魔锁妖塔挑战", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "锁妖塔日常挑战与怪物试炼通关", DefaultOn: false},
@@ -448,8 +449,10 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return social.NewServerChatRoomRoutine(f.chatRoomCfg)
 
 	// 4. Dungeon
-	case "dungeon", "dungeon_sweep":
-		return dungeon.NewDungeonSweepRoutine(f.dictRepo, f.dungeonCfg)
+	case "dungeon":
+		return dungeon.NewQuestPushRoutine(f.dictRepo, f.dungeonCfg)
+	case "dungeon_sweep":
+		return dungeon.NewEliteSweepRoutine(f.dictRepo, f.dungeonCfg)
 	case "bag_cleanup":
 		return dungeon.NewBagCleanupRoutine(f.dictRepo)
 	case "six_realms":

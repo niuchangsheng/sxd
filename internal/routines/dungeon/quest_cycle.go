@@ -928,27 +928,31 @@ func executeAuthoritativeQuestCycle(
 		// -----------------------------------------------------------------
 		// Step 2: 接取所有满足等级的可接取任务 (State == 0: Acceptable)
 		// 神仙道同时进行中的任务上限为 5 个 (State == 1)
+		// 接取顺序严格遵循：主线 (Type=1) > 支线 (Type=2) > 精英 (Type=4) > 其他，
+		// 防止精英/支线任务抢占最后一个任务槽位导致主线任务无法接取。
 		// -----------------------------------------------------------------
 		acceptedAny := false
 		playerLevel := session.GetPlayerState().Level
 
 		activeCount := 0
+		var acceptable []protocol.PlayerQuestItem
 		for _, it := range items {
-			if it.State == 1 {
+			switch it.State {
+			case 1:
 				activeCount++
+			case 0:
+				acceptable = append(acceptable, it)
 			}
 		}
+		sortQuestItemsByPriority(acceptable, dictRepo, false)
 
-		for _, it := range items {
+		for _, it := range acceptable {
 			if activeCount >= 5 {
 				break
 			}
 			if ctx.Err() != nil || session.State() == client.StateClosed {
 				slog.Info("会话已关闭，终止任务接取循环", "role_id", session.RoleID())
 				return
-			}
-			if it.State != 0 {
-				continue
 			}
 			q, _ := dictRepo.GetQuest(int(it.QuestID))
 			if q != nil && q.Level > 0 && q.Level > playerLevel {
@@ -1030,7 +1034,7 @@ func executeAuthoritativeQuestCycle(
 
 		// -----------------------------------------------------------------
 		// Step 3: 推进已接取进行中的任务 (State == 1: Accepted / InProgress)
-		// 排序优先级：对话任务优先 -> 主线任务 (Type=1) 优先 -> 较小 Lock 优先
+		// 排序优先级：对话任务优先 -> 主线 (Type=1) > 支线 (Type=2) > 精英 (Type=4) -> 较小 Lock 优先
 		// -----------------------------------------------------------------
 		var inProgress []protocol.PlayerQuestItem
 		for _, it := range items {
@@ -1038,25 +1042,7 @@ func executeAuthoritativeQuestCycle(
 				inProgress = append(inProgress, it)
 			}
 		}
-		sort.SliceStable(inProgress, func(i, j int) bool {
-			qi, _ := dictRepo.GetQuest(int(inProgress[i].QuestID))
-			qj, _ := dictRepo.GetQuest(int(inProgress[j].QuestID))
-			if qi == nil || qj == nil {
-				return inProgress[i].QuestID < inProgress[j].QuestID
-			}
-			talkI := qi.MissionID == 0 || qi.TalkQuest == 1
-			talkJ := qj.MissionID == 0 || qj.TalkQuest == 1
-			if talkI != talkJ {
-				return talkI
-			}
-			if qi.Type != qj.Type {
-				return qi.Type < qj.Type
-			}
-			if qi.Lock != qj.Lock {
-				return qi.Lock < qj.Lock
-			}
-			return qi.ID < qj.ID
-		})
+		sortQuestItemsByPriority(inProgress, dictRepo, true)
 
 		for _, it := range inProgress {
 			if ctx.Err() != nil || session.State() == client.StateClosed {
@@ -1240,4 +1226,51 @@ func submitCompleteQuest(ctx context.Context, session *client.RoleSession, quest
 		return false, true
 	}
 	return false, false
+}
+
+// questTypeRank 定义任务推图的显式类型优先级：
+// 主线 (Type=1) > 支线 (Type=2) > 精英副本 (Type=4) > 其他类型。
+func questTypeRank(qType int) int {
+	switch qType {
+	case 1:
+		return 1
+	case 2:
+		return 2
+	case 4:
+		return 3
+	default:
+		return 4
+	}
+}
+
+// sortQuestItemsByPriority 按「对话优先(可选) -> 主线 > 支线 > 精英 -> Lock 升序 -> QuestID 升序」稳定排序。
+func sortQuestItemsByPriority(items []protocol.PlayerQuestItem, dictRepo dictionary.Repository, talkFirst bool) {
+	sort.SliceStable(items, func(i, j int) bool {
+		qi, _ := dictRepo.GetQuest(int(items[i].QuestID))
+		qj, _ := dictRepo.GetQuest(int(items[j].QuestID))
+		if qi == nil || qj == nil {
+			if qi != nil {
+				return true
+			}
+			if qj != nil {
+				return false
+			}
+			return items[i].QuestID < items[j].QuestID
+		}
+		if talkFirst {
+			talkI := qi.MissionID == 0 || qi.TalkQuest == 1
+			talkJ := qj.MissionID == 0 || qj.TalkQuest == 1
+			if talkI != talkJ {
+				return talkI
+			}
+		}
+		ri, rj := questTypeRank(qi.Type), questTypeRank(qj.Type)
+		if ri != rj {
+			return ri < rj
+		}
+		if qi.Lock != qj.Lock {
+			return qi.Lock < qj.Lock
+		}
+		return qi.ID < qj.ID
+	})
 }

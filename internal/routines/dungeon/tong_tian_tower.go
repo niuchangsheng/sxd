@@ -45,7 +45,9 @@ func NewTongTianTowerRoutine() scheduler.ActivityRoutine {
 		"tong_tian_tower",
 		"dungeon",
 		scheduler.ScheduleCron,
-		scheduler.PriorityNormal,
+		// 体力优先级：主线/支线/精英推图 (PhaseCoreLoop+0=300) > 通天塔 (290) > 精英副本扫荡 (280)。
+		// 确保自然体力优先用于推进通天塔，而非先被精英副本扫荡耗尽。
+		scheduler.PhasePriority(scheduler.PhaseCoreLoop, -10),
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {

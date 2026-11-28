@@ -1039,7 +1039,7 @@ func SellBagCraftScrolls(ctx context.Context, session *client.RoleSession, dictR
 	return sold
 }
 
-func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig) scheduler.ActivityRoutine {
+func normalizeSweepConfig(cfgs ...SweepConfig) SweepConfig {
 	cfg := DefaultSweepConfig()
 	hasSubConfig := false
 	if len(cfgs) > 0 {
@@ -1107,15 +1107,59 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 	if len(cfg.Sweep.Pipeline) == 0 {
 		cfg.Sweep.Pipeline = []string{"sweep_elite"}
 	}
+	return cfg
+}
 
+// NewQuestPushRoutine 构造仅执行主线/支线/精英任务首通推图的调度任务 (Priority=PhaseCoreLoop+0=300)。
+// 与 NewEliteSweepRoutine (280) 拆分，使通天塔 (290) 能够在推图之后、精英扫荡之前优先消耗体力。
+func NewQuestPushRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig) scheduler.ActivityRoutine {
+	cfg := normalizeSweepConfig(cfgs...)
+	cfg.Sweep.Enabled = false
+	if len(cfg.Pipeline) > 0 {
+		filtered := make([]string, 0, len(cfg.Pipeline))
+		for _, p := range cfg.Pipeline {
+			if p != "sweep_elite" {
+				filtered = append(filtered, p)
+			}
+		}
+		cfg.Pipeline = filtered
+	}
+	return newDungeonRoutine("dungeon", scheduler.PhasePriority(scheduler.PhaseCoreLoop, 0), dictRepo, cfg)
+}
+
+// NewEliteSweepRoutine 构造仅执行精英副本扫荡的调度任务 (Priority=PhaseCoreLoop-20=280)。
+// 优先级低于主支线推图 (300) 与通天塔 (290)，确保剩余自然体力最后才用于扫荡精英副本。
+func NewEliteSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig) scheduler.ActivityRoutine {
+	cfg := normalizeSweepConfig(cfgs...)
+	cfg.QuestCycle.Enabled = false
+	if len(cfg.Pipeline) > 0 {
+		filtered := make([]string, 0, len(cfg.Pipeline))
+		for _, p := range cfg.Pipeline {
+			if p == "sweep_elite" {
+				filtered = append(filtered, p)
+			}
+		}
+		cfg.Pipeline = filtered
+	}
+	return newDungeonRoutine("dungeon_sweep", scheduler.PhasePriority(scheduler.PhaseCoreLoop, -20), dictRepo, cfg)
+}
+
+func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig) scheduler.ActivityRoutine {
+	cfg := normalizeSweepConfig(cfgs...)
+	return newDungeonRoutine("dungeon", scheduler.PhasePriority(scheduler.PhaseCoreLoop, 0), dictRepo, cfg)
+}
+
+func newDungeonRoutine(
+	routineID string,
+	priority scheduler.RoutinePriority,
+	dictRepo dictionary.Repository,
+	cfg SweepConfig,
+) scheduler.ActivityRoutine {
 	return scheduler.NewBaseRoutine(
-		"dungeon",
+		routineID,
 		"dungeon",
 		scheduler.ScheduleLoop,
-		// 高于所有 Cron 玩法 (含天帝宝库 200)：魔王试炼 Mod 57、宝库 594 面板等
-		// 都会切换服务端会话上下文，导致随后的 enter_town/get_sections 被静默丢弃。
-		// 实测 2026-11-15：宝库先跑后，任务 564 的 enter_town/map 21 章节列表连续超时。
-		scheduler.PhasePriority(scheduler.PhaseCoreLoop, 0),
+		priority,
 		30*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
 			if session == nil {
