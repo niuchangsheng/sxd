@@ -117,3 +117,62 @@ func TestBagCleanup_SkipsWhenSpaceEnough(t *testing.T) {
 		t.Fatalf("空格充足时不应出售, sell calls = %d", sellCalls)
 	}
 }
+
+// TestBagCleanup_SellsBeforeServerRejectsRewards 验证阈值提升后，剩 11 格
+// （48 格容量、37 件物品）就会触发清理。线上 s1 在剩 8~15 格时伙伴猜猜看
+// 已报「背包已满」，旧阈值 5 永远不会触发。
+func TestBagCleanup_SellsBeforeServerRejectsRewards(t *testing.T) {
+	dictRepo, err := dictionary.NewRepository("")
+	if err != nil {
+		t.Fatalf("load dictionary: %v", err)
+	}
+	defer dictRepo.Close()
+
+	sess, srvConn := createTestSession(t, 0)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var mu sync.Mutex
+	var soldGrids []int16
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionIDItemGetPackList:
+			buf := new(bytes.Buffer)
+			_ = binary.Write(buf, binary.BigEndian, int16(48)) // 容量 48
+			_ = binary.Write(buf, binary.BigEndian, int32(0))
+			_ = binary.Write(buf, binary.BigEndian, uint16(37)) // 已用 37 → 剩 11 格
+			for i := 1; i <= 36; i++ {
+				_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+					PlayerItemID: int32(i), ItemID: protocol.ItemIDSteamedBun, GridID: int32(i), Field4: 1, Field5: 1,
+				})
+			}
+			_ = protocol.WriteItemRecord(buf, protocol.ItemRecord{
+				PlayerItemID: 37, ItemID: 940, GridID: 37, Field4: 100, Field5: 1, // 逍遥戟制作卷
+			})
+			_ = binary.Write(buf, binary.BigEndian, int16(10))
+			_ = binary.Write(buf, binary.BigEndian, uint16(0))
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID, buf.Bytes()))
+			return true
+		case protocol.ActionIDItemSell:
+			grid := int16(binary.BigEndian.Uint16(pkt.Payload[:2]))
+			mu.Lock()
+			soldGrids = append(soldGrids, grid)
+			mu.Unlock()
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(pkt.ActionID,
+				[]byte{protocol.ItemActionSuccess}))
+			return true
+		}
+		return false
+	})
+
+	routine := dungeon.NewBagCleanupRoutine(dictRepo)
+	if err := routine.Execute(context.Background(), sess, nil); err != nil {
+		t.Fatalf("bag cleanup: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(soldGrids) != 1 || soldGrids[0] != 37 {
+		t.Fatalf("剩 11 格时应出售制作卷(格位37), 实际出售: %v", soldGrids)
+	}
+}
