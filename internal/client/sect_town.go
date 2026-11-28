@@ -163,16 +163,5 @@ func (s *RoleSession) OpenSectTownSessionWithCredentials(ctx context.Context, cr
 		"sect_name", cred.SectName,
 	)
 
-	sess := NewRoleSession(cfg)
-	if err := sess.Start(ctx); err != nil {
-		return nil, fmt.Errorf("client: 启动仙盟城镇会话失败: %w", err)
-	}
-	if err := sess.AwaitActive(ctx); err != nil {
-		sess.Close()
-		if errors.Is(err, ErrSessionClosed) {
-			return nil, errors.New("client: 仙盟城镇会话在激活前关闭")
-		}
-		return nil, fmt.Errorf("client: 等待仙盟城镇会话激活超时: %w", err)
-	}
-	return sess, nil
+	return s.openChildSession(ctx, "仙盟城镇", cfg, 0)
 }

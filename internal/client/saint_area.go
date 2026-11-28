@@ -108,16 +108,5 @@ func (s *RoleSession) OpenSaintAreaSessionWithInfo(ctx context.Context, cred *pr
 		"server_id", cred.ServerName,
 	)
 
-	sa := NewRoleSession(cfg)
-	if err := sa.Start(ctx); err != nil {
-		return nil, fmt.Errorf("client: 启动圣域会话失败: %w", err)
-	}
-	if err := sa.AwaitActive(ctx); err != nil {
-		sa.Close()
-		if errors.Is(err, ErrSessionClosed) {
-			return nil, fmt.Errorf("client: 圣域会话在激活前关闭")
-		}
-		return nil, fmt.Errorf("client: 等待圣域会话激活超时: %w", err)
-	}
-	return sa, nil
+	return s.openChildSession(ctx, "圣域", cfg, 0)
 }

@@ -389,3 +389,123 @@ func TestConcurrentRefreshCredentialsAndSnapshotConfig_NoRace(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestHalfOpenZombieProbe_TriggersReconnect 验证连接空闲无下行包达到 StaleProbeInterval 后，
+// 若 0/6 活性探针在 HeartbeatTimeout 内无回包（半开僵尸连接），会话会主动断开并重连。
+func TestHalfOpenZombieProbe_TriggersReconnect(t *testing.T) {
+	c1, s1 := net.Pipe()
+	c2, s2 := net.Pipe()
+	defer s1.Close()
+	defer s2.Close()
+
+	// 连接 1 模拟半开黑洞：吃掉所有请求（含 0/6 探针）但不回任何包。
+	go func() {
+		for {
+			if _, err := protocol.ReadPacket(s1); err != nil {
+				return
+			}
+		}
+	}()
+	// 连接 2 正常响应 0/6 探针。
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(s2)
+			if err != nil {
+				return
+			}
+			if pkt.ActionID == protocol.ActionIDPlayerGetFunctions {
+				_ = protocol.WritePacket(s2, protocol.NewPacket(protocol.ActionIDPlayerGetFunctions, []byte{0, 0}))
+			}
+		}
+	}()
+
+	var dialCount atomic.Int32
+	sess := NewRoleSession(SessionConfig{
+		RoleID:             "role-zombie-probe",
+		ServerAddr:         "mock-pipe",
+		HeartbeatInterval:  25 * time.Millisecond,
+		HeartbeatTimeout:   60 * time.Millisecond,
+		StaleProbeInterval: 40 * time.Millisecond,
+		ReconnectInterval:  10 * time.Millisecond,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if dialCount.Add(1) == 1 {
+				return c1, nil
+			}
+			return c2, nil
+		},
+		Authenticator: func(s *RoleSession) error { return nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sess.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sess.Close()
+	if err := sess.AwaitActive(ctx); err != nil {
+		t.Fatalf("await active: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for (sess.ConnectionGeneration() < 2 || sess.State() != StateActive) && time.Now().Before(deadline) {
+		time.Sleep(15 * time.Millisecond)
+	}
+	if sess.ConnectionGeneration() < 2 || sess.State() != StateActive {
+		t.Fatalf("半开僵尸连接探针超时后应自动重连到第 2 代连接, gen=%d state=%s",
+			sess.ConnectionGeneration(), sess.State())
+	}
+}
+
+// TestHalfOpenZombieProbe_HealthyRepliesKeepConnAlive 验证健康连接在 0/6 活性探针正常回包时
+// 保持原连接不触发误重连。
+func TestHalfOpenZombieProbe_HealthyRepliesKeepConnAlive(t *testing.T) {
+	c1, s1 := net.Pipe()
+	defer s1.Close()
+
+	var probeReplies atomic.Int32
+	go func() {
+		for {
+			pkt, err := protocol.ReadPacket(s1)
+			if err != nil {
+				return
+			}
+			if pkt.ActionID == protocol.ActionIDPlayerGetFunctions {
+				probeReplies.Add(1)
+				_ = protocol.WritePacket(s1, protocol.NewPacket(protocol.ActionIDPlayerGetFunctions, []byte{0, 0}))
+			}
+		}
+	}()
+
+	var dialCount atomic.Int32
+	sess := NewRoleSession(SessionConfig{
+		RoleID:             "role-healthy-probe",
+		ServerAddr:         "mock-pipe",
+		HeartbeatInterval:  25 * time.Millisecond,
+		HeartbeatTimeout:   100 * time.Millisecond,
+		StaleProbeInterval: 40 * time.Millisecond,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialCount.Add(1)
+			return c1, nil
+		},
+		Authenticator: func(s *RoleSession) error { return nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sess.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sess.Close()
+	if err := sess.AwaitActive(ctx); err != nil {
+		t.Fatalf("await active: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for probeReplies.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(15 * time.Millisecond)
+	}
+	if probeReplies.Load() < 2 {
+		t.Fatalf("期望至少完成 2 次活性探针, got %d", probeReplies.Load())
+	}
+	if dialCount.Load() != 1 || sess.ConnectionGeneration() != 1 {
+		t.Fatalf("探针正常回包时不应触发重连, dialCount=%d gen=%d", dialCount.Load(), sess.ConnectionGeneration())
+	}
+}

@@ -227,6 +227,8 @@ func run(ctx context.Context, args []string) error {
 	dispatcher := scheduler.NewDispatcher()
 
 	ticketCache := platform.NewTicketCache(90 * time.Minute)
+	// 同账号多角色运行期换票强制串行并拉开至少 3 秒间隔，避免并发 Web 登录互顶。
+	ticketCache.SetMinAccountLoginInterval(3 * time.Second)
 	if fwAuth, err := platform.NewFengwanAuthenticator(); err == nil {
 		ticketCache.RegisterAuthenticator(fwAuth)
 	}

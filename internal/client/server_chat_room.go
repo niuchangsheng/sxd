@@ -31,8 +31,8 @@ func (s *RoleSession) OpenServerChatRoomSession(
 		return nil, fmt.Errorf("client: 聊天服登录码为空")
 	}
 
-	cfg := s.cfg
-	cfg.RoleID = s.cfg.RoleID + "-chat"
+	cfg := s.snapshotConfig()
+	cfg.RoleID = cfg.RoleID + "-chat"
 	cfg.ServerAddr = net.JoinHostPort(info.Host, strconv.Itoa(int(info.Port)))
 	cfg.ServerID = info.ServerName
 	cfg.MaxReconnectAttempts = 1
@@ -66,26 +66,5 @@ func (s *RoleSession) OpenServerChatRoomSession(
 		return nil
 	}
 
-	chat := NewRoleSession(cfg)
-	startErr := chat.Start(ctx)
-	if startErr != nil {
-		return nil, fmt.Errorf("client: 启动聊天服会话失败: %w", startErr)
-	}
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		switch chat.State() {
-		case StateActive:
-			return chat, nil
-		case StateClosed:
-			chat.Close()
-			return nil, fmt.Errorf("client: 聊天服会话在激活前关闭")
-		}
-		select {
-		case <-ctx.Done():
-			chat.Close()
-			return nil, fmt.Errorf("client: 等待聊天服会话激活超时: %w", ctx.Err())
-		case <-ticker.C:
-		}
-	}
+	return s.openChildSession(ctx, "聊天服", cfg, 0)
 }

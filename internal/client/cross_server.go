@@ -336,20 +336,5 @@ func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol
 		"server_id", curCred.ServerName,
 	)
 
-	cross := NewRoleSession(cfg)
-	if err := cross.Start(ctx); err != nil {
-		return nil, fmt.Errorf("client: 启动仙界跨服会话失败: %w", err)
-	}
-
-	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer waitCancel()
-
-	if err := cross.AwaitActive(waitCtx); err != nil {
-		cross.Close()
-		if err == ErrSessionClosed {
-			return nil, fmt.Errorf("client: 仙界跨服会话在激活前关闭")
-		}
-		return nil, fmt.Errorf("client: 等待仙界跨服会话激活超时: %w", err)
-	}
-	return cross, nil
+	return s.openChildSession(ctx, "仙界跨服", cfg, 30*time.Second)
 }

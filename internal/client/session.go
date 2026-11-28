@@ -5,6 +5,7 @@
 package client
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -31,6 +32,8 @@ var (
 	// ErrRoleSelectionRequired 服务端返回 FIRST_TIME：要求客户端选择/创建角色。
 	// 自动化严禁替用户创建角色，只能等待用户在官方客户端选定角色后再登录。
 	ErrRoleSelectionRequired = errors.New("client: role selection required (FIRST_TIME)")
+	// ErrStaleConnection 半开僵尸连接活性探针无回包，需重新建连。
+	ErrStaleConnection = errors.New("client: stale connection probe timeout")
 )
 
 const (
@@ -108,10 +111,13 @@ type SessionConfig struct {
 
 	// HeartbeatInterval 心跳定时保活间隔 (默认 15s；2026-11-22 实机探针确认 0/75 为服务端静默吸收且空闲 12s+ 不断线)
 	HeartbeatInterval time.Duration
-	// HeartbeatTimeout 心跳超时时间 (默认 5s)
+	// HeartbeatTimeout 心跳/半开连接活性探针超时时间 (默认 5s)
 	HeartbeatTimeout time.Duration
 	// HeartbeatActionID 心跳消息号 (默认 0x0000004B, Mod_Player_Base.heart)
 	HeartbeatActionID uint32
+	// StaleProbeInterval 主服连接空闲无任何下行包超过该时长后，发送一次无害只读探针 (0/6)
+	// 检测半开僵尸 TCP 连接（默认真实连接 90s；<0 显式关闭；自定义 Dialer/mock 模式默认关闭）。
+	StaleProbeInterval time.Duration
 
 	// ReconnectInterval 重连回退重试时间间隔 (默认 2s)
 	ReconnectInterval time.Duration
@@ -196,6 +202,7 @@ type RoleSession struct {
 	// prevAct 集中管理当前连接的业务动作尾链 (PrevAct) 与最近收包诊断缓冲。
 	prevAct      *PrevActChain
 	lastSendTime atomic.Int64
+	lastRxTime   atomic.Int64
 	// lastForceRebuild 最近一次强制重建（maxAge=0）的时间戳 (UnixNano)，用于
 	// 合并连续强制重建请求。
 	lastForceRebuild atomic.Int64
@@ -237,6 +244,10 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		cfg.SectQueryTimeout = 5 * time.Second
 	}
 	isCustom := cfg.Dialer != nil
+	isMock := cfg.ServerAddr == "" || cfg.ServerAddr == "mock" || cfg.ServerAddr == "dry-run" || cfg.ServerAddr == "sandbox"
+	if cfg.StaleProbeInterval == 0 && !isCustom && !isMock {
+		cfg.StaleProbeInterval = 90 * time.Second
+	}
 	if cfg.Authenticator == nil {
 		if !isCustom || (cfg.ServerAddr != "mock" && cfg.ServerAddr != "mock-pipe") {
 			cfg.Authenticator = DefaultGatewayAuthenticator
@@ -750,6 +761,26 @@ func (s *RoleSession) ConnectionGeneration() uint64 {
 	return s.connGeneration.Load()
 }
 
+// LastRxTime 返回最近一次从网关收到数据包的时间；尚未收包时返回零值。
+func (s *RoleSession) LastRxTime() time.Time {
+	ns := s.lastRxTime.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
+func (s *RoleSession) hasPendingCalls() bool {
+	s.handlerMu.RLock()
+	defer s.handlerMu.RUnlock()
+	for _, calls := range s.pendingCalls {
+		if len(calls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ConnectionSince 返回当前连接建立的时间；尚未连接时返回零值。
 func (s *RoleSession) ConnectionSince() time.Time {
 	ns := s.connSince.Load()
@@ -1163,10 +1194,12 @@ func (s *RoleSession) runLoop() {
 		// 态看到新连接。
 		s.setState(StateAuthenticating)
 
+		nowNano := time.Now().UnixNano()
 		s.writeMu.Lock()
 		s.conn = conn
 		s.connGeneration.Add(1)
-		s.connSince.Store(time.Now().UnixNano())
+		s.connSince.Store(nowNano)
+		s.lastRxTime.Store(nowNano)
 		// 新连接的 PrevAct 链在服务端从零开始，必须清掉上一条连接的全部锚点状态。
 		s.prevAct.Reset()
 		s.writeMu.Unlock()
@@ -1396,6 +1429,38 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, re
 			return s.handleConnectFailure(err)
 
 		case <-ticker.C:
+			// 半开僵尸连接检测：空闲期长时间未收到任何下行包且无在途业务请求时，
+			// 发送一次无害必回包只读探针 (0/6)，超时即判定半开连接并立即触发重连。
+			if s.cfg.StaleProbeInterval > 0 && !s.hasPendingCalls() {
+				if lastRx := s.LastRxTime(); !lastRx.IsZero() && time.Since(lastRx) >= s.cfg.StaleProbeInterval {
+					probeCtx, probeCancel := context.WithTimeout(s.ctx, s.cfg.HeartbeatTimeout)
+					_, probeErr := s.Call(
+						probeCtx,
+						protocol.BuildGetPlayerFunctionsPacket(s.LastBusinessActionID()),
+						protocol.ActionIDPlayerGetFunctions,
+					)
+					probeCancel()
+					if probeErr != nil {
+						slog.Warn("半开连接活性探针无回包，主动断开重连",
+							"role_id", s.cfg.RoleID,
+							"idle_rx", time.Since(lastRx).Round(time.Second),
+							"error", probeErr,
+						)
+						s.closeCurrentConn()
+						<-readDone
+						if s.intentionalReconnect.Swap(false) {
+							s.reconnectAttempts = 0
+							s.setState(StateReconnecting)
+							return s.waitIntentionalReconnectGrace()
+						}
+						// 传入 ErrStaleConnection 而非原始 context.DeadlineExceeded，
+						// 避免被 reconnectWait 误判为「登录握手超时」而强等 20s。
+						return s.handleConnectFailure(ErrStaleConnection)
+					}
+					continue
+				}
+			}
+
 			// 仅在真实空闲期（距上次发包超过心跳间隔）才发送保活心跳包：
 			//   - 常规业务请求 (< HeartbeatInterval) 期间不会插入心跳；
 			//   - 若遇到长超时静默丢包 (> HeartbeatInterval)，仍允许发送保活包，避免连接被中间件/网关回收。
@@ -1444,8 +1509,9 @@ func (s *RoleSession) readLoop(conn net.Conn, connCancel context.CancelFunc, err
 		close(done)
 	}()
 
+	br := bufio.NewReaderSize(conn, 16*1024)
 	for {
-		pkt, err := protocol.ReadPacket(conn)
+		pkt, err := protocol.ReadPacket(br)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				errCh <- io.EOF
@@ -1455,6 +1521,7 @@ func (s *RoleSession) readLoop(conn net.Conn, connCancel context.CancelFunc, err
 			return
 		}
 
+		s.lastRxTime.Store(time.Now().UnixNano())
 		s.prevAct.RecordRx(pkt.ActionID)
 		hexDump := hex.EncodeToString(pkt.Payload)
 		if len(hexDump) > 64 {
