@@ -60,8 +60,8 @@ func (s *RoleSession) OpenSaintAreaSessionWithInfo(ctx context.Context, cred *pr
 		return nil, fmt.Errorf("client: 圣域连接凭据为空")
 	}
 
-	cfg := s.cfg
-	cfg.RoleID = s.cfg.RoleID + "-sa"
+	cfg := s.snapshotConfig()
+	cfg.RoleID = cfg.RoleID + "-sa"
 	cfg.ServerAddr = net.JoinHostPort(cred.Host, strconv.Itoa(int(cred.Port)))
 	cfg.ServerID = cred.ServerName
 	cfg.Time1 = cred.Time
@@ -112,21 +112,12 @@ func (s *RoleSession) OpenSaintAreaSessionWithInfo(ctx context.Context, cred *pr
 	if err := sa.Start(ctx); err != nil {
 		return nil, fmt.Errorf("client: 启动圣域会话失败: %w", err)
 	}
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		switch sa.State() {
-		case StateActive:
-			return sa, nil
-		case StateClosed:
-			sa.Close()
+	if err := sa.AwaitActive(ctx); err != nil {
+		sa.Close()
+		if errors.Is(err, ErrSessionClosed) {
 			return nil, fmt.Errorf("client: 圣域会话在激活前关闭")
 		}
-		select {
-		case <-ctx.Done():
-			sa.Close()
-			return nil, fmt.Errorf("client: 等待圣域会话激活超时: %w", ctx.Err())
-		case <-ticker.C:
-		}
+		return nil, fmt.Errorf("client: 等待圣域会话激活超时: %w", err)
 	}
+	return sa, nil
 }

@@ -53,6 +53,10 @@ const (
 	// 重建不足 2 秒时直接复用（防止两个玩法在恢复瞬间连环拆连接）；更早的
 	// 重建不合并，剧情副本单场战斗后仍需全新 Mod 4 上下文。
 	forceRebuildCoalesce = 2 * time.Second
+	// intentionalReconnectGrace 主动断开后等待网关释放旧会话的最小间隔。
+	// 2026-11-28 实测：0ms 立即重拨会导致网关在 5 秒后 EOF 踢断新握手，
+	// 留出 1.5 秒释放窗口即可首轮握手直接通过。
+	intentionalReconnectGrace = 1500 * time.Millisecond
 )
 
 const (
@@ -127,12 +131,18 @@ type SessionConfig struct {
 
 // RoleSession 代表与游戏服务器建立的长连接角色会话。
 type RoleSession struct {
-	cfg SessionConfig
+	cfg   SessionConfig
+	cfgMu sync.RWMutex
 
 	state   SessionState
+	closing bool
 	stateMu sync.RWMutex
 	// stateCh 在每次状态迁移时关闭并替换，供 AwaitActive 无轮询地等待状态变化。
 	stateCh chan struct{}
+	// connCtx / connCancel 绑定当前活跃 TCP 连接的生命周期；断线或关闭连接时立即取消，
+	// 唤醒所有挂起的 Call 与握手等待者，避免死等至业务超时。
+	connCtx    context.Context
+	connCancel context.CancelFunc
 	// rebuildMu 串行化「主动重建会话」决策：同一时刻只允许一个调用方拆连接，
 	// 其余调用方在锁内等待重连完成或复用刚建立的新连接。
 	rebuildMu sync.Mutex
@@ -152,11 +162,14 @@ type RoleSession struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	reconnectAttempts int
-	isCustomDialer    bool
+	reconnectAttempts    int
+	isCustomDialer       bool
+	intentionalReconnect atomic.Bool
 
 	// 凭据自愈节流：记录最近一次 Web 换票时间、换票后连续失败次数、当前票据是否已被
 	// 成功登录消费，以及最近一次连接失败原因。
+	// credRefreshCallMu 串行化外部 HTTP 换票调用，防止 runLoop 与 EnsureFreshConnection 并发重复换票。
+	credRefreshCallMu    sync.Mutex
 	credRefreshMu        sync.Mutex
 	lastCredRefresh      time.Time
 	failuresSinceRefresh int
@@ -325,6 +338,91 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 	return s
 }
 
+// snapshotConfig 在读锁下返回当前会话配置的安全副本（含 Extra 深拷贝），
+// 防止与 RefreshCredentials 并发读写引发数据竞争或 map 读写 panic。
+func (s *RoleSession) snapshotConfig() SessionConfig {
+	s.cfgMu.RLock()
+	cfg := s.cfg
+	if s.cfg.Extra != nil {
+		extra := make(map[string]string, len(s.cfg.Extra))
+		for k, v := range s.cfg.Extra {
+			extra[k] = v
+		}
+		cfg.Extra = extra
+	}
+	s.cfgMu.RUnlock()
+	return cfg
+}
+
+// runRefreshCredentials 串行执行平台换票回调并将更新后的凭据原子写回 s.cfg。
+func (s *RoleSession) runRefreshCredentials(ctx context.Context) error {
+	s.cfgMu.RLock()
+	fn := s.cfg.RefreshCredentials
+	s.cfgMu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	cfgCopy := s.snapshotConfig()
+	if err := fn(ctx, &cfgCopy); err != nil {
+		return err
+	}
+	s.cfgMu.Lock()
+	s.cfg.ServerAddr = cfgCopy.ServerAddr
+	s.cfg.ServerID = cfgCopy.ServerID
+	s.cfg.Platform = cfgCopy.Platform
+	s.cfg.Username = cfgCopy.Username
+	s.cfg.Token = cfgCopy.Token
+	s.cfg.Code = cfgCopy.Code
+	s.cfg.Time = cfgCopy.Time
+	s.cfg.Hash = cfgCopy.Hash
+	s.cfg.Time1 = cfgCopy.Time1
+	s.cfg.Hash1 = cfgCopy.Hash1
+	if cfgCopy.Extra != nil {
+		extra := make(map[string]string, len(cfgCopy.Extra))
+		for k, v := range cfgCopy.Extra {
+			extra[k] = v
+		}
+		s.cfg.Extra = extra
+	} else {
+		s.cfg.Extra = nil
+	}
+	s.cfgMu.Unlock()
+	return nil
+}
+
+// currentConnCtx 返回当前 TCP 连接绑定的上下文；尚未建连时返回 nil。
+func (s *RoleSession) currentConnCtx() context.Context {
+	s.stateMu.RLock()
+	ctx := s.connCtx
+	s.stateMu.RUnlock()
+	return ctx
+}
+
+// cancelCurrentConnCtx 取消当前连接上下文，立即唤醒阻塞中的 Call 与握手等待者。
+func (s *RoleSession) cancelCurrentConnCtx() {
+	s.stateMu.Lock()
+	cancel := s.connCancel
+	s.connCancel = nil
+	s.stateMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// drainPendingCalls 排空并关闭全部挂起等待通道，防止旧连接的等待者滞留并抢占新连接回包。
+func (s *RoleSession) drainPendingCalls() {
+	s.handlerMu.Lock()
+	pending := s.pendingCalls
+	s.pendingCalls = make(map[uint32][]chan *protocol.Packet)
+	s.handlerMu.Unlock()
+
+	for _, calls := range pending {
+		for _, ch := range calls {
+			close(ch)
+		}
+	}
+}
+
 // State 获取会话当前所处状态。
 func (s *RoleSession) State() SessionState {
 	s.stateMu.RLock()
@@ -335,6 +433,10 @@ func (s *RoleSession) State() SessionState {
 func (s *RoleSession) setState(newState SessionState) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
+	// 一旦进入关闭流程或已关闭，禁止状态机把状态回退为 Active/Reconnecting。
+	if s.state == StateClosed || (s.closing && newState != StateClosed) {
+		return
+	}
 	if s.state != newState {
 		s.state = newState
 		if s.stateCh != nil {
@@ -401,8 +503,16 @@ func (s *RoleSession) SetPacketObserver(fn func(*protocol.Packet)) {
 // 的调度上下文 (无 deadline)，Call 将永久阻塞，冻结该角色的整个调度协程
 // (2026-11-10 叶公好龙卡死事故)。业务侧仍应显式设置更短的超时，这里仅作
 // isMockAddr 判断当前会话是否运行在离线 mock/沙箱模式。
+func (s *RoleSession) serverAddr() string {
+	s.cfgMu.RLock()
+	addr := s.cfg.ServerAddr
+	s.cfgMu.RUnlock()
+	return addr
+}
+
 func (s *RoleSession) isMockAddr() bool {
-	return s.cfg.ServerAddr == "" || s.cfg.ServerAddr == "mock" || s.cfg.ServerAddr == "dry-run" || s.cfg.ServerAddr == "sandbox"
+	addr := s.serverAddr()
+	return addr == "" || addr == "mock" || addr == "dry-run" || addr == "sandbox"
 }
 
 // callTimeout 根据当前会话模式返回业务超时（离线 mock/沙箱使用更短超时）。
@@ -473,6 +583,7 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 		ctx = callCtx
 	}
 
+	connCtx := s.currentConnCtx()
 	ch := make(chan *protocol.Packet, 1)
 
 	s.handlerMu.Lock()
@@ -498,6 +609,15 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 		return nil, err
 	}
 
+	var sessionDone <-chan struct{}
+	if s.ctx != nil {
+		sessionDone = s.ctx.Done()
+	}
+	var connDone <-chan struct{}
+	if connCtx != nil {
+		connDone = connCtx.Done()
+	}
+
 	select {
 	case <-ctx.Done():
 		// 带参请求超时通常意味着服务端静默丢弃：客户端锚点已前进而服务端链
@@ -506,9 +626,20 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 			s.prevAct.MarkDirty()
 		}
 		return nil, ctx.Err()
-	case <-s.ctx.Done():
+	case <-sessionDone:
 		return nil, ErrSessionClosed
-	case p := <-ch:
+	case <-connDone:
+		if s.State() == StateClosed {
+			return nil, ErrSessionClosed
+		}
+		return nil, ErrNotConnected
+	case p, ok := <-ch:
+		if !ok || p == nil {
+			if s.State() == StateClosed {
+				return nil, ErrSessionClosed
+			}
+			return nil, ErrNotConnected
+		}
 		return p, nil
 	}
 }
@@ -532,11 +663,21 @@ func (s *RoleSession) Start(parentCtx context.Context) error {
 // Close 主动关闭角色会话并释放全部资源。
 func (s *RoleSession) Close() {
 	s.stateMu.Lock()
-	if s.state == StateClosed {
+	if s.state == StateClosed || s.closing {
 		s.stateMu.Unlock()
 		return
 	}
+	s.closing = true
 	wasActive := s.state == StateActive
+	s.stateMu.Unlock()
+
+	// 在仍处于 Active、底层连接与读循环均未关闭时执行 onBeforeClose
+	// （例如跨服城镇会话发送 95/2 leave_town 通知服务端离城）。
+	if wasActive && s.onBeforeClose != nil {
+		s.onBeforeClose()
+	}
+
+	s.stateMu.Lock()
 	s.state = StateClosed
 	// 唤醒所有 AwaitActive 等待者：会话关闭必须立即返回，而不是等到 ctx 到期。
 	if s.stateCh != nil {
@@ -544,10 +685,6 @@ func (s *RoleSession) Close() {
 	}
 	s.stateCh = make(chan struct{})
 	s.stateMu.Unlock()
-
-	if wasActive && s.onBeforeClose != nil {
-		s.onBeforeClose()
-	}
 
 	if s.cancel != nil {
 		s.cancel()
@@ -557,6 +694,7 @@ func (s *RoleSession) Close() {
 	if s.crossSession != nil {
 		cs := s.crossSession
 		s.crossSession = nil
+		s.crossParentGen = 0
 		s.crossMu.Unlock()
 		cs.Close()
 	} else {
@@ -564,6 +702,7 @@ func (s *RoleSession) Close() {
 	}
 
 	s.closeCurrentConn()
+	s.drainPendingCalls()
 	s.wg.Wait()
 
 	if s.onAfterClose != nil {
@@ -692,45 +831,75 @@ func (s *RoleSession) EnsureFreshConnection(ctx context.Context, maxAge time.Dur
 		"age", age.Round(time.Second),
 		"max_age", maxAge,
 	)
+	genBeforeRefresh := s.ConnectionGeneration()
 	// 主动重建前先换票：旧票据在服务端释放旧会话前往往无法立刻重新登录，
 	// 实测会连续 3 次握手超时、约 80 秒后才由自愈管道换票成功。
 	if s.refreshCredentials(ctx) {
 		slog.Info("重建会话前已换取新凭据", "role_id", s.cfg.RoleID)
 	}
+
+	// 若换票期间底层已自然断线并进入新一代连接，直接等待该新连接激活，避免误拆刚建好的连接。
+	if s.ConnectionGeneration() > genBeforeRefresh {
+		waitCtx, waitCancel := context.WithTimeout(ctx, sessionActiveWait)
+		waitErr := s.AwaitActive(waitCtx)
+		waitCancel()
+		if waitErr != nil {
+			if errors.Is(waitErr, context.DeadlineExceeded) && ctx.Err() == nil {
+				return ErrNotConnected
+			}
+			return waitErr
+		}
+		if maxAge == 0 {
+			s.lastForceRebuild.Store(time.Now().UnixNano())
+		}
+		return nil
+	}
+
 	gen := s.ConnectionGeneration()
 	s.ReconnectNow()
 
-	deadline := time.Now().Add(sessionActiveWait)
+	waitCtx, waitCancel := context.WithTimeout(ctx, sessionActiveWait)
+	defer waitCancel()
 	for {
-		if s.ConnectionGeneration() > gen && s.State() == StateActive {
+		s.stateMu.RLock()
+		st, ch := s.state, s.stateCh
+		s.stateMu.RUnlock()
+
+		if s.ConnectionGeneration() > gen && st == StateActive {
 			if maxAge == 0 {
 				// 以「重建完成」时刻为准合并紧随其后的强制重建请求。
 				s.lastForceRebuild.Store(time.Now().UnixNano())
 			}
 			return nil
 		}
-		if s.State() == StateClosed {
+		if st == StateClosed {
 			return ErrSessionClosed
 		}
-		if time.Now().After(deadline) {
-			return ErrNotConnected
-		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return ErrNotConnected
+		case <-ch:
 		}
 	}
 }
 
 // refreshCredentials 在主动重建会话前换取新的平台凭据，返回是否执行了换票。
 //
-// 与 runLoop 的自愈逻辑共用节流：距上次换票不足 minCredentialRefreshInterval
-// 时不重复登录，避免多角色共用账号时互相顶号。
+// 使用 credRefreshCallMu 与 runLoop 串行化外部换票调用，避免并发重复 Web 登录。
 func (s *RoleSession) refreshCredentials(ctx context.Context) bool {
-	if s.cfg.RefreshCredentials == nil {
+	s.cfgMu.RLock()
+	hasRefresher := s.cfg.RefreshCredentials != nil
+	s.cfgMu.RUnlock()
+	if !hasRefresher {
 		return false
 	}
+
+	s.credRefreshCallMu.Lock()
+	defer s.credRefreshCallMu.Unlock()
+
 	// 主动重建时若当前票据已被登录消费 (ticketConsumed)，必须立即换取新票；
 	// 尚未消费的新票据保留 10 秒防抖，避免同一次重建流程里重复登录。
 	s.credRefreshMu.Lock()
@@ -739,7 +908,7 @@ func (s *RoleSession) refreshCredentials(ctx context.Context) bool {
 	if recent {
 		return false
 	}
-	if err := s.cfg.RefreshCredentials(ctx, &s.cfg); err != nil {
+	if err := s.runRefreshCredentials(ctx); err != nil {
 		slog.Warn("重建会话前换票未成功，继续使用现有凭据", "role_id", s.cfg.RoleID, "error", err)
 		return false
 	}
@@ -783,27 +952,55 @@ func (s *RoleSession) setWriteDeadline() {
 	}
 }
 
-func (s *RoleSession) Send(p *protocol.Packet) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	if s.State() == StateClosed {
+// prepareWriteLocked 在持有 writeMu 的前提下校验连接状态并设置写超时。
+// 仅允许 Active（业务发包）和 Authenticating（握手发包）状态写入，防止在
+// Disconnected/Connecting/Reconnecting 窗口污染尚未就绪的连接。
+func (s *RoleSession) prepareWriteLocked() error {
+	st := s.State()
+	if st == StateClosed {
 		return ErrSessionClosed
+	}
+	if st != StateActive && st != StateAuthenticating {
+		return ErrNotConnected
 	}
 	if s.conn == nil {
 		return ErrNotConnected
 	}
 	s.setWriteDeadline()
+	return nil
+}
+
+// abortConnOnWriteErrLocked 在持有 writeMu 的前提下关闭发生写错误/写超时的连接。
+// 写超时或半包写失败会导致 TCP 帧边界永久错乱，必须立即断开以触发干净重连。
+func (s *RoleSession) abortConnOnWriteErrLocked() {
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+	}
+	s.cancelCurrentConnCtx()
+}
+
+func (s *RoleSession) Send(p *protocol.Packet) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if err := s.prepareWriteLocked(); err != nil {
+		return err
+	}
 
 	p = s.prevAct.StampPayload(p)
 
 	err := protocol.WritePacket(s.conn, p)
-	if err == nil && p != nil {
+	if err != nil {
+		s.abortConnOnWriteErrLocked()
+		return err
+	}
+	if p != nil {
 		s.lastSendTime.Store(time.Now().UnixNano())
 		s.prevAct.RecordSent(p.ActionID)
 		slog.Debug("发送网关请求", "role_id", s.cfg.RoleID, "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", p.ActionID, p.ActionID>>16, p.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(p.Payload))
 	}
-	return err
+	return nil
 }
 
 // SendVerbatim 发送已按线格式编码好的业务封包：不追加或覆盖 PrevAct 尾链，
@@ -815,23 +1012,23 @@ func (s *RoleSession) SendVerbatim(p *protocol.Packet) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	if s.State() == StateClosed {
-		return ErrSessionClosed
+	if err := s.prepareWriteLocked(); err != nil {
+		return err
 	}
-	if s.conn == nil {
-		return ErrNotConnected
-	}
-	s.setWriteDeadline()
 
 	err := protocol.WritePacket(s.conn, p)
-	if err == nil && p != nil {
+	if err != nil {
+		s.abortConnOnWriteErrLocked()
+		return err
+	}
+	if p != nil {
 		s.lastSendTime.Store(time.Now().UnixNano())
 		s.prevAct.RecordSent(p.ActionID)
 		slog.Debug("发送网关请求(verbatim)", "role_id", s.cfg.RoleID,
 			"action_id", fmt.Sprintf("0x%08X", p.ActionID),
 			"payload_hex", hex.EncodeToString(p.Payload))
 	}
-	return err
+	return nil
 }
 
 // SendCompressed 向对端发送经 zlib 压缩的协议封包。
@@ -839,20 +1036,20 @@ func (s *RoleSession) SendCompressed(p *protocol.Packet) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	if s.State() == StateClosed {
-		return ErrSessionClosed
+	if err := s.prepareWriteLocked(); err != nil {
+		return err
 	}
-	if s.conn == nil {
-		return ErrNotConnected
-	}
-	s.setWriteDeadline()
 
 	err := protocol.WriteCompressedPacket(s.conn, p)
-	if err == nil && p != nil {
+	if err != nil {
+		s.abortConnOnWriteErrLocked()
+		return err
+	}
+	if p != nil {
 		s.lastSendTime.Store(time.Now().UnixNano())
 		s.prevAct.RecordSent(p.ActionID)
 	}
-	return err
+	return nil
 }
 
 // SendRaw 向对端直接写入原始字节切片 (并发安全加锁)。
@@ -860,23 +1057,21 @@ func (s *RoleSession) SendRaw(data []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	if s.State() == StateClosed {
-		return ErrSessionClosed
+	if err := s.prepareWriteLocked(); err != nil {
+		return err
 	}
-	if s.conn == nil {
-		return ErrNotConnected
-	}
-	s.setWriteDeadline()
 
 	_, err := s.conn.Write(data)
-	if err == nil {
-		s.lastSendTime.Store(time.Now().UnixNano())
-		if len(data) >= 8 {
-			actID := binary.BigEndian.Uint32(data[4:8])
-			s.prevAct.RecordSent(actID)
-		}
+	if err != nil {
+		s.abortConnOnWriteErrLocked()
+		return err
 	}
-	return err
+	s.lastSendTime.Store(time.Now().UnixNano())
+	if len(data) >= 8 {
+		actID := binary.BigEndian.Uint32(data[4:8])
+		s.prevAct.RecordSent(actID)
+	}
+	return nil
 }
 
 func (s *RoleSession) closeCurrentConn() {
@@ -886,6 +1081,7 @@ func (s *RoleSession) closeCurrentConn() {
 		_ = s.conn.Close()
 		s.conn = nil
 	}
+	s.cancelCurrentConnCtx()
 }
 
 // ReconnectNow 主动断开当前连接，触发状态机按原配置重新登录。
@@ -898,6 +1094,7 @@ func (s *RoleSession) ReconnectNow() {
 		return
 	}
 	slog.Info("主动断开连接以重建服务端会话上下文", "role_id", s.cfg.RoleID)
+	s.intentionalReconnect.Store(true)
 	s.closeCurrentConn()
 }
 
@@ -916,14 +1113,22 @@ func (s *RoleSession) runLoop() {
 		// 注意：普通 EOF 不应每次重连都重新 Web 登录——同一平台账号下多个角色
 		// 共用一次登录态，频繁换票会把另一角色顶下线（2026-11-21 s0/s1 实测：
 		// 一个角色的换票循环把另一个角色的握手持续顶掉，resultCode=2）。
-		if s.State() == StateReconnecting && s.cfg.RefreshCredentials != nil && s.shouldRefreshCredentials() {
-			slog.Info("正在通过自愈管道重新换取最新平台动态凭据...", "role_id", s.cfg.RoleID)
-			if rErr := s.cfg.RefreshCredentials(s.ctx, &s.cfg); rErr != nil {
-				slog.Warn("凭据自愈换票未成功", "role_id", s.cfg.RoleID, "error", rErr)
-			} else {
-				s.markCredentialRefreshed()
-				slog.Info("凭据自愈换票成功，已装载新动态凭据", "role_id", s.cfg.RoleID, "server_addr", s.cfg.ServerAddr)
+		s.cfgMu.RLock()
+		hasRefresher := s.cfg.RefreshCredentials != nil
+		s.cfgMu.RUnlock()
+		if s.State() == StateReconnecting && hasRefresher && s.shouldRefreshCredentials() {
+			s.credRefreshCallMu.Lock()
+			if s.shouldRefreshCredentials() {
+				slog.Info("正在通过自愈管道重新换取最新平台动态凭据...", "role_id", s.cfg.RoleID)
+				if rErr := s.runRefreshCredentials(s.ctx); rErr != nil {
+					slog.Warn("凭据自愈换票未成功", "role_id", s.cfg.RoleID, "error", rErr)
+				} else {
+					s.markCredentialRefreshed()
+					cfgNow := s.snapshotConfig()
+					slog.Info("凭据自愈换票成功，已装载新动态凭据", "role_id", s.cfg.RoleID, "server_addr", cfgNow.ServerAddr)
+				}
 			}
+			s.credRefreshCallMu.Unlock()
 		}
 
 		if s.State() != StateReconnecting {
@@ -931,15 +1136,32 @@ func (s *RoleSession) runLoop() {
 		}
 		// 同一角色的常驻跨服辅助连接在线时，网关会拒绝新的主服登录
 		// （实测连续握手超时约 75 秒）。每次重连前先断开辅助连接，
-		// 新连接激活后由 cross_keepalive 重新建立。
+		// 新连接激活后由 cross_keepalive 或 EnsureFreshConnection 重新建立。
 		s.suspendCrossSession()
-		conn, err := s.cfg.Dialer(s.ctx, "tcp", s.cfg.ServerAddr)
+		cfgSnap := s.snapshotConfig()
+		conn, err := cfgSnap.Dialer(s.ctx, "tcp", cfgSnap.ServerAddr)
 		if err != nil {
 			if !s.handleConnectFailure(err) {
 				return
 			}
 			continue
 		}
+
+		connCtx, connCancel := context.WithCancel(s.ctx)
+		s.stateMu.Lock()
+		if s.state == StateClosed || s.closing {
+			s.stateMu.Unlock()
+			connCancel()
+			_ = conn.Close()
+			return
+		}
+		s.connCtx = connCtx
+		s.connCancel = connCancel
+		s.stateMu.Unlock()
+
+		// 先切换到 Authenticating 再暴露 s.conn，确保 Send() 不会在 Connecting/Reconnecting
+		// 态看到新连接。
+		s.setState(StateAuthenticating)
 
 		s.writeMu.Lock()
 		s.conn = conn
@@ -949,16 +1171,21 @@ func (s *RoleSession) runLoop() {
 		s.prevAct.Reset()
 		s.writeMu.Unlock()
 
-		// 2. 启动读循环通道
+		// 2. 启动读循环通道（由 readDone 跟踪退出，确保旧 readLoop 完全结束后再建下一条连接）
 		readErrCh := make(chan error, 1)
-		go s.readLoop(conn, readErrCh)
+		readDone := make(chan struct{})
+		go s.readLoop(conn, connCancel, readErrCh, readDone)
 
 		// 3. 执行认证握手
-		s.setState(StateAuthenticating)
-		if s.cfg.Authenticator != nil {
-			if err := s.cfg.Authenticator(s); err != nil {
+		if cfgSnap.Authenticator != nil {
+			if err := cfgSnap.Authenticator(s); err != nil {
 				slog.Info("角色身份认证失败", "role_id", s.cfg.RoleID, "error", err)
 				s.closeCurrentConn()
+				<-readDone
+				if s.intentionalReconnect.Swap(false) {
+					s.setState(StateReconnecting)
+					continue
+				}
 				if !s.handleConnectFailure(err) {
 					return
 				}
@@ -972,7 +1199,7 @@ func (s *RoleSession) runLoop() {
 		s.dropStaleCrossSession()
 
 		// 5. 运行激活态心跳保活与异常等待
-		if !s.runActiveSession(conn, readErrCh) {
+		if !s.runActiveSession(conn, readErrCh, readDone) {
 			return
 		}
 	}
@@ -1084,10 +1311,11 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 
 	s.reconnectAttempts++
 	s.noteConnectFailure(err)
+	serverAddr := s.serverAddr()
 	if s.cfg.MaxReconnectAttempts > 0 && s.reconnectAttempts >= s.cfg.MaxReconnectAttempts {
 		slog.Error("超过最大重连尝试次数，会话终止",
 			"role_id", s.cfg.RoleID,
-			"server_addr", s.cfg.ServerAddr,
+			"server_addr", serverAddr,
 			"attempts", s.reconnectAttempts,
 			"error", err,
 		)
@@ -1108,14 +1336,14 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 		waitDuration = roleSelectionRetryInterval
 		slog.Warn("服务端要求选择/创建角色，自动化不会创建角色；请在官方客户端选定角色后等待自动重连",
 			"role_id", s.cfg.RoleID,
-			"server_addr", s.cfg.ServerAddr,
+			"server_addr", serverAddr,
 			"retry_in", waitDuration,
 		)
 	}
 
 	slog.Info("网络连接中断，等待重连",
 		"role_id", s.cfg.RoleID,
-		"server_addr", s.cfg.ServerAddr,
+		"server_addr", serverAddr,
 		"attempts", s.reconnectAttempts,
 		"retry_in", waitDuration,
 		"error", err,
@@ -1130,7 +1358,7 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 	}
 }
 
-func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bool {
+func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, readDone <-chan struct{}) bool {
 	ticker := time.NewTicker(s.cfg.HeartbeatInterval)
 	defer ticker.Stop()
 
@@ -1142,6 +1370,7 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 		select {
 		case <-s.ctx.Done():
 			s.closeCurrentConn()
+			<-readDone
 			s.setState(StateClosed)
 			return false
 
@@ -1156,6 +1385,14 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 		case err := <-readErrCh:
 			slog.Info("网络读取循环退出", "role_id", s.cfg.RoleID, "error", err)
 			s.closeCurrentConn()
+			<-readDone
+			// 主动重建（ReconnectNow / EnsureFreshConnection）不计入失败计数并清零旧计数；
+			// 真实网关留出短暂释放窗口，避免 0ms 立即重拨撞上旧会话未释放而被 EOF。
+			if s.intentionalReconnect.Swap(false) {
+				s.reconnectAttempts = 0
+				s.setState(StateReconnecting)
+				return s.waitIntentionalReconnectGrace()
+			}
 			return s.handleConnectFailure(err)
 
 		case <-ticker.C:
@@ -1173,13 +1410,40 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 			if err := s.Send(heartbeat); err != nil {
 				slog.Warn("发送心跳失败", "role_id", s.cfg.RoleID, "error", err)
 				s.closeCurrentConn()
+				<-readDone
+				if s.intentionalReconnect.Swap(false) {
+					s.reconnectAttempts = 0
+					s.setState(StateReconnecting)
+					return s.waitIntentionalReconnectGrace()
+				}
 				return s.handleConnectFailure(err)
 			}
 		}
 	}
 }
 
-func (s *RoleSession) readLoop(conn net.Conn, errCh chan<- error) {
+func (s *RoleSession) waitIntentionalReconnectGrace() bool {
+	if s.isCustomDialer || intentionalReconnectGrace <= 0 {
+		return true
+	}
+	timer := time.NewTimer(intentionalReconnectGrace)
+	defer timer.Stop()
+	select {
+	case <-s.ctx.Done():
+		s.setState(StateClosed)
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (s *RoleSession) readLoop(conn net.Conn, connCancel context.CancelFunc, errCh chan<- error, done chan<- struct{}) {
+	defer func() {
+		connCancel()
+		s.drainPendingCalls()
+		close(done)
+	}()
+
 	for {
 		pkt, err := protocol.ReadPacket(conn)
 		if err != nil {

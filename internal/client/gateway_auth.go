@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -26,45 +27,48 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
 	defer cancel()
 
+	cfg := s.snapshotConfig()
+	connCtx := s.currentConnCtx()
+
 	// 0. 构造并发送登录握手请求包 (优先主服 0x00000000，或跨服 0x005E0000)
 	var loginPkt *protocol.Packet
 	var loginRespActionID uint32 = protocol.ActionIDPlayerLogin
 
-	if s.cfg.Time1 != 0 && s.cfg.Hash1 != "" && s.cfg.Hash == "" {
+	if cfg.Time1 != 0 && cfg.Hash1 != "" && cfg.Hash == "" {
 		// 跨服网关凭据
 		loginRespActionID = protocol.ActionIDStLogin
-		originNickName := s.cfg.OriginNickName
+		originNickName := cfg.OriginNickName
 		if originNickName == "" {
 			originNickName = s.OriginNickName()
 		}
 		var err error
 		loginPkt, err = protocol.BuildStLoginPacket(protocol.StLoginRequest{
-			ServerName:     s.cfg.ServerID,
-			PlayerID:       s.cfg.PlayerID,
+			ServerName:     cfg.ServerID,
+			PlayerID:       cfg.PlayerID,
 			OriginNickName: originNickName,
-			Time:           s.cfg.Time1,
-			PassCode:       s.cfg.Hash1,
+			Time:           cfg.Time1,
+			PassCode:       cfg.Hash1,
 		})
 		if err != nil {
 			return fmt.Errorf("client: failed to build st login packet: %w", err)
 		}
 	} else {
 		// 主服原生网关凭据
-		timeStr := fmt.Sprintf("%d", s.cfg.Time)
-		if s.cfg.Time == 0 {
+		timeStr := fmt.Sprintf("%d", cfg.Time)
+		if cfg.Time == 0 {
 			timeStr = fmt.Sprintf("%d", time.Now().Unix())
 		}
-		platform := s.cfg.Platform
+		platform := cfg.Platform
 		if platform == "" || platform == "fengwan" {
 			platform = "疯玩"
 		}
-		hash := s.cfg.Hash
+		hash := cfg.Hash
 		if hash == "" {
-			hash = s.cfg.Token
+			hash = cfg.Token
 		}
-		username := s.cfg.Username
+		username := cfg.Username
 		if username == "" {
-			username = s.cfg.RoleID
+			username = cfg.RoleID
 		}
 
 		loginReq := protocol.PlayerLoginRequest{
@@ -76,43 +80,43 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 			ClientType: "web",
 		}
 
-		if s.cfg.Extra != nil {
-			if rd, ok := s.cfg.Extra["regdate"]; ok {
+		if cfg.Extra != nil {
+			if rd, ok := cfg.Extra["regdate"]; ok {
 				if v, err := strconv.ParseInt(rd, 10, 32); err == nil {
 					loginReq.RegDate = int32(v)
 				}
 			}
-			if ot, ok := s.cfg.Extra["open_time"]; ok {
+			if ot, ok := cfg.Extra["open_time"]; ok {
 				if v, err := strconv.ParseInt(ot, 10, 32); err == nil {
 					loginReq.OpenTime = int32(v)
 				}
 			}
-			if in, ok := s.cfg.Extra["is_newst"]; ok {
+			if in, ok := cfg.Extra["is_newst"]; ok {
 				if v, err := strconv.ParseInt(in, 10, 8); err == nil {
 					loginReq.IsNewst = int8(v)
 				}
 			}
-			if stage, ok := s.cfg.Extra["stage"]; ok && stage != "" {
+			if stage, ok := cfg.Extra["stage"]; ok && stage != "" {
 				loginReq.Stage = stage
 			}
-			if client, ok := s.cfg.Extra["client"]; ok && client != "" {
+			if client, ok := cfg.Extra["client"]; ok && client != "" {
 				loginReq.Client = client
 			}
-			if src, ok := s.cfg.Extra["source"]; ok {
+			if src, ok := cfg.Extra["source"]; ok {
 				loginReq.Source = src
 			}
-			if idCard, ok := s.cfg.Extra["id_card"]; ok && idCard != "" {
+			if idCard, ok := cfg.Extra["id_card"]; ok && idCard != "" {
 				loginReq.IDCard = idCard
 			}
-			if s.cfg.Extra["non_kid"] == "1" {
+			if cfg.Extra["non_kid"] == "1" {
 				loginReq.IDCard = ""
 			}
-			if s.cfg.Extra["hash_code"] != "" {
+			if cfg.Extra["hash_code"] != "" {
 				loginReq.IsOfficial = true
 			}
 		}
 
-		if loginReq.Stage == "" && (s.cfg.Platform == "xindong" || s.cfg.Platform == "xd") {
+		if loginReq.Stage == "" && (cfg.Platform == "xindong" || cfg.Platform == "xd") {
 			loginReq.Stage = "心动"
 		}
 		if loginReq.Client == "" {
@@ -163,11 +167,22 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 		_ = s.Send(step1Pkt)
 	}
 
+	var connDone <-chan struct{}
+	if connCtx != nil {
+		connDone = connCtx.Done()
+	}
+
 	var respPkt *protocol.Packet
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf("client: login handshake timeout or failed: %w", ctx.Err())
-	case respPkt = <-respCh:
+	case <-connDone:
+		return fmt.Errorf("client: connection closed during login handshake: %w", ErrNotConnected)
+	case p, ok := <-respCh:
+		if !ok || p == nil {
+			return fmt.Errorf("client: connection closed during login handshake: %w", ErrNotConnected)
+		}
+		respPkt = p
 	}
 
 	// 校验登录回包状态码
@@ -246,7 +261,11 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 	// 1. Step 1: 自动执行 Action 72 城镇场景初始化同步
 	step1Pkt := protocol.BuildPlayerInitStep1Packet(0x0048)
 	step1Resp, err := s.Call(ctx, step1Pkt, protocol.ActionIDPlayerInitStep1)
-	if err == nil {
+	if err != nil {
+		if errors.Is(err, ErrNotConnected) || errors.Is(err, ErrSessionClosed) || (connCtx != nil && connCtx.Err() != nil) {
+			return fmt.Errorf("client: init step 1 failed (connection lost): %w", err)
+		}
+	} else {
 		if initRes, pErr := protocol.ParsePlayerInitStep1Result(step1Resp.Payload); pErr == nil {
 			s.UpdatePlayerState(func(ps *PlayerState) {
 				ps.TownID = int(initRes.TownID)
@@ -256,16 +275,24 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 
 	// 2. Step 2: 场景进阶同步 (ActionID 0x00000063，携带前序动作 0x0048，单向通知包)
 	step2Pkt := protocol.BuildPlayerInitStep2Packet(0x0048)
-	_ = s.Send(step2Pkt)
+	if err := s.Send(step2Pkt); err != nil {
+		return fmt.Errorf("client: init step 2 send failed: %w", err)
+	}
 
 	// 3. Step 3: 扩展模块初始化 (ActionID 0x00A50000，携带前序动作 0x0063，单向通知包)
 	step3Pkt := protocol.BuildPlayerInitStep3Packet(0x0063)
-	_ = s.Send(step3Pkt)
+	if err := s.Send(step3Pkt); err != nil {
+		return fmt.Errorf("client: init step 3 send failed: %w", err)
+	}
 
 	// 4. Step 4: 全量角色资产快照获取 (ActionID 0x00000002，携带前序动作 0x00A50000)
 	step4Pkt := protocol.BuildPlayerGetInfoPacket(0x00A50000)
 	step4Resp, err := s.Call(ctx, step4Pkt, protocol.ActionIDPlayerGetInfo)
-	if err == nil {
+	if err != nil {
+		if errors.Is(err, ErrNotConnected) || errors.Is(err, ErrSessionClosed) || (connCtx != nil && connCtx.Err() != nil) {
+			return fmt.Errorf("client: init step 4 failed (connection lost): %w", err)
+		}
+	} else {
 		infoRes, pErr := protocol.ParsePlayerLoginResult(step4Resp.Payload)
 		if pErr == nil && infoRes != nil {
 			s.UpdatePlayerState(func(ps *PlayerState) {

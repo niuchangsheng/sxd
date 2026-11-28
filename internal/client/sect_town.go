@@ -108,11 +108,10 @@ func (s *RoleSession) OpenSectTownSessionWithCredentials(ctx context.Context, cr
 	if cred == nil {
 		return nil, ErrNotInSect
 	}
-	cfg := s.cfg
-	cfg.RoleID = s.cfg.RoleID + "-sect"
+	cfg := s.snapshotConfig()
+	cfg.RoleID = cfg.RoleID + "-sect"
 	cfg.ServerAddr = net.JoinHostPort(cred.Login.Host, strconv.Itoa(int(cred.Login.Port)))
 	cfg.ServerID = cred.Login.ServerName
-	cfg.Platform = s.cfg.Platform
 	cfg.HeartbeatInterval = 5 * time.Second
 	cfg.MaxReconnectAttempts = 1
 	cfg.RefreshCredentials = nil
@@ -168,21 +167,12 @@ func (s *RoleSession) OpenSectTownSessionWithCredentials(ctx context.Context, cr
 	if err := sess.Start(ctx); err != nil {
 		return nil, fmt.Errorf("client: 启动仙盟城镇会话失败: %w", err)
 	}
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		switch sess.State() {
-		case StateActive:
-			return sess, nil
-		case StateClosed:
-			sess.Close()
+	if err := sess.AwaitActive(ctx); err != nil {
+		sess.Close()
+		if errors.Is(err, ErrSessionClosed) {
 			return nil, errors.New("client: 仙盟城镇会话在激活前关闭")
 		}
-		select {
-		case <-ctx.Done():
-			sess.Close()
-			return nil, fmt.Errorf("client: 等待仙盟城镇会话激活超时: %w", ctx.Err())
-		case <-ticker.C:
-		}
+		return nil, fmt.Errorf("client: 等待仙盟城镇会话激活超时: %w", err)
 	}
+	return sess, nil
 }
