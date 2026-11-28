@@ -1253,3 +1253,18 @@ Int left_day, Int mount_count, Int title_count, Int cur_level
 >   `336/20` 返回 `[Int time_diff, UByte result]`，result=9 即成功。
 > - 自动化每天只发一次，记账文件 `data/runtime/server_chat_room_state.json`
 >   （已加入 `.gitignore`）。
+
+### 4.30 Module 362 (0x016A): 圣域无尽龙域 / 龙域战场 (`Mod_SaDragonArea_Base`)
+
+| Action | ActionID | 方法 | 连接 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 362/0 | `0x016A0000` | `get_dragon_area_info` | 圣域 (`SOCKETSAINTAREA`) | 空 | 18 字段：`Int seq, [[Int item_id, Int count] award_list], Short complete_count, Byte decrease_difficulty, String first_nickname, Int first_war_report_id, String first_version, String best_nickname, Int best_war_report_id, String best_version, Int special_pattern, Int monster_team_id, [[Byte loc, Int ball, Byte lv] round_dragonball_list], [[7×Int] monster_list], Int five_elements_property_id, Int last_week_seq, Int quick_seq, Int is_dragon_clear` |
+| 362/1 | `0x016A0001` | `get_top_10` | 圣域 (`SOCKETSAINTAREA`) | 空 | 排行榜前十 |
+| 362/2 | `0x016A0002` | `fight` | 圣域 (`SOCKETSAINTAREA`) | 空 | `UByte result, war_result_list, [[Int item_id, Int count] award_list]` |
+| 362/4 | `0x016A0004` | `quick_fight` | 圣域 (`SOCKETSAINTAREA`) | 空 | `[[Int seq, [[Int item_id, Int count] award_list]]]`（免费一键扫荡至 `quick_seq`） |
+
+> **结果码与实测结论（2026-11-28，对照 `Main.swf` `Mod_SaDragonArea_Base` 与探针 `test/probes/probe_sa_dragon_area_live.go`）**：
+>
+> - 结果码枚举：`0=SUCCESS`、`1=FUNCTION_NO_OPEN`、`2=COMPLETE_ALL`、`3=SAINT_AREA_CLOSE`、`4=CD`、`5=FAILD`。
+> - 主服发 `362/0` 静默无回包，必须通过 `OpenSaintAreaSession` 建立圣域独立长连接；未开放圣域的区服（如 `293/1` 返回空 host）直接返回 `ErrSaintAreaCredentialMissing`。
+> - `s0` 实机 `362/0` 返回 400 字节，18 字段完整解码后 `remaining_bytes=0`；`362/4` 免费一键扫荡不消耗元宝。

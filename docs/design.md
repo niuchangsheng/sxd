@@ -20,20 +20,24 @@
 
 ## 2. 分层模块职责
 
-### 2.1 网络会话层 (`internal/client`)
-经过 Phase 2 职责拆分后，`internal/client` 按单一职责组织为以下核心文件：
+### 2.1 网络会话与传输层 (`internal/client` + `internal/platform`)
+经过职责拆分与连接层加固后，`internal/client` 按「传输层 / 会话状态机 / 派生子会话 / 观测指标 / 领域封装」清晰分层：
 
 | 文件 | 核心职责 |
 | :--- | :--- |
-| [session.go](file:///home/chang/sxd/internal/client/session.go) | `RoleSession` 生命周期状态机（`Disconnected`/`Connecting`/`Authenticating`/`Active`/`Closed`）、`Send`/`Call`/`CallWithPrevActResync`、心跳保活、指数退避重连与 `callTimeout` 辅助 |
+| [transport.go](file:///home/chang/sxd/internal/client/transport.go) | 单代 TCP 连接传输对象 `connTransport`：独占 `net.Conn`、写锁与 10s 写超时（写错/超时立即断链防帧错乱）、16KB `bufio.Reader` 读循环、本代 `pendingCalls` 路由表与连接级 `ctx/cancel`；断线时整对象销毁并排空等待通道，从结构上杜绝跨连接串包 |
+| [session.go](file:///home/chang/sxd/internal/client/session.go) | `RoleSession` 生命周期状态机（`Disconnected`/`Connecting`/`Authenticating`/`Active`/`Reconnecting`/`Closed`）、`AwaitActive` 事件等待、`cfgMu` 并发安全配置快照与串行换票、主动重建（`EnsureFreshConnection` + `1.5s` 网关释放缓冲）、`Close`/`onBeforeClose` 离城时序与 `0/6` 半开僵尸连接活性探针（`StaleProbeInterval`） |
+| [child_session.go](file:///home/chang/sxd/internal/client/child_session.go) | 统一派生子会话工厂 `openChildSession(lifeCtx, waitCtx, ...)`：分离生命周期上下文与激活等待超时，统一处理 `AwaitActive`、失败回收与关闭主服半开探针 |
+| [metrics.go](file:///home/chang/sxd/internal/client/metrics.go) | 线程安全连接健康度快照 `SessionMetrics`（连接代数、存活/收包间隔、被动断线、主动重建、握手失败、半开探针、跨服保活状态与最近断线原因），供 Web `/api/roles` 透出 |
 | [prevact.go](file:///home/chang/sxd/internal/client/prevact.go) | 并发安全的 `PrevActChain` 状态机：统一管理业务尾链锚点、失步标记（`chainDirty`）、最近 32 条收包环形诊断缓冲与载荷覆写 |
 | [player_state.go](file:///home/chang/sxd/internal/client/player_state.go) | `PlayerState` 资产快照、下行属性推送解析（`update_player_data`）、`FetchLatestPlayerInfo` 与 `SyncQuests` |
-| [gateway_auth.go](file:///home/chang/sxd/internal/client/gateway_auth.go) | `DefaultGatewayAuthenticator` 四步登录握手与全量角色资产初始化 |
+| [gateway_auth.go](file:///home/chang/sxd/internal/client/gateway_auth.go) | `DefaultGatewayAuthenticator` 四步登录握手与全量角色资产初始化；监听连接级 `connCtx` 实现握手 EOF 秒级快速失败 |
 | [town_practice.go](file:///home/chang/sxd/internal/client/town_practice.go) | 主城切换（`EnterTown`/`ReturnToTown`）与城镇打坐练功协议封装 |
 | [beelzebub_session.go](file:///home/chang/sxd/internal/client/beelzebub_session.go) / [beelzebub_trials.go](file:///home/chang/sxd/internal/client/beelzebub_trials.go) | 魔王试炼（Mod 57）会话封装、组队与自动挑战编排 |
 | [tower_actions.go](file:///home/chang/sxd/internal/client/tower_actions.go) | 六道轮回塔（Mod 32）与背包物品出售封装 |
-| [cross_server.go](file:///home/chang/sxd/internal/client/cross_server.go) / [saint_area.go](file:///home/chang/sxd/internal/client/saint_area.go) / [sect_town.go](file:///home/chang/sxd/internal/client/sect_town.go) / [server_chat_room.go](file:///home/chang/sxd/internal/client/server_chat_room.go) | 按需建立与回收的跨服（仙界）、圣域、仙盟城镇与独立聊天服子会话 |
+| [cross_server.go](file:///home/chang/sxd/internal/client/cross_server.go) / [saint_area.go](file:///home/chang/sxd/internal/client/saint_area.go) / [sect_town.go](file:///home/chang/sxd/internal/client/sect_town.go) / [server_chat_room.go](file:///home/chang/sxd/internal/client/server_chat_room.go) | 仙界常驻保活辅助连接（`94/0` + `6/12`，不进城，抵御 5 分钟墙钟扫描回收）、仙界城镇（`onBeforeClose` 发送 `95/2 leave_town`，`onAfterClose` 同步短超时恢复常驻辅助连接）、圣域（含 `sa_dragon_area` Module 362）、仙盟城镇与独立聊天服子会话 |
 | [mock_server.go](file:///home/chang/sxd/internal/client/mock_server.go) | 供离线调试、沙箱与单元测试使用的虚拟协议服务端 `runMockGameServer` |
+| [cache.go](file:///home/chang/sxd/internal/platform/cache.go) | `TicketCache` 按 `platform:username` 维度的账号级换票门闩（`accountLoginGate`）与最小换票间隔（默认 3s）：不同账号并发换票互不阻塞，同账号多区服运行期严格串行防互顶 |
 
 ### 2.2 协议编解码与 PrevAct 链状态机 (`internal/protocol` + `internal/client/prevact.go`)
 1. **帧格式与流式解压**：
@@ -61,7 +65,7 @@ stateDiagram-v2
     Execute --> PostTown: defer WithReturnToTown()
     PostTown --> Classify: 错误语义分类
     Classify --> Cooling: CooldownError / ErrAttemptsExhausted / ErrBagFull
-    Classify --> ShortRetry: ErrNotConnected (5m)
+    Classify --> ShortRetry: ErrNotConnected (90s)
     Classify --> SilentBackoff: DeadlineExceeded (连续 3 次 → min(次日 00:05, 6h))
     Classify --> Done: nil (清零该任务丢包计数)
     Cooling --> Idle
@@ -70,14 +74,14 @@ stateDiagram-v2
     Done --> Idle
 ```
 
-- **零忙轮询事件驱动**（[scheduler.go](file:///home/chang/sxd/internal/scheduler/scheduler.go)）：`pickNextReadyOrWait()` 在锁内计算最高优先级可执行项或精确等待时长，通过 `time.NewTimer(wait)` 休眠；`Register`、`SetRoutineEnabled(..., true)`、`TriggerBatch` 通过非阻塞 `wakeCh` 立即唤醒调度循环。
+- **零忙轮询事件驱动**（[scheduler.go](file:///home/chang/sxd/internal/scheduler/scheduler.go)）：`pickNextReadyOrWait()` 在锁内计算最高优先级可执行项或精确等待时长，通过 `time.NewTimer(wait)` 休眠；会话未激活时直接阻塞在事件驱动的 `session.AwaitActive(ctx)`（零轮询、重连恢复瞬间拉起）；`Register`、`SetRoutineEnabled(..., true)`、`TriggerBatch` 通过非阻塞 `wakeCh` 立即唤醒调度循环。
 - **语义化优先级阶段**（[routine.go](file:///home/chang/sxd/internal/scheduler/routine.go)）：禁止魔数优先级，统一使用 `PhasePriority(phase, offset)`：
-  - `PhaseSystem (500)`：会话维护（如 5 分钟主动重建连接）
+  - `PhaseSystem (500)`：会话维护（`cross_keepalive` 510 常驻跨服保活；可选 `session_refresh` 500）
   - `PhaseTownSensitive (420)`：对城镇上下文极敏感的玩法（天帝宝库、灵域猎妖）
   - `PhaseEarlyBattle (350)`：长会话后段易丢包的战斗/养成（五行天宫、无量劫海、飞升、魔界远征、无尽洞天等）
-  - `PhaseCoreLoop (300)`：核心循环（轮回图录等）
+  - `PhaseCoreLoop (300)`：核心体力与循环链路，严格分层为 **主支线/精英首通推图 `dungeon` (300) > 通天塔 `tong_tian_tower` (290) > 精英副本扫荡 `dungeon_sweep` (280)**
   - `PhaseEarlyWindow (200)`：早间窗口（结缘宝箱等）
-  - `PhaseHighPriority (100)` / `PhaseStandard (50)` / `PhaseCleanup (10)`：常规日常与收尾清理
+  - `PhaseHighPriority (100)` / `PhaseStandard (50)` / `PhaseCleanup (10)`：常规日常（含圣域无尽龙域 `sa_dragon_area`）与收尾清理
 - **声明式横切选项**：
   - `WithReturnToTown(timeout...)`：玩法退出时自动回城，避免战斗场景残留污染后续玩法；
   - `WithFunctionID(id)`：执行前原生调用 `check_function_open`（Mod 0, Act 69）；
@@ -91,7 +95,7 @@ stateDiagram-v2
   - `kit.Sleep(ctx, d)` 取代裸 `time.Sleep`，支持 `SIGINT` 毫秒级退出；
   - `kit.WithTimeoutOverride(ctx, d)` 允许单测将 8~45 秒业务超时压缩到毫秒级。
 - **7 大领域包与注册工厂**（[registry.go](file:///home/chang/sxd/internal/routines/registry.go)）：
-  - `system`（1 项）、`daily`、`dungeon`、`farming`、`minigame`、`pvp`、`social` 共 **113 个例程**，Phase 3 后全部按单玩法/单业务域拆分为内聚文件（无超 1,500 行文件）。
+  - `system`（2 项：`cross_keepalive` / `session_refresh`）、`daily`、`dungeon`（含拆分后的 `dungeon` / `tong_tian_tower` / `dungeon_sweep` 与圣域无尽龙域 `sa_dragon_area`）、`farming`、`minigame`、`pvp`、`social` 共 **123 个例程**，全部按单玩法/单业务域拆分为内聚文件。
 
 ### 2.5 官方静态数据层 (`data/gamedata.db`)、自动构建管线与题库 (`internal/qa`)
 - `internal/dictionary` 以只读模式挂载 `data/gamedata.db`（带进程级 `Default()` 共享与热点表内存缓存），作为全系统唯一的官方 SWF 静态数据层：为主线推图（任务/NPC/关卡锁/怪物编队）、精英扫荡与背包清理（`item`）、宗师修行（`roletype`）、天帝宝库自选大奖（`wishpoolaward`）、NPC 结交问答（`NPCQuest`）、魔王试炼 Boss 元数据（`beelzebub_boss`）及主角法相祈愿奖励（`faxiang_pray_award`）提供统一查询，彻底消除了代码中散落的 SWF 硬编码补丁。

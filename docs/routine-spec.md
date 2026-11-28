@@ -142,8 +142,12 @@ stateDiagram-v2
 
 ## 三、 六大核心玩法子系统实战规范
 
-### 3.1 副本体力扫荡 (`dungeon_sweep`)
-- **调度策略**：`ScheduleLoop`，每 30 分钟轮询一次。
+### 3.1 副本推图、通天塔与精英扫荡体力优先级 (`dungeon` / `tong_tian_tower` / `dungeon_sweep`)
+- **全局体力调度顺序**：为避免自然体力被精英副本扫荡提前耗尽，系统在 `PhaseCoreLoop (300)` 阶段严格拆分为三级优先级：
+  1. **主支线与精英首通推图 (`dungeon`，`PhaseCoreLoop + 0 = 300`)**：执行 `quest_cycle`，接取（`State == 0`，5 槽位上限）与推进（`State == 1`）两个阶段均按 `主线 (Type=1) > 支线 (Type=2) > 精英首通 (Type=4) > 其他` 稳定排序；`auto_replenish_stamina` 仅作用于推图。
+  2. **通天塔 (`tong_tian_tower`，`PhaseCoreLoop - 10 = 290`)**：消耗剩余自然体力逐层挑战与突破重天（不消耗元宝）。
+  3. **精英副本扫荡 (`dungeon_sweep`，`PhaseCoreLoop - 20 = 280`)**：最后消耗剩余自然体力执行精英副本扫荡与装备制作卷清理；配置层仅写 `dungeon: true` 时自动同时开启 `dungeon` 与 `dungeon_sweep`（向后兼容）。
+- **调度策略**：`dungeon` / `dungeon_sweep` 为 `ScheduleLoop`（每 30 分钟）；`tong_tian_tower` 为 `ScheduleCron`。
 - **前置检查**：
   1. `session.GetStamina() >= 5`（单次关卡基础体力消耗为 5 点）。
   2. `session.GetPlayerState().BagCapacity > 0`（防止背包满导致掉落装备损毁）。
@@ -153,6 +157,14 @@ stateDiagram-v2
 - **发包时序**：
   1. 发送 `Module 25, Action 1 (0x00190001)` 发起扫荡；
   2. 解析回包扣减本地体力记录。若体力不足，触发熔断挂起。
+
+#### 3.1.2 圣域无尽龙域 / 龙域战场 (`sa_dragon_area`)
+- **协议与连接路由**：`Mod_SaDragonArea_Base`（Module 362），全部动作必须走圣域独立长连接（`OpenSaintAreaSession` / `SOCKETSAINTAREA`），主服发包无响应。
+- **调度策略**：`ScheduleCron`，优先级 `PriorityNormal`；前置检查 `FunctionIDSaintArea` 与圣域连接凭据（未开放圣域的区服返回 `ErrConditionNotMet` 平滑跳过，不刷告警）。
+- **执行流程（0 元宝）**：
+  1. 调用 `362/0 get_dragon_area_info` 获取当前层数 `seq`、可免费一键扫荡上限 `quick_seq` 与 `is_dragon_clear`；若 `is_dragon_clear != 0` 返回 `ErrAttemptsExhausted`。
+  2. 若 `seq <= quick_seq`，先调用 `362/4 quick_fight` 执行免费一键扫荡并刷新面板。
+  3. 循环调用 `362/2 fight` 逐层挑战，解析结果码分流：`0=SUCCESS` 后复查 `362/0` 判断 `seq` 是否推进（同层连续战败 3 次进入 4 小时冷却），`2=COMPLETE_ALL` 熔断至次日，`4=CD` 短暂等待重试，`1=FUNCTION_NO_OPEN` / `3=SAINT_AREA_CLOSE` 返回 `ErrConditionNotMet`。
 
 #### 3.1.1 精英副本扫荡 (`sweep_elite`)
 

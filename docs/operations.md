@@ -109,7 +109,7 @@ Web 控制台默认绑定 `127.0.0.1:8080`（**严禁无鉴权直接暴露到公
 | 端点 | 方法 | 用途 |
 | :--- | :--- | :--- |
 | `/api/health` | `GET` | 存活探针，返回 `status`、`version`、`time` |
-| `/api/roles` | `GET` | 查询所有角色在线状态（`Active` / `Connecting` / `Disconnected` 等） |
+| `/api/roles` | `GET` | 查询所有角色在线状态及连接健康指标 `health`（连接代数、存活/收包间隔、被动断线、主动重建、握手失败、半开探针、跨服保活状态与最近断线原因） |
 | `/api/logs` | `GET` | 获取最近 200 条内存日志 |
 | `/api/routines` | `GET` | 查询全部玩法运行态与冷却时间；支持 `?role_id=<id>` 按角色筛选 |
 | `/api/routines` | `POST` | 动态启停玩法或应用预设，请求体：`{"role_id":"","id":"arena","enabled":false}` 或 `{"role_id":"","preset":"..."}` |
@@ -127,8 +127,8 @@ curl -fsS http://127.0.0.1:8080/api/roles
 
 1. **Cookie 模式（强烈推荐）**：在 `accounts[].cookie` 填入心动平台 `A1=...; A2=...` Cookie，可绕过图形验证码风控，通常有效期数周。
 2. **Cookie 过期续期**：运行 `./bin/sxd-auto --config configs/config.yaml --browser-login`，按提示登录即可自动捕获并回写最新 Cookie。
-3. **多区服换票节流**：`startup.ticket_min_interval_seconds` / `ticket_max_interval_seconds`（默认 2~5 秒）保证同一账号的多区服串行换票，防止短时间并发登录触发风控。
-4. **会话定时自愈**：系统内建 `session_refresh` 例程，每 5 分钟按连接存活时长主动重建主服连接，规避游戏服务端长会话后段的批量静默丢包。
+3. **多区服账号级换票协调**：启动期由 `startup.ticket_min_interval_seconds` / `ticket_max_interval_seconds`（默认 2~5 秒）串行换票；运行期 `TicketCache` 按 `platform:username` 维度串行化换票并强制最小间隔 3 秒，不同账号并发互不阻塞，彻底避免同账号多区服并发换票互顶。
+4. **常驻跨服保活与半开连接自愈**：默认启用 `cross_keepalive`（常驻 login-only 仙界辅助连接 `94/0` + `6/12`）抵御网关 5 分钟墙钟扫描回收；主服连接在空闲无下行包达 `90s`（`StaleProbeInterval`）且无在途业务请求时，自动发送只读 `0/6` 活性探针检测半开僵尸 TCP 连接，超时即以 `ErrStaleConnection` 快速重连。可选 `session_refresh` 在需要定期强制重置上下文时按需开启。
 5. **离线字典同步刷新**：游戏大版本更新（新增道具/伙伴/关卡/宝库大奖/魔王 Boss 等）后，执行以下两步从零重建 `data/gamedata.db`：
    ```bash
    go run -tags=probe test/probes/probe_ticket_extra.go       # 获取最新 cur_ver 与 diff_urls[cur_ver]
