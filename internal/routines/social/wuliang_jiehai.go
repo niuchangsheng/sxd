@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -30,6 +31,15 @@ import (
 	"sxd-pie-ng/internal/routines/kit"
 	"sxd-pie-ng/internal/scheduler"
 )
+
+// wuliangTeamsDetail 将逐队结算格式化为 "seq:win" 列表，便于定位是哪支队伍失败。
+func wuliangTeamsDetail(teams []protocol.EraInfiniteTeamResult) string {
+	parts := make([]string, 0, len(teams))
+	for _, t := range teams {
+		parts = append(parts, fmt.Sprintf("%d:%t", t.Seq, t.IsWin))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
 
 const (
 	// maxWuliangFights 单轮最多挑战关卡数。
@@ -337,7 +347,8 @@ func NewWuliangJieHaiRoutine() scheduler.ActivityRoutine {
 					losses++
 					slog.Info("无量劫海挑战失败（多队伍需全部成功）", "role_id", session.RoleID(),
 						"chapter_id", chapter, "now_level", target,
-						"losses", losses, "fights", fights)
+						"losses", losses, "fights", fights,
+						"teams", wuliangTeamsDetail(res.Teams))
 					if losses >= maxWuliangConsecutiveLosses {
 						return scheduler.NewCooldown(4*time.Hour,
 							fmt.Sprintf("无量劫海连续挑战失败 %d 次", losses))

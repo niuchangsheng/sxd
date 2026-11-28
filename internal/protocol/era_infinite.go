@@ -56,10 +56,20 @@ type EraInfiniteChapter struct {
 	ChapterID int32
 }
 
+// EraInfiniteTeamResult 表示 853/4 回包中单支队伍的结算。
+// 无量劫海要求所有上阵队伍全部胜利（fight_result_list 逐队 is_win）。
+type EraInfiniteTeamResult struct {
+	Seq      int32
+	IsWin    bool
+	ReportID int32
+	Version  string
+}
+
 // EraInfiniteFightResult 表示挑战结果。
 type EraInfiniteFightResult struct {
 	Result uint8
 	IsWin  bool
+	Teams  []EraInfiniteTeamResult
 }
 
 func eraInfinitePrevPacket(actionID uint32, ints ...int32) *Packet {
@@ -258,19 +268,24 @@ func ParseEraInfiniteFightResult(payload []byte) (*EraInfiniteFightResult, error
 	if err != nil {
 		return out, nil
 	}
+	out.Teams = make([]EraInfiniteTeamResult, 0, count)
 	for i := 0; i < int(count); i++ {
-		if _, err = r.ReadInt32(); err != nil { // seq
+		var team EraInfiniteTeamResult
+		if team.Seq, err = r.ReadInt32(); err != nil {
 			return out, nil
 		}
-		if _, err = r.ReadInt32(); err != nil { // is_win
+		win, err := r.ReadInt32()
+		if err != nil {
 			return out, nil
 		}
-		if _, err = r.ReadInt32(); err != nil { // report_id
+		team.IsWin = win == 1
+		if team.ReportID, err = r.ReadInt32(); err != nil {
 			return out, nil
 		}
-		if _, err = r.ReadString(); err != nil { // report_version
+		if team.Version, err = r.ReadString(); err != nil {
 			return out, nil
 		}
+		out.Teams = append(out.Teams, team)
 	}
 	win, err := r.ReadInt32()
 	if err != nil {

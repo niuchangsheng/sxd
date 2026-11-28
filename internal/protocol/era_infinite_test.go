@@ -39,6 +39,41 @@ func TestParseEraInfiniteFightResult(t *testing.T) {
 	if res.Result != 0 || !res.IsWin {
 		t.Fatalf("挑战回包不符: %+v", res)
 	}
+	if len(res.Teams) != 1 || res.Teams[0].Seq != 1 || !res.Teams[0].IsWin ||
+		res.Teams[0].ReportID != 0x145cb354 || res.Teams[0].Version != "2026110601" {
+		t.Fatalf("逐队结算不符: %+v", res.Teams)
+	}
+}
+
+// TestParseEraInfiniteFightResult_MultiTeamLoss 验证多队伍逐队结果：
+// 第 2 队失败导致整体 is_win=0，且逐队 is_win 可被解析用于诊断。
+func TestParseEraInfiniteFightResult_MultiTeamLoss(t *testing.T) {
+	w := protocol.NewWriter()
+	w.WriteUint8(0)     // result
+	w.WriteUint16(3)    // count
+	for _, team := range []struct {
+		seq   int32
+		win   int32
+		rid   int32
+		ver   string
+	}{{1, 1, 100, "2026112801"}, {2, 0, 101, "2026112801"}, {3, 1, 102, "2026112801"}} {
+		w.WriteInt32(team.seq)
+		w.WriteInt32(team.win)
+		w.WriteInt32(team.rid)
+		w.WriteString(team.ver)
+	}
+	w.WriteInt32(0) // overall is_win
+
+	res, err := protocol.ParseEraInfiniteFightResult(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseEraInfiniteFightResult: %v", err)
+	}
+	if res.IsWin {
+		t.Fatalf("整体应失败: %+v", res)
+	}
+	if len(res.Teams) != 3 || res.Teams[1].IsWin || !res.Teams[0].IsWin || !res.Teams[2].IsWin {
+		t.Fatalf("逐队结算不符: %+v", res.Teams)
+	}
 }
 
 func TestBuildEraInfiniteFightPacket(t *testing.T) {

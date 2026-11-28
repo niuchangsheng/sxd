@@ -135,12 +135,20 @@ func NewLevitatePerfusionRoutine() scheduler.ActivityRoutine {
 				}
 				return resp
 			}
+			// 357/0、357/1 在本账号的旧会话上会被服务端静默丢弃：2026-11-28
+			// 13:59 实测 81 秒会话上三个请求全部无回包，而 13:54 的 18 秒
+			// 会话全部成功（与无量劫海/无尽洞天一致）。健康窗口从 3 分钟收紧
+			// 到 30 秒，并在入口先重建，避免整轮空转。
+			const levitateFreshSessionAge = 30 * time.Second
 			ensureFreshIfAged := func() error {
 				since := session.ConnectionSince()
-				if since.IsZero() || time.Since(since) <= client.HealthySessionAge {
+				if since.IsZero() || time.Since(since) <= levitateFreshSessionAge {
 					return nil
 				}
-				return session.EnsureFreshConnection(ctx, client.HealthySessionAge)
+				return session.EnsureFreshConnection(ctx, levitateFreshSessionAge)
+			}
+			if err := ensureFreshIfAged(); err != nil {
+				return err
 			}
 			fetchInfo := func(typ uint8) *protocol.LevitateInfo {
 				resp := call(protocol.BuildLevitateInfoPacket(typ), protocol.ActionIDLevitateInfo)
