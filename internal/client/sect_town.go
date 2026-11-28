@@ -163,5 +163,5 @@ func (s *RoleSession) OpenSectTownSessionWithCredentials(ctx context.Context, cr
 		"sect_name", cred.SectName,
 	)
 
-	return s.openChildSession(ctx, "仙盟城镇", cfg, 0)
+	return s.openChildSession(ctx, ctx, "仙盟城镇", cfg, 0)
 }

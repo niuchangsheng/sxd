@@ -589,3 +589,41 @@ func TestSessionMetrics_TracksLifecycleEvents(t *testing.T) {
 		t.Errorf("期望记录 LastDisconnectReason")
 	}
 }
+
+// TestOpenChildSession_RespectsWaitCtxTimeout 验证 openChildSession 区分 lifeCtx 与 waitCtx：
+// 即使 lifeCtx 无超时且 activateTimeout=30s，只要调用方 waitCtx 到期就会立刻超时并清理子会话。
+func TestOpenChildSession_RespectsWaitCtxTimeout(t *testing.T) {
+	parent := NewRoleSession(SessionConfig{RoleID: "role-parent", ServerAddr: "mock-pipe"})
+
+	blockDial := make(chan struct{})
+	defer close(blockDial)
+
+	cfg := SessionConfig{
+		RoleID:     "role-child-timeout",
+		ServerAddr: "mock-pipe",
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-blockDial:
+				return nil, ErrNotConnected
+			}
+		},
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	child, err := parent.openChildSession(context.Background(), waitCtx, "测试子会话", cfg, 30*time.Second)
+	elapsed := time.Since(start)
+	if err == nil || child != nil {
+		if child != nil {
+			child.Close()
+		}
+		t.Fatalf("期望 waitCtx 到期触发超时失败, got child=%v err=%v", child, err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("openChildSession 应遵守 waitCtx (120ms) 而非等待 30s, took %v", elapsed)
+	}
+}

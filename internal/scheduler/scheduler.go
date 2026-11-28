@@ -209,19 +209,21 @@ func (s *RoleScheduler) runLoop() {
 		}
 		idleLogged = false
 
-		// 零假动作铁律：会话未处于 StateActive 激活态时严禁触发业务 Routine
+		// 零假动作铁律：会话未处于 StateActive 激活态时严禁触发业务 Routine。
+		// 使用事件驱动的 AwaitActive 阻塞等待恢复，取代 200ms 轮询，重连后零延迟拉起任务。
 		if s.session != nil && s.session.State() != client.StateActive {
-			timer := time.NewTimer(200 * time.Millisecond)
-			select {
-			case <-s.ctx.Done():
-				timer.Stop()
+			if err := s.session.AwaitActive(s.ctx); err != nil {
+				if errors.Is(err, client.ErrSessionClosed) {
+					select {
+					case <-s.ctx.Done():
+						return
+					case <-s.wakeCh:
+						continue
+					}
+				}
 				return
-			case <-s.wakeCh:
-				timer.Stop()
-				continue
-			case <-timer.C:
-				continue
 			}
+			continue
 		}
 
 		// 动作前强制注入拟人防封抖动延迟

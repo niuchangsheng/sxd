@@ -108,5 +108,5 @@ func (s *RoleSession) OpenSaintAreaSessionWithInfo(ctx context.Context, cred *pr
 		"server_id", cred.ServerName,
 	)
 
-	return s.openChildSession(ctx, "圣域", cfg, 0)
+	return s.openChildSession(ctx, ctx, "圣域", cfg, 0)
 }

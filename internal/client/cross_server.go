@@ -116,7 +116,7 @@ func (s *RoleSession) EnsureCrossSessionAlive(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("client: 申请常驻跨服凭据失败: %w", err)
 	}
-	cross, err := s.openCrossServerKeepaliveSession(life, cred)
+	cross, err := s.openCrossServerKeepaliveSession(life, ctx, cred)
 	if err != nil {
 		return fmt.Errorf("client: 建立常驻跨服会话失败: %w", err)
 	}
@@ -173,7 +173,7 @@ func (s *RoleSession) OpenCrossServerSessionWithInfo(ctx context.Context, cred *
 	s.crossTownActive.Store(true)
 	s.suspendCrossSession()
 
-	cross, err := s.openCrossServerSession(ctx, cred, true)
+	cross, err := s.openCrossServerSession(ctx, ctx, cred, true)
 	if err != nil {
 		s.crossTownActive.Store(false)
 		s.restoreCrossKeepalive()
@@ -217,11 +217,11 @@ func (s *RoleSession) restoreCrossKeepalive() {
 }
 
 // openCrossServerKeepaliveSession 建立仅完成登录与频道加入、不进入仙界城镇的常驻跨服连接。
-func (s *RoleSession) openCrossServerKeepaliveSession(ctx context.Context, cred *protocol.StCrossServerInfo) (*RoleSession, error) {
-	return s.openCrossServerSession(ctx, cred, false)
+func (s *RoleSession) openCrossServerKeepaliveSession(lifeCtx, waitCtx context.Context, cred *protocol.StCrossServerInfo) (*RoleSession, error) {
+	return s.openCrossServerSession(lifeCtx, waitCtx, cred, false)
 }
 
-func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol.StCrossServerInfo, enterTown bool) (*RoleSession, error) {
+func (s *RoleSession) openCrossServerSession(lifeCtx, waitCtx context.Context, cred *protocol.StCrossServerInfo, enterTown bool) (*RoleSession, error) {
 	if cred == nil {
 		return nil, fmt.Errorf("client: 仙界跨服凭据为空")
 	}
@@ -244,9 +244,11 @@ func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol
 		cfg.RefreshCredentials = nil
 	} else {
 		// 常驻辅助连接随主会话无限自愈：8219 偶发 EOF 后自动向主服换取新一次性 PassCode。
+		// 若主服此时存在在途业务请求 (hasPendingCalls)，跳过本次后台换票，避免 96/0 并发打断主服 PrevAct 链，
+		// 交由主调度空隙的 cross_keepalive 干净重建。
 		cfg.MaxReconnectAttempts = 0
 		cfg.RefreshCredentials = func(c context.Context, sCfg *SessionConfig) error {
-			if s.State() != StateActive || s.crossTownActive.Load() {
+			if s.State() != StateActive || s.crossTownActive.Load() || s.hasPendingCalls() {
 				return ErrNotConnected
 			}
 			fresh, fErr := s.FetchCrossServerCredentials(c)
@@ -336,5 +338,5 @@ func (s *RoleSession) openCrossServerSession(ctx context.Context, cred *protocol
 		"server_id", curCred.ServerName,
 	)
 
-	return s.openChildSession(ctx, "仙界跨服", cfg, 30*time.Second)
+	return s.openChildSession(lifeCtx, waitCtx, "仙界跨服", cfg, 30*time.Second)
 }

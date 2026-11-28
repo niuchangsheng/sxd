@@ -66,5 +66,5 @@ func (s *RoleSession) OpenServerChatRoomSession(
 		return nil
 	}
 
-	return s.openChildSession(ctx, "聊天服", cfg, 0)
+	return s.openChildSession(ctx, ctx, "聊天服", cfg, 0)
 }

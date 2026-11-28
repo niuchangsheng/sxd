@@ -5,13 +5,11 @@
 package client
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -145,10 +143,6 @@ type RoleSession struct {
 	stateMu sync.RWMutex
 	// stateCh 在每次状态迁移时关闭并替换，供 AwaitActive 无轮询地等待状态变化。
 	stateCh chan struct{}
-	// connCtx / connCancel 绑定当前活跃 TCP 连接的生命周期；断线或关闭连接时立即取消，
-	// 唤醒所有挂起的 Call 与握手等待者，避免死等至业务超时。
-	connCtx    context.Context
-	connCancel context.CancelFunc
 	// rebuildMu 串行化「主动重建会话」决策：同一时刻只允许一个调用方拆连接，
 	// 其余调用方在锁内等待重连完成或复用刚建立的新连接。
 	rebuildMu sync.Mutex
@@ -156,11 +150,12 @@ type RoleSession struct {
 	playerState PlayerState
 	playerMu    sync.RWMutex
 
-	conn    net.Conn
-	writeMu sync.Mutex
+	// transport 承载当前活跃 TCP 连接的读写、pendingCalls 与连接级生命周期；
+	// 每次重连创建全新实例，从结构上隔离新旧连接。
+	transport   *connTransport
+	transportMu sync.RWMutex
 
 	handlers       map[uint32][]func(*protocol.Packet)
-	pendingCalls   map[uint32][]chan *protocol.Packet
 	packetObserver func(*protocol.Packet)
 	handlerMu      sync.RWMutex
 
@@ -285,7 +280,6 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		// 避免首个连接抖动就立刻再登录一次 Web。
 		lastCredRefresh: time.Now(),
 		handlers:        make(map[uint32][]func(*protocol.Packet)),
-		pendingCalls:    make(map[uint32][]chan *protocol.Packet),
 		playerState: PlayerState{
 			Level:           300,
 			Stamina:         201,
@@ -408,37 +402,39 @@ func (s *RoleSession) runRefreshCredentials(ctx context.Context) error {
 	return nil
 }
 
+// currentTransport 返回当前代 TCP 传输对象；尚未建连或已关闭时返回 nil。
+func (s *RoleSession) currentTransport() *connTransport {
+	s.transportMu.RLock()
+	t := s.transport
+	s.transportMu.RUnlock()
+	return t
+}
+
 // currentConnCtx 返回当前 TCP 连接绑定的上下文；尚未建连时返回 nil。
 func (s *RoleSession) currentConnCtx() context.Context {
-	s.stateMu.RLock()
-	ctx := s.connCtx
-	s.stateMu.RUnlock()
-	return ctx
-}
-
-// cancelCurrentConnCtx 取消当前连接上下文，立即唤醒阻塞中的 Call 与握手等待者。
-func (s *RoleSession) cancelCurrentConnCtx() {
-	s.stateMu.Lock()
-	cancel := s.connCancel
-	s.connCancel = nil
-	s.stateMu.Unlock()
-	if cancel != nil {
-		cancel()
+	if t := s.currentTransport(); t != nil {
+		return t.ctx
 	}
+	return nil
 }
 
-// drainPendingCalls 排空并关闭全部挂起等待通道，防止旧连接的等待者滞留并抢占新连接回包。
-func (s *RoleSession) drainPendingCalls() {
-	s.handlerMu.Lock()
-	pending := s.pendingCalls
-	s.pendingCalls = make(map[uint32][]chan *protocol.Packet)
-	s.handlerMu.Unlock()
-
-	for _, calls := range pending {
-		for _, ch := range calls {
-			close(ch)
+// registerPendingCall 在当前代连接上登记一个回包等待通道。
+func (s *RoleSession) registerPendingCall(actionID uint32) (chan *protocol.Packet, func(), context.Context, error) {
+	if s.State() == StateClosed {
+		return nil, nil, nil, ErrSessionClosed
+	}
+	t := s.currentTransport()
+	if t == nil {
+		return nil, nil, nil, ErrNotConnected
+	}
+	ch, cleanup, ok := t.registerPending(actionID)
+	if !ok {
+		if s.State() == StateClosed {
+			return nil, nil, nil, ErrSessionClosed
 		}
+		return nil, nil, nil, ErrNotConnected
 	}
+	return ch, cleanup, t.ctx, nil
 }
 
 // State 获取会话当前所处状态。
@@ -601,27 +597,11 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 		ctx = callCtx
 	}
 
-	connCtx := s.currentConnCtx()
-	ch := make(chan *protocol.Packet, 1)
-
-	s.handlerMu.Lock()
-	if s.pendingCalls == nil {
-		s.pendingCalls = make(map[uint32][]chan *protocol.Packet)
+	ch, cleanup, connCtx, err := s.registerPendingCall(respActionID)
+	if err != nil {
+		return nil, err
 	}
-	s.pendingCalls[respActionID] = append(s.pendingCalls[respActionID], ch)
-	s.handlerMu.Unlock()
-
-	defer func() {
-		s.handlerMu.Lock()
-		calls := s.pendingCalls[respActionID]
-		for i, c := range calls {
-			if c == ch {
-				s.pendingCalls[respActionID] = append(calls[:i], calls[i+1:]...)
-				break
-			}
-		}
-		s.handlerMu.Unlock()
-	}()
+	defer cleanup()
 
 	if err := s.Send(req); err != nil {
 		return nil, err
@@ -720,7 +700,6 @@ func (s *RoleSession) Close() {
 	}
 
 	s.closeCurrentConn()
-	s.drainPendingCalls()
 	s.wg.Wait()
 
 	if s.onAfterClose != nil {
@@ -778,12 +757,8 @@ func (s *RoleSession) LastRxTime() time.Time {
 }
 
 func (s *RoleSession) hasPendingCalls() bool {
-	s.handlerMu.RLock()
-	defer s.handlerMu.RUnlock()
-	for _, calls := range s.pendingCalls {
-		if len(calls) > 0 {
-			return true
-		}
+	if t := s.currentTransport(); t != nil {
+		return t.hasPending()
 	}
 	return false
 }
@@ -979,64 +954,44 @@ func (s *RoleSession) LastAckActionID() uint32 {
 
 // Send 向对端发送一个未压缩协议封包。
 
-// setWriteDeadline 为当前连接设置写超时。
-//
-// 服务端限流/停止读取时 TCP 发送缓冲区会被填满，conn.Write 会永久阻塞并
-// 持有 writeMu，导致整个会话（含心跳与调度）冻结。写超时可让 Send 返回，
-// 由上层重连逻辑恢复。
-func (s *RoleSession) setWriteDeadline() {
-	if s.conn != nil {
-		_ = s.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	}
-}
-
-// prepareWriteLocked 在持有 writeMu 的前提下校验连接状态并设置写超时。
-// 仅允许 Active（业务发包）和 Authenticating（握手发包）状态写入，防止在
-// Disconnected/Connecting/Reconnecting 窗口污染尚未就绪的连接。
-func (s *RoleSession) prepareWriteLocked() error {
+// activeTransportForWrite 校验会话状态并返回当前可写入的传输实例。
+// 仅允许 Active（业务发包）和 Authenticating（握手发包）状态写入。
+func (s *RoleSession) activeTransportForWrite() (*connTransport, error) {
 	st := s.State()
 	if st == StateClosed {
-		return ErrSessionClosed
+		return nil, ErrSessionClosed
 	}
 	if st != StateActive && st != StateAuthenticating {
-		return ErrNotConnected
+		return nil, ErrNotConnected
 	}
-	if s.conn == nil {
-		return ErrNotConnected
+	t := s.currentTransport()
+	if t == nil {
+		return nil, ErrNotConnected
 	}
-	s.setWriteDeadline()
-	return nil
-}
-
-// abortConnOnWriteErrLocked 在持有 writeMu 的前提下关闭发生写错误/写超时的连接。
-// 写超时或半包写失败会导致 TCP 帧边界永久错乱，必须立即断开以触发干净重连。
-func (s *RoleSession) abortConnOnWriteErrLocked() {
-	if s.conn != nil {
-		_ = s.conn.Close()
-		s.conn = nil
-	}
-	s.cancelCurrentConnCtx()
+	return t, nil
 }
 
 func (s *RoleSession) Send(p *protocol.Packet) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	if err := s.prepareWriteLocked(); err != nil {
-		return err
-	}
-
-	p = s.prevAct.StampPayload(p)
-
-	err := protocol.WritePacket(s.conn, p)
+	t, err := s.activeTransportForWrite()
 	if err != nil {
-		s.abortConnOnWriteErrLocked()
 		return err
 	}
-	if p != nil {
-		s.lastSendTime.Store(time.Now().UnixNano())
-		s.prevAct.RecordSent(p.ActionID)
-		slog.Debug("发送网关请求", "role_id", s.cfg.RoleID, "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", p.ActionID, p.ActionID>>16, p.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(p.Payload))
+	var stamped *protocol.Packet
+	if err := t.writeLocked(func(conn net.Conn) error {
+		stamped = s.prevAct.StampPayload(p)
+		if err := protocol.WritePacket(conn, stamped); err != nil {
+			return err
+		}
+		if stamped != nil {
+			s.lastSendTime.Store(time.Now().UnixNano())
+			s.prevAct.RecordSent(stamped.ActionID)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if stamped != nil {
+		slog.Debug("发送网关请求", "role_id", s.cfg.RoleID, "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", stamped.ActionID, stamped.ActionID>>16, stamped.ActionID&0xFFFF), "payload_hex", hex.EncodeToString(stamped.Payload))
 	}
 	return nil
 }
@@ -1047,21 +1002,23 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 // 少数官方动作的末 4 字节是业务参数而非 PrevAct（如剧情副本 4/24 的
 // 0x02F80001），不能用常规 Send 的自动尾链填充。
 func (s *RoleSession) SendVerbatim(p *protocol.Packet) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	if err := s.prepareWriteLocked(); err != nil {
+	t, err := s.activeTransportForWrite()
+	if err != nil {
 		return err
 	}
-
-	err := protocol.WritePacket(s.conn, p)
-	if err != nil {
-		s.abortConnOnWriteErrLocked()
+	if err := t.writeLocked(func(conn net.Conn) error {
+		if err := protocol.WritePacket(conn, p); err != nil {
+			return err
+		}
+		if p != nil {
+			s.lastSendTime.Store(time.Now().UnixNano())
+			s.prevAct.RecordSent(p.ActionID)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	if p != nil {
-		s.lastSendTime.Store(time.Now().UnixNano())
-		s.prevAct.RecordSent(p.ActionID)
 		slog.Debug("发送网关请求(verbatim)", "role_id", s.cfg.RoleID,
 			"action_id", fmt.Sprintf("0x%08X", p.ActionID),
 			"payload_hex", hex.EncodeToString(p.Payload))
@@ -1071,55 +1028,49 @@ func (s *RoleSession) SendVerbatim(p *protocol.Packet) error {
 
 // SendCompressed 向对端发送经 zlib 压缩的协议封包。
 func (s *RoleSession) SendCompressed(p *protocol.Packet) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	if err := s.prepareWriteLocked(); err != nil {
-		return err
-	}
-
-	err := protocol.WriteCompressedPacket(s.conn, p)
+	t, err := s.activeTransportForWrite()
 	if err != nil {
-		s.abortConnOnWriteErrLocked()
 		return err
 	}
-	if p != nil {
-		s.lastSendTime.Store(time.Now().UnixNano())
-		s.prevAct.RecordSent(p.ActionID)
-	}
-	return nil
+	return t.writeLocked(func(conn net.Conn) error {
+		if err := protocol.WriteCompressedPacket(conn, p); err != nil {
+			return err
+		}
+		if p != nil {
+			s.lastSendTime.Store(time.Now().UnixNano())
+			s.prevAct.RecordSent(p.ActionID)
+		}
+		return nil
+	})
 }
 
 // SendRaw 向对端直接写入原始字节切片 (并发安全加锁)。
 func (s *RoleSession) SendRaw(data []byte) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	if err := s.prepareWriteLocked(); err != nil {
-		return err
-	}
-
-	_, err := s.conn.Write(data)
+	t, err := s.activeTransportForWrite()
 	if err != nil {
-		s.abortConnOnWriteErrLocked()
 		return err
 	}
-	s.lastSendTime.Store(time.Now().UnixNano())
-	if len(data) >= 8 {
-		actID := binary.BigEndian.Uint32(data[4:8])
-		s.prevAct.RecordSent(actID)
-	}
-	return nil
+	return t.writeLocked(func(conn net.Conn) error {
+		if _, err := conn.Write(data); err != nil {
+			return err
+		}
+		s.lastSendTime.Store(time.Now().UnixNano())
+		if len(data) >= 8 {
+			actID := binary.BigEndian.Uint32(data[4:8])
+			s.prevAct.RecordSent(actID)
+		}
+		return nil
+	})
 }
 
 func (s *RoleSession) closeCurrentConn() {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if s.conn != nil {
-		_ = s.conn.Close()
-		s.conn = nil
+	s.transportMu.Lock()
+	t := s.transport
+	s.transport = nil
+	s.transportMu.Unlock()
+	if t != nil {
+		t.close()
 	}
-	s.cancelCurrentConnCtx()
 }
 
 // ReconnectNow 主动断开当前连接，触发状态机按原配置重新登录。
@@ -1186,43 +1137,43 @@ func (s *RoleSession) runLoop() {
 			continue
 		}
 
-		connCtx, connCancel := context.WithCancel(s.ctx)
-		s.stateMu.Lock()
-		if s.state == StateClosed || s.closing {
-			s.stateMu.Unlock()
-			connCancel()
+		s.stateMu.RLock()
+		isClosingOrClosed := s.state == StateClosed || s.closing
+		s.stateMu.RUnlock()
+		if isClosingOrClosed {
 			_ = conn.Close()
 			return
 		}
-		s.connCtx = connCtx
-		s.connCancel = connCancel
-		s.stateMu.Unlock()
 
-		// 先切换到 Authenticating 再暴露 s.conn，确保 Send() 不会在 Connecting/Reconnecting
+		t := newConnTransport(s.ctx, conn, s.cfg.RoleID)
+
+		// 先切换到 Authenticating 再暴露新 transport，确保 Send() 不会在 Connecting/Reconnecting
 		// 态看到新连接。
 		s.setState(StateAuthenticating)
 
 		nowNano := time.Now().UnixNano()
-		s.writeMu.Lock()
-		s.conn = conn
+		s.transportMu.Lock()
+		s.transport = t
 		s.connGeneration.Add(1)
 		s.connSince.Store(nowNano)
 		s.lastRxTime.Store(nowNano)
 		// 新连接的 PrevAct 链在服务端从零开始，必须清掉上一条连接的全部锚点状态。
 		s.prevAct.Reset()
-		s.writeMu.Unlock()
+		s.transportMu.Unlock()
 
-		// 2. 启动读循环通道（由 readDone 跟踪退出，确保旧 readLoop 完全结束后再建下一条连接）
-		readErrCh := make(chan error, 1)
-		readDone := make(chan struct{})
-		go s.readLoop(conn, connCancel, readErrCh, readDone)
+		// 2. 启动本代连接的读循环
+		t.startReadLoop(func(pkt *protocol.Packet) {
+			s.lastRxTime.Store(time.Now().UnixNano())
+			s.prevAct.RecordRx(pkt.ActionID)
+			s.dispatchPacket(t, pkt)
+		})
 
 		// 3. 执行认证握手
 		if cfgSnap.Authenticator != nil {
 			if err := cfgSnap.Authenticator(s); err != nil {
 				slog.Info("角色身份认证失败", "role_id", s.cfg.RoleID, "error", err)
-				s.closeCurrentConn()
-				<-readDone
+				s.closeTransport(t)
+				t.waitReadDone()
 				if s.intentionalReconnect.Swap(false) {
 					s.setState(StateReconnecting)
 					continue
@@ -1242,9 +1193,20 @@ func (s *RoleSession) runLoop() {
 		s.dropStaleCrossSession()
 
 		// 5. 运行激活态心跳保活与异常等待
-		if !s.runActiveSession(conn, readErrCh, readDone) {
+		if !s.runActiveSession(t) {
 			return
 		}
+	}
+}
+
+func (s *RoleSession) closeTransport(t *connTransport) {
+	s.transportMu.Lock()
+	if s.transport == t {
+		s.transport = nil
+	}
+	s.transportMu.Unlock()
+	if t != nil {
+		t.close()
 	}
 }
 
@@ -1401,7 +1363,7 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 	}
 }
 
-func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, readDone <-chan struct{}) bool {
+func (s *RoleSession) runActiveSession(t *connTransport) bool {
 	ticker := time.NewTicker(s.cfg.HeartbeatInterval)
 	defer ticker.Stop()
 
@@ -1412,8 +1374,8 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, re
 	for {
 		select {
 		case <-s.ctx.Done():
-			s.closeCurrentConn()
-			<-readDone
+			s.closeTransport(t)
+			t.waitReadDone()
 			s.setState(StateClosed)
 			return false
 
@@ -1425,10 +1387,10 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, re
 			s.lastConnectErr = nil
 			s.credRefreshMu.Unlock()
 
-		case err := <-readErrCh:
+		case err := <-t.readErrCh:
 			slog.Info("网络读取循环退出", "role_id", s.cfg.RoleID, "error", err)
-			s.closeCurrentConn()
-			<-readDone
+			s.closeTransport(t)
+			t.waitReadDone()
 			// 主动重建（ReconnectNow / EnsureFreshConnection）不计入失败计数并清零旧计数；
 			// 真实网关留出短暂释放窗口，避免 0ms 立即重拨撞上旧会话未释放而被 EOF。
 			if s.intentionalReconnect.Swap(false) {
@@ -1443,7 +1405,7 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, re
 		case <-ticker.C:
 			// 半开僵尸连接检测：空闲期长时间未收到任何下行包且无在途业务请求时，
 			// 发送一次无害必回包只读探针 (0/6)，超时即判定半开连接并立即触发重连。
-			if s.cfg.StaleProbeInterval > 0 && !s.hasPendingCalls() {
+			if s.cfg.StaleProbeInterval > 0 && !t.hasPending() {
 				if lastRx := s.LastRxTime(); !lastRx.IsZero() && time.Since(lastRx) >= s.cfg.StaleProbeInterval {
 					probeCtx, probeCancel := context.WithTimeout(s.ctx, s.cfg.HeartbeatTimeout)
 					_, probeErr := s.Call(
@@ -1458,8 +1420,8 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, re
 							"idle_rx", time.Since(lastRx).Round(time.Second),
 							"error", probeErr,
 						)
-						s.closeCurrentConn()
-						<-readDone
+						s.closeTransport(t)
+						t.waitReadDone()
 						if s.intentionalReconnect.Swap(false) {
 							s.reconnectAttempts = 0
 							s.setState(StateReconnecting)
@@ -1489,8 +1451,8 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, re
 			heartbeat := protocol.NewPacket(s.cfg.HeartbeatActionID, nil)
 			if err := s.Send(heartbeat); err != nil {
 				slog.Warn("发送心跳失败", "role_id", s.cfg.RoleID, "error", err)
-				s.closeCurrentConn()
-				<-readDone
+				s.closeTransport(t)
+				t.waitReadDone()
 				if s.intentionalReconnect.Swap(false) {
 					s.reconnectAttempts = 0
 					s.setState(StateReconnecting)
@@ -1519,55 +1481,20 @@ func (s *RoleSession) waitIntentionalReconnectGrace() bool {
 	}
 }
 
-func (s *RoleSession) readLoop(conn net.Conn, connCancel context.CancelFunc, errCh chan<- error, done chan<- struct{}) {
-	defer func() {
-		connCancel()
-		s.drainPendingCalls()
-		close(done)
-	}()
-
-	br := bufio.NewReaderSize(conn, 16*1024)
-	for {
-		pkt, err := protocol.ReadPacket(br)
-		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				errCh <- io.EOF
-			} else {
-				errCh <- err
-			}
-			return
-		}
-
-		s.lastRxTime.Store(time.Now().UnixNano())
-		s.prevAct.RecordRx(pkt.ActionID)
-		hexDump := hex.EncodeToString(pkt.Payload)
-		if len(hexDump) > 64 {
-			hexDump = hexDump[:64] + "..."
-		}
-		slog.Debug("收到网关回包", "role_id", s.cfg.RoleID, "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", pkt.ActionID, pkt.ActionID>>16, pkt.ActionID&0xFFFF), "payload_len", len(pkt.Payload), "hex", hexDump)
-		s.dispatchPacket(pkt)
-	}
-}
-
-func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
-	s.handlerMu.Lock()
-	observer := s.packetObserver
-	if calls, ok := s.pendingCalls[pkt.ActionID]; ok && len(calls) > 0 {
-		ch := calls[0]
-		s.pendingCalls[pkt.ActionID] = calls[1:]
+func (s *RoleSession) dispatchPacket(t *connTransport, pkt *protocol.Packet) {
+	if t != nil && t.deliverPending(pkt) {
 		// 只有真正被服务端处理并回包的非心跳业务动作才推进确认锚点并解除失步标记。
 		s.prevAct.RecordAck(pkt.ActionID)
-		select {
-		case ch <- pkt:
-		default:
-		}
 	}
+
+	s.handlerMu.RLock()
+	observer := s.packetObserver
 	var handlers []func(*protocol.Packet)
 	if list := s.handlers[pkt.ActionID]; len(list) > 0 {
 		handlers = make([]func(*protocol.Packet), len(list))
 		copy(handlers, list)
 	}
-	s.handlerMu.Unlock()
+	s.handlerMu.RUnlock()
 
 	if observer != nil {
 		observer(pkt)

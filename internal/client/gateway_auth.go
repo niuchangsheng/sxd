@@ -137,25 +137,14 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 	}
 
 	// 注册握手回包通道并流水线发送首部封包
-	respCh := make(chan *protocol.Packet, 1)
-	s.handlerMu.Lock()
-	if s.pendingCalls == nil {
-		s.pendingCalls = make(map[uint32][]chan *protocol.Packet)
+	respCh, cleanupResp, regConnCtx, regErr := s.registerPendingCall(loginRespActionID)
+	if regErr != nil {
+		return fmt.Errorf("client: failed to register login waiter: %w", regErr)
 	}
-	s.pendingCalls[loginRespActionID] = append(s.pendingCalls[loginRespActionID], respCh)
-	s.handlerMu.Unlock()
-
-	defer func() {
-		s.handlerMu.Lock()
-		calls := s.pendingCalls[loginRespActionID]
-		for i, c := range calls {
-			if c == respCh {
-				s.pendingCalls[loginRespActionID] = append(calls[:i], calls[i+1:]...)
-				break
-			}
-		}
-		s.handlerMu.Unlock()
-	}()
+	defer cleanupResp()
+	if regConnCtx != nil {
+		connCtx = regConnCtx
+	}
 
 	if err := s.Send(loginPkt); err != nil {
 		return fmt.Errorf("client: failed to send login packet: %w", err)
