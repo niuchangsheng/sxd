@@ -107,6 +107,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "xunxian_road", Name: "寻仙之路推图", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "寻仙之路关卡挑战与节点宝箱领用", DefaultOn: false},
 		{ID: "beelzebub_trials", Name: "魔王试炼", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "自动创建队伍、招募助战镜像、挑战每日魔王试炼并领取道行奖励", DefaultOn: false},
 		{ID: "tong_tian_tower", Name: "通天塔", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "自动逐层挑战通天塔并按需突破重天 (不消耗元宝)", DefaultOn: false},
+		{ID: "sa_dragon_area", Name: "圣域无尽龙域", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "圣域龙域战场免费一键扫荡与逐层挑战 (Module 362, 不消耗元宝)", DefaultOn: false},
 		{ID: "nine_regions", Name: "九空无界挑战", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "自动创建队伍/选择助战并挑战九空无界关卡 (不消耗元宝)", DefaultOn: false},
 
 		// 5. PVP 领域 (6)
@@ -473,6 +474,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return dungeon.NewBeelzebubTrialsRoutine(f.beelzebubCfg)
 	case "tong_tian_tower":
 		return dungeon.NewTongTianTowerRoutine()
+	case "sa_dragon_area":
+		return dungeon.NewSaDragonAreaRoutine()
 	case "nine_regions":
 		return dungeon.NewNineRegionsRoutine()
 
