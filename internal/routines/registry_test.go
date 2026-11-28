@@ -69,6 +69,33 @@ func TestRoutines_DefinitionsAndRegistry(t *testing.T) {
 	}
 }
 
+func TestRoutines_DefaultOnPolicy(t *testing.T) {
+	// 仅显式要求默认关闭的玩法允许 DefaultOn=false；其余已有及后续新增玩法默认开启，
+	// 避免每次新增玩法都必须手动修改每个账号的运行配置文件。
+	expectedOff := map[string]bool{
+		"children_daily":  true,
+		"session_refresh": true,
+		"xunxian_road":    true,
+		"era_travel":      true,
+	}
+
+	defs := routines.GetAllDefinitions()
+	seen := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		seen[d.ID] = true
+		wantOn := !expectedOff[d.ID]
+		if d.DefaultOn != wantOn {
+			t.Errorf("玩法 %q 的 DefaultOn=%v, want %v (新增玩法须默认开启，除非显式加入默认关闭白名单)",
+				d.ID, d.DefaultOn, wantOn)
+		}
+	}
+	for id := range expectedOff {
+		if !seen[id] {
+			t.Errorf("默认关闭白名单中的玩法 %q 不存在于 GetAllDefinitions()", id)
+		}
+	}
+}
+
 func TestSubdomains_Instances(t *testing.T) {
 	d := daily.NewSignInRoutine()
 	if d.Name() != "daily_sign_in" {

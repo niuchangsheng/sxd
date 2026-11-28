@@ -272,3 +272,50 @@ scheduler:
 		t.Fatal("expected invalid server_overrides to fail Load")
 	}
 }
+
+func TestPhantomGemLotteryDefaultsAndOverride(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  port: 8080
+scheduler:
+  routines:
+    phantom_gem_lottery: true
+  server_overrides:
+    s0:
+      phantom_gem_lottery:
+        mountain: 沧溟
+    s1:
+      phantom_gem_lottery:
+        mountain: 玄晖
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Scheduler.PhantomGemLottery.Mountain != "灵玉" {
+		t.Fatalf("default mountain = %q, want 灵玉", cfg.Scheduler.PhantomGemLottery.Mountain)
+	}
+	s0, err := cfg.EffectiveScheduler("s0")
+	if err != nil {
+		t.Fatalf("EffectiveScheduler(s0) failed: %v", err)
+	}
+	if s0.PhantomGemLottery.Mountain != "沧溟" {
+		t.Fatalf("s0 mountain = %q, want 沧溟", s0.PhantomGemLottery.Mountain)
+	}
+	s1, err := cfg.EffectiveScheduler("s1")
+	if err != nil {
+		t.Fatalf("EffectiveScheduler(s1) failed: %v", err)
+	}
+	if s1.PhantomGemLottery.Mountain != "玄晖" {
+		t.Fatalf("s1 mountain = %q, want 玄晖", s1.PhantomGemLottery.Mountain)
+	}
+
+	badPath := writeTempConfig(t, `
+scheduler:
+  phantom_gem_lottery:
+    mountain: 不存在的宝山
+`)
+	if _, err := config.Load(badPath); err == nil {
+		t.Fatal("expected invalid mountain to fail Load")
+	}
+}

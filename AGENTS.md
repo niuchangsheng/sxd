@@ -3,6 +3,7 @@
 ## 铁律 (Iron Laws)
 
 - **回包解析铁律**：所有业务请求必须解析响应包体（至少读取 `result_code` / `result`），并依据具体失败语义（次数不足、冷却中、条件不满足/无可领悟技能、背包已满、未知错误码等）执行对应的熔断、挂起或退出分支。**严禁**以“`session.Call` 未返回错误”或“收到回包”判定业务成功，**严禁**用 `_, _ = session.Call(...)` 丢弃带结果码的响应。新增或修改玩法必须为成功路径与至少一个失败码补充单元测试。详见 [docs/routine-spec.md](./docs/routine-spec.md) 2.2 节、[docs/protocol-spec.md](./docs/protocol-spec.md) 1.2 节与 [ADR-0015](./docs/adr/0015-mandatory-response-result-code-handling.md)。
+- **新增玩法默认开启**：在 [internal/routines/registry.go](./internal/routines/registry.go) 注册新玩法时，除用户明确要求关闭或高风险可选特性外，一律设置 `DefaultOn: true`，确保现有运行配置无需手动追加开关即可自动启用（由 `TestRoutines_DefaultOnPolicy` 单测守护）。
 
 ## Core specifications
 

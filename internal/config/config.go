@@ -124,9 +124,17 @@ type SchedulerConfig struct {
 	ServerChatRoom  ServerChatRoomConfig   `yaml:"server_chat_room"`
 	TreasureHouse   TreasureHouseConfig    `yaml:"treasure_house"`
 	LuckyStar       LuckyStarConfig        `yaml:"lucky_star"`
-	OnlineGift      OnlineGiftConfig       `yaml:"online_gift"`
-	MasterPractice  MasterPracticeConfig   `yaml:"master_practice"`
-	Expert          map[string]interface{} `yaml:"expert"`
+	OnlineGift        OnlineGiftConfig        `yaml:"online_gift"`
+	MasterPractice    MasterPracticeConfig    `yaml:"master_practice"`
+	PhantomGemLottery PhantomGemLotteryConfig `yaml:"phantom_gem_lottery"`
+	Expert            map[string]interface{}  `yaml:"expert"`
+}
+
+// PhantomGemLotteryConfig 山海幻兽·多宝山普通寻宝配置 (Mod 694)。
+// 支持选择四座宝山：沧溟 (1) / 玄晖 (2) / 翠青 (3) / 灵玉 (4)，默认 灵玉。
+type PhantomGemLotteryConfig struct {
+	// Mountain 目标宝山：沧溟 / 玄晖 / 翠青 / 灵玉（也支持拼音 cangming/xuanhui/cuiqing/lingyu 或编号 1~4），默认 "灵玉"。
+	Mountain string `yaml:"mountain"`
 }
 
 // MasterPracticeConfig 宗师修行策略配置。
@@ -489,11 +497,20 @@ func Load(path string) (*Config, error) {
 	}
 
 	applySchedulerDefaults(&cfg.Scheduler)
+	if _, ok := protocol.ParsePhantomGemMountain(cfg.Scheduler.PhantomGemLottery.Mountain); !ok {
+		return nil, fmt.Errorf("config: invalid scheduler.phantom_gem_lottery.mountain %q (支持: 沧溟/玄晖/翠青/灵玉)",
+			cfg.Scheduler.PhantomGemLottery.Mountain)
+	}
 
 	// 预校验所有区服覆盖，避免运行期才发现覆盖节点非法。
 	for serverID := range cfg.Scheduler.ServerOverrides {
-		if _, err := cfg.EffectiveScheduler(serverID); err != nil {
+		eff, err := cfg.EffectiveScheduler(serverID)
+		if err != nil {
 			return nil, fmt.Errorf("config: invalid server_overrides[%s]: %w", serverID, err)
+		}
+		if _, ok := protocol.ParsePhantomGemMountain(eff.PhantomGemLottery.Mountain); !ok {
+			return nil, fmt.Errorf("config: invalid server_overrides[%s].phantom_gem_lottery.mountain %q (支持: 沧溟/玄晖/翠青/灵玉)",
+				serverID, eff.PhantomGemLottery.Mountain)
 		}
 	}
 
@@ -602,6 +619,11 @@ func applySchedulerDefaults(sc *SchedulerConfig) {
 	// 粗铁淬炼池默认淬炼玄铁; 可显式指定 lingcai 提炼灵材。
 	if sc.SpiritPool.RefineTarget == "" {
 		sc.SpiritPool.RefineTarget = "xuantie"
+	}
+
+	// 多宝山普通寻宝默认选择灵玉宝山；支持 沧溟 / 玄晖 / 翠青 / 灵玉。
+	if sc.PhantomGemLottery.Mountain == "" {
+		sc.PhantomGemLottery.Mountain = "灵玉"
 	}
 
 	// BeelzebubTrials 默认等级门槛 0 (由服务端资格检查自动决定)

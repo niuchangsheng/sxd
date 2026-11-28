@@ -1268,3 +1268,18 @@ Int left_day, Int mount_count, Int title_count, Int cur_level
 > - 结果码枚举：`0=SUCCESS`、`1=FUNCTION_NO_OPEN`、`2=COMPLETE_ALL`、`3=SAINT_AREA_CLOSE`、`4=CD`、`5=FAILD`。
 > - 主服发 `362/0` 静默无回包，必须通过 `OpenSaintAreaSession` 建立圣域独立长连接；未开放圣域的区服（如 `293/1` 返回空 host）直接返回 `ErrSaintAreaCredentialMissing`。
 > - `s0` 实机 `362/0` 返回 400 字节，18 字段完整解码后 `remaining_bytes=0`；`362/4` 免费一键扫荡不消耗元宝。
+
+### 4.31 Module 694 (0x02B6): 山海幻兽·多宝山 (`Mod_PhantomGemLottery_Base`)
+
+| Action | ActionID | 方法 | 连接 | 请求 | 回包 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 694/0 | `0x02B60000` | `panel_info` | 主服 | 空 + `4B PrevAct` | `[mountain_list], [requite_list], Int32 × 7`（详见下） |
+| 694/1 | `0x02B60001` | `find` | 主服 | `Int8 mountain_id, Int8 find_type` + `4B PrevAct` | `UByte result, [[Int32 item_id, Int32 item_num, Int8 is_high]], [[Int32 item_id, Int32 item_num]], Int32 player_rest_time` |
+| 694/2 | `0x02B60002` | `get_requite_award` | 主服 | `Int32 requite_id, Int32 award_id` + `4B PrevAct` | `UByte result` |
+
+> **抓包与反编译结论（2026-11-28，对照 `Main.swf` `Mod_PhantomGemLottery_Base` / `phantom_gem_lottery.swf` 与 `duobaoshan.pcapng`）**：
+>
+> - 四座宝山 `mountain_id` 映射：`1=沧溟`、`2=玄晖`、`3=翠青`、`4=灵玉`（`PhantomGemLotteryData.MOUNTAIN_LINGYU_INDEX=4`，自动化默认灵玉）。
+> - `find_type`：`0=普通寻宝`（消耗 500 道源，每日四山共享 1 次，宗门 buff 可额外提供 `remain_extra_normal_times` 次）、`1=高级寻宝`（消耗元宝/寻宝司南，自动化不调用）。
+> - `panel_info` 每座宝山结构：`Int8 mountain_id, [normal_list], Int32 remain_normal_times, [high_list], Int32 remain_high_times, Int32 remain_extra_normal_times`；尾部 7 个 Int32 依次为 `requite_value, ticket_num, is_lucky_day, player_rest_time, discount_num, sect_buff_expire_time, is_cloud_treasury_privilege_flag`。实抓 `duobaoshan.pcapng` 解压后 15,108 字节，`remaining_bytes=0`。
+> - `find` 结果码：`0=SUCCESS`、`1=FAILED`、`2=NO_ENOUGTH_TIMES`、`3=NO_ENOUGTH_INGOT`、`4=NO_ENOUGTH_DAOYUAN`、`5=EUDEMONS_FUN_NOT_OPENED`、`6=ITEM_PACK_FULL`。抓包样本 `04 00 00000016` → `000001000029ce0000000101000000000000`（灵玉普通寻宝获得道具 10702 ×1，福馈值 4010 → 4020，`remain_normal_times` 1 → 0）。

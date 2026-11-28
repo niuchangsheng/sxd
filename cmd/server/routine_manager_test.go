@@ -110,8 +110,8 @@ func TestRoutineManager_ApplyPresetPerRole(t *testing.T) {
 	s0 := newTestRoleScheduler(t, "s0-遁一")
 	s1 := newTestRoleScheduler(t, "s1-小号")
 	rm := newRoutineManager(nil)
-	rm.registerRole("s0-遁一", "s0", s0, map[string]bool{}, factory)
-	rm.registerRole("s1-小号", "s1", s1, map[string]bool{}, factory)
+	rm.registerRole("s0-遁一", "s0", s0, map[string]bool{"arena": false}, factory)
+	rm.registerRole("s1-小号", "s1", s1, map[string]bool{"arena": false}, factory)
 
 	if err := rm.ApplyPreset("s0-遁一", "all"); err != nil {
 		t.Fatalf("apply preset s0 failed: %v", err)

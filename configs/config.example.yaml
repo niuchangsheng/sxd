@@ -143,7 +143,7 @@ scheduler:
     golden_touch_stone: true      # 点金石
     forbidden_book: true          # 禁地之书 (免费优先)
     ice_cave: true                # 一键冰窟探险
-    era_travel: true              # 山河纪元游历
+    era_travel: false             # 山河纪元游历 (当前关闭)
     lingdao_practice: true        # 灵道初解修炼
     huanshou_invade: true         # 山海幻兽入侵
     wufa_field: true              # 悟法领域感悟
@@ -152,7 +152,8 @@ scheduler:
     find_immortal: true           # 喜从天降 (免费龙鱼令)
     five_blessings: true          # 五福临门免费祈福
     find_beast: true              # 寻找异兽免费次数
-    duobao_mountain: true         # 多宝山免费挖掘
+    duobao_mountain: true         # 神秘宝藏免费挖掘 (Mod 740)
+    phantom_gem_lottery: true     # 山海幻兽·多宝山普通寻宝 (消耗道源，默认灵玉宝山，不消耗元宝)
     eudemons: true                # 幻兽经脉激活
     partner_link: true            # 灵结激活
     star_picture: true            # 法力星图: 仅 has_divination=0 且 free>0 时占星一次, 不循环不买次数
@@ -275,6 +276,11 @@ scheduler:
   online_gift:
     claim_function_end_gifts: true    # 领取功能终结礼包
     max_claims_per_gift: 20           # 单个礼包连续领取上限
+
+  # 山海幻兽·多宝山普通寻宝（消耗道源，不消耗元宝）
+  # 可选四座宝山: 沧溟 / 玄晖 / 翠青 / 灵玉（默认: 灵玉）
+  phantom_gem_lottery:
+    mountain: 灵玉
 
   # 说明: 喜从天降、五福临门无策略参数，仅使用免费次数，不消耗元宝。
 

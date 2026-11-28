@@ -176,6 +176,13 @@ func newRegistryFactory(
 	}
 	factory.SetMasterPracticeConfig(mpCfg)
 
+	// 5.2 山海幻兽·多宝山普通寻宝目标宝山配置（默认灵玉，可选沧溟/玄晖/翠青/灵玉）
+	pglCfg := minigame.DefaultPhantomGemLotteryConfig()
+	if sc.PhantomGemLottery.Mountain != "" {
+		pglCfg.Mountain = sc.PhantomGemLottery.Mountain
+	}
+	factory.SetPhantomGemLotteryConfig(pglCfg)
+
 	// 6. 在线礼包与功能终结礼包策略配置
 	ogCfg := daily.DefaultOnlineGiftConfig()
 	if sc.OnlineGift.ClaimFunctionEndGifts != nil {
