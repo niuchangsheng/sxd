@@ -355,6 +355,33 @@ func isPackItemSellable(dictRepo dictionary.Repository, it protocol.ItemRecord) 
 	return false
 }
 
+// sessionRecoverWait 等待会话从重连/认证窗口恢复到 Active 的上限。
+// 与 client.EnsureFreshConnection 的恢复窗口一致：超时后交给调度器 90 秒短重试。
+const sessionRecoverWait = 60 * time.Second
+
+// awaitSessionActive 等待会话回到激活态，避免在重连窗口继续下发业务请求
+// 而产生大量 "session is not active" 空转。返回 false 表示等待超时或会话关闭。
+func awaitSessionActive(ctx context.Context, session *client.RoleSession) bool {
+	if session == nil {
+		return false
+	}
+	if st := session.State(); st != client.StateActive {
+		// 只有状态机正在自愈（建连/认证/重连）时才值得等；未启动或已关闭立即失败。
+		if !st.IsRecovering() {
+			slog.Info("会话未激活且不在重连中，本轮提前结束",
+				"role_id", session.RoleID(), "state", st.String())
+			return false
+		}
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, sessionRecoverWait)
+	defer cancel()
+	if err := session.AwaitActive(waitCtx); err != nil {
+		slog.Info("等待会话重连恢复失败，本轮提前结束", "role_id", session.RoleID(), "err", err)
+		return false
+	}
+	return true
+}
+
 // eliteSweepStackItemTypeID 精英副本可堆叠掉落的主要道具类型 (制作卷)。
 const eliteSweepStackItemTypeID = 1002
 
@@ -812,13 +839,8 @@ func executeEliteMissionSweep(
 			)
 			break
 		}
-		if session.State() != client.StateActive {
-			for i := 0; i < 15 && session.State() != client.StateActive; i++ {
-				kit.Sleep(ctx, 200*time.Millisecond)
-			}
-			if session.State() != client.StateActive {
-				break
-			}
+		if !awaitSessionActive(ctx, session) {
+			return successRounds, client.ErrNotConnected
 		}
 
 		const maxTownAttempts = 2
@@ -1199,10 +1221,8 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				_ = questEnsureStamina()
 
 				if dictRepo != nil {
-					if session.State() != client.StateActive {
-						for i := 0; i < 15 && session.State() != client.StateActive; i++ {
-							kit.Sleep(ctx, 200*time.Millisecond)
-						}
+					if !awaitSessionActive(ctx, session) {
+						return client.ErrNotConnected
 					}
 
 					questBad := false
@@ -1299,10 +1319,10 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 
 			sweepLoop:
 				for _, step := range sweepPipeline {
-					if session.State() != client.StateActive {
-						for i := 0; i < 15 && session.State() != client.StateActive; i++ {
-							kit.Sleep(ctx, 200*time.Millisecond)
-						}
+					// 推图阶段的轮内重连可能仍在进行：等会话恢复再发扫荡请求，
+					// 避免整段扫荡以 "session is not active" 空跑（2026-11-28 s1 实测）。
+					if !awaitSessionActive(ctx, session) {
+						return client.ErrNotConnected
 					}
 					if !sweepHasStamina() {
 						slog.Info("当前角色体力不足，关卡扫荡阶段结束", "role_id", session.RoleID(), "remaining_stamina", session.GetStamina())
@@ -1318,6 +1338,11 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							&totalCostStamina, &totalGainExp, &totalGainCoins,
 						)
 						sweepSuccessRounds += rounds
+						if eliteErr != nil && errors.Is(eliteErr, client.ErrNotConnected) {
+							// 会话在扫荡中被断线且本轮 60 秒恢复窗口已耗尽：不再进入
+							// 兜底出售重复等待，交给 90 秒后的下一轮在扫荡结束时完成。
+							return eliteErr
+						}
 						// 大循环兜底：精英副本扫荡结束后出售背包内全部装备制作卷
 						//（s0/s1 均执行；丹药制作卷 TypeID 1001 不在出售范围）。
 						sellEquipmentScrollsAfterEliteSweep(ctx, session, dictRepo)

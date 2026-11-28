@@ -132,3 +132,59 @@ func TestSleep_RespectsContextCancel(t *testing.T) {
 		t.Fatalf("Sleep did not abort promptly on cancel: took %v", elapsed)
 	}
 }
+
+// TestCall_WaitsForReconnectAndRetries 验证调用发生在会话重连窗口时，kit.Call
+// 等待状态机恢复后重试一次，而不是把 ErrNotConnected 暴露给业务层。
+func TestCall_WaitsForReconnectAndRetries(t *testing.T) {
+	const okAct uint32 = 0x01010003
+
+	sess := client.NewRoleSession(client.SessionConfig{
+		RoleID:     "role-kit-reconnect",
+		ServerAddr: "mock-pipe",
+		Dialer: func(context.Context, string, string) (net.Conn, error) {
+			c1, c2 := net.Pipe()
+			go func() {
+				defer c2.Close()
+				for {
+					pkt, err := protocol.ReadPacket(c2)
+					if err != nil {
+						return
+					}
+					if pkt.ActionID == okAct {
+						_ = protocol.WritePacket(c2, protocol.NewPacket(okAct, []byte{0x09}))
+					}
+				}
+			}()
+			return c1, nil
+		},
+		Authenticator: func(*client.RoleSession) error { return nil },
+	})
+	if err := sess.Start(context.Background()); err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	defer sess.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != client.StateActive {
+		t.Fatalf("session not active: %s", sess.State())
+	}
+
+	// 主动断开，等状态机进入重连窗口后再发起业务调用。
+	sess.ReconnectNow()
+	deadline = time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateReconnecting && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !sess.State().IsRecovering() {
+		t.Fatalf("state = %s, want Reconnecting", sess.State())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	resp, err := kit.Call(ctx, sess, protocol.NewPacket(okAct, nil), okAct, time.Second)
+	if err != nil || resp == nil || len(resp.Payload) != 1 || resp.Payload[0] != 0x09 {
+		t.Fatalf("重连后重试应成功: resp=%v err=%v", resp, err)
+	}
+}

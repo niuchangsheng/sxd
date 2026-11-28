@@ -11,7 +11,13 @@ import (
 	"sxd-pie-ng/internal/protocol"
 )
 
-const fallbackCallTimeout = 8 * time.Second
+const (
+	fallbackCallTimeout = 8 * time.Second
+	// reconnectCallWait 首次调用因「会话重连中」失败后，等待状态机恢复的上限。
+	// 重连退避最长 5 分钟；这里只覆盖一次恢复窗口，超时后按 ErrNotConnected
+	// 交给调度器 90 秒短重试，避免调用方无限挂起。
+	reconnectCallWait = 60 * time.Second
+)
 
 type timeoutOverrideKey struct{}
 
@@ -57,6 +63,12 @@ func IsAbortErr(err error) (error, bool) {
 }
 
 // Call 使用受控超时发起一次协议请求并返回完整错误，绝不吞错。
+//
+// 若首次调用因会话正在重连（ErrNotConnected 且状态可自愈）失败，先等待状态机
+// 恢复再重试一次，避免把「重连窗口」当成业务失败暴露给 Routine。
+//
+// 重试不会产生重复业务动作：Call 只在发包前（Send 发现 conn 不可用）返回
+// ErrNotConnected；一旦请求已写入连接，失败口径是超时，不做重发。
 func Call(ctx context.Context, session *client.RoleSession, pkt *protocol.Packet, respActionID uint32, timeout time.Duration) (*protocol.Packet, error) {
 	if session == nil {
 		return nil, client.ErrNotConnected
@@ -64,12 +76,18 @@ func Call(ctx context.Context, session *client.RoleSession, pkt *protocol.Packet
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cCtx, cancel := context.WithTimeout(ctx, resolveTimeout(ctx, timeout))
-	defer cancel()
-	return session.Call(cCtx, pkt, respActionID)
+	resp, err := callOnce(ctx, session, pkt, respActionID, timeout, false)
+	if !shouldWaitForReconnect(ctx, session, err) {
+		return resp, err
+	}
+	if waitErr := awaitReconnect(ctx, session); waitErr != nil {
+		return resp, err
+	}
+	return callOnce(ctx, session, pkt, respActionID, timeout, false)
 }
 
 // CallResync 使用受控超时发起带 PrevAct 重同步重试的协议请求，绝不吞错。
+// 断线语义与 Call 一致：等待重连后重试一次。
 func CallResync(ctx context.Context, session *client.RoleSession, pkt *protocol.Packet, respActionID uint32, timeout time.Duration) (*protocol.Packet, error) {
 	if session == nil {
 		return nil, client.ErrNotConnected
@@ -77,7 +95,43 @@ func CallResync(ctx context.Context, session *client.RoleSession, pkt *protocol.
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return session.CallWithPrevActResync(ctx, resolveTimeout(ctx, timeout), pkt, respActionID)
+	resp, err := callOnce(ctx, session, pkt, respActionID, timeout, true)
+	if !shouldWaitForReconnect(ctx, session, err) {
+		return resp, err
+	}
+	if waitErr := awaitReconnect(ctx, session); waitErr != nil {
+		return resp, err
+	}
+	return callOnce(ctx, session, pkt, respActionID, timeout, true)
+}
+
+// callOnce 执行一次受控超时的协议请求。
+func callOnce(ctx context.Context, session *client.RoleSession, pkt *protocol.Packet, respActionID uint32, timeout time.Duration, resync bool) (*protocol.Packet, error) {
+	cCtx, cancel := context.WithTimeout(ctx, resolveTimeout(ctx, timeout))
+	defer cancel()
+	if resync {
+		return session.CallWithPrevActResync(cCtx, resolveTimeout(ctx, timeout), pkt, respActionID)
+	}
+	return session.Call(cCtx, pkt, respActionID)
+}
+
+// shouldWaitForReconnect 判断本次失败是否属于「会话正在自愈」的断线：
+// 只有 ErrNotConnected 且状态机仍在建连/认证/重连，且调用上下文未取消时才值得等待。
+func shouldWaitForReconnect(ctx context.Context, session *client.RoleSession, err error) bool {
+	if !errors.Is(err, client.ErrNotConnected) {
+		return false
+	}
+	if ctx.Err() != nil || session == nil {
+		return false
+	}
+	return session.State().IsRecovering()
+}
+
+// awaitReconnect 阻塞等待会话重新进入激活态。
+func awaitReconnect(ctx context.Context, session *client.RoleSession) error {
+	waitCtx, cancel := context.WithTimeout(ctx, reconnectCallWait)
+	defer cancel()
+	return session.AwaitActive(waitCtx)
 }
 
 // Sleep 在尊重 ctx.Done() 的前提下等待指定时长，取代无法中断的裸 time.Sleep。

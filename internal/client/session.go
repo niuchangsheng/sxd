@@ -45,6 +45,14 @@ const (
 	roleSelectionRetryInterval = 10 * time.Minute
 	// sessionReleaseWait 登录握手超时后的最小等待，给网关释放旧会话留出时间。
 	sessionReleaseWait = 20 * time.Second
+	// sessionActiveWait 会话非激活时等待状态机自行恢复的上限。
+	// 重连退避最长 5 分钟，这里只给「恢复窗口」留 60 秒；超时后由调度器
+	// 按 90 秒短重试，避免单个 Routine 长时间占住角色调度队列。
+	sessionActiveWait = 60 * time.Second
+	// forceRebuildCoalesce 强制重建（maxAge=0）的连续合并窗口：距上一次强制
+	// 重建不足 2 秒时直接复用（防止两个玩法在恢复瞬间连环拆连接）；更早的
+	// 重建不合并，剧情副本单场战斗后仍需全新 Mod 4 上下文。
+	forceRebuildCoalesce = 2 * time.Second
 )
 
 const (
@@ -123,6 +131,11 @@ type RoleSession struct {
 
 	state   SessionState
 	stateMu sync.RWMutex
+	// stateCh 在每次状态迁移时关闭并替换，供 AwaitActive 无轮询地等待状态变化。
+	stateCh chan struct{}
+	// rebuildMu 串行化「主动重建会话」决策：同一时刻只允许一个调用方拆连接，
+	// 其余调用方在锁内等待重连完成或复用刚建立的新连接。
+	rebuildMu sync.Mutex
 
 	playerState PlayerState
 	playerMu    sync.RWMutex
@@ -170,6 +183,10 @@ type RoleSession struct {
 	// prevAct 集中管理当前连接的业务动作尾链 (PrevAct) 与最近收包诊断缓冲。
 	prevAct      *PrevActChain
 	lastSendTime atomic.Int64
+	// lastForceRebuild 最近一次强制重建（maxAge=0）的时间戳 (UnixNano)，用于
+	// 合并连续强制重建请求。
+	lastForceRebuild atomic.Int64
+
 	// connGeneration 每次成功建立新连接后递增，供「主动重建会话」等待新连接使用。
 	connGeneration atomic.Uint64
 	// connSince 最近一次建立连接的时间戳 (UnixNano)，用于判断会话已存活多久。
@@ -231,6 +248,7 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		cfg:            cfg,
 		isCustomDialer: isCustom,
 		state:          StateDisconnected,
+		stateCh:        make(chan struct{}),
 		prevAct:        NewPrevActChain(cfg.HeartbeatActionID),
 		// 启动时由 main 统一换取过票据，此处给出最小换票间隔，
 		// 避免首个连接抖动就立刻再登录一次 Web。
@@ -319,11 +337,43 @@ func (s *RoleSession) setState(newState SessionState) {
 	defer s.stateMu.Unlock()
 	if s.state != newState {
 		s.state = newState
+		if s.stateCh != nil {
+			close(s.stateCh)
+		}
+		s.stateCh = make(chan struct{})
 		slog.Debug("角色会话状态变更",
 			"role_id", s.cfg.RoleID,
 			"role_name", s.cfg.RoleName,
 			"state", newState.String(),
 		)
+	}
+}
+
+// AwaitActive 阻塞等待会话回到 StateActive 激活态。
+//
+// 会话处于 Connecting/Authenticating/Reconnecting 时连接暂不可用但状态机正在
+// 自行恢复；业务调用方应等待状态迁移，而不是把「重连中」当成「未连接」失败，
+// 否则会在每次断线恢复窗口产生大量 "session is not active" 空转。
+// 会话关闭返回 ErrSessionClosed，ctx 到期返回 ctx.Err()。
+func (s *RoleSession) AwaitActive(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		s.stateMu.RLock()
+		st, ch := s.state, s.stateCh
+		s.stateMu.RUnlock()
+		switch st {
+		case StateActive:
+			return nil
+		case StateClosed:
+			return ErrSessionClosed
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ch:
+		}
 	}
 }
 
@@ -488,6 +538,11 @@ func (s *RoleSession) Close() {
 	}
 	wasActive := s.state == StateActive
 	s.state = StateClosed
+	// 唤醒所有 AwaitActive 等待者：会话关闭必须立即返回，而不是等到 ctx 到期。
+	if s.stateCh != nil {
+		close(s.stateCh)
+	}
+	s.stateCh = make(chan struct{})
 	s.stateMu.Unlock()
 
 	if wasActive && s.onBeforeClose != nil {
@@ -576,23 +631,59 @@ const HealthySessionAge = 3 * time.Minute
 //
 // 若已超过健康窗口，主动重建连接并等待新一代连接进入 Active：重型玩法
 // （无量劫海/飞升灌注/魔界远征等）在旧会话上会被服务端丢弃甚至断链，
-// 在登录后的早期窗口内才能稳定完成。等待超时返回 ErrNotConnected，
-// 由调度器按 90 秒短重试。
+// 在登录后的早期窗口内才能稳定完成。
 //
-// maxAge 为 0 表示无条件重建（供定期刷新等调用方使用）；负数取默认健康窗口。
+// maxAge == 0 表示强制重建（调用方需要全新的服务端会话上下文，例如剧情副本
+// 单场战斗后 Mod 4 上下文失效）。距上一次强制重建不足 2 秒的连续请求会被
+// 合并，避免多个玩法在恢复瞬间连环拆连接。
+//
+// 会话正在重连/认证时先等待状态机恢复（最多 sessionActiveWait），而不是立即
+// 返回「未连接」；只有会话已关闭或等待超时才返回错误，交由调度器 90 秒重试。
 func (s *RoleSession) EnsureFreshConnection(ctx context.Context, maxAge time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if maxAge < 0 {
 		maxAge = HealthySessionAge
 	}
-	if s.State() != StateActive {
-		return ErrNotConnected
+	if s.State() == StateClosed {
+		return ErrSessionClosed
 	}
+
+	// 串行化重建决策：并发调用方排队，后进入者会看到刚重建好的新连接。
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+
+	// 状态机正在自行恢复时先等它完成，不把「重连中」暴露成未连接。
+	if st := s.State(); st != StateActive {
+		if !st.IsRecovering() {
+			return ErrNotConnected
+		}
+		waitCtx, waitCancel := context.WithTimeout(ctx, sessionActiveWait)
+		waitErr := s.AwaitActive(waitCtx)
+		waitCancel()
+		if waitErr != nil {
+			if errors.Is(waitErr, context.DeadlineExceeded) && ctx.Err() == nil {
+				return ErrNotConnected
+			}
+			return waitErr
+		}
+	}
+
 	since := s.ConnectionSince()
 	age := time.Duration(0)
 	if !since.IsZero() {
 		age = time.Since(since)
 	}
-	if age <= maxAge {
+	if maxAge == 0 {
+		// 强制重建合并窗口：只有「刚发生过的强制重建」才合并，连接本身
+		// 新不代表服务端业务上下文新（例如剧情副本一场战斗后上下文已失效）。
+		if last := s.lastForceRebuild.Load(); last != 0 {
+			if time.Since(time.Unix(0, last)) < forceRebuildCoalesce {
+				return nil
+			}
+		}
+	} else if age <= maxAge {
 		return nil
 	}
 
@@ -609,13 +700,17 @@ func (s *RoleSession) EnsureFreshConnection(ctx context.Context, maxAge time.Dur
 	gen := s.ConnectionGeneration()
 	s.ReconnectNow()
 
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(sessionActiveWait)
 	for {
 		if s.ConnectionGeneration() > gen && s.State() == StateActive {
+			if maxAge == 0 {
+				// 以「重建完成」时刻为准合并紧随其后的强制重建请求。
+				s.lastForceRebuild.Store(time.Now().UnixNano())
+			}
 			return nil
 		}
 		if s.State() == StateClosed {
-			return ErrNotConnected
+			return ErrSessionClosed
 		}
 		if time.Now().After(deadline) {
 			return ErrNotConnected

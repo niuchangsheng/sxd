@@ -40,3 +40,16 @@ func (s SessionState) String() string {
 		return "Unknown"
 	}
 }
+
+// IsRecovering 表示会话状态机正在自行恢复连接（建连/认证/重连中）。
+//
+// 这类状态下连接暂不可用但正在自愈，调用方应等待状态迁移而不是把它当成
+// 「未连接」业务失败；只有 Disconnected/Closed 才应立即报错。
+func (s SessionState) IsRecovering() bool {
+	switch s {
+	case StateConnecting, StateAuthenticating, StateReconnecting:
+		return true
+	default:
+		return false
+	}
+}

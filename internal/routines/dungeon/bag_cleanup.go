@@ -127,6 +127,12 @@ func sellEquipmentScrollsAfterEliteSweep(ctx context.Context, session *client.Ro
 	if session == nil || dictRepo == nil {
 		return
 	}
+	// 扫荡收尾阶段会话可能刚好在重连：等状态机恢复再卖，避免整包兜底
+	// 在恢复窗口里以 "session is not active" 静默失败（2026-11-28 s1 实测）。
+	if !awaitSessionActive(ctx, session) {
+		slog.Warn("精英扫荡后出售装备制作卷：会话未恢复，跳过本轮", "role_id", session.RoleID())
+		return
+	}
 	pack, err := fetchPackItemList(ctx, session)
 	if err != nil || pack == nil {
 		slog.Warn("精英扫荡后出售装备制作卷：拉取背包失败",
