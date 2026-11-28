@@ -20,9 +20,13 @@ import (
 
 const (
 	// bagCleanupFreeThreshold 剩余空格低于该值时触发清理。
-	bagCleanupFreeThreshold = 5
+	//
+	// 2026-11-28：原阈值 5 时 s1 长期在 8~15 空格间徘徊，清理任务从未触发，
+	// 装备制作卷沉积到 40/48 格；而伙伴猜猜看等服务端接口在 10 空格时已报
+	// 「背包已满」。阈值提到 12，让清理先于服务端判定满仓发生。
+	bagCleanupFreeThreshold = 12
 	// bagCleanupTargetFree 清理后希望达到的空格数。
-	bagCleanupTargetFree = 10
+	bagCleanupTargetFree = 20
 	// bagCleanupMaxSell 单轮最多出售的装备制作卷叠数（兜底上限）。
 	bagCleanupMaxSell = 20
 )
@@ -66,6 +70,8 @@ func NewBagCleanupRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 			// 不能作为满仓判据；用「容量 - 已用格位」计算真实空格。
 			freeSlots := int(pack.PackCapacity) - len(pack.PackItems)
 			if freeSlots > bagCleanupFreeThreshold {
+				slog.Debug("背包清理：空格充足，跳过", "role_id", session.RoleID(),
+					"free_slots", freeSlots, "threshold", bagCleanupFreeThreshold)
 				return nil
 			}
 			// 只卖到「目标空格数」即可（每卖一叠腾 1 格），避免一次清空全部制作卷。
@@ -110,13 +116,15 @@ func NewBagCleanupRoutine(dictRepo dictionary.Repository) scheduler.ActivityRout
 }
 
 // sellEquipmentScrollsAfterEliteSweep 精英副本扫荡结束后的兜底出售：
-// 卖出背包内所有装备制作卷 (TypeID=1002、名称含「制作卷」、无元宝价值)。
-// 仅在 ncs/qq 的 s0 服务器生效；网络/解析失败只记录日志，不影响扫荡结果。
+// 卖出背包内所有装备制作卷 (TypeID=1002、名称含「制作卷」、描述含「装备」、
+// 无元宝价值)。网络/解析失败只记录日志，不影响扫荡结果。
+//
+// 2026-11-28：此前仅 s0 执行，s1 背包沉积了 11 叠装备制作卷（赤霄/天罡/倚天），
+// 加上推图与活动掉落一度逼近满仓（40/48）。丹药制作卷为 TypeID 1001
+// （如 382/383 一品/二品武力丹制作卷），不在本函数判定范围内，因此对
+// s1（配置保留 1-5 品丹药制作卷）同样安全。
 func sellEquipmentScrollsAfterEliteSweep(ctx context.Context, session *client.RoleSession, dictRepo dictionary.Repository) {
 	if session == nil || dictRepo == nil {
-		return
-	}
-	if !strings.HasPrefix(session.RoleID(), "s0-") {
 		return
 	}
 	pack, err := fetchPackItemList(ctx, session)
@@ -127,14 +135,11 @@ func sellEquipmentScrollsAfterEliteSweep(ctx context.Context, session *client.Ro
 	}
 	sold := 0
 	for _, it := range pack.PackItems {
-		dItem, dErr := dictRepo.GetItem(int(it.ItemID))
-		if dErr != nil || dItem == nil {
+		if !isEquipmentCraftScroll(dictRepo, it.ItemID) {
 			continue
 		}
-		if dItem.TypeID != eliteSweepStackItemTypeID || dItem.Ingot > 0 {
-			continue
-		}
-		if !strings.Contains(dItem.Name, "制作卷") {
+		// 元宝价值物品一律跳过，避免误卖玩家投入元宝获得的道具。
+		if dItem, dErr := dictRepo.GetItem(int(it.ItemID)); dErr == nil && dItem != nil && dItem.Ingot > 0 {
 			continue
 		}
 		if ok, _ := sellPackItem(ctx, session, it); ok {

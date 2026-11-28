@@ -1318,7 +1318,8 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 							&totalCostStamina, &totalGainExp, &totalGainCoins,
 						)
 						sweepSuccessRounds += rounds
-						// 大循环兜底：精英副本扫荡结束后在 s0 出售所有装备制作卷。
+						// 大循环兜底：精英副本扫荡结束后出售背包内全部装备制作卷
+						//（s0/s1 均执行；丹药制作卷 TypeID 1001 不在出售范围）。
 						sellEquipmentScrollsAfterEliteSweep(ctx, session, dictRepo)
 						if eliteErr != nil {
 							return eliteErr
