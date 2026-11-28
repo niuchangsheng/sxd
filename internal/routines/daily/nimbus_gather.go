@@ -68,13 +68,10 @@ func NewNimbusGatherRoutine() scheduler.ActivityRoutine {
 			}
 			slog.Info("正在执行日常任务: 每日灵脉采集", "role_id", session.RoleID())
 
-			if err := session.EnsureFreshConnection(ctx, nimbusFreshSessionAge); err != nil {
-				return err
-			}
-
 			caller := kit.NewCaller(ctx, session, nimbusCallTimeout)
 
-			// 1. 面板：确认功能开启状态与今日剩余次数。
+			// 1. 面板：确认功能开启状态与今日剩余次数（长会话上 104/0 面板正常，
+			//    先查面板再决定是否重建连接，避免次数已用尽或未开放时白拆共享连接）。
 			infoResp, err := caller.Call(protocol.BuildNimbusInfoPacket(), protocol.ActionIDNimbusInfo)
 			if err != nil || infoResp == nil {
 				if abort := caller.AbortErr(); abort != nil {
@@ -101,6 +98,11 @@ func NewNimbusGatherRoutine() scheduler.ActivityRoutine {
 					"role_id", session.RoleID(), "nimbus", info.Nimbus)
 				return scheduler.NewCooldownUntil(scheduler.NextDailyReset(time.Now()),
 					"灵脉今日采集次数已用尽")
+			}
+
+			// 确认今日有剩余采集次数后，再按健康窗口重建连接，确保 104/1 采集在干净连接上执行。
+			if err := session.EnsureFreshConnection(ctx, nimbusFreshSessionAge); err != nil {
+				return err
 			}
 
 			// 2. 采集前复位城镇场景：灵脉采集属于场景写操作，副本/活动残留

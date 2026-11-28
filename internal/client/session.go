@@ -212,6 +212,13 @@ type RoleSession struct {
 	// connSince 最近一次建立连接的时间戳 (UnixNano)，用于判断会话已存活多久。
 	connSince atomic.Int64
 
+	// 连接健康度观测计数与最近断线原因（lastDisconnectReason 受 stateMu 保护）。
+	passiveDisconnects    atomic.Uint64
+	intentionalReconnects atomic.Uint64
+	handshakeFailures     atomic.Uint64
+	staleProbeTriggers    atomic.Uint64
+	lastDisconnectReason  string
+
 	// factionUnavailable 标记本次会话内已确认帮派模块对当前角色不可用。
 	// 服务端对未加入帮派角色的帮派类请求会静默丢弃（无任何回包），
 	// 由首个超时的帮派任务置位，供其余帮派玩法直接跳过，避免重复空等。
@@ -1125,6 +1132,7 @@ func (s *RoleSession) ReconnectNow() {
 		return
 	}
 	slog.Info("主动断开连接以重建服务端会话上下文", "role_id", s.cfg.RoleID)
+	s.intentionalReconnects.Add(1)
 	s.intentionalReconnect.Store(true)
 	s.closeCurrentConn()
 }
@@ -1219,6 +1227,8 @@ func (s *RoleSession) runLoop() {
 					s.setState(StateReconnecting)
 					continue
 				}
+				s.handshakeFailures.Add(1)
+				s.recordDisconnectReason(err)
 				if !s.handleConnectFailure(err) {
 					return
 				}
@@ -1426,6 +1436,8 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, re
 				s.setState(StateReconnecting)
 				return s.waitIntentionalReconnectGrace()
 			}
+			s.passiveDisconnects.Add(1)
+			s.recordDisconnectReason(err)
 			return s.handleConnectFailure(err)
 
 		case <-ticker.C:
@@ -1453,6 +1465,9 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, re
 							s.setState(StateReconnecting)
 							return s.waitIntentionalReconnectGrace()
 						}
+						s.staleProbeTriggers.Add(1)
+						s.passiveDisconnects.Add(1)
+						s.recordDisconnectReason(ErrStaleConnection)
 						// 传入 ErrStaleConnection 而非原始 context.DeadlineExceeded，
 						// 避免被 reconnectWait 误判为「登录握手超时」而强等 20s。
 						return s.handleConnectFailure(ErrStaleConnection)
@@ -1481,6 +1496,8 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error, re
 					s.setState(StateReconnecting)
 					return s.waitIntentionalReconnectGrace()
 				}
+				s.passiveDisconnects.Add(1)
+				s.recordDisconnectReason(err)
 				return s.handleConnectFailure(err)
 			}
 		}

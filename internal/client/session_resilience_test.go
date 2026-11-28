@@ -509,3 +509,83 @@ func TestHalfOpenZombieProbe_HealthyRepliesKeepConnAlive(t *testing.T) {
 		t.Fatalf("探针正常回包时不应触发重连, dialCount=%d gen=%d", dialCount.Load(), sess.ConnectionGeneration())
 	}
 }
+
+// TestSessionMetrics_TracksLifecycleEvents 验证 SessionMetrics 准确统计连接代数、
+// 主动重建、被动断线与握手失败次数及最近断线原因。
+func TestSessionMetrics_TracksLifecycleEvents(t *testing.T) {
+	pipes := make([][2]net.Conn, 4)
+	for i := range pipes {
+		pipes[i][0], pipes[i][1] = net.Pipe()
+		defer pipes[i][0].Close()
+		defer pipes[i][1].Close()
+	}
+
+	var dialIdx atomic.Int32
+	var authCalls atomic.Int32
+	sess := NewRoleSession(SessionConfig{
+		RoleID:            "role-metrics",
+		ServerAddr:        "mock-pipe",
+		HeartbeatInterval: time.Hour,
+		ReconnectInterval: 10 * time.Millisecond,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			i := int(dialIdx.Add(1)) - 1
+			if i >= len(pipes) {
+				return nil, ErrNotConnected
+			}
+			return pipes[i][0], nil
+		},
+		Authenticator: func(s *RoleSession) error {
+			// 第 2 次握手模拟失败一次，验证 HandshakeFailures 计数。
+			if authCalls.Add(1) == 2 {
+				return ErrAuthRejected
+			}
+			return nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sess.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sess.Close()
+	if err := sess.AwaitActive(ctx); err != nil {
+		t.Fatalf("await active: %v", err)
+	}
+
+	// 1. 主动重建 -> 触发第 2 次握手失败 -> 自动重连到第 3 代连接。
+	sess.ReconnectNow()
+	deadline := time.Now().Add(2 * time.Second)
+	for (sess.ConnectionGeneration() < 3 || sess.State() != StateActive) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sess.ConnectionGeneration() < 3 || sess.State() != StateActive {
+		t.Fatalf("期望恢复到第 3 代连接, gen=%d state=%s", sess.ConnectionGeneration(), sess.State())
+	}
+
+	// 2. 被动断开第 3 代连接 -> 自动重连到第 4 代连接。
+	_ = pipes[2][1].Close()
+	deadline = time.Now().Add(2 * time.Second)
+	for (sess.ConnectionGeneration() < 4 || sess.State() != StateActive) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sess.ConnectionGeneration() < 4 || sess.State() != StateActive {
+		t.Fatalf("期望恢复到第 4 代连接, gen=%d state=%s", sess.ConnectionGeneration(), sess.State())
+	}
+
+	m := sess.Metrics()
+	if m.ConnGeneration != 4 {
+		t.Errorf("ConnGeneration = %d, want 4", m.ConnGeneration)
+	}
+	if m.IntentionalReconnects != 1 {
+		t.Errorf("IntentionalReconnects = %d, want 1", m.IntentionalReconnects)
+	}
+	if m.HandshakeFailures != 1 {
+		t.Errorf("HandshakeFailures = %d, want 1", m.HandshakeFailures)
+	}
+	if m.PassiveDisconnects != 1 {
+		t.Errorf("PassiveDisconnects = %d, want 1", m.PassiveDisconnects)
+	}
+	if m.LastDisconnectReason == "" {
+		t.Errorf("期望记录 LastDisconnectReason")
+	}
+}

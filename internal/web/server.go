@@ -21,12 +21,26 @@ import (
 //go:embed static/*
 var staticFS embed.FS
 
+// ConnectionHealth 角色连接的运行时健康度观测指标。
+type ConnectionHealth struct {
+	ConnGeneration        uint64 `json:"conn_generation"`
+	ConnAgeSec            int64  `json:"conn_age_sec"`
+	LastRxAgeSec          int64  `json:"last_rx_age_sec"`
+	PassiveDisconnects    uint64 `json:"passive_disconnects"`
+	IntentionalReconnects uint64 `json:"intentional_reconnects"`
+	HandshakeFailures     uint64 `json:"handshake_failures"`
+	StaleProbeTriggers    uint64 `json:"stale_probe_triggers"`
+	CrossSessionActive    bool   `json:"cross_session_active"`
+	LastDisconnectReason  string `json:"last_disconnect_reason,omitempty"`
+}
+
 // RoleInfo 角色状态展示结构体
 type RoleInfo struct {
-	RoleID   string `json:"role_id"`
-	RoleName string `json:"role_name"`
-	ServerID string `json:"server_id"`
-	State    string `json:"state"`
+	RoleID   string            `json:"role_id"`
+	RoleName string            `json:"role_name"`
+	ServerID string            `json:"server_id"`
+	State    string            `json:"state"`
+	Health   *ConnectionHealth `json:"health,omitempty"`
 }
 
 // RoleProvider 角色信息提供器接口

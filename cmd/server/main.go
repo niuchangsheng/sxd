@@ -105,6 +105,18 @@ func (m *sessionManager) ListRoles() []web.RoleInfo {
 		res[i] = r
 		if i < len(m.sessions) && m.sessions[i] != nil {
 			res[i].State = m.sessions[i].State().String()
+			metrics := m.sessions[i].Metrics()
+			res[i].Health = &web.ConnectionHealth{
+				ConnGeneration:        metrics.ConnGeneration,
+				ConnAgeSec:            metrics.ConnAgeSec,
+				LastRxAgeSec:          metrics.LastRxAgeSec,
+				PassiveDisconnects:    metrics.PassiveDisconnects,
+				IntentionalReconnects: metrics.IntentionalReconnects,
+				HandshakeFailures:     metrics.HandshakeFailures,
+				StaleProbeTriggers:    metrics.StaleProbeTriggers,
+				CrossSessionActive:    metrics.CrossSessionActive,
+				LastDisconnectReason:  metrics.LastDisconnectReason,
+			}
 		}
 	}
 	return res
