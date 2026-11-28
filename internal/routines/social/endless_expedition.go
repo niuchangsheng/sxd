@@ -122,6 +122,36 @@ func NewEndlessExpeditionRoutine() scheduler.ActivityRoutine {
 
 			challenges := 0
 			for challenges < maxEndlessChallenges && ctx.Err() == nil {
+				// 797/22/23 只在新建会话的前约 60 秒内被服务端处理；入场前的
+				// 年龄校验发生在拉面板之前，挑战真正发送时会话可能已越过窗口
+				// （2026-11-28 13:55 实测 89 秒会话上 797/23 被静默丢弃）。
+				// 因此每次挑战前都按真实发送时刻复核，超窗则重建并重拉面板。
+				if isSessionAged() {
+					slog.Info("无尽洞天挑战前会话已超健康窗口，重建后继续",
+						"role_id", session.RoleID(), "layer", layer, "challenges", challenges)
+					if err := session.EnsureFreshConnection(ctx, endlessFreshSessionAge); err != nil {
+						return err
+					}
+					refreshed := resyncCall(protocol.BuildEndlessPanelPacket(),
+						protocol.ActionIDEndlessPanel)
+					if refreshed == nil {
+						if abort := caller.AbortErr(); abort != nil {
+							return abort
+						}
+						return scheduler.NewCooldown(10*time.Minute, "无尽洞天重建后拉面板失败")
+					}
+					nextPanel, nErr := protocol.ParseEndlessPanel(refreshed.Payload)
+					if nErr != nil || nextPanel.Result != protocol.EndlessSuccess || nextPanel.Layer() <= 0 {
+						slog.Info("无尽洞天重建后不可挑战，结束本轮", "role_id", session.RoleID(),
+							"layer", layer, "err", nErr)
+						return nil
+					}
+					if nextPanel.Layer() != layer {
+						slog.Info("无尽洞天重建后层数变化", "role_id", session.RoleID(),
+							"from", layer, "to", nextPanel.Layer())
+						layer = nextPanel.Layer()
+					}
+				}
 				// 禁选列表仅为客户端展示所需，实测该请求在多数状态下会被
 				// 服务端静默丢弃；直接跳过该请求，避免污染后续挑战链路。
 				// 怪物队伍信息同样用于客户端展示，部分时段会被静默丢弃；
