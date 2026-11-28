@@ -29,8 +29,8 @@ func TestWuxingRoutine_OneKeyRetriesThenExitOnFailure(t *testing.T) {
 	sess := newMinigameMockSession(t, func(conn net.Conn, pkt *protocol.Packet) {
 		switch pkt.ActionID {
 		case protocol.ActionIDTownEnter:
+			// 共享 mock 已统一回包，这里只统计复位次数。
 			townCalls.Add(1)
-			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDWuxingPanel10:
 			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0}))
 		case protocol.ActionIDWuxingPanel:

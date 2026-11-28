@@ -48,6 +48,13 @@ func newMinigameMockSession(t *testing.T, handler func(net.Conn, *protocol.Packe
 				_ = protocol.WritePacket(serverConn, protocol.BuildPlayerFunctionsResultPacket(minigameAutomationFunctionIDs))
 				continue
 			}
+			// 场景复位默认可成功，避免依赖城镇上下文的例程在单测里空等；
+			// 同时把包交给用例 handler，便于其统计复位次数。
+			if pkt.ActionID == protocol.ActionIDTownEnter {
+				_ = protocol.WritePacket(serverConn, protocol.NewPacket(pkt.ActionID, []byte{0}))
+				handler(serverConn, pkt)
+				continue
+			}
 			handler(serverConn, pkt)
 		}
 	}()

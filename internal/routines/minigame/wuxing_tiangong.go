@@ -104,10 +104,19 @@ func NewWuxingTiangongRoutine() scheduler.ActivityRoutine {
 			failedRounds := 0
 			for {
 				// 453/3 对城镇上下文敏感：首轮及重试前都先复位城镇。
-				// 2026-11-24 实测重试会被静默丢弃；2026-11-25 00:57 首轮
-				// 在 1.5 分钟会话上同样被丢弃。
+				// 2026-11-28 06:03 实测：前序结缘开箱后的 21 秒会话上
+				// enter_town 与 453/3 均被静默丢弃；失败时强制换新连接再复位。
 				if !session.ReturnToTown(ctx, 5*time.Second) {
-					slog.Info("五行天宫重试前返回城镇失败，继续尝试", "role_id", session.RoleID())
+					slog.Info("五行天宫返回城镇失败，重建连接后重试", "role_id", session.RoleID())
+					if fErr := session.EnsureFreshConnection(ctx, 0); fErr != nil {
+						if abort, ok := kit.IsAbortErr(fErr); ok {
+							return abort
+						}
+					} else if !session.ReturnToTown(ctx, 5*time.Second) {
+						slog.Info("五行天宫重建后仍无法返回城镇，稍后重试", "role_id", session.RoleID())
+						return scheduler.HandleSilentDropCtx(ctx, session, "wuxing_tiangong", 3,
+							time.Hour, "五行天宫返回城镇失败")
+					}
 				}
 				fightResp := caller.TryCall(protocol.BuildWuxingFightPacket(protocol.WuxingFightModeAll, session.LastActionID()),
 					protocol.ActionIDWuxingFight, 30*time.Second)
