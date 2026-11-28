@@ -128,7 +128,7 @@ curl -fsS http://127.0.0.1:8080/api/roles
 1. **Cookie 模式（强烈推荐）**：在 `accounts[].cookie` 填入心动平台 `A1=...; A2=...` Cookie，可绕过图形验证码风控，通常有效期数周。
 2. **Cookie 过期续期**：运行 `./bin/sxd-auto --config configs/config.yaml --browser-login`，按提示登录即可自动捕获并回写最新 Cookie。
 3. **多区服账号级换票协调**：启动期由 `startup.ticket_min_interval_seconds` / `ticket_max_interval_seconds`（默认 2~5 秒）串行换票；运行期 `TicketCache` 按 `platform:username` 维度串行化换票并强制最小间隔 3 秒，不同账号并发互不阻塞，彻底避免同账号多区服并发换票互顶。
-4. **常驻跨服保活与半开连接自愈**：默认启用 `cross_keepalive`（常驻 login-only 仙界辅助连接 `94/0` + `6/12`）抵御网关 5 分钟墙钟扫描回收；主服连接在空闲无下行包达 `90s`（`StaleProbeInterval`）且无在途业务请求时，自动发送只读 `0/6` 活性探针检测半开僵尸 TCP 连接，超时即以 `ErrStaleConnection` 快速重连。可选 `session_refresh` 在需要定期强制重置上下文时按需开启。
+4. **常驻跨服保活与半开连接自愈**：默认启用 `cross_keepalive`（常驻 login-only 仙界辅助连接 `94/0` + `6/12`）抵御网关 5 分钟墙钟扫描回收；主服连接在空闲无下行包达 `90s`（`StaleProbeInterval`）且无在途业务请求时，自动发送只读 `0/6` 活性探针检测半开僵尸 TCP 连接，超时即以 `ErrStaleConnection` 快速重连。
 5. **离线字典同步刷新**：游戏大版本更新（新增道具/伙伴/关卡/宝库大奖/魔王 Boss 等）后，执行以下两步从零重建 `data/gamedata.db`：
    ```bash
    go run -tags=probe test/probes/probe_ticket_extra.go       # 获取最新 cur_ver 与 diff_urls[cur_ver]

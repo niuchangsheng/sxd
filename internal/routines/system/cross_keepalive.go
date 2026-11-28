@@ -33,7 +33,7 @@ func NewCrossKeepaliveRoutine() scheduler.ActivityRoutine {
 		"cross_keepalive",
 		"system",
 		scheduler.ScheduleLoop,
-		// 与 session_refresh 同域，高优先级：登录后第一时间建立常驻跨服辅助连接。
+		// 系统域高优先级：登录后第一时间建立常驻跨服辅助连接。
 		scheduler.PhasePriority(scheduler.PhaseSystem, 10),
 		crossKeepaliveInterval,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {

@@ -75,50 +75,6 @@ func BuildQiMenFormationConfirmPacket(prevAct uint32) *Packet {
 // 7. 劫镖
 // --------------------------------------------------------------------------------
 
-// BuildXunXianGetProgressPacket 构造查询寻仙之路进度封包 (Module 466, Action 1)。
-func BuildXunXianGetProgressPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDTownEnter
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDXunXianGetProgress, w.Bytes())
-}
-
-// BuildXunXianChallengePacket 构造挑战寻仙之路关卡节点封包 (Module 466, Action 3)。
-func BuildXunXianChallengePacket(nodeID int32, prevAct uint32) *Packet {
-	w := NewWriter()
-	w.WriteInt32(nodeID)
-	if prevAct == 0 {
-		prevAct = ActionIDXunXianGetProgress
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDXunXianChallenge, w.Bytes())
-}
-
-// BuildXunXianClaimChestPacket 构造领取寻仙之路通关宝箱封包 (Module 466, Action 13)。
-//
-// Deprecated: Action 13 官方为 fairyland_status（查询，不领奖）。领奖请用
-// BuildXunXianOneClickAwardPacket (Action 16)。
-func BuildXunXianClaimChestPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDXunXianChallenge
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDXunXianClaimChest, w.Bytes())
-}
-
-// BuildXunXianOneClickAwardPacket 构造一键领取寻仙之路全部奖励封包 (Module 466, Action 16)。
-func BuildXunXianOneClickAwardPacket(prevAct uint32) *Packet {
-	w := NewWriter()
-	if prevAct == 0 {
-		prevAct = ActionIDXunXianChallenge
-	}
-	w.WriteUint32(prevAct)
-	return NewPacket(ActionIDXunXianOneClickAward, w.Bytes())
-}
-
 // --------------------------------------------------------------------------------
 // 9. 锁妖塔
 // --------------------------------------------------------------------------------

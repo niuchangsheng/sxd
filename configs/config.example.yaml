@@ -116,7 +116,6 @@ scheduler:
     zodiac_challenge: true        # 生肖挑战与金油炼化
     spirit_trial: true            # 精灵试炼扫荡
     qimen_dunjia: true            # 奇门遁甲法阵注灵
-    xunxian_road: false           # 寻仙之路推图 (当前关闭)
     beelzebub_trials: true        # 魔王试炼与道行奖励
     tong_tian_tower: true         # 通天塔逐层挑战/突破
     sa_dragon_area: true          # 圣域无尽龙域/龙域战场 (免费一键扫荡 + 逐层挑战，不消耗元宝)

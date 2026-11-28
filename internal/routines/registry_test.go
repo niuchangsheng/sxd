@@ -73,10 +73,8 @@ func TestRoutines_DefaultOnPolicy(t *testing.T) {
 	// 仅显式要求默认关闭的玩法允许 DefaultOn=false；其余已有及后续新增玩法默认开启，
 	// 避免每次新增玩法都必须手动修改每个账号的运行配置文件。
 	expectedOff := map[string]bool{
-		"children_daily":  true,
-		"session_refresh": true,
-		"xunxian_road":    true,
-		"era_travel":      true,
+		"children_daily": true,
+		"era_travel":     true,
 	}
 
 	defs := routines.GetAllDefinitions()
@@ -156,7 +154,6 @@ func TestSubdomains_Instances(t *testing.T) {
 		{farming.NewSpiritPoolRoutine(), "spirit_pool"},
 		{pvp.NewCaravanHijackRoutine(), "caravan_hijack"},
 		{dungeon.NewQiMenRoutine(), "qimen_dunjia"},
-		{dungeon.NewXunXianRoutine(), "xunxian_road"},
 		{dungeon.NewDemonTowerRoutine(), "demon_tower"},
 		{dungeon.NewBeelzebubTrialsRoutine(dungeon.DefaultBeelzebubTrialsConfig()), "beelzebub_trials"},
 		{dungeon.NewTrainingRoomRoutine(dungeon.DefaultTrainingRoomConfig()), "training_room"},

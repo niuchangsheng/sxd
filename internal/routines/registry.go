@@ -56,7 +56,6 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "rebirth_land", Name: "轮回净地挂机奖励", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "免费一键领取轮回净地挂机奖励 (不消耗元宝)", DefaultOn: true},
 		{ID: "era_rebirth_attr_gift", Name: "修真境界礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "使用修真境界时间道具 (851/4→851/5, 道具不足跳过)", DefaultOn: true},
 		{ID: "xiuzhen_realm_award", Name: "修真境界一键礼包", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "领取修真境界主面板礼包 (552/1→552/5, 已领取等次日重置)", DefaultOn: true},
-		{ID: "session_refresh", Name: "会话上下文刷新", Domain: "system", Schedule: scheduler.ScheduleLoop, Description: "可选：连接满 4 分钟后主动重连（登录竞争激烈时建议关闭）", DefaultOn: false},
 		{ID: "cross_keepalive", Name: "跨服辅助常驻保活", Domain: "system", Schedule: scheduler.ScheduleLoop, Description: "常驻登录态仙界跨服辅助连接 (94/0+6/12，不进跨服城镇)，避免主服会话被 5 分钟回收扫描踢掉", DefaultOn: true},
 		{ID: "levitate_perfusion", Name: "飞升伙伴灌注经验", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "飞升页面伙伴灌注经验 (357/1, 已灌注完即停止)", DefaultOn: true},
 		{ID: "activity_report", Name: "每日活跃度汇总", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "只读汇总每日/周常活跃度并输出 1200 达标缺口", DefaultOn: true},
@@ -105,7 +104,6 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "zodiac_challenge", Name: "生肖挑战与金油", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "十二生肖关卡挑战与金油炼化突破", DefaultOn: true},
 		{ID: "spirit_trial", Name: "精灵试炼扫荡", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "精灵副本星级通关挑战与材料扫荡", DefaultOn: true},
 		{ID: "qimen_dunjia", Name: "奇门遁甲法阵", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "奇门遁甲法阵星图注灵与布阵生效", DefaultOn: true},
-		{ID: "xunxian_road", Name: "寻仙之路推图", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "寻仙之路关卡挑战与节点宝箱领用", DefaultOn: false},
 		{ID: "beelzebub_trials", Name: "魔王试炼", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "自动创建队伍、招募助战镜像、挑战每日魔王试炼并领取道行奖励", DefaultOn: true},
 		{ID: "tong_tian_tower", Name: "通天塔", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "自动逐层挑战通天塔并按需突破重天 (不消耗元宝)", DefaultOn: true},
 		{ID: "sa_dragon_area", Name: "圣域无尽龙域", Domain: "dungeon", Schedule: scheduler.ScheduleCron, Description: "圣域龙域战场免费一键扫荡与逐层挑战 (Module 362, 不消耗元宝)", DefaultOn: true},
@@ -387,8 +385,6 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewEraRebirthAttrGiftRoutine()
 	case "xiuzhen_realm_award":
 		return daily.NewXiuZhenRealmAwardRoutine()
-	case "session_refresh":
-		return system.NewSessionRefreshRoutine()
 	case "cross_keepalive":
 		return system.NewCrossKeepaliveRoutine()
 	case "levitate_perfusion":
@@ -479,8 +475,6 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return dungeon.NewSpiritTrialRoutine()
 	case "qimen_dunjia":
 		return dungeon.NewQiMenRoutine()
-	case "xunxian_road":
-		return dungeon.NewXunXianRoutine()
 	case "beelzebub_trials":
 		return dungeon.NewBeelzebubTrialsRoutine(f.beelzebubCfg)
 	case "tong_tian_tower":

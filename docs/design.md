@@ -76,7 +76,7 @@ stateDiagram-v2
 
 - **零忙轮询事件驱动**（[scheduler.go](file:///home/chang/sxd/internal/scheduler/scheduler.go)）：`pickNextReadyOrWait()` 在锁内计算最高优先级可执行项或精确等待时长，通过 `time.NewTimer(wait)` 休眠；会话未激活时直接阻塞在事件驱动的 `session.AwaitActive(ctx)`（零轮询、重连恢复瞬间拉起）；`Register`、`SetRoutineEnabled(..., true)`、`TriggerBatch` 通过非阻塞 `wakeCh` 立即唤醒调度循环。
 - **语义化优先级阶段**（[routine.go](file:///home/chang/sxd/internal/scheduler/routine.go)）：禁止魔数优先级，统一使用 `PhasePriority(phase, offset)`：
-  - `PhaseSystem (500)`：会话维护（`cross_keepalive` 510 常驻跨服保活；可选 `session_refresh` 500）
+  - `PhaseSystem (500)`：会话维护（`cross_keepalive` 510 常驻跨服保活）
   - `PhaseTownSensitive (420)`：对城镇上下文极敏感的玩法（天帝宝库、灵域猎妖）
   - `PhaseEarlyBattle (350)`：长会话后段易丢包的战斗/养成（五行天宫、无量劫海、飞升、魔界远征、无尽洞天等）
   - `PhaseCoreLoop (300)`：核心体力与循环链路，严格分层为 **主支线/精英首通推图 `dungeon` (300) > 通天塔 `tong_tian_tower` (290) > 精英副本扫荡 `dungeon_sweep` (280)**
@@ -95,7 +95,7 @@ stateDiagram-v2
   - `kit.Sleep(ctx, d)` 取代裸 `time.Sleep`，支持 `SIGINT` 毫秒级退出；
   - `kit.WithTimeoutOverride(ctx, d)` 允许单测将 8~45 秒业务超时压缩到毫秒级。
 - **7 大领域包与注册工厂**（[registry.go](file:///home/chang/sxd/internal/routines/registry.go)）：
-  - `system`（2 项：`cross_keepalive` / `session_refresh`）、`daily`、`dungeon`（含拆分后的 `dungeon` / `tong_tian_tower` / `dungeon_sweep` 与圣域无尽龙域 `sa_dragon_area`）、`farming`、`minigame`、`pvp`、`social` 共 **123 个例程**，全部按单玩法/单业务域拆分为内聚文件。
+  - `system`（1 项：`cross_keepalive`）、`daily`、`dungeon`（含拆分后的 `dungeon` / `tong_tian_tower` / `dungeon_sweep` 与圣域无尽龙域 `sa_dragon_area`）、`farming`、`minigame`、`pvp`、`social` 共 **123 个例程**，全部按单玩法/单业务域拆分为内聚文件。
 
 ### 2.5 官方静态数据层 (`data/gamedata.db`)、自动构建管线与题库 (`internal/qa`)
 - `internal/dictionary` 以只读模式挂载 `data/gamedata.db`（带进程级 `Default()` 共享与热点表内存缓存），作为全系统唯一的官方 SWF 静态数据层：为主线推图（任务/NPC/关卡锁/怪物编队）、精英扫荡与背包清理（`item`）、宗师修行（`roletype`）、天帝宝库自选大奖（`wishpoolaward`）、NPC 结交问答（`NPCQuest`）、魔王试炼 Boss 元数据（`beelzebub_boss`）及主角法相祈愿奖励（`faxiang_pray_award`）提供统一查询，彻底消除了代码中散落的 SWF 硬编码补丁。

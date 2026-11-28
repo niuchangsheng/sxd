@@ -57,36 +57,6 @@ func TestChallengeStoryMission_OpenBoxFailureDoesNotBookClear(t *testing.T) {
 	}
 }
 
-// TestXunXianRoutine_StopsAfterConsecutiveFailures 验证寻仙之路节点奖励连续失败 3 次后
-// 结束本轮（挑战副本 N 次失败退出），并仍然执行一键领取。
-func TestXunXianRoutine_StopsAfterConsecutiveFailures(t *testing.T) {
-	var awardCalls, oneClickCalls atomic.Int32
-	sess := newTownResetTestSession(t, func(pkt *protocol.Packet, conn net.Conn) bool {
-		switch pkt.ActionID {
-		case protocol.ActionIDXunXianGetProgress:
-			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{0x00, 0x00}))
-		case protocol.ActionIDXunXianChallenge:
-			awardCalls.Add(1)
-			// 失败码 4=FAILED。
-			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.XunXianResultFailed}))
-		case protocol.ActionIDXunXianOneClickAward:
-			oneClickCalls.Add(1)
-			_ = protocol.WritePacket(conn, protocol.NewPacket(pkt.ActionID, []byte{protocol.XunXianResultSuccess}))
-		}
-		return true
-	})
-
-	if err := NewXunXianRoutine().Execute(context.Background(), sess, nil); err != nil {
-		t.Fatalf("xunxian: %v", err)
-	}
-	if got := awardCalls.Load(); got != 3 {
-		t.Fatalf("连续 3 次失败后应停止, award calls = %d", got)
-	}
-	if got := oneClickCalls.Load(); got != 1 {
-		t.Fatalf("应执行一次一键领取, calls = %d", got)
-	}
-}
-
 // TestChallengeStoryMission_PickupAlreadyPickedBooksClearWithoutRewards 验证重复挑战
 // 已通关副本时 pickup_award 返回 23（奖励已领取）：应记为已通关并消耗体力，
 // 但不再重复累加本地经验/铜钱收益。

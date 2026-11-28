@@ -98,12 +98,6 @@ func TestFeaturePackets_BuildProtocols(t *testing.T) {
 		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDCaravanHijack, pRob.ActionID)
 	}
 
-	// 8. 寻仙之路 (Module 466, Action 3)
-	pXunXian := protocol.BuildXunXianChallengePacket(0xBC, 0)
-	if pXunXian.ActionID != protocol.ActionIDXunXianChallenge {
-		t.Errorf("期望 ActionID 0x%08X, 实际 0x%08X", protocol.ActionIDXunXianChallenge, pXunXian.ActionID)
-	}
-
 	// 9. 锁妖塔 (Module 705, Action 0 面板 / Action 1 挑战)
 	pDemon := protocol.BuildDemonTowerPanelPacket()
 	if pDemon.ActionID != protocol.ActionIDDemonTowerPanel || len(pDemon.Payload) != 0 {
