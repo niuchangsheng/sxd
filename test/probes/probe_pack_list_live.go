@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -41,7 +42,13 @@ func main() {
 	defer dictRepo.Close()
 
 	acc := cfg.Accounts[0]
-	role := acc.Roles[0]
+	idx := 0
+	if v := os.Getenv("SXD_PROBE_ROLE_INDEX"); v != "" {
+		if n, e := strconv.Atoi(v); e == nil && n >= 0 && n < len(acc.Roles) {
+			idx = n
+		}
+	}
+	role := acc.Roles[idx]
 
 	ticketCache := platform.NewTicketCache(90 * time.Minute)
 	xdAuth, err := platform.NewXindongAuthenticator()
