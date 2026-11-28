@@ -63,6 +63,7 @@ func GetAllDefinitions() []RoutineDefinition {
 		{ID: "tactics_water", Name: "兵法圣水购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "铜钱购买湛蓝圣水完成兵法活跃度 (不消耗元宝)", DefaultOn: false},
 		{ID: "partner_link_box", Name: "缘魂宝箱购买", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "道缘/铜钱购买缘魂宝箱完成活跃度 (不消耗元宝)", DefaultOn: false},
 		{ID: "xiudan", Name: "服用修为丹", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "通天道场服用背包内修为丹完成活跃度 (不购买、不消耗元宝)", DefaultOn: false},
+		{ID: "memory_zone", Name: "回忆之境", Domain: "daily", Schedule: scheduler.ScheduleCron, Description: "每日免费回忆一次，优先魔神专区选择第一个未拥有伙伴 (Module 526, 不消耗元宝)", DefaultOn: false},
 
 		// 2. Farming 领域 (6)
 		{ID: "herb_garden", Name: "药园种植巡检", Domain: "farming", Schedule: scheduler.ScheduleLoop, Description: "全自动药园播种、施肥、除草与成熟采摘", DefaultOn: true},
@@ -392,6 +393,8 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 		return daily.NewPartnerLinkBoxRoutine()
 	case "xiudan":
 		return daily.NewXiuDanRoutine()
+	case "memory_zone":
+		return daily.NewMemoryZoneRoutine()
 
 	// 2. Farming
 	case "herb_garden":

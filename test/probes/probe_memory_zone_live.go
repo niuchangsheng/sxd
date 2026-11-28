@@ -1,14 +1,14 @@
 //go:build probe
 
-// 目标: 回忆之境主面板/回溯面板与免费回溯 (Mod_MemoryZone_Base, Module 526)
+// 目标: 实机探测「回忆之境」(Mod_MemoryZone_Base, Module 526 / 0x020E) 的
+//       功能开放状态 (0/69 function_id=216)、主面板 (526/1) 与分区伙伴碎片面板 (526/2)。
 //
-//	main_panel (Act 1, 0x020E0001) request=[] response=[UByte,[Int,Int,Int,Int],Int]
-//	back_panel (Act 2, 0x020E0002) request=[Int type] response=[UByte,[Int,Int,Int],Int,Int,Int,Int]
-//	backtrack  (Act 4, 0x020E0004) request=[Int role_id] response=[UByte,[Int,Int],[Int,Int,Int],Int,Int]
+// 运行命令:
+//   SXD_CONFIG=configs/niuchangsheng.yaml SXD_SERVER=s0 go run -tags=probe test/probes/probe_memory_zone_live.go
 //
-// 仅当 back_panel 返回 daily_free_times>0 时才执行一次免费回溯，绝不使用元宝档。
-//
-// 运行命令: SXD_CONFIG=configs/s0.yaml go run -tags=probe test/probes/probe_memory_zone_live.go
+// 预期表现:
+//   - 默认仅执行只读探测（0/69 -> 526/1 -> 526/2），打印原始 hex 与解码结果；
+//   - 仅当显式设置 SXD_DO_BACKTRACK=1 时才调用 NewMemoryZoneRoutine() 执行每日免费回溯（0 元宝）。
 package main
 
 import (
@@ -17,149 +17,137 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/config"
 	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/daily"
 )
 
 func main() {
 	slog.SetLogLoggerLevel(slog.LevelInfo)
+
 	cfgPath := os.Getenv("SXD_CONFIG")
 	if cfgPath == "" {
-		cfgPath = "configs/s0.yaml"
+		cfgPath = "configs/niuchangsheng.yaml"
 	}
+	wantServer := os.Getenv("SXD_SERVER")
+	if wantServer == "" {
+		wantServer = "s0"
+	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		slog.Error("加载配置失败", "err", err)
+		slog.Error("加载配置失败", "path", cfgPath, "err", err)
 		return
 	}
-	acc := cfg.Accounts[0]
-	role := acc.Roles[0]
-	tc := platform.NewTicketCache(90 * time.Minute)
-	xd, _ := platform.NewXindongAuthenticator()
-	xd.SetCookie(acc.Cookie)
-	tc.RegisterAuthenticator(xd)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-	ticket, err := tc.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)
+
+	var acc config.AccountConfig
+	var role config.RoleConfig
+	found := false
+	for _, a := range cfg.Accounts {
+		for _, r := range a.Roles {
+			if strings.EqualFold(r.ServerID, wantServer) {
+				acc = a
+				role = r
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		slog.Error("配置中未找到目标区服角色", "server", wantServer)
+		return
+	}
+
+	ticketCache := platform.NewTicketCache(90 * time.Minute)
+	xdAuth, err := platform.NewXindongAuthenticator()
 	if err != nil {
-		slog.Error("换票失败", "err", err)
+		slog.Error("创建心动认证器失败", "err", err)
 		return
 	}
-	rc := client.SessionConfig{RoleID: fmt.Sprintf("%s-%s", role.ServerID, role.RoleName), RoleName: role.RoleName,
-		Username: acc.Username, ServerAddr: ticket.GatewayURL, ServerID: role.ServerID,
-		Platform: acc.Platform, Authenticator: client.DefaultAuthenticator, MaxReconnectAttempts: 3}
-	client.ApplyTicket(&rc, ticket)
-	sess := client.NewRoleSession(rc)
-	if err := sess.Start(ctx); err != nil {
-		slog.Error("启动会话失败", "err", err)
+	xdAuth.SetCookie(acc.Cookie)
+	ticketCache.RegisterAuthenticator(xdAuth)
+
+	runCtx, cancelRun := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelRun()
+	ticket, err := ticketCache.GetOrFetch(runCtx, acc.Platform, acc.Username, acc.Password, role.ServerID)
+	if err != nil {
+		slog.Error("获取登录票据失败", "err", err)
+		return
+	}
+
+	sessCfg := client.SessionConfig{
+		RoleID:               fmt.Sprintf("%s-%s", role.ServerID, role.RoleName),
+		RoleName:             role.RoleName,
+		Username:             acc.Username,
+		ServerAddr:           ticket.GatewayURL,
+		ServerID:             role.ServerID,
+		Platform:             acc.Platform,
+		Authenticator:        client.DefaultAuthenticator,
+		MaxReconnectAttempts: 3,
+	}
+	client.ApplyTicket(&sessCfg, ticket)
+
+	sess := client.NewRoleSession(sessCfg)
+	if err := sess.Start(runCtx); err != nil {
+		slog.Error("启动主服会话失败", "err", err)
 		return
 	}
 	defer sess.Close()
-	for sess.State() != client.StateActive && ctx.Err() == nil {
-		time.Sleep(100 * time.Millisecond)
+	if err := sess.AwaitActive(runCtx); err != nil {
+		slog.Error("等待主服会话激活失败", "err", err)
+		return
 	}
-	call := func(action uint32, payload []byte) *protocol.Packet {
-		pkt := protocol.NewPacket(action, payload)
-		pkt.HasPrevAct = true
-		c, cc := context.WithTimeout(ctx, 7*time.Second)
-		defer cc()
-		resp, err := sess.Call(c, pkt, action)
+
+	open, err := sess.CheckFunctionOpen(runCtx, protocol.FunctionIDMemoryZone)
+	slog.Info("功能开放探测", "function_id", protocol.FunctionIDMemoryZone, "open", open, "err", err)
+	if !open {
+		return
+	}
+
+	mainResp, err := sess.CallWithPrevActResync(runCtx, 8*time.Second, protocol.BuildMemoryZoneMainPanelPacket(), protocol.ActionIDMemoryZoneMainPanel)
+	if err != nil {
+		slog.Error("526/1 main_panel 失败", "err", err)
+		return
+	}
+	slog.Info("526/1 main_panel 原始回包", "len", len(mainResp.Payload), "hex", hex.EncodeToString(mainResp.Payload))
+	mainPanel, err := protocol.ParseMemoryZoneMainPanel(mainResp.Payload)
+	if err != nil {
+		slog.Error("526/1 解析失败", "err", err)
+		return
+	}
+	slog.Info("526/1 解析结果", "result", mainPanel.Result, "categories", mainPanel.Categories, "award_daoyuan", mainPanel.AwardDaoYuan)
+
+	for _, c := range mainPanel.Categories {
+		backResp, err := sess.CallWithPrevActResync(runCtx, 8*time.Second, protocol.BuildMemoryZoneBackPanelPacket(c.Type), protocol.ActionIDMemoryZoneBackPanel)
 		if err != nil {
-			slog.Warn("无回包", "action", fmt.Sprintf("0x%08X", action), "err", err)
-			return nil
+			slog.Error("526/2 back_panel 失败", "type", c.Type, "err", err)
+			continue
 		}
-		return resp
-	}
-	zero := []byte{0, 0, 0, 0}
-	mainResp := call(0x020E0001, zero)
-	if mainResp == nil {
-		slog.Error("回忆之境主面板无回包")
-		return
-	}
-	slog.Info("主面板", "hex", hex.EncodeToString(mainResp.Payload))
-	// 解析 back_list types
-	mr := protocol.NewReader(mainResp.Payload)
-	res, _ := mr.ReadUint8()
-	n, _ := mr.ReadUint16()
-	types := make([]int32, 0, n)
-	for i := 0; i < int(n); i++ {
-		t, _ := mr.ReadInt32()
-		_, _ = mr.ReadInt32()
-		_, _ = mr.ReadInt32()
-		_, _ = mr.ReadInt32()
-		types = append(types, t)
-	}
-	daoyuan, _ := mr.ReadInt32()
-	slog.Info("主面板解析", "result", res, "types", types, "award_daoyuan", daoyuan)
-	if len(types) == 0 {
-		return
+		backPanel, err := protocol.ParseMemoryZoneBackPanel(backResp.Payload)
+		if err != nil {
+			slog.Error("526/2 解析失败", "type", c.Type, "err", err)
+			continue
+		}
+		slog.Info("526/2 解析结果",
+			"type", c.Type,
+			"result", backPanel.Result,
+			"today", backPanel.TodayBackTimes,
+			"free", backPanel.DailyFreeTimes,
+			"ingot_limit", backPanel.DailyIngotTimes,
+			"cost_ingot", backPanel.CostIngot,
+			"partners", backPanel.Partners)
 	}
 
-	typeW := protocol.NewWriter()
-	typeW.WriteInt32(types[0])
-	typeW.WriteUint32(0)
-	backResp := call(0x020E0002, typeW.Bytes())
-	if backResp == nil {
-		slog.Error("回溯面板无回包")
-		return
-	}
-	slog.Info("回溯面板", "hex", hex.EncodeToString(backResp.Payload))
-	br := protocol.NewReader(backResp.Payload)
-	bres, _ := br.ReadUint8()
-	bn, _ := br.ReadUint16()
-	roleIDs := make([]int32, 0, bn)
-	for i := 0; i < int(bn); i++ {
-		rid, _ := br.ReadInt32()
-		have, _ := br.ReadInt32()
-		need, _ := br.ReadInt32()
-		roleIDs = append(roleIDs, rid)
-		slog.Info("伙伴", "role_id", rid, "have_scrap", have, "need_scrap", need)
-	}
-	todayBack, _ := br.ReadInt32()
-	freeTimes, _ := br.ReadInt32()
-	ingotTimes, _ := br.ReadInt32()
-	costIngot, _ := br.ReadInt32()
-	slog.Info("回溯面板解析", "result", bres, "today_back", todayBack,
-		"daily_free_times", freeTimes, "daily_ingot_times", ingotTimes, "cost_ingot", costIngot)
-	if freeTimes <= 0 || len(roleIDs) == 0 {
-		slog.Info("无免费回溯次数或无伙伴，跳过")
-		return
-	}
-	st := sess.GetPlayerState()
-	rw := protocol.NewWriter()
-	rw.WriteInt32(roleIDs[0])
-	rw.WriteUint32(0)
-	btResp := call(0x020E0004, rw.Bytes())
-	if btResp == nil {
-		return
-	}
-	slog.Info("回溯回包", "hex", hex.EncodeToString(btResp.Payload))
-	time.Sleep(300 * time.Millisecond)
-	fin := sess.GetPlayerState()
-	slog.Info("回溯后", "coin_delta", fin.Coins-st.Coins, "ingot_delta", fin.Ingots-st.Ingots)
-
-	// 回溯完成后再尝试领取绑定奖励 (Act 3)，避免 0x020E0003 的静默无回包
-	// 打断 PrevAct 链导致 backtrack 被判 FAILED。
-	for _, t := range types {
-		for _, withPrev := range []bool{false, true} {
-			gw := protocol.NewWriter()
-			gw.WriteInt32(t)
-			gw.WriteUint32(0)
-			pkt := protocol.NewPacket(0x020E0003, gw.Bytes())
-			pkt.HasPrevAct = withPrev
-			c, cc := context.WithTimeout(ctx, 6*time.Second)
-			gResp, gErr := sess.Call(c, pkt, 0x020E0003)
-			cc()
-			if gErr != nil {
-				continue
-			}
-			slog.Info("绑定奖励回包", "type", t, "with_prev", withPrev,
-				"hex", hex.EncodeToString(gResp.Payload))
-			return
-		}
+	if os.Getenv("SXD_DO_BACKTRACK") == "1" {
+		err := daily.NewMemoryZoneRoutine().Execute(runCtx, sess, nil)
+		slog.Info("NewMemoryZoneRoutine 执行完成", "err", err)
 	}
 }

@@ -87,6 +87,8 @@ const (
 	FunctionIDStMine int32 = 157
 	// FunctionIDDevilExpedition 魔界远征功能编号 (FunctionTypeData: DevilExpedition)
 	FunctionIDDevilExpedition int32 = 201
+	// FunctionIDMemoryZone 回忆之境功能编号 (FunctionTypeData: MemoryZone)
+	FunctionIDMemoryZone int32 = 216
 )
 
 // BuildCheckFunctionOpenPacket 构造功能开放状态查询封包。
